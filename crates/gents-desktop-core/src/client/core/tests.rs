@@ -13,8 +13,8 @@ use tokio::sync::Notify;
 
 use super::route_manager::cleanup_saved_peer_p2p;
 use super::supervisor::{
-    p2p_health_materially_changed, probe_p2p_health, repair_saved_peer,
-    request_index_for_ready_peers, saved_peer_needs_repair,
+    probe_p2p_health, repair_saved_peer, request_client_recovery_for_ready_peers,
+    saved_peer_needs_repair,
 };
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
@@ -35,6 +35,8 @@ struct RecordingP2P {
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
+    sync_status: StdRwLock<serde_json::Value>,
+    sync_status_error: StdRwLock<Option<String>>,
 }
 
 #[allow(dead_code)]
@@ -76,6 +78,17 @@ impl RecordingP2P {
             .connected_peers_error
             .write()
             .expect("connected peers error lock poisoned") = error.map(ToOwned::to_owned);
+    }
+
+    fn set_sync_status(&self, status: serde_json::Value) {
+        *self.sync_status.write().expect("sync status lock poisoned") = status;
+    }
+
+    fn set_sync_status_error(&self, error: Option<&str>) {
+        *self
+            .sync_status_error
+            .write()
+            .expect("sync status error lock poisoned") = error.map(ToOwned::to_owned);
     }
 
     fn connected_peer_snapshot(&self) -> Vec<String> {
@@ -141,6 +154,22 @@ impl RecordingP2P {
 
 #[async_trait]
 impl P2POps for RecordingP2P {
+    async fn sync_status(&self) -> P2PResult<serde_json::Value> {
+        if let Some(error) = self
+            .sync_status_error
+            .read()
+            .expect("sync status error lock poisoned")
+            .clone()
+        {
+            return Err(error.into());
+        }
+        Ok(self
+            .sync_status
+            .read()
+            .expect("sync status lock poisoned")
+            .clone())
+    }
+
     async fn local_peer_id(&self) -> P2PResult<String> {
         if let Some(error) = self
             .local_peer_id_error
@@ -452,7 +481,7 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
 }
 
 #[tokio::test]
-async fn index_sync_request_targets_exactly_the_client_index() {
+async fn recovery_sync_targets_the_session_index_and_runtime_readiness() {
     use crate::client::paths::DesktopPaths;
 
     let tmp = tempfile::TempDir::new().expect("tmpdir");
@@ -466,15 +495,20 @@ async fn index_sync_request_targets_exactly_the_client_index() {
     recording.set_connected_peers(vec!["peer-alpha".to_string()]);
     let p2p: Arc<dyn P2POps> = recording.clone();
 
-    let requested = super::bootstrap::request_index_sync(core.node(), &p2p)
+    let requested = super::bootstrap::request_client_recovery_sync(core.node(), &p2p)
         .await
         .expect("request index sync");
     assert_eq!(
         requested,
-        ["AgentConversation", "AgentSession", "MailboxItem"]
+        [
+            "AgentConversation",
+            "AgentSession",
+            "MailboxItem",
+            "AgentBehaviorReadiness"
+        ]
     );
 
-    let mut expected = crate::client::schema::index_collection_names()
+    let mut expected = crate::client::schema::client_recovery_collection_names()
         .into_iter()
         .map(|name| {
             core.node()
@@ -525,22 +559,24 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     .await;
     let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
     let mut requested_for = BTreeMap::new();
-    let index_collection_count = crate::client::schema::index_collection_names().len();
+    let recovery_collection_count = crate::client::schema::client_recovery_collection_names().len();
 
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count
+        recovery_collection_count
     );
     assert_eq!(
         requested_for.keys().cloned().collect::<BTreeSet<_>>(),
         saved
     );
 
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count
+        recovery_collection_count
     );
 
     let mut beta_record = PeerRecord::new("Beta", "peer-beta", "did:key:beta");
@@ -563,10 +599,11 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
         }
     ));
     saved.insert("saved-beta".to_string());
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count * 2
+        recovery_collection_count * 2
     );
     assert_eq!(
         requested_for.keys().cloned().collect::<BTreeSet<_>>(),
@@ -574,15 +611,17 @@ async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_fa
     );
 
     requested_for.remove("saved-alpha");
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert_eq!(
         recording.sync_branchable_calls().len(),
-        index_collection_count * 3
+        recovery_collection_count * 3
     );
 
     requested_for.remove("saved-alpha");
     recording.set_connected_peers(Vec::new());
-    request_index_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for).await;
+    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
+        .await;
     assert!(sync_state
         .snapshot()
         .peers
@@ -915,7 +954,8 @@ async fn probe_p2p_health_reports_healthy_transport() {
     }]);
     let p2p: Arc<dyn P2POps> = recording;
 
-    let health = probe_p2p_health(&p2p, &P2PHealth::default()).await;
+    let (health, database_sync, database_sync_error) =
+        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
 
     assert_eq!(health.status, P2PHealthStatus::Healthy);
     assert_eq!(health.connected_peer_count, 1);
@@ -923,6 +963,94 @@ async fn probe_p2p_health_reports_healthy_transport() {
     assert_eq!(health.consecutive_failures, 0);
     assert_eq!(health.last_error, None);
     assert!(health.last_ok_at.is_some());
+    assert!(database_sync.is_none());
+    assert!(database_sync_error.is_none());
+}
+
+#[tokio::test]
+async fn probe_p2p_health_carries_database_sync_facts_without_rebuilding_them() {
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
+    recording.set_connected_peers(vec!["127.0.0.1:56000/p2p/peer-alpha".to_string()]);
+    recording.set_sync_status(
+        serde_json::to_value(P2pSyncStatusSnapshot {
+            pending_dags: 2,
+            persisted_pending_dags: 3,
+            pending_dag_fetch_exhausted: 7,
+            pending_dag_terminal_merged: 5,
+            pending_dag_terminal_quarantined: 1,
+            quarantined_pending_dags: 1,
+            push_backlog: gents::P2pPushBacklogSnapshot {
+                queued_items: 4,
+                active_jobs: 2,
+                ..Default::default()
+            },
+            push_retry_markers: gents::P2pPushRetryMarkerSnapshot {
+                document_markers: 6,
+                collection_markers: 1,
+                scheduled_peers: 2,
+                oldest_scheduled_retry_unix: Some(123),
+            },
+            ..P2pSyncStatusSnapshot::default()
+        })
+        .unwrap(),
+    );
+    let p2p: Arc<dyn P2POps> = recording;
+
+    let (_, database_sync, database_sync_error) =
+        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+    let database_sync = database_sync.expect("database sync status");
+    assert!(database_sync_error.is_none());
+
+    assert_eq!(database_sync.pending_dags, 2);
+    assert_eq!(database_sync.persisted_pending_dags, 3);
+    assert_eq!(database_sync.pending_dag_fetch_exhausted, 7);
+    assert_eq!(database_sync.quarantined_pending_dags, 1);
+    assert_eq!(database_sync.push_backlog.queued_items, 4);
+    assert_eq!(database_sync.push_retry_markers.document_markers, 6);
+}
+
+#[tokio::test]
+async fn probe_p2p_health_reports_an_incomplete_database_status_without_degrading_transport() {
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
+    recording.set_sync_status(serde_json::json!({ "pending_dags": 0 }));
+    let p2p: Arc<dyn P2POps> = recording;
+
+    let (health, database_sync, database_sync_error) =
+        probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+
+    assert_eq!(health.status, P2PHealthStatus::Healthy);
+    assert_eq!(health.consecutive_failures, 0);
+    assert!(health.last_error.is_none());
+    assert!(database_sync_error
+        .as_deref()
+        .is_some_and(|error| error.contains("invalid database sync status")));
+    assert!(database_sync.is_none());
+}
+
+#[tokio::test]
+async fn probe_p2p_health_reports_database_status_read_failure_without_degrading_transport() {
+    let recording = Arc::new(RecordingP2P::default());
+    recording.set_listen_addresses(vec!["127.0.0.1:56000/p2p/local-peer".to_string()]);
+    recording.set_sync_status_error(Some("diagnostic unavailable"));
+    let p2p: Arc<dyn P2POps> = recording;
+
+    let previous = P2PHealth {
+        status: P2PHealthStatus::Healthy,
+        consecutive_failures: 0,
+        ..P2PHealth::default()
+    };
+    let (health, database_sync, database_sync_error) =
+        probe_p2p_health(&p2p, &previous, None, None).await;
+
+    assert_eq!(health.status, P2PHealthStatus::Healthy);
+    assert_eq!(health.consecutive_failures, 0);
+    assert!(health.last_error.is_none());
+    assert!(database_sync.is_none());
+    assert!(database_sync_error
+        .as_deref()
+        .is_some_and(|error| error.contains("failed to read database sync status")));
 }
 
 #[tokio::test]
@@ -934,7 +1062,7 @@ async fn probe_p2p_health_marks_repeated_failures_wedged() {
 
     let mut health = P2PHealth::default();
     for _ in 0..P2P_WEDGED_FAILURE_THRESHOLD {
-        health = probe_p2p_health(&p2p, &health).await;
+        (health, _, _) = probe_p2p_health(&p2p, &health, None, None).await;
     }
 
     assert_eq!(health.status, P2PHealthStatus::Wedged);

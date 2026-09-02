@@ -79,6 +79,19 @@ impl DesktopPaths {
     pub fn iroh_secret_key_path(&self) -> &Path {
         &self.iroh_secret_key_path
     }
+
+    /// Whether this home contains enough durable client state to require a
+    /// restart, even before enrollment has materialized its first peer row.
+    ///
+    /// This is only a liveness hint. The restarted client still verifies every
+    /// enrollment signature, authorization generation, lease, and route
+    /// receipt before it can create authority or report readiness.
+    pub fn client_state_exists(&self) -> bool {
+        self.principal_metadata_path.is_file()
+            && self.identity_key_path.is_file()
+            && self.iroh_secret_key_path.is_file()
+            && self.node_data_dir.join("MANIFEST").is_file()
+    }
 }
 
 #[cfg(test)]
@@ -105,5 +118,20 @@ mod tests {
 
         assert_eq!(DESKTOP_HOME_ENV, "GENTS_DESKTOP_HOME");
         assert!(paths.root().ends_with(Path::new("gents").join("desktop")));
+    }
+
+    #[test]
+    fn client_state_requires_the_complete_persisted_restart_boundary() {
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let paths = DesktopPaths::from_root(tempdir.path());
+        std::fs::create_dir_all(paths.node_data_dir()).expect("node dir");
+        std::fs::write(paths.node_data_dir().join("MANIFEST"), "manifest").expect("node manifest");
+        assert!(!paths.client_state_exists());
+
+        std::fs::write(paths.principal_metadata_path(), "{}").expect("principal metadata");
+        std::fs::write(paths.identity_key_path(), [0_u8; 64]).expect("principal key");
+        std::fs::write(paths.iroh_secret_key_path(), [0_u8; 32]).expect("iroh key");
+
+        assert!(paths.client_state_exists());
     }
 }

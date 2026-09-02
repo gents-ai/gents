@@ -181,6 +181,9 @@ pub struct ClientHydrationProgress {
     pub agent_did: String,
     pub phase: ClientHydrationPhase,
     pub merged_count: usize,
+    /// Locally present identities that belong to the signed served manifest.
+    /// Before a manifest arrives this equals `merged_count`.
+    pub covered_count: usize,
     pub served_count: Option<usize>,
     pub merged_documents: BTreeSet<SessionHydrationDocumentKey>,
     pub served_documents: Option<BTreeSet<SessionHydrationDocumentKey>>,
@@ -193,6 +196,7 @@ impl Default for ClientHydrationProgress {
             agent_did: String::new(),
             phase: ClientHydrationPhase::Idle,
             merged_count: 0,
+            covered_count: 0,
             served_count: None,
             merged_documents: BTreeSet::new(),
             served_documents: None,
@@ -221,6 +225,7 @@ pub fn begin_hydration_request(session_id: &str, agent_did: &str) -> ClientHydra
         agent_did: agent_did.to_string(),
         phase: ClientHydrationPhase::Requested,
         merged_count: 0,
+        covered_count: 0,
         served_count: None,
         merged_documents: BTreeSet::new(),
         served_documents: None,
@@ -280,12 +285,16 @@ pub fn observe_hydration_progress(
     let served = merge_served(base.served_documents.clone(), served_documents);
     let merged_count = merged.len();
     let served_count = served.as_ref().map(BTreeSet::len);
+    let covered_count = served
+        .as_ref()
+        .map_or(merged_count, |served| merged.intersection(served).count());
     if failed || base.phase == ClientHydrationPhase::Failed {
         return ClientHydrationProgress {
             session_id: session_id.to_string(),
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Failed,
             merged_count,
+            covered_count,
             served_count,
             merged_documents: merged,
             served_documents: served,
@@ -297,6 +306,7 @@ pub fn observe_hydration_progress(
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Complete,
             merged_count,
+            covered_count,
             served_count,
             merged_documents: merged,
             served_documents: served,
@@ -311,6 +321,7 @@ pub fn observe_hydration_progress(
             agent_did: agent_did.to_string(),
             phase: ClientHydrationPhase::Serving,
             merged_count,
+            covered_count,
             served_count,
             merged_documents: merged,
             served_documents: served,
@@ -325,6 +336,7 @@ pub fn observe_hydration_progress(
             ClientHydrationPhase::Idle
         },
         merged_count,
+        covered_count,
         served_count,
         merged_documents: merged,
         served_documents: served,

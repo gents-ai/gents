@@ -8,6 +8,7 @@ use defra_p2p_adapter::P2POperations as P2POps;
 use gents::agent::p2p_reconcile::{
     compute_pairing_diff, DiffOp, PairingActual, PairingDesired, RemoteP2pAdmin,
 };
+use gents::{JsonP2pSyncStatusAdapter, P2pSyncStatusAdapter, P2pSyncStatusSnapshot};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior};
@@ -15,18 +16,19 @@ use tokio::time::{Instant, MissedTickBehavior};
 use super::super::peer_directory::PeerRecord;
 use super::super::principal_identity::PrincipalIdentity;
 use super::bootstrap::{
-    connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer, request_index_sync,
+    connect_peer_with_retry, force_connect_peer_with_retry, is_connected_peer,
+    request_client_recovery_sync,
 };
 use super::p2p_ops::{
     p2p_connected_peers, p2p_get_replicators, p2p_listen_addresses, p2p_local_peer_id,
-    p2p_notify_network_change,
+    p2p_notify_network_change, p2p_sync_status,
 };
 use super::route_manager::ClientRouteManager;
 use super::route_manager::PendingRemovalCleanup;
 use super::sync_state::ClientSyncStateOwner;
 use super::{
-    ClientPeerStatus, P2PHealth, P2PHealthStatus, P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL,
-    P2P_WEDGED_FAILURE_THRESHOLD,
+    p2p_health_materially_changed, ClientPeerStatus, P2PHealth, P2PHealthStatus,
+    P2PSupervisorCommand, P2P_SUPERVISOR_INTERVAL, P2P_WEDGED_FAILURE_THRESHOLD,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,10 +60,9 @@ pub(super) fn spawn_p2p_supervisor_task(
     install_replicators_on_bootstrap: bool,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut health = sync_state.snapshot().transport;
         let mut ticker = tokio::time::interval(P2P_SUPERVISOR_INTERVAL);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let mut index_requests = BTreeMap::new();
+        let mut recovery_requests = BTreeMap::new();
         let mut route_reconciled_at = BTreeMap::new();
         let mut removal_retries = BTreeMap::new();
 
@@ -119,18 +120,28 @@ pub(super) fn spawn_p2p_supervisor_task(
                 &route_manager,
                 install_replicators_on_bootstrap,
                 manual_repair,
-                &mut index_requests,
+                &mut recovery_requests,
                 &mut route_reconciled_at,
                 &enrollment_authority,
             )
             .await;
 
-            let next_health = probe_p2p_health(&p2p, &health).await;
-            if p2p_health_materially_changed(&health, &next_health) {
-                log_p2p_health_transition(&health, &next_health);
-                sync_state.replace_transport(next_health.clone());
+            let previous = sync_state.snapshot();
+            let (next_health, next_database_sync, next_database_sync_error) = probe_p2p_health(
+                &p2p,
+                &previous.transport,
+                previous.database_sync,
+                previous.database_sync_error,
+            )
+            .await;
+            if p2p_health_materially_changed(&previous.transport, &next_health) {
+                log_p2p_health_transition(&previous.transport, &next_health);
             }
-            health = next_health;
+            sync_state.replace_database_observation(
+                next_health,
+                next_database_sync,
+                next_database_sync_error,
+            );
         }
     })
 }
@@ -222,7 +233,7 @@ async fn run_saved_peer_repair_cycle(
     route_manager: &Arc<ClientRouteManager>,
     install_replicators_on_bootstrap: bool,
     force_repair: bool,
-    index_requests: &mut BTreeMap<String, PeerRecord>,
+    recovery_requests: &mut BTreeMap<String, PeerRecord>,
     route_reconciled_at: &mut BTreeMap<String, (RouteReconcileFence, Instant)>,
     enrollment_authority: &BTreeMap<String, super::enrollment::EnrollmentAuthorizationGeneration>,
 ) {
@@ -231,7 +242,7 @@ async fn run_saved_peer_repair_cycle(
         .iter()
         .map(|record| record.peer_id.clone())
         .collect::<BTreeSet<_>>();
-    index_requests
+    recovery_requests
         .retain(|peer_id, expected| expected.peer_id == *peer_id && records.contains(expected));
     route_reconciled_at.retain(|peer_id, (expected, _)| {
         expected.record.peer_id == *peer_id
@@ -244,7 +255,7 @@ async fn run_saved_peer_repair_cycle(
             saved_record,
             enrollment_authority,
         ) {
-            index_requests.remove(&saved_record.peer_id);
+            recovery_requests.remove(&saved_record.peer_id);
             route_reconciled_at.remove(&saved_record.peer_id);
             continue;
         }
@@ -285,7 +296,7 @@ async fn run_saved_peer_repair_cycle(
             .iter()
             .any(|candidate| candidate.peer_id == record.peer_id);
         if needs_repair {
-            index_requests.remove(&record.peer_id);
+            recovery_requests.remove(&record.peer_id);
             let updated = repair_saved_peer(
                 p2p,
                 &record,
@@ -346,11 +357,18 @@ async fn run_saved_peer_repair_cycle(
     }
 
     if install_replicators_on_bootstrap {
-        request_index_for_ready_peers(node, p2p, sync_state, &saved_peer_ids, index_requests).await;
+        request_client_recovery_for_ready_peers(
+            node,
+            p2p,
+            sync_state,
+            &saved_peer_ids,
+            recovery_requests,
+        )
+        .await;
     }
 }
 
-pub(super) async fn request_index_for_ready_peers(
+pub(super) async fn request_client_recovery_for_ready_peers(
     node: &Arc<EmbeddedNode>,
     p2p: &Arc<dyn P2POps>,
     sync_state: &ClientSyncStateOwner,
@@ -379,7 +397,7 @@ pub(super) async fn request_index_for_ready_peers(
         return;
     }
 
-    match request_index_sync(node.as_ref(), p2p).await {
+    match request_client_recovery_sync(node.as_ref(), p2p).await {
         Ok(collections) => {
             let current = sync_state.records();
             requested_for.extend(
@@ -391,16 +409,16 @@ pub(super) async fn request_index_for_ready_peers(
             tracing::info!(
                 target: "gents_desktop_core::peer_maintenance",
                 requested_collections = ?collections,
-                "session index sync request dispatched; merges continue asynchronously"
+                "client recovery sync request dispatched; merges continue asynchronously"
             );
         }
         Err(error) => {
-            let message = format!("session index sync request failed: {error}");
+            let message = format!("client recovery sync request failed: {error}");
             sync_state.set_last_error_for_records(&pending, message);
             tracing::warn!(
                 target: "gents_desktop_core::peer_maintenance",
                 error = %error,
-                "session index sync request failed; supervisor will retry after repair"
+                "client recovery sync request failed; supervisor will retry after repair"
             );
         }
     }
@@ -431,7 +449,12 @@ fn status_for_record(record: &PeerRecord) -> ClientPeerStatus {
     }
 }
 
-pub(super) async fn probe_p2p_health(p2p: &Arc<dyn P2POps>, previous: &P2PHealth) -> P2PHealth {
+pub(super) async fn probe_p2p_health(
+    p2p: &Arc<dyn P2POps>,
+    previous: &P2PHealth,
+    previous_database_sync: Option<P2pSyncStatusSnapshot>,
+    previous_database_sync_error: Option<String>,
+) -> (P2PHealth, Option<P2pSyncStatusSnapshot>, Option<String>) {
     let now = SystemTime::now();
     let probe = async {
         let peer_id = p2p_local_peer_id(p2p).await?;
@@ -446,21 +469,37 @@ pub(super) async fn probe_p2p_health(p2p: &Arc<dyn P2POps>, previous: &P2PHealth
 
         let connected_peers = p2p_connected_peers(p2p).await?;
         let replicators = p2p_get_replicators(p2p).await?;
-
         Ok::<(usize, usize), anyhow::Error>((connected_peers.len(), replicators.len()))
     }
     .await;
 
     match probe {
-        Ok((connected_peer_count, replicator_count)) => P2PHealth {
-            status: P2PHealthStatus::Healthy,
-            consecutive_failures: 0,
-            connected_peer_count,
-            replicator_count,
-            last_error: None,
-            last_ok_at: Some(now),
-            last_failure_at: previous.last_failure_at,
-        },
+        Ok((connected_peer_count, replicator_count)) => {
+            let (database_sync, database_sync_error) = match p2p_sync_status(p2p).await {
+                Ok(sync_status) if sync_status.is_null() => (None, None),
+                Ok(sync_status) => match JsonP2pSyncStatusAdapter.adapt(&sync_status) {
+                    Ok(status) => (Some(status), None),
+                    Err(error) => (None, Some(format!("invalid database sync status: {error}"))),
+                },
+                Err(error) => (
+                    None,
+                    Some(format!("failed to read database sync status: {error}")),
+                ),
+            };
+            (
+                P2PHealth {
+                    status: P2PHealthStatus::Healthy,
+                    consecutive_failures: 0,
+                    connected_peer_count,
+                    replicator_count,
+                    last_error: None,
+                    last_ok_at: Some(now),
+                    last_failure_at: previous.last_failure_at,
+                },
+                database_sync,
+                database_sync_error,
+            )
+        }
         Err(error) => {
             let consecutive_failures = previous.consecutive_failures.saturating_add(1);
             let status = if consecutive_failures >= P2P_WEDGED_FAILURE_THRESHOLD {
@@ -468,15 +507,19 @@ pub(super) async fn probe_p2p_health(p2p: &Arc<dyn P2POps>, previous: &P2PHealth
             } else {
                 P2PHealthStatus::Degraded
             };
-            P2PHealth {
-                status,
-                consecutive_failures,
-                connected_peer_count: previous.connected_peer_count,
-                replicator_count: previous.replicator_count,
-                last_error: Some(error.to_string()),
-                last_ok_at: previous.last_ok_at,
-                last_failure_at: Some(now),
-            }
+            (
+                P2PHealth {
+                    status,
+                    consecutive_failures,
+                    connected_peer_count: previous.connected_peer_count,
+                    replicator_count: previous.replicator_count,
+                    last_error: Some(error.to_string()),
+                    last_ok_at: previous.last_ok_at,
+                    last_failure_at: Some(now),
+                },
+                previous_database_sync,
+                previous_database_sync_error,
+            )
         }
     }
 }
@@ -506,14 +549,6 @@ fn log_p2p_health_transition(previous: &P2PHealth, next: &P2PHealth) {
             "desktop P2P transport health degraded"
         );
     }
-}
-
-pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHealth) -> bool {
-    previous.status != next.status
-        || previous.consecutive_failures != next.consecutive_failures
-        || previous.connected_peer_count != next.connected_peer_count
-        || previous.replicator_count != next.replicator_count
-        || previous.last_error != next.last_error
 }
 
 pub(super) async fn saved_peer_needs_repair(

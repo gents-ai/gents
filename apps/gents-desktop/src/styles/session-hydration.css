@@ -1,5 +1,5 @@
 @layer chat {
-  .session-hydration-status {
+  .conversation-loading-status {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -14,54 +14,74 @@
     letter-spacing: 0.01em;
   }
 
-  .session-hydration-status.is-requested,
-  .session-hydration-status.is-serving {
+  .conversation-loading-status.is-loading {
     border-left-color: var(--color-info);
   }
 
-  .session-hydration-status.is-complete {
-    border-left-color: var(--color-accent);
-    color: var(--color-text-warm);
+  .conversation-loading-status.is-blocked {
+    border-left-color: var(--color-warning);
   }
 
-  .session-hydration-status.is-failed {
+  .conversation-loading-status.is-failed {
     border-left-color: var(--color-error-strong);
     background: rgb(var(--color-error-deep-rgb) / 0.55);
     color: var(--color-error-soft);
   }
 
-  .session-hydration-copy {
+  .conversation-loading-copy {
     display: inline-flex;
     align-items: center;
     gap: 0.55rem;
     min-width: 0;
   }
 
-  .session-hydration-pulse {
+  .conversation-loading-copy > span:last-child {
+    display: grid;
+    gap: 0.15rem;
+  }
+
+  .conversation-loading-copy strong {
+    color: var(--color-text-warm);
+    font-weight: 650;
+  }
+
+  .conversation-loading-pulse {
     width: 0.55rem;
     height: 0.55rem;
     flex: 0 0 auto;
     border-radius: 999px;
     background: var(--color-info);
-    animation: session-hydration-pulse var(--motion-pulse) ease-out infinite;
+    animation: conversation-loading-pulse var(--motion-pulse) ease-out infinite;
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .session-hydration-pulse {
+    .conversation-loading-pulse {
       animation: none;
     }
   }
 
-  @keyframes session-hydration-pulse {
+  @keyframes conversation-loading-pulse {
     50% {
       opacity: 0.2;
     }
   }
 
   @media (max-width: 760px) {
-    .session-hydration-status {
+    .conversation-loading-status {
       margin: 0 var(--space-3);
       padding: 0.4rem 0.55rem;
+    }
+  }
+
+  @media (max-width: 520px) {
+    .conversation-loading-status {
+      align-items: flex-start;
+      flex-direction: column;
+      gap: var(--space-2);
+    }
+
+    .conversation-loading-status > button {
+      align-self: flex-end;
     }
   }
 }

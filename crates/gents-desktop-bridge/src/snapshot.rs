@@ -54,6 +54,7 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
         agent_did: progress.agent_did.clone(),
         phase: progress.phase.as_str().to_string(),
         merged_count: progress.merged_count,
+        covered_count: progress.covered_count,
         served_count: progress.served_count,
     }
 }
@@ -61,14 +62,13 @@ pub(crate) fn to_hydration_view(progress: &ClientHydrationProgress) -> SessionHy
 pub(crate) fn to_sync_health_view(health: &SyncHealth) -> SyncHealthView {
     SyncHealthView {
         state: health.state.as_str().to_string(),
-        since: system_time_rfc3339(health.since),
-        offline_since: system_time_rfc3339(health.offline_since),
-        stalled_since: system_time_rfc3339(health.stalled_since),
-        last_error_class: pairing_error_class_label(health.last_error_class),
         last_error: health.last_error.clone(),
-        pairing_retry_count: health.pairing_retry_count,
-        route_retry_count: health.route_retry_count,
         connected_peer_count: health.connected_peer_count,
+        pending_dag_count: health.pending_dag_count,
+        persisted_pending_dag_count: health.persisted_pending_dag_count,
+        push_retry_marker_count: health.push_retry_marker_count,
+        exhausted_fetch_count: health.exhausted_fetch_count,
+        quarantined_dag_count: health.quarantined_dag_count,
     }
 }
 
@@ -84,8 +84,8 @@ pub(crate) fn to_pairing_collection_view(
     }
 }
 
-pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> SyncHealthView {
-    to_sync_health_view(&project_sync_health(sync))
+pub(crate) fn project_client_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealthView> {
+    project_sync_health(sync).map(|health| to_sync_health_view(&health))
 }
 
 fn pairing_error_class_label(class: Option<PairingErrorClass>) -> Option<String> {
@@ -146,6 +146,7 @@ async fn build_bootstrap_summary_raw(
         agent_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),
+        client_state_exists: desktop_paths.client_state_exists(),
         saved_peers: peer_records
             .iter()
             .map(|peer| SavedPeerView {

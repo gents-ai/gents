@@ -1,108 +1,60 @@
 import { describe, expect, it } from "vitest";
 
-import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 import {
-  formatElapsedSince,
+  projectSyncOperationalStatus,
   syncHealthDiagnostics,
-  syncHealthLabel,
   syncHealthState,
-} from "../src/lib/syncHealth";
+  type SyncHealthView,
+} from "@source-inc/gents-desktop-client";
 
 function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    since: null,
-    offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
     ...overrides,
   };
 }
 
-describe("syncHealthLabel", () => {
-  it("names healthy, syncing, stalled, offline-since, and failed", () => {
-    const now = Date.parse("2026-08-27T12:00:00Z");
-    expect(syncHealthLabel(health(), now)).toBe("Sync healthy");
-    expect(syncHealthLabel(health({ state: "syncing" }), now)).toBe("Syncing");
-    expect(
-      syncHealthLabel(
-        health({
-          state: "stalled",
-          stalledSince: "2026-08-27T11:50:00Z",
-        }),
-        now,
-      ),
-    ).toBe("Sync stalled since 10m ago");
-    expect(
-      syncHealthLabel(
-        health({
-          state: "offline",
-          offlineSince: "2026-08-27T10:00:00Z",
-        }),
-        now,
-      ),
-    ).toBe("Offline since 2h ago");
-    expect(syncHealthLabel(health({ state: "failed" }), now)).toBe("Sync failed");
+describe("projectSyncOperationalStatus", () => {
+  it("names unobserved, healthy, syncing, offline, and failed", () => {
+    expect(projectSyncOperationalStatus(null).shortLabel).toBe("Checking sync");
+    expect(projectSyncOperationalStatus(health())?.shortLabel).toBe("Sync healthy");
+    expect(projectSyncOperationalStatus(health({ state: "syncing" }))?.shortLabel).toBe(
+      "Syncing",
+    );
+    expect(projectSyncOperationalStatus(health({ state: "offline" }))?.shortLabel).toBe(
+      "Offline",
+    );
+    expect(projectSyncOperationalStatus(health({ state: "failed" }))?.shortLabel).toBe(
+      "Sync failed",
+    );
     expect(syncHealthState(null)).toBeNull();
     expect(syncHealthState(health({ state: "future-state" }))).toBeNull();
-    expect(formatElapsedSince("2026-08-27T11:59:20Z", now)).toBe("40s ago");
   });
 });
 
 describe("syncHealthDiagnostics", () => {
-  it("exposes global pairing, route, error-class, and stuck-since counters", () => {
+  it("exposes the database gauges without rebuilding route retries", () => {
     const diagnostics = syncHealthDiagnostics(
       health({
-        state: "stalled",
-        lastErrorClass: "RpcTimeout",
-        lastError: "timeout",
-        pairingRetryCount: 6,
-        stalledSince: "2026-08-27T11:00:00Z",
+        state: "syncing",
+        lastError: "provider exhaustion",
+        pendingDagCount: 2,
+        persistedPendingDagCount: 3,
+        pushRetryMarkerCount: 4,
+        exhaustedFetchCount: 5,
       }),
-      [
-        {
-          label: "Studio",
-          agentDid: "did:test:agent",
-          dialSucceeded: true,
-          lastError: null,
-          pairing: [
-            {
-              collectionId: "AgentSession",
-              pairingRetryCount: 6,
-              lastRetryAt: "2026-08-27T11:00:00Z",
-              lastRetryErrorClass: "RpcTimeout",
-              stuckSince: "2026-08-27T11:00:00Z",
-            },
-          ],
-          routes: [
-            {
-              routeId: "r1",
-              direction: "client-to-runtime",
-              directoryId: "peer-1",
-              transportPeerId: null,
-              address: null,
-              template: "machine",
-              desired: true,
-              applied: false,
-              liveMatch: false,
-              filterSummary: "machine",
-              lastError: "timeout",
-              retryCount: 2,
-              lastRetryAt: "2026-08-27T11:00:00Z",
-              lastRetryErrorClass: "RpcTimeout",
-            },
-          ],
-        } as never,
-      ],
     );
-    expect(diagnostics.state).toBe("stalled");
-    expect(diagnostics.lastErrorClass).toBe("RpcTimeout");
-    expect(diagnostics.pairingRetryCount).toBe(6);
-    expect(diagnostics.peers[0]?.pairing[0]?.stuckSince).toBe("2026-08-27T11:00:00Z");
-    expect(diagnostics.peers[0]?.routes[0]?.retryCount).toBe(2);
+    expect(diagnostics.state).toBe("syncing");
+    expect(diagnostics.pendingDagCount).toBe(2);
+    expect(diagnostics.persistedPendingDagCount).toBe(3);
+    expect(diagnostics.pushRetryMarkerCount).toBe(4);
+    expect(diagnostics.exhaustedFetchCount).toBe(5);
   });
 });

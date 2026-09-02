@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  restoreManagedServer,
-  shouldAutoStartDesktopClient,
-} from "../src/hooks/desktopShellEffects";
+import { shouldAutoStartDesktopClient } from "../src/hooks/desktopShellEffects";
+import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function apiWithManagedServer(
@@ -102,6 +100,21 @@ describe("managed server launch restoration", () => {
         {
           bootstrap: {
             savedPeers: [{ source: "paired-remote" }],
+          },
+          client: null,
+        } as never,
+        false,
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts persisted client state before the first enrollment peer materializes", () => {
+    expect(
+      shouldAutoStartDesktopClient(
+        {
+          bootstrap: {
+            clientStateExists: true,
+            savedPeers: [],
           },
           client: null,
         } as never,

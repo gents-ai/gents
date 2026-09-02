@@ -3,4 +3,4 @@ import type { DeploymentView } from "./DeploymentView.js";
 import type { P2PHealthView } from "./P2PHealthView.js";
 import type { SyncHealthView } from "./SyncHealthView.js";
 
-export type DesktopRuntimeSnapshot = { localPeerId: string, listenAddresses: Array<string>, p2pHealth: P2PHealthView, syncHealth?: SyncHealthView | null, bootstrapErrors: Array<string>, lastMutationError: string | null, focusedRequestId: string | null, configuredPeerCount: number, dialedPeerCount: number, peerIssueCount: number, rowCount: number, approxSerializedBytes: number, deployments: Array<DeploymentView>, };
+export type DesktopRuntimeSnapshot = { localPeerId: string, listenAddresses: Array<string>, p2pHealth: P2PHealthView, syncHealth: SyncHealthView | null, bootstrapErrors: Array<string>, lastMutationError: string | null, focusedRequestId: string | null, configuredPeerCount: number, dialedPeerCount: number, peerIssueCount: number, rowCount: number, approxSerializedBytes: number, deployments: Array<DeploymentView>, };

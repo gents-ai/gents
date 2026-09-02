@@ -5,6 +5,7 @@ import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import { listen } from "@tauri-apps/api/event";
 import { ChatWorkspace } from "./components/ChatWorkspace";
 import { ConfigWorkspace } from "./components/ConfigWorkspace";
+import type { ConfigTab } from "./components/config-workspace/model";
 import { useConfigNavigationController } from "./components/config/ConfigNavigationGuard";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FleetHostDashboard } from "./components/fleet/FleetHostDashboard";
@@ -20,6 +21,7 @@ import { StartupScreen } from "./components/StartupScreen";
 import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
+import { isMobileTauriShell } from "./lib/shellPlatform";
 import "./App.css";
 
 function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
@@ -37,6 +39,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     return {
       api: client.api,
       listenToUpdates: (handler) => client.transport.listenClientUpdated(handler),
+      supportsManagedServer: !isMobileTauriShell(),
     };
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
@@ -70,6 +73,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     "navigation",
   );
   const [configReturnView, setConfigReturnView] = useState<"fleet" | "chat">("fleet");
+  const [configInitialTab, setConfigInitialTab] = useState<ConfigTab>("behavior");
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const configNavigation = useConfigNavigationController();
   const requestConfigNavigation = configNavigation.requestNavigation;
@@ -162,12 +166,13 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     });
   }
 
-  function openConfig(agentDid?: string) {
+  function openConfig(agentDid?: string, initialTab: ConfigTab = "behavior") {
     shell.clearPendingMailboxCause();
     if (agentDid) {
       shell.setSelectedAgentDid(agentDid);
     }
     setConfigReturnView(workspaceView === "fleet" ? "fleet" : "chat");
+    setConfigInitialTab(initialTab);
     setWorkspaceView("config");
   }
 
@@ -209,6 +214,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
         {shell.startupPhase !== "ready" ? (
           <StartupScreen
             error={shell.error}
+            managedServerSupported={bridge.supportsManagedServer === true}
             onRetry={shell.onRetryStartup}
             phase={shell.startupPhase}
           />
@@ -321,27 +327,42 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 activeRequestId={
                   shell.activeRequestId ?? shell.session?.latestRequestId ?? null
                 }
+                activityStatus={shell.activityStatus}
                 approxSerializedBytes={
                   shell.snapshot?.client?.approxSerializedBytes ?? 0
                 }
                 canSend={shell.canSendMessage}
-                configuredPeerCount={shell.snapshot?.client?.configuredPeerCount ?? 0}
-                dialedPeerCount={shell.snapshot?.client?.dialedPeerCount ?? 0}
+                conversationLoadingStatus={shell.conversationLoadingStatus}
                 draft={shell.draft}
                 interruptVisible={shell.interruptVisible}
                 onDraftChange={shell.setDraft}
+                onConfigureInference={
+                  shell.operationalState?.admissionBlocker?.action ===
+                  "configureInference"
+                    ? () => openConfig(shell.selectedDeployment?.agentDid, "backends")
+                    : undefined
+                }
+                onReconnect={
+                  shell.operationalState?.admissionBlocker?.action === "reconnect"
+                    ? shell.onRepairP2P
+                    : undefined
+                }
+                onConversationReconnect={
+                  shell.snapshot?.client ? shell.onRepairP2P : undefined
+                }
+                reconnecting={shell.repairingP2P}
                 onRenameConversationTitle={shell.onRenameConversationTitle}
                 onSend={shell.onSendMessage}
                 onRetryMessage={shell.onRetryMessage}
                 onRetryHydration={() =>
                   shell.retrySessionHydration(shell.selectedSessionId)
                 }
+                onRetryConversation={() =>
+                  shell.refreshSession(shell.selectedSessionId)
+                }
                 onLoadOlderTimeline={shell.loadOlderSessionTimeline}
                 rowCount={shell.snapshot?.client?.rowCount ?? 0}
-                runtimeHealth={shell.runtimeHealth}
-                sendHint={
-                  shell.sendStatus.kind === "disabled" ? shell.sendStatus.hint : null
-                }
+                syncHealth={shell.snapshot?.client?.syncHealth ?? null}
                 retryUnavailableHint={
                   shell.retryStatus.kind === "disabled" &&
                   shell.retryStatus.reason === "behaviorUnavailable"
@@ -371,6 +392,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           <section className="config-page">
             <ConfigWorkspace
               api={bridge.api}
+              initialTab={configInitialTab}
               backLabel={
                 configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"
               }

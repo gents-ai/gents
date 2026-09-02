@@ -58,6 +58,12 @@ pub async fn desktop_peer_enroll_status(
     let status = fetch_runtime_connection_payload(address)
         .await
         .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+    let server_label = status
+        .get("agent_name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .map(str::to_owned);
     let token = status
         .pointer("/enrollment/token")
         .and_then(serde_json::Value::as_str)
@@ -69,7 +75,11 @@ pub async fn desktop_peer_enroll_status(
         })?;
     core.request_status_enrollment(token)
         .await
-        .map(EnrollmentRequestView::from)
+        .map(|result| {
+            let mut view = EnrollmentRequestView::from(result);
+            view.server_label = server_label;
+            view
+        })
         .map_err(|error| BridgeError::from_legacy_message(format!("{error:#}")))
 }
 

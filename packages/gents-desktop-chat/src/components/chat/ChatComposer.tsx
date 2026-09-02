@@ -7,48 +7,45 @@ import {
   type KeyboardEvent,
 } from "react";
 
-import { isTerminalTurnState } from "../../chat-shell.js";
+import type { ChatActivityStatus } from "../../chat-shell.js";
 import type { SkillView } from "@source-inc/gents-desktop-client";
 import { CancelButton } from "../cancelUx/index.js";
 import { applySkillSelection, slashSkillSuggestion } from "./slashSkills.js";
 
 export type ChatComposerProps = {
   activeRequestId: string | null;
+  activityStatus: ChatActivityStatus | null;
   approxSerializedBytes: number;
   behaviorLabel: string | null;
   canSend: boolean;
-  configuredPeerCount: number;
-  dialedPeerCount: number;
   draft: string;
   interruptVisible: boolean;
   rowCount: number;
-  sendHint: string | null;
   sending: boolean;
   turnState: string | null;
   onDraftChange: (value: string) => void;
+  onConfigureInference?: () => void;
+  onReconnect?: () => void | Promise<unknown>;
+  reconnecting?: boolean;
   onInterruptClick: () => void;
   onSend: (event: FormEvent) => void;
   skills?: SkillView[];
 };
 
-function turnStatusLabel(turnState: string | null): string | null {
-  if (!turnState || isTerminalTurnState(turnState)) {
-    return null;
-  }
-  return turnState === "streaming" ? "Responding…" : "Working…";
-}
-
 const COMPOSER_MAX_HEIGHT_PX = 320;
 
 export function ChatComposer({
   activeRequestId,
+  activityStatus,
   canSend,
   draft,
   interruptVisible,
-  sendHint,
   sending,
   turnState,
   onDraftChange,
+  onConfigureInference,
+  onReconnect,
+  reconnecting = false,
   onInterruptClick,
   onSend,
   skills = [],
@@ -190,14 +187,57 @@ export function ChatComposer({
       </div>
 
       <div className="composer-footer">
-        <div className="muted small" data-testid="composer-status">
-          {sendHint ??
-            turnStatusLabel(turnState) ??
-            (skills.length > 0
-              ? "⏎ send · ⇧⏎ new line · / skills"
-              : "⏎ send · ⇧⏎ new line")}
+        <div
+          aria-atomic="true"
+          aria-live="polite"
+          className={`composer-status${activityStatus ? ` is-${activityStatus.kind}` : " is-idle"}`}
+          data-activity-kind={activityStatus?.kind ?? "idle"}
+          data-testid="composer-status"
+          role="status"
+        >
+          {activityStatus ? (
+            <>
+              <span
+                aria-hidden="true"
+                className={`composer-status-dot${activityStatus.animated ? " is-animated" : ""}`}
+              />
+              <span className="composer-status-copy">
+                <strong>{activityStatus.label}</strong>
+                <span>{activityStatus.detail}</span>
+              </span>
+            </>
+          ) : (
+            <span className="composer-idle-hint">
+              {skills.length > 0
+                ? "⏎ send · ⇧⏎ new line · / skills"
+                : "⏎ send · ⇧⏎ new line"}
+            </span>
+          )}
         </div>
         <div className="composer-actions">
+          {onReconnect ? (
+            <button
+              className="ghost-button"
+              data-testid="composer-reconnect"
+              disabled={reconnecting}
+              onClick={() =>
+                void Promise.resolve(onReconnect()).catch(() => {})
+              }
+              type="button"
+            >
+              {reconnecting ? "Reconnecting…" : "Reconnect agent"}
+            </button>
+          ) : null}
+          {onConfigureInference ? (
+            <button
+              className="ghost-button"
+              data-testid="composer-configure-inference"
+              onClick={onConfigureInference}
+              type="button"
+            >
+              Configure inference
+            </button>
+          ) : null}
           <CancelButton
             activeRequestId={activeRequestId}
             forceVisible={interruptVisible}

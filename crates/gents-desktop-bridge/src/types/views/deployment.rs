@@ -22,30 +22,13 @@ pub struct P2PHealthView {
 #[serde(rename_all = "camelCase")]
 pub struct SyncHealthView {
     pub state: String,
-    pub since: Option<String>,
-    pub offline_since: Option<String>,
-    pub stalled_since: Option<String>,
-    pub last_error_class: Option<String>,
     pub last_error: Option<String>,
-    pub pairing_retry_count: u32,
-    pub route_retry_count: u32,
     pub connected_peer_count: usize,
-}
-
-impl Default for SyncHealthView {
-    fn default() -> Self {
-        Self {
-            state: "healthy".into(),
-            since: None,
-            offline_since: None,
-            stalled_since: None,
-            last_error_class: None,
-            last_error: None,
-            pairing_retry_count: 0,
-            route_retry_count: 0,
-            connected_peer_count: 0,
-        }
-    }
+    pub pending_dag_count: Option<usize>,
+    pub persisted_pending_dag_count: Option<usize>,
+    pub push_retry_marker_count: Option<usize>,
+    pub exhausted_fetch_count: Option<u64>,
+    pub quarantined_dag_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq, TS)]
@@ -547,8 +530,6 @@ pub struct DesktopRuntimeSnapshot {
     pub local_peer_id: String,
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[ts(optional = nullable)]
     pub sync_health: Option<SyncHealthView>,
     pub bootstrap_errors: Vec<String>,
     pub last_mutation_error: Option<String>,
@@ -605,6 +586,9 @@ pub struct EnrollmentRequestView {
     pub network_id: String,
     pub admin_did: String,
     pub server_peer: String,
+    /// Presentation-only label advertised by the authenticated status endpoint.
+    /// It is never used for enrollment authority or route selection.
+    pub server_label: Option<String>,
     pub owner_agent: String,
     pub state: String,
 }
@@ -616,6 +600,7 @@ impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentReq
             network_id: result.network_id,
             admin_did: result.admin_did,
             server_peer: result.server_peer,
+            server_label: None,
             owner_agent: result.owner_agent,
             state: result.state,
         }
@@ -651,6 +636,7 @@ mod peer_remove_response_tests {
                 agent_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,
+                client_state_exists: true,
                 saved_peers: Vec::new(),
             },
             client: None,

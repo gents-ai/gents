@@ -4,6 +4,7 @@ import { formatPeerConnectionError } from "../peerConnectionErrors.js";
 import type {
   BootstrapSummary,
   DeploymentView,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import {
@@ -35,6 +36,7 @@ function isTerminalTurnState(turnState?: string | null) {
 export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;
   deployment: DeploymentView;
+  syncHealth?: SyncHealthView | null;
   onOpenChat: (agentDid: string) => void;
   onOpenConfig: (agentDid: string) => void;
   onRemovePeer?: (peerId: string) => Promise<unknown> | void;
@@ -45,6 +47,7 @@ export type FleetRowProps = {
 export function FleetRow({
   bootstrap,
   deployment,
+  syncHealth = null,
   onOpenChat,
   onOpenConfig,
   onRemovePeer,
@@ -53,9 +56,10 @@ export function FleetRow({
 }: FleetRowProps) {
   const [editingLabel, setEditingLabel] = useState<string | null>(null);
   const [confirmingRemove, setConfirmingRemove] = useState(false);
-  const status = deploymentStatus(deployment);
+  const status = deploymentStatus(deployment, syncHealth);
   const localRuntime = isLocalRuntimeSource(deployment.source);
-  const chatReady = deployment.pairingReady;
+  const remoteRuntime = deployment.source === "enrollment";
+  const chatReady = status.chatReady;
 
   function commitRename() {
     const label = (editingLabel ?? "").trim();
@@ -161,21 +165,9 @@ export function FleetRow({
                 title={`Open ${deployment.label} details`}
                 type="button"
               >
-                {deployment.agentPrincipal.displayName ?? deployment.label}
+                {deployment.label}
               </button>
             )}
-            {onRenamePeer && editingLabel == null ? (
-              <button
-                aria-label={`Rename ${deployment.label}`}
-                className="ghost-button fleet-row-icon fleet-rename"
-                data-testid={`fleet-rename-${deployment.peerId}`}
-                onClick={() => setEditingLabel(deployment.label)}
-                title="Rename deployment (saved label)"
-                type="button"
-              >
-                <PencilIcon />
-              </button>
-            ) : null}
             <span
               className="muted fleet-agent-summary"
               data-testid={`fleet-summary-${deployment.peerId}`}
@@ -193,6 +185,18 @@ export function FleetRow({
               </span>
             ) : null}
           </div>
+          {onRenamePeer && editingLabel == null ? (
+            <button
+              aria-label={`Rename ${deployment.label}`}
+              className="ghost-button fleet-row-icon fleet-rename"
+              data-testid={`fleet-rename-${deployment.peerId}`}
+              onClick={() => setEditingLabel(deployment.label)}
+              title="Rename deployment (saved label)"
+              type="button"
+            >
+              <PencilIcon />
+            </button>
+          ) : null}
         </div>
       </td>
       <td>
@@ -204,9 +208,15 @@ export function FleetRow({
       <td>
         <div className="fleet-inference-cell">
           <Metric
-            label={backendCount === 1 ? "backend" : "backends"}
+            label={
+              remoteRuntime
+                ? "host-managed"
+                : backendCount === 1
+                  ? "backend"
+                  : "backends"
+            }
             title={inferenceBackendTitle(deployment)}
-            value={backendCount}
+            value={remoteRuntime ? "—" : backendCount}
           />
           {inferenceSetupNeeded ? (
             onSetupInference ? (
@@ -300,7 +310,7 @@ function Metric({
 }: {
   label?: string;
   title?: string;
-  value: number;
+  value: number | string;
 }) {
   return (
     <span className="fleet-metric" title={title}>

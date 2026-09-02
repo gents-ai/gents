@@ -36,20 +36,20 @@ export function visibleSessionHydration(
 
 export function sessionHydrationLabel(hydration: VisibleSessionHydration): string {
   const served = hydration.servedCount;
-  const merged = hydration.mergedCount;
+  const covered = hydration.coveredCount;
   switch (hydration.phase) {
     case "requested":
       return "Fetching session history";
     case "serving":
       return served == null
-        ? merged > 0
-          ? `Fetching session history · ${merged} documents so far`
+        ? covered > 0
+          ? `Fetching session history · ${covered} documents so far`
           : "Fetching session history"
-        : `Fetching session history · ${merged} of ${served}`;
+        : `Fetching session history · ${covered} of ${served}`;
     case "complete":
       return served == null
         ? "Session history loaded"
-        : `Session history loaded · ${merged} of ${served}`;
+        : `Session history loaded · ${covered} of ${served}`;
     case "failed":
       return "Couldn't fetch the rest of this session";
   }

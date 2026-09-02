@@ -49,6 +49,12 @@ const streamingSession: DesktopSessionSnapshot = {
 
 const baseProps = {
   activeRequestId: "req_root",
+  activityStatus: {
+    kind: "working" as const,
+    label: "Agent is working…",
+    detail: "This turn must finish before another message can be sent.",
+    animated: true,
+  },
   selectedDeployment: baseDeployment,
   selectedConversationTitle: "t",
   selectedBehaviorId: "default",
@@ -57,10 +63,7 @@ const baseProps = {
   runtimeHealth: null,
   rowCount: 0,
   approxSerializedBytes: 0,
-  dialedPeerCount: 1,
-  configuredPeerCount: 1,
   canSend: false,
-  sendHint: null,
   draft: "",
   interruptVisible: true,
   sending: false,

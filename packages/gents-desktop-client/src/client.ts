@@ -13,12 +13,11 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.15.0";
-// Runtime-authored behavior readiness is required and the duplicate runtime
-// counters are gone and status pairing is authenticated enrollment, so this
-// client requires the breaking 4.0 bridge.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "4.0";
+// Sync status consumes the database-owned gauges directly and no longer
+// accepts the duplicated pairing/route retry wire fields.
+export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
+  "29bb972cc0e19f13eb99c5e899d5b5b2fdac647b452c7c954687ca12aaf41623";
 
 function parseBridgeContractVersion(version: string): [number, number] | null {
   const match = /^(\d+)\.(\d+)$/.exec(version);

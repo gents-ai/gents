@@ -1,7 +1,14 @@
 import type {
   DeploymentView,
+  SyncHealthView,
   ToolSelectionView,
 } from "@source-inc/gents-desktop-client";
+import {
+  isLocalRuntimeSource,
+  projectDeploymentOperationalState,
+} from "@source-inc/gents-desktop-client";
+
+export { isLocalRuntimeSource } from "@source-inc/gents-desktop-client";
 
 export type StatusTone = "green" | "yellow" | "red";
 
@@ -13,59 +20,53 @@ export type ToolIcon = {
   title: string;
 };
 
-export function deploymentStatus(deployment: DeploymentView): {
+export function deploymentStatus(
+  deployment: DeploymentView,
+  syncHealth: SyncHealthView | null = null,
+): {
   title: string;
   tone: StatusTone;
   label: string;
   lastError: string | null;
+  chatReady: boolean;
 } {
-  const p2p = deployment.dialSucceeded ? "connected" : "saved";
-  const readinessSource = deployment.behaviorReadiness?.source;
-  const runtime =
-    readinessSource?.state === "current"
-      ? "ready"
-      : `unknown (${
-          readinessSource?.state === "unknown"
-            ? readinessSource.reason
-            : "readiness_missing"
-        })`;
-  const reconcile = deployment.runtime?.reconcilePhase ?? "unknown";
+  const operational = projectDeploymentOperationalState(
+    deployment,
+    null,
+    syncHealth,
+  );
   const lastError =
     deployment.lastError ?? deployment.runtime?.lastReconcileError ?? null;
   const title = [
-    `P2P ${p2p}`,
-    `runtime ${runtime}`,
-    `reconcile ${reconcile}`,
-    lastError ? `error ${lastError}` : null,
+    operational.transport.detail,
+    operational.route.detail,
+    operational.sync.detail,
+    operational.behavior.detail,
+    operational.reconcile.detail,
   ]
     .filter(Boolean)
     .join(" | ");
-
-  if (lastError) {
-    return { title, tone: "red", label: "Error", lastError };
-  }
-
-  if (!deployment.dialSucceeded) {
-    return { title, tone: "red", label: "Not connected", lastError };
-  }
-
-  if (!deployment.pairingReady) {
-    return {
-      title: `${title} | awaiting signed enrollment route and behavior readiness`,
-      tone: "yellow",
-      label: "Preparing",
-      lastError,
-    };
-  }
-
-  if (reconcile !== "idle" && reconcile !== "unknown") {
-    return { title, tone: "yellow", label: "Syncing", lastError };
-  }
-
-  return { title, tone: "green", label: "Online", lastError };
+  return {
+    title,
+    tone:
+      operational.summary.kind === "ready"
+        ? "green"
+        : operational.summary.kind === "blocked"
+          ? "red"
+          : "yellow",
+    label: operational.summary.shortLabel,
+    lastError,
+    chatReady: operational.admissionBlocker === null,
+  };
 }
 
 export function inferenceBackendTitle(deployment: DeploymentView) {
+  if (deployment.source === "enrollment") {
+    return projectDeploymentOperationalState(deployment).behaviorReadiness
+      .kind !== "unknown"
+      ? "Backend details stay on the agent host; this runtime reports authoritative behavior readiness"
+      : "Backend details stay on the agent host; runtime readiness is currently unavailable";
+  }
   const labels = (deployment.inferenceBackends ?? [])
     .filter((backend) => backend.enabled !== false)
     .map((backend) => backend.name ?? backend.backendId);
@@ -75,6 +76,9 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
 }
 
 export function needsInferenceSetup(deployment: DeploymentView): boolean {
+  // Enrolled clients do not receive non-branchable backend documents and
+  // cannot configure them locally. Runtime-authored readiness is authoritative.
+  if (deployment.source === "enrollment") return false;
   return !deployment.inferenceBackends.some(
     (backend) => backend.enabled !== false && backend.models.length > 0,
   );
@@ -206,10 +210,6 @@ function uniqueValues(values: Array<string | null | undefined>) {
         .map((value) => value.trim()),
     ),
   ).sort();
-}
-
-export function isLocalRuntimeSource(source?: string | null): boolean {
-  return source === "local-standard";
 }
 
 export function formatRelativeTime(value?: string | null) {

@@ -1,12 +1,12 @@
 import type { Dispatch, FormEvent, MutableRefObject, SetStateAction } from "react";
 
 import type {
-  BehaviorReadinessDecision,
   ChatShellProjection,
   ChatWorkflowState,
   OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 import type {
+  BehaviorReadinessDecision,
   DeploymentView,
   DesktopApiAdapter,
   DesktopSessionSnapshot,

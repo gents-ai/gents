@@ -1,4 +1,10 @@
-import { useRef, useState, type MutableRefObject, type SetStateAction } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type SetStateAction,
+} from "react";
 
 import type {
   DesktopApiAdapter,
@@ -7,16 +13,14 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
+import type { DesktopStartupPhase } from "../lib/loadingStatus";
+import { restoreManagedServer } from "./managedServerLifecycle";
 
-export type DesktopStartupPhase =
-  | "loading-configuration"
-  | "starting-client"
-  | "configuration-error"
-  | "client-error"
-  | "ready";
+export type { DesktopStartupPhase } from "../lib/loadingStatus";
 
 type ClientLifecycleOptions = {
   api: DesktopApiAdapter;
+  supportsManagedServer: boolean;
   refreshSession: (sessionId: string | null) => Promise<DesktopSessionSnapshot | null>;
   selectedSessionIdRef: MutableRefObject<string | null>;
   setError: (error: string | null) => void;
@@ -26,6 +30,7 @@ type ClientLifecycleOptions = {
 /** Own desktop process startup, snapshot reads, and bounded restart recovery. */
 export function useDesktopClientLifecycle({
   api,
+  supportsManagedServer,
   refreshSession,
   selectedSessionIdRef,
   setError,
@@ -37,14 +42,17 @@ export function useDesktopClientLifecycle({
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
   const snapshotRefreshSeq = useRef(0);
-  const startupPhaseRef = useRef<DesktopStartupPhase>("loading-configuration");
+  const initialStartupPhase: DesktopStartupPhase = supportsManagedServer
+    ? "checking-managed-server"
+    : "loading-configuration";
+  const startupPhaseRef = useRef<DesktopStartupPhase>(initialStartupPhase);
   const startClientInFlight = useRef<Promise<DesktopClientSnapshot | null> | null>(
     null,
   );
+  const initializationInFlight = useRef<Promise<void> | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
-  const [startupPhase, setStartupPhaseState] = useState<DesktopStartupPhase>(
-    "loading-configuration",
-  );
+  const [startupPhase, setStartupPhaseState] =
+    useState<DesktopStartupPhase>(initialStartupPhase);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -66,7 +74,9 @@ export function useDesktopClientLifecycle({
         setError(null);
         if (resolvingConfiguration) {
           setStartupPhase(
-            next.client || next.bootstrap.savedPeers.length === 0
+            next.client ||
+              (!next.bootstrap.clientStateExists &&
+                next.bootstrap.savedPeers.length === 0)
               ? "ready"
               : "starting-client",
           );
@@ -112,11 +122,38 @@ export function useDesktopClientLifecycle({
     await ensureDesktopClientStarted();
   }
 
-  async function onRetryStartup() {
-    autostartAttempted.current = false;
-    setStartupPhase("loading-configuration");
-    await refreshSnapshot();
+  function initializeDesktop(): Promise<void> {
+    if (initializationInFlight.current) return initializationInFlight.current;
+    const pending = (async () => {
+      autostartAttempted.current = false;
+      if (supportsManagedServer) {
+        setStartupPhase("checking-managed-server");
+        try {
+          localServerAvailable.current = await restoreManagedServer(api);
+        } catch (error) {
+          setError(String(error));
+          setStartupPhase("managed-server-error");
+          return;
+        }
+      }
+      setStartupPhase("loading-configuration");
+      await refreshSnapshot();
+    })().finally(() => {
+      if (initializationInFlight.current === pending) {
+        initializationInFlight.current = null;
+      }
+    });
+    initializationInFlight.current = pending;
+    return pending;
   }
+
+  async function onRetryStartup() {
+    await initializeDesktop();
+  }
+
+  useEffect(() => {
+    void initializeDesktop();
+  }, []);
 
   async function restartDesktopClient(reason: string) {
     if (autoRestartInFlight.current) return;

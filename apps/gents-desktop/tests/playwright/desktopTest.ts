@@ -16,7 +16,6 @@ export type HarnessScenario =
   | "coding"
   | "session-hydration"
   | "sync-offline"
-  | "sync-stalled"
   | "sync-failed";
 
 export const PEER_ID = "peer-bombadil-local";
@@ -212,7 +211,7 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
             ".chat-header",
             ".chat-title-block",
             ".chat-status",
-            ".session-hydration-status",
+            ".conversation-loading-status",
             ".composer-panel",
             ".fleet-header",
             ".config-header",

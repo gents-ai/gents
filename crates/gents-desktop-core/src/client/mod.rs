@@ -16,6 +16,7 @@ pub use core::{
     EnrollmentRequestResult, P2PHealth, P2PHealthStatus, PairingCollectionStatus,
     STUCK_THRESHOLD_ATTEMPTS,
 };
+pub use gents::P2pSyncStatusSnapshot;
 pub use mutations::{PeerMutationResult, SubmitRequestOptions, SubmittedRequest};
 pub use observe::{
     ObservedStore, ObserverHandle, ObserverMetricsSnapshot, StoreProjectionRevision,

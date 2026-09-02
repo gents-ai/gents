@@ -246,6 +246,7 @@ export const bootstrap: BootstrapSummary = {
   agentHomeExists: true,
   desktopHomeExists: true,
   peerDirectoryExists: true,
+  clientStateExists: false,
   savedPeers: [],
 };
 

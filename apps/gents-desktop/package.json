@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "npm run build:packages && tsc && vite build",
+    "build:packages": "npm run build:packages --prefix ../..",
     "format": "prettier --write \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
     "format:check": "prettier --check \"src/**/*.{css,json,ts,tsx}\" \"tests/**/*.{html,mjs,ts,tsx}\" \"*.{json,ts}\"",
     "test": "vitest run",

@@ -6,7 +6,9 @@ import { MessageList } from "@source-inc/gents-desktop-chat";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import {
   getDesktopApiAdapter,
+  projectDeploymentOperationalState,
   setDesktopApiAdapterForTests,
+  type BehaviorReadinessDecision,
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 import { projectChatShell } from "@source-inc/gents-desktop-chat";
@@ -25,6 +27,43 @@ const unavailableBehaviorReadiness = {
   behaviorLabel: "Ops",
   reason: "backend_temporarily_unavailable",
 } as const;
+
+function operationalStateFor(
+  decision: BehaviorReadinessDecision = readyBehaviorReadiness,
+  routeReady = deployment.chatSafe,
+) {
+  const behaviorId = decision.behaviorId ?? "default";
+  return projectDeploymentOperationalState({
+    ...deployment,
+    pairingReady: routeReady,
+    chatSafe: routeReady,
+    behaviors: [
+      {
+        behaviorId,
+        displayName: decision.kind === "unknown" ? behaviorId : decision.behaviorLabel,
+        enabled: true,
+        isDefault: true,
+      },
+    ],
+    behaviorReadiness: {
+      ...deployment.behaviorReadiness,
+      source:
+        decision.kind === "unknown"
+          ? { state: "unknown", reason: decision.reason }
+          : { state: "current" },
+      defaultBehaviorId: behaviorId,
+      behaviors: [
+        decision.kind === "unavailable"
+          ? {
+              state: "unavailable",
+              behaviorId,
+              reason: decision.reason,
+            }
+          : { state: "ready", behaviorId },
+      ],
+    },
+  });
+}
 
 afterEach(() => setDesktopApiAdapterForTests(null));
 
@@ -293,8 +332,7 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: deployment.chatSafe,
-      behaviorReadiness: readyBehaviorReadiness,
+      operationalState: operationalStateFor(),
     });
     expect(shellProjection.sendStatus).toMatchObject({
       kind: "disabled",
@@ -348,8 +386,7 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: true,
-      behaviorReadiness: readyBehaviorReadiness,
+      operationalState: operationalStateFor(),
     });
     const blockedRetryProjection = projectChatShell({
       clientAvailable: true,
@@ -360,8 +397,7 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: true,
-      behaviorReadiness: unavailableBehaviorReadiness,
+      operationalState: operationalStateFor(unavailableBehaviorReadiness),
     });
     const common = {
       api: { retryRequest } as unknown as DesktopApiAdapter,
@@ -431,8 +467,7 @@ describe("error card retry", () => {
       session,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: deployment.chatSafe,
-      behaviorReadiness: readyBehaviorReadiness,
+      operationalState: operationalStateFor(),
     });
 
     const actions = createDesktopShellChatActions({

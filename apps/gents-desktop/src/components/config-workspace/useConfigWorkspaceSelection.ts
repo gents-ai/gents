@@ -6,8 +6,9 @@ import { ensureSelection, type ConfigTab } from "./model";
 export function useConfigWorkspaceSelection(
   selectedDeployment: DeploymentView | null,
   selectedBehaviorId: string | null,
+  initialTab: ConfigTab = "behavior",
 ) {
-  const [activeTab, setActiveTab] = useState<ConfigTab>("behavior");
+  const [activeTab, setActiveTab] = useState<ConfigTab>(initialTab);
   const [selectedConfigBehaviorId, setSelectedConfigBehaviorId] = useState<
     string | null
   >(null);

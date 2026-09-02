@@ -300,7 +300,7 @@ fn ts_rs_exports_tagged_enum_and_camel_case_structs() {
     let bootstrap = std::fs::read_to_string(tmp.path().join("DesktopBootstrapSummary.ts"))
         .expect("DesktopBootstrapSummary.ts");
     assert!(
-        bootstrap.contains("defaultAgentHome"),
+        bootstrap.contains("defaultAgentHome") && bootstrap.contains("clientStateExists"),
         "serde rename_all camelCase should be reflected; got:\n{bootstrap}"
     );
     let error = std::fs::read_to_string(tmp.path().join("BridgeError.ts")).expect("BridgeError.ts");

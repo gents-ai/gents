@@ -3,13 +3,28 @@ import { describe, expect, it, vi } from "vitest";
 
 import { FleetRow, type FleetRowProps } from "@source-inc/gents-desktop-fleet";
 import { deploymentStatus } from "@source-inc/gents-desktop-fleet";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+import type { DeploymentView, SyncHealthView } from "@source-inc/gents-desktop-client";
 import { deployment } from "./config-panel-wiring/fixtures";
 
-function renderRow(dep: DeploymentView) {
+function syncHealth(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
+  return {
+    state: "healthy",
+    lastError: null,
+    connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
+    ...overrides,
+  };
+}
+
+function renderRow(dep: DeploymentView, sync = syncHealth()) {
   const props: FleetRowProps = {
     bootstrap: null,
     deployment: dep,
+    syncHealth: sync,
     onOpenChat: vi.fn(),
     onOpenConfig: vi.fn(),
   };
@@ -26,6 +41,12 @@ describe("fleet health visibility", () => {
   it("labels statuses instead of relying on a hover dot", () => {
     expect(
       deploymentStatus({ ...deployment, dialSucceeded: true, lastError: null }).label,
+    ).toBe("Checking sync");
+    expect(
+      deploymentStatus(
+        { ...deployment, dialSucceeded: true, lastError: null },
+        syncHealth(),
+      ).label,
     ).toBe("Online");
     expect(deploymentStatus({ ...deployment, dialSucceeded: false }).label).toBe(
       "Not connected",
@@ -33,6 +54,28 @@ describe("fleet health visibility", () => {
     expect(deploymentStatus({ ...deployment, lastError: "dial timeout" }).label).toBe(
       "Error",
     );
+  });
+
+  it("does not call a connected peer online when runtime readiness is stale", () => {
+    const stale = {
+      ...deployment,
+      source: "enrollment",
+      dialSucceeded: true,
+      pairingReady: true,
+      lastError: null,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        source: { state: "unknown" as const, reason: "readiness_stale" as const },
+      },
+    };
+    const syncing = syncHealth({
+      state: "syncing",
+      pendingDagCount: 1,
+      exhaustedFetchCount: 1,
+    });
+    expect(deploymentStatus(stale, syncing).label).toBe("Runtime unavailable");
+    renderRow(stale, syncing);
+    expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
   });
 
   it("shows a visible error line with remediation-aware copy on failing rows", () => {

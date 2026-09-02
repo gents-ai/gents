@@ -10,12 +10,12 @@ import type {
   DesktopSessionSnapshot,
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
+import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
   timingConfig,
 } from "./desktopShellRuntime";
-import { selectedBehaviorIdForDeployment } from "../lib/behaviorReadiness";
 import { useDesktopProjectionEffects } from "./useDesktopProjectionEffects";
 
 type DesktopShellEffectsArgs = {
@@ -92,23 +92,6 @@ export function useDesktopShellEffects({
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId, selectedSessionIdRef]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void restoreManagedServer(api)
-      .then((available) => {
-        localServerAvailable.current = available;
-      })
-      .catch((error) => {
-        if (!cancelled) setError(String(error));
-      })
-      .finally(() => {
-        if (!cancelled) void refreshSnapshot();
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!snapshot || snapshot.client || starting || sending) {
@@ -297,46 +280,14 @@ export function useDesktopShellEffects({
   }, [localWorkflow, sending, setLocalWorkflow]);
 }
 
-const managedServerRestoreInFlight = new WeakMap<
-  DesktopApiAdapter,
-  Promise<boolean | null>
->();
-
-export function restoreManagedServer(api: DesktopApiAdapter): Promise<boolean | null> {
-  const existing = managedServerRestoreInFlight.get(api);
-  if (existing) return existing;
-
-  const pending = restoreManagedServerOnce(api).finally(() => {
-    if (managedServerRestoreInFlight.get(api) === pending) {
-      managedServerRestoreInFlight.delete(api);
-    }
-  });
-  managedServerRestoreInFlight.set(api, pending);
-  return pending;
-}
-
-async function restoreManagedServerOnce(
-  api: DesktopApiAdapter,
-): Promise<boolean | null> {
-  if (!api.managedServerStatus || !api.startManagedServer) return null;
-
-  const status = await api.managedServerStatus();
-  if (status.state === "running" || status.state === "external") {
-    return true;
-  }
-  if (!status.autoStart) {
-    return false;
-  }
-
-  await api.startManagedServer(status.agentName?.trim() || "Local Agent");
-  return true;
-}
-
 export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
 ): boolean {
-  return snapshot.bootstrap.savedPeers.some(
-    (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+  return (
+    snapshot.bootstrap.clientStateExists ||
+    snapshot.bootstrap.savedPeers.some(
+      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+    )
   );
 }

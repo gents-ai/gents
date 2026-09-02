@@ -469,6 +469,7 @@ pub(crate) struct LeanSessionHydrationProgressCase {
     pub(crate) begin_request: bool,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
+    pub(crate) expected_covered: usize,
     pub(crate) expected_retry_admit: bool,
     pub(crate) expected_complete: bool,
 }
@@ -482,6 +483,7 @@ pub(crate) struct LeanSessionHydrationDurableCase {
     pub(crate) served_matches: bool,
     pub(crate) expected_phase: String,
     pub(crate) expected_merged: usize,
+    pub(crate) expected_covered: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

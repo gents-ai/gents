@@ -6,11 +6,13 @@ import type {
   BehaviorUnavailableReasonView,
   DeploymentView,
 } from "@source-inc/gents-desktop-client";
-import { projectChatShell } from "@source-inc/gents-desktop-chat";
 import {
+  behaviorReadinessCanConfigureInference,
+  projectDeploymentOperationalState,
   selectedBehaviorIdForDeployment,
   selectedBehaviorReadinessDecision,
-} from "../src/lib/behaviorReadiness";
+} from "@source-inc/gents-desktop-client";
+import { projectChatShell } from "@source-inc/gents-desktop-chat";
 
 function deployment(
   status: BehaviorReadinessStatusView,
@@ -22,6 +24,8 @@ function deployment(
 ): DeploymentView {
   return {
     agentDid: "did:key:z6MkRemote",
+    dialSucceeded: true,
+    pairingReady: options.chatSafe ?? true,
     chatSafe: options.chatSafe ?? true,
     defaultBehaviorId: "default",
     behaviorReadiness: {
@@ -54,6 +58,48 @@ function unavailable(reason: BehaviorUnavailableReasonView): DeploymentView {
 }
 
 describe("selectedBehaviorReadinessDecision", () => {
+  it.each([
+    "backend_not_configured",
+    "backend_disabled",
+    "backend_temporarily_unavailable",
+    "credentials_required",
+    "inference_profile_invalid",
+  ] satisfies BehaviorUnavailableReasonView[])(
+    "offers inference configuration for %s",
+    (reason) => {
+      expect(
+        behaviorReadinessCanConfigureInference(
+          selectedBehaviorReadinessDecision(unavailable(reason), null),
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it("does not mislabel missing readiness or non-inference failures", () => {
+    const missing = deployment(
+      { state: "ready", behaviorId: "default" },
+      { sourceReason: "readiness_missing" },
+    );
+    expect(
+      behaviorReadinessCanConfigureInference(
+        selectedBehaviorReadinessDecision(missing, null),
+      ),
+    ).toBe(false);
+    expect(
+      behaviorReadinessCanConfigureInference(
+        selectedBehaviorReadinessDecision(
+          unavailable("tool_surface_unavailable"),
+          null,
+        ),
+      ),
+    ).toBe(false);
+    expect(projectDeploymentOperationalState(missing).behavior.action).toBeNull();
+    expect(
+      projectDeploymentOperationalState(unavailable("backend_disabled")).behavior
+        .action,
+    ).toBeNull();
+  });
+
   it("uses runtime readiness as the sole behavior authority", () => {
     const remote = deployment({ state: "ready", behaviorId: "default" });
     expect(remote.inferenceBackends).toEqual([]);
@@ -167,8 +213,7 @@ describe("selectedBehaviorReadinessDecision", () => {
         session: null,
         selectedConversation: null,
         localWorkflow: { kind: "ready" },
-        chatSafe: remote.chatSafe,
-        behaviorReadiness: selectedBehaviorReadinessDecision(remote, null),
+        operationalState: projectDeploymentOperationalState(remote),
       });
 
       if (blockedReason === null) {

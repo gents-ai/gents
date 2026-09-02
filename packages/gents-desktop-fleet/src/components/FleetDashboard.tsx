@@ -4,7 +4,9 @@ import type {
   BootstrapSummary,
   DesktopApiAdapter,
   DeploymentView,
+  EnrollmentRequestView,
   P2PHealth,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import type { FleetCopy } from "../copy.js";
 import { needsInferenceSetup } from "../fleetMetrics.js";
@@ -18,6 +20,7 @@ export type FleetDashboardProps = {
   deployments: DeploymentView[];
   loading: boolean;
   p2pHealth: P2PHealth | null;
+  syncHealth?: SyncHealthView | null;
   repairingP2P: boolean;
   starting: boolean;
   onRequestStatusEnrollment: AddPeerFormProps["onRequestStatusEnrollment"];
@@ -41,8 +44,8 @@ export function FleetDashboard({
   addingPeer,
   bootstrap,
   deployments,
-  loading,
   p2pHealth,
+  syncHealth = null,
   repairingP2P,
   starting,
   onRequestStatusEnrollment,
@@ -59,9 +62,14 @@ export function FleetDashboard({
   renderInferenceSetup,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
+  const [pendingEnrollment, setPendingEnrollment] = useState<{
+    request: EnrollmentRequestView;
+    serverAddress: string;
+  } | null>(null);
   const [wizardDeployment, setWizardDeployment] =
     useState<DeploymentView | null>(null);
   const autoPromptedInference = useRef(new Set<string>());
+  const enrollmentRenameInFlight = useRef<string | null>(null);
   const hasDeployments = deployments.length > 0;
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
@@ -91,6 +99,73 @@ export function FleetDashboard({
     setWizardDeployment(deploymentNeedingInference);
   }, [deploymentNeedingInference, renderInferenceSetup]);
 
+  useEffect(() => {
+    if (!pendingEnrollment) return;
+    const enrolled = deployments.find(
+      (deployment) =>
+        deployment.peerId === pendingEnrollment.request.serverPeer &&
+        deployment.pairingReady,
+    );
+    if (!enrolled) return;
+
+    const serverLabel = pendingEnrollment.request.serverLabel?.trim();
+    if (
+      onRenamePeer &&
+      serverLabel &&
+      enrolled.label === "Enrolled Agent" &&
+      enrollmentRenameInFlight.current !== enrolled.peerId
+    ) {
+      enrollmentRenameInFlight.current = enrolled.peerId;
+      void Promise.resolve(onRenamePeer(enrolled.peerId, serverLabel))
+        .catch(() => {})
+        .finally(() => {
+          enrollmentRenameInFlight.current = null;
+          setPendingEnrollment((current) =>
+            current?.request.serverPeer === enrolled.peerId ? null : current,
+          );
+        });
+      return;
+    }
+    setPendingEnrollment(null);
+  }, [deployments, onRenamePeer, pendingEnrollment]);
+
+  async function requestStatusEnrollment(serverAddress: string) {
+    const request = await onRequestStatusEnrollment(serverAddress);
+    setPendingEnrollment({ request, serverAddress });
+    setShowAddPeer(false);
+    return request;
+  }
+
+  const pendingNotice = pendingEnrollment ? (
+    <section
+      aria-live="polite"
+      className="fleet-enrollment-pending"
+      data-testid="fleet-enrollment-pending"
+    >
+      <div>
+        <p className="eyebrow">Enrollment requested</p>
+        <strong>
+          Waiting for {pendingEnrollment.request.serverLabel || "server"}{" "}
+          approval
+        </strong>
+        <p className="muted">
+          {pendingEnrollment.serverAddress} · request{" "}
+          <span className="mono">{pendingEnrollment.request.requestId}</span>
+        </p>
+      </div>
+      <button
+        className="ghost-button"
+        onClick={() => {
+          setPendingEnrollment(null);
+          setShowAddPeer(true);
+        }}
+        type="button"
+      >
+        Use a different server
+      </button>
+    </section>
+  ) : null;
+
   if (!hasDeployments) {
     return (
       <section className="fleet-empty" data-testid="fleet-empty">
@@ -105,22 +180,24 @@ export function FleetDashboard({
             </p>
           </div>
           {localRuntimeSetup}
-          <details
-            className="fleet-remote-disclosure"
-            data-testid="fleet-remote-disclosure"
-          >
-            <summary aria-label="Connect a remote agent">
-              {localRuntimeSetup
-                ? "Skip local setup and connect a remote agent…"
-                : "Connect agent"}
-            </summary>
-            <AddPeerForm
-              addingPeer={addingPeer}
-              disabled={starting || loading}
-              localError={null}
-              onRequestStatusEnrollment={onRequestStatusEnrollment}
-            />
-          </details>
+          {pendingNotice ?? (
+            <details
+              className="fleet-remote-disclosure"
+              data-testid="fleet-remote-disclosure"
+            >
+              <summary aria-label="Connect a remote agent">
+                {localRuntimeSetup
+                  ? "Skip local setup and connect a remote agent…"
+                  : "Connect agent"}
+              </summary>
+              <AddPeerForm
+                addingPeer={addingPeer}
+                disabled={starting}
+                localError={null}
+                onRequestStatusEnrollment={requestStatusEnrollment}
+              />
+            </details>
+          )}
         </div>
       </section>
     );
@@ -146,24 +223,27 @@ export function FleetDashboard({
           ) : null}
           <button
             className="primary-button"
+            disabled={pendingEnrollment !== null}
             onClick={() => {
               setShowAddPeer((value) => !value);
             }}
             type="button"
           >
-            Add Agent
+            {pendingEnrollment ? "Enrollment requested" : "Add Agent"}
           </button>
         </div>
       </header>
+
+      {pendingNotice}
 
       {showAddPeer ? (
         <section className="panel fleet-add-panel">
           {localRuntimeSetup}
           <AddPeerForm
             addingPeer={addingPeer}
-            disabled={starting || loading}
+            disabled={starting}
             localError={null}
-            onRequestStatusEnrollment={onRequestStatusEnrollment}
+            onRequestStatusEnrollment={requestStatusEnrollment}
           />
         </section>
       ) : null}
@@ -187,6 +267,7 @@ export function FleetDashboard({
               <FleetRow
                 bootstrap={bootstrap}
                 deployment={deployment}
+                syncHealth={syncHealth}
                 key={deployment.peerId}
                 onOpenChat={onOpenChat}
                 onOpenConfig={onOpenConfig}

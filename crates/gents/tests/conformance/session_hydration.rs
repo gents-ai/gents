@@ -70,6 +70,11 @@ fn generated_session_hydration_durable_cases_match_storage_projection() {
             case.name
         );
         assert_eq!(progress.merged_count, case.expected_merged, "{}", case.name);
+        assert_eq!(
+            progress.covered_count, case.expected_covered,
+            "{} covered count",
+            case.name
+        );
     }
 }
 
@@ -245,6 +250,7 @@ fn generated_session_hydration_progress_cases_match_observe() {
             agent_did: case.prev_agent.clone(),
             phase: ClientHydrationPhase::parse(&case.prev_phase),
             merged_count: case.prev_merged,
+            covered_count: case.prev_merged,
             served_count: case.prev_served,
             merged_documents: hydration_keys(case.prev_merged, true),
             served_documents: case.prev_served.map(|count| hydration_keys(count, true)),
@@ -271,6 +277,18 @@ fn generated_session_hydration_progress_cases_match_observe() {
         };
         assert_eq!(next.phase.as_str(), case.expected_phase, "{}", case.name);
         assert_eq!(next.merged_count, case.expected_merged, "{}", case.name);
+        assert_eq!(
+            next.covered_count, case.expected_covered,
+            "{} covered count",
+            case.name
+        );
+        if let Some(served_count) = next.served_count {
+            assert!(
+                next.covered_count <= served_count,
+                "{} covered count must be bounded by the manifest",
+                case.name
+            );
+        }
         assert_eq!(
             next.phase == ClientHydrationPhase::Complete,
             case.expected_complete,

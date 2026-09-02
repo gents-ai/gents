@@ -7,6 +7,12 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+// 5.0: breaking — sync health exposes DefraDB gauges and removes duplicated
+//      pairing/route retry fields.
+// 4.2: additive — SessionHydrationView.coveredCount distinguishes signed
+//      manifest coverage from all locally merged transcript rows.
+// 4.1: additive — bootstrap reports persisted client state independently from
+//      the materialized peer directory so enrollment recovery can restart.
 // 4.0: breaking — status-first enrollment replaces unauthenticated peer add.
 // 3.0: breaking — runtime-authored behavior readiness is required on every
 //       deployment and duplicate AgentRuntime readiness counters are removed.
@@ -29,13 +35,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "4.0";
+pub const CONTRACT_VERSION: &str = "5.0";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "7a0203eda69c7fedd3f50f89b48af64e7aac23c86a92718742dc9417d8c6bc7a";
+    "29bb972cc0e19f13eb99c5e899d5b5b2fdac647b452c7c954687ca12aaf41623";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

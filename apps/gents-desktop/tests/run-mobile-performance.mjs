@@ -254,33 +254,6 @@ async function runSample(browserInstance, sampleIndex) {
     }),
   );
 
-  scenarios.push(
-    await measureScenario(
-      page,
-      cdp,
-      "foreground_truthful_connected_projection",
-      async () => {
-        await page.evaluate(() =>
-          window.__GENTS_MOBILE_PERFORMANCE__.setP2PStatus("wedged"),
-        );
-        await page.waitForFunction(() =>
-          document.body.textContent?.includes("P2P stalled"),
-        );
-        await page.evaluate(() =>
-          window.__GENTS_MOBILE_PERFORMANCE__.setP2PStatus("healthy"),
-        );
-        await page.waitForFunction(() =>
-          document.body.textContent?.includes("Connected"),
-        );
-      },
-      async () => ({
-        syntheticSignal: true,
-        limitation:
-          "Measures truthful UI projection after a recovery signal, not iOS suspension or transport repair.",
-      }),
-    ),
-  );
-
   const navigationHeapSamples = [];
   scenarios.push(
     await measureScenario(

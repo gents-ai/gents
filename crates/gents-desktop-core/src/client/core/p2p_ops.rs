@@ -69,6 +69,15 @@ pub(super) async fn p2p_get_replicators(p2p: &Arc<dyn P2POps>) -> Result<Vec<Rep
     }
 }
 
+pub(super) async fn p2p_sync_status(p2p: &Arc<dyn P2POps>) -> Result<serde_json::Value> {
+    match timeout(P2P_OPERATION_TIMEOUT, p2p.sync_status()).await {
+        Ok(result) => result
+            .map_err(anyhow::Error::msg)
+            .context("reading desktop database sync status"),
+        Err(_) => anyhow::bail!("timed out reading desktop database sync status"),
+    }
+}
+
 pub(super) async fn p2p_remove_replicator(
     p2p: &Arc<dyn P2POps>,
     collections: Vec<String>,

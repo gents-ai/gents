@@ -1,5 +1,28 @@
 use super::*;
 
+fn background_completion_enqueue_gate(
+    node: &EmbeddedNode,
+) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+    type Gate = tokio::sync::Mutex<()>;
+    static GATES: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::BTreeMap<usize, std::sync::Weak<Gate>>>,
+    > = std::sync::OnceLock::new();
+
+    let node_key = node as *const EmbeddedNode as usize;
+    let mut gates = GATES
+        .get_or_init(|| std::sync::Mutex::new(std::collections::BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&node_key).and_then(std::sync::Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = std::sync::Arc::new(Gate::new(()));
+    gates.insert(node_key, std::sync::Arc::downgrade(&gate));
+    gate
+}
+
 /// Atomically bind a background-completion notification to the pending wake
 /// request that will consume it. The transaction either reuses the coalesced
 /// pending wake it read or creates a new one; a concurrent claim conflicts and
@@ -24,6 +47,16 @@ pub(crate) async fn enqueue_background_completion_with_message(
         .filter(|key| !key.is_empty())
         .context("atomic background completion enqueue requires a queue key")?
         .to_string();
+
+    // The proven queue transition is sequential: one coalescing enqueue must
+    // observe the pending entry created by the previous transition. DefraDB
+    // transactions conflict only when they touch the same document, so two
+    // empty reads could otherwise create disjoint requests and return before
+    // duplicate reconciliation converges them. Serialize this boundary per
+    // embedded node; cross-process duplicates still converge below.
+    let gate = background_completion_enqueue_gate(node);
+    let _enqueue_guard = gate.lock().await;
+
     let behavior_id = parent_behavior_id(node, parent).await?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);

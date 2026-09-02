@@ -49,7 +49,6 @@ export type DesktopUiHarnessScenario =
   | "mobile-performance"
   | "session-hydration"
   | "sync-offline"
-  | "sync-stalled"
   | "sync-failed";
 
 export type DesktopUiHarnessOptions = {
@@ -85,7 +84,6 @@ export type MobilePerformanceHarnessController = {
   recordCommit(commit: MobilePerformanceCommit): void;
   streamUpdate(): number;
   streamBurst(count: number): number;
-  setP2PStatus(status: "healthy" | "degraded" | "wedged"): void;
 };
 
 export type SessionSyncHarnessController = {
@@ -154,6 +152,7 @@ export function createDesktopUiHarness(
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
+      source: "local-standard",
       behaviorReadiness: {
         ...deployment.behaviorReadiness,
         behaviors: deployment.behaviorReadiness.behaviors.map((behavior) => ({
@@ -227,7 +226,7 @@ export function createDesktopUiHarness(
     updatedAt: TWO_HOURS_AGO,
     previewText: greeting,
     status: activeTurn ? "processing" : "completed",
-    turnState: activeTurn ? "processing" : "completed",
+    turnState: activeTurn ? "streaming" : "completed",
     latestRequestId: "request-intro",
     latestResponse: {
       status: activeTurn ? "streaming" : "completed",
@@ -415,6 +414,7 @@ export function createDesktopUiHarness(
         agentDid: AGENT_DID,
         phase: "requested",
         mergedCount: 1,
+        coveredCount: 1,
         servedCount: null,
       },
     });
@@ -540,6 +540,7 @@ export function createDesktopUiHarness(
         agentHomeExists: true,
         desktopHomeExists: true,
         peerDirectoryExists: true,
+        clientStateExists: true,
         savedPeers:
           scenario === "empty-fleet"
             ? []
@@ -868,7 +869,8 @@ export function createDesktopUiHarness(
         requestId: "enrollment-request-harness",
         networkId: "network-harness",
         adminDid: AGENT_DID,
-        serverPeer: deployment.peerId,
+        serverPeer: "peer-enrollment-pending",
+        serverLabel: "Bombadil UI Agent",
         ownerAgent: AGENT_DID,
         state: "pending_approval",
       };
@@ -878,8 +880,6 @@ export function createDesktopUiHarness(
       syncHealth = {
         ...syncHealth,
         state: "healthy",
-        offlineSince: null,
-        stalledSince: null,
         connectedPeerCount: 1,
         lastError: null,
       };
@@ -935,6 +935,7 @@ export function createDesktopUiHarness(
         ...session.hydration,
         phase: "requested" as const,
         mergedCount: session.timelineItems.length,
+        coveredCount: session.timelineItems.length,
         servedCount: null,
       };
       sessions.set(sessionId, { ...session, hydration });
@@ -1479,7 +1480,6 @@ export function createDesktopUiHarness(
         lastProbeAt: STARTED_AT,
         lastSeen: STARTED_AT,
         updatedAt: STARTED_AT,
-        lastErrorClass: null,
         lastErrorMessage: null,
       }));
       return services;
@@ -1650,10 +1650,6 @@ export function createDesktopUiHarness(
             notifyBurst("store", count, true);
             return sequence;
           },
-          setP2PStatus(status) {
-            p2pStatus = status;
-            notify("health");
-          },
         }
       : null;
 
@@ -1687,6 +1683,8 @@ export function createDesktopUiHarness(
       agentDid: AGENT_DID,
       phase,
       mergedCount,
+      coveredCount:
+        servedCount == null ? mergedCount : Math.min(mergedCount, servedCount),
       servedCount,
     };
   }
@@ -2128,65 +2126,48 @@ function initialSyncHealth(scenario: DesktopUiHarnessScenario): SyncHealthView {
   if (scenario === "sync-offline") {
     return {
       state: "offline",
-      since: STARTED_AT,
-      offlineSince: STARTED_AT,
-      stalledSince: null,
-      lastErrorClass: null,
       lastError: "fixture transport unavailable",
-      pairingRetryCount: 0,
-      routeRetryCount: 0,
       connectedPeerCount: 0,
-    };
-  }
-  if (scenario === "sync-stalled") {
-    return {
-      state: "stalled",
-      since: STARTED_AT,
-      offlineSince: null,
-      stalledSince: STARTED_AT,
-      lastErrorClass: "RpcTimeout",
-      lastError: "pairing retry exhausted",
-      pairingRetryCount: 6,
-      routeRetryCount: 6,
-      connectedPeerCount: 1,
+      pendingDagCount: 0,
+      persistedPendingDagCount: 0,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 0,
+      quarantinedDagCount: 0,
     };
   }
   if (scenario === "sync-failed") {
     return {
       state: "failed",
-      since: STARTED_AT,
-      offlineSince: null,
-      stalledSince: null,
-      lastErrorClass: "RemoteUnauthorized",
-      lastError: "permanently rejected",
-      pairingRetryCount: 1,
-      routeRetryCount: 1,
+      lastError: "database DAG quarantined",
       connectedPeerCount: 1,
+      pendingDagCount: 1,
+      persistedPendingDagCount: 1,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 1,
+      quarantinedDagCount: 1,
     };
   }
   if (scenario === "session-hydration") {
     return {
       state: "healthy",
-      since: STARTED_AT,
-      offlineSince: null,
-      stalledSince: null,
-      lastErrorClass: null,
       lastError: null,
-      pairingRetryCount: 0,
-      routeRetryCount: 0,
       connectedPeerCount: 1,
+      pendingDagCount: 0,
+      persistedPendingDagCount: 0,
+      pushRetryMarkerCount: 0,
+      exhaustedFetchCount: 0,
+      quarantinedDagCount: 0,
     };
   }
   return {
     state: "healthy",
-    since: STARTED_AT,
-    offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
   };
 }
 
@@ -2211,7 +2192,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "mobile-performance":
     case "session-hydration":
     case "sync-offline":
-    case "sync-stalled":
     case "sync-failed":
       return value;
     default:

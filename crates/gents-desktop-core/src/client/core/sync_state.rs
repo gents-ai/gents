@@ -2,7 +2,9 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
-use super::{ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
+use gents::P2pSyncStatusSnapshot;
+
+use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
 #[cfg(test)]
 use crate::client::load_peer_directory_snapshot;
 #[cfg(test)]
@@ -13,9 +15,9 @@ type LastErrorPatch = (Option<String>, Option<String>);
 
 /// The sole in-process owner of configured-peer and transport observations.
 ///
-/// Every mutation publishes a coherent snapshot. The watch channel coalesces
-/// bursts from a repair sweep while still ensuring the bridge wakes when only
-/// a route, pairing retry, or configured-peer row changes.
+/// Status-changing mutations publish a coherent snapshot. The watch channel
+/// coalesces raw clock updates while still waking the bridge for product state,
+/// route, pairing retry, or configured-peer changes.
 #[derive(Clone)]
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
@@ -63,6 +65,8 @@ impl ClientSyncStateOwner {
         sort_statuses(&mut peers);
         let (tx, _) = watch::channel(ClientSyncStateSnapshot {
             transport,
+            database_sync: None,
+            database_sync_error: None,
             directory: records,
             peers,
         });
@@ -262,13 +266,19 @@ impl ClientSyncStateOwner {
         Ok(completed)
     }
 
-    pub(super) fn replace_transport(&self, transport: P2PHealth) {
+    pub(super) fn replace_database_observation(
+        &self,
+        transport: P2PHealth,
+        database_sync: Option<P2pSyncStatusSnapshot>,
+        database_sync_error: Option<String>,
+    ) {
         self.tx.send_if_modified(|state| {
-            if state.transport == transport {
-                return false;
-            }
+            let transport_changed = p2p_health_materially_changed(&state.transport, &transport);
+            let previous_health = crate::client::project_sync_health(state);
             state.transport = transport;
-            true
+            state.database_sync = database_sync;
+            state.database_sync_error = database_sync_error;
+            transport_changed || previous_health != crate::client::project_sync_health(state)
         });
     }
 
@@ -883,5 +893,36 @@ mod tests {
         owner.replace_peer(&expected, existing);
 
         assert!(!updates.has_changed().expect("watch remains open"));
+    }
+
+    #[tokio::test]
+    async fn retry_countdown_updates_raw_status_without_republishing_ui_state() {
+        let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let first = P2pSyncStatusSnapshot {
+            pending_dags: 1,
+            next_pending_retry_in_ms: Some(1_000),
+            ..P2pSyncStatusSnapshot::default()
+        };
+        owner.replace_database_observation(P2PHealth::default(), Some(first), None);
+        assert!(updates.has_changed().expect("watch remains open"));
+        updates.borrow_and_update();
+
+        let second = P2pSyncStatusSnapshot {
+            pending_dags: 1,
+            next_pending_retry_in_ms: Some(900),
+            ..P2pSyncStatusSnapshot::default()
+        };
+        owner.replace_database_observation(P2PHealth::default(), Some(second), None);
+
+        assert!(!updates.has_changed().expect("watch remains open"));
+        assert_eq!(
+            owner
+                .snapshot()
+                .database_sync
+                .expect("database observation")
+                .next_pending_retry_in_ms,
+            Some(900)
+        );
     }
 }

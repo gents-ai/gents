@@ -418,6 +418,7 @@ pub struct SessionHydrationView {
     pub agent_did: String,
     pub phase: String,
     pub merged_count: usize,
+    pub covered_count: usize,
     pub served_count: Option<usize>,
 }
 

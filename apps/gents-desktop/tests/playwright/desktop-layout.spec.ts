@@ -28,7 +28,6 @@ const shellScenarios = [
   "save-error",
   "backend-health-error",
   "sync-offline",
-  "sync-stalled",
   "sync-failed",
 ] as const;
 
@@ -36,6 +35,9 @@ test.describe("desktop responsive layout guardrails", () => {
   for (const scenario of chatScenarios) {
     test(`${scenario} has no page-level horizontal overflow`, async ({ page }) => {
       await gotoHarness(page, scenario);
+      if (scenario === "backend-unavailable") {
+        await page.getByTestId("inference-wizard-close").click();
+      }
       await openChat(page);
       await expectNoPageHorizontalOverflow(page);
     });

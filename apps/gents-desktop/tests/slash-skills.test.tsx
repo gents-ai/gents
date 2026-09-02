@@ -97,15 +97,13 @@ describe("composer slash menu", () => {
     render(
       <ChatComposer
         activeRequestId={null}
+        activityStatus={null}
         approxSerializedBytes={0}
         behaviorLabel="default"
         canSend
-        configuredPeerCount={1}
-        dialedPeerCount={1}
         draft={draft}
         interruptVisible={false}
         rowCount={0}
-        sendHint={null}
         sending={false}
         turnState={null}
         onDraftChange={onDraftChange}

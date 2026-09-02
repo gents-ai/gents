@@ -1,0 +1,246 @@
+import type {
+  DeploymentOperationalState,
+  DesktopSessionSnapshot,
+  OperationalStatus,
+} from "@source-inc/gents-desktop-client";
+import { sessionHydrationLabel, visibleSessionHydration } from "./sessionHydration";
+
+export type DesktopStartupPhase =
+  | "checking-managed-server"
+  | "loading-configuration"
+  | "starting-client"
+  | "managed-server-error"
+  | "configuration-error"
+  | "client-error"
+  | "ready";
+
+export type LoadingStepState = "active" | "complete" | "pending" | "error";
+
+export type StartupLoadingStatus = {
+  failed: boolean;
+  title: string;
+  currentLabel: string;
+  managedServerState: LoadingStepState | null;
+  connectionState: LoadingStepState;
+  clientState: LoadingStepState;
+};
+
+export function projectStartupLoadingStatus(
+  phase: Exclude<DesktopStartupPhase, "ready">,
+  managedServerSupported = false,
+): StartupLoadingStatus {
+  switch (phase) {
+    case "checking-managed-server":
+      return {
+        failed: false,
+        title: "Bringing Gents online",
+        currentLabel: "Checking the hosted agent",
+        managedServerState: "active",
+        connectionState: "pending",
+        clientState: "pending",
+      };
+    case "loading-configuration":
+      return {
+        failed: false,
+        title: "Bringing Gents online",
+        currentLabel: "Reading saved connections",
+        managedServerState: managedServerSupported ? "complete" : null,
+        connectionState: "active",
+        clientState: "pending",
+      };
+    case "starting-client":
+      return {
+        failed: false,
+        title: "Bringing Gents online",
+        currentLabel: "Starting the secure client",
+        managedServerState: managedServerSupported ? "complete" : null,
+        connectionState: "complete",
+        clientState: "active",
+      };
+    case "managed-server-error":
+      return {
+        failed: true,
+        title: "Startup paused",
+        currentLabel: "The hosted agent could not be restored",
+        managedServerState: "error",
+        connectionState: "pending",
+        clientState: "pending",
+      };
+    case "configuration-error":
+      return {
+        failed: true,
+        title: "Startup paused",
+        currentLabel: "Saved connections could not be read",
+        managedServerState: managedServerSupported ? "complete" : null,
+        connectionState: "error",
+        clientState: "pending",
+      };
+    case "client-error":
+      return {
+        failed: true,
+        title: "Startup paused",
+        currentLabel: "The secure client could not start",
+        managedServerState: managedServerSupported ? "complete" : null,
+        connectionState: "complete",
+        clientState: "error",
+      };
+  }
+}
+
+export type SessionLoadState = {
+  phase: "idle" | "loading" | "loaded" | "failed";
+  sessionId: string | null;
+  agentDid: string | null;
+  found: boolean | null;
+  error: string | null;
+};
+
+export type ConversationLoadingLayer =
+  "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
+
+export type ConversationLoadingAction =
+  "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
+
+export type ConversationLoadingStatus = {
+  layer: ConversationLoadingLayer;
+  phase: "loading" | "blocked" | "failed";
+  title: string;
+  detail: string;
+  action: ConversationLoadingAction | null;
+};
+
+type ConversationLoadingInput = {
+  selectedSessionId: string | null;
+  selectedAgentDid: string | null;
+  session: DesktopSessionSnapshot | null;
+  sessionLoad: SessionLoadState;
+  operationalState: DeploymentOperationalState | null;
+};
+
+/**
+ * Sole projection for user-visible conversation waits. It does not invent
+ * progress: every state comes from an in-flight local read, signed hydration
+ * progress, the application sync owner, or runtime-authored behavior readiness.
+ */
+export function projectConversationLoadingStatus({
+  selectedSessionId,
+  selectedAgentDid,
+  session,
+  sessionLoad,
+  operationalState,
+}: ConversationLoadingInput): ConversationLoadingStatus | null {
+  if (!selectedSessionId) return null;
+
+  const sessionMatches =
+    session?.sessionId === selectedSessionId &&
+    (!selectedAgentDid || !session.agentDid || session.agentDid === selectedAgentDid);
+  const loadMatches =
+    sessionLoad.sessionId === selectedSessionId &&
+    (!selectedAgentDid ||
+      !sessionLoad.agentDid ||
+      sessionLoad.agentDid === selectedAgentDid);
+
+  if (loadMatches && sessionLoad.phase === "loading" && !sessionMatches) {
+    return {
+      layer: "localDatabase",
+      phase: "loading",
+      title: "Loading conversation",
+      detail: "Reading saved messages from the local database.",
+      action: null,
+    };
+  }
+
+  if (loadMatches && sessionLoad.phase === "failed") {
+    return {
+      layer: "localDatabase",
+      phase: "failed",
+      title: "Couldn’t load this conversation",
+      detail: sessionLoad.error ?? "The local database read failed.",
+      action: "retryLocal",
+    };
+  }
+
+  if (!loadMatches && !sessionMatches) {
+    return {
+      layer: "localDatabase",
+      phase: "loading",
+      title: "Opening conversation",
+      detail: "Preparing the exact local session read.",
+      action: null,
+    };
+  }
+
+  const hydration = visibleSessionHydration(
+    sessionMatches ? session?.hydration : null,
+    selectedSessionId,
+    selectedAgentDid,
+  );
+  if (hydration?.phase === "failed") {
+    return {
+      layer: "sessionSync",
+      phase: "failed",
+      title: "Conversation sync failed",
+      detail: "The agent could not finish sending the requested session history.",
+      action: "retryHydration",
+    };
+  }
+  if (hydration?.phase === "serving") {
+    return {
+      layer: "sessionSync",
+      phase: "loading",
+      title: "Syncing conversation history",
+      detail: sessionHydrationLabel(hydration),
+      action: null,
+    };
+  }
+  if (hydration?.phase === "requested") {
+    const routeBlocker = operationalState?.admissionBlocker;
+    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
+      return conversationStatusFromOperational(routeBlocker);
+    return {
+      layer: "sessionSync",
+      phase: "loading",
+      title: "Requesting conversation history",
+      detail: "Waiting for the enrolled agent to begin the secure transfer.",
+      action: null,
+    };
+  }
+
+  if (!sessionMatches) {
+    const routeBlocker = operationalState?.admissionBlocker;
+    if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
+      return conversationStatusFromOperational(routeBlocker);
+    return {
+      layer: "sessionSync",
+      phase: "blocked",
+      title: "Waiting for conversation history",
+      detail:
+        "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
+      action: operationalState ? "reconnect" : "retryLocal",
+    };
+  }
+
+  if (operationalState?.admissionBlocker)
+    return conversationStatusFromOperational(operationalState.admissionBlocker);
+
+  return null;
+}
+
+function conversationStatusFromOperational(
+  operational: OperationalStatus,
+): ConversationLoadingStatus {
+  return {
+    layer:
+      operational.layer === "p2p" || operational.layer === "route"
+        ? "p2p"
+        : operational.layer === "sync"
+          ? "sync"
+          : operational.layer === "inference"
+            ? "inference"
+            : "runtime",
+    phase: operational.kind === "blocked" ? "blocked" : "loading",
+    title: operational.label,
+    detail: operational.detail,
+    action: operational.action,
+  };
+}

@@ -14,7 +14,7 @@ use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
 use super::super::schema::{
-    ensure_runtime_schemas, index_collection_names, subscribe_all_collections,
+    client_recovery_collection_names, ensure_runtime_schemas, subscribe_all_collections,
 };
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
@@ -95,7 +95,8 @@ impl ClientCore {
         let (peer_statuses, bootstrap_errors) = {
             bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
         };
-        let initial_health = super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default()).await;
+        let (initial_health, initial_database_sync, initial_database_sync_error) =
+            super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
         for status in peer_statuses {
             if let Some(expected) = records
                 .iter()
@@ -104,7 +105,11 @@ impl ClientCore {
                 sync_state.replace_peer(expected, status);
             }
         }
-        sync_state.replace_transport(initial_health);
+        sync_state.replace_database_observation(
+            initial_health,
+            initial_database_sync,
+            initial_database_sync_error,
+        );
         let observer = spawn_observer_with_selection(
             Arc::clone(&node),
             Arc::clone(&store),
@@ -335,7 +340,7 @@ pub(super) async fn force_connect_peer_with_retry_until(
     }
 }
 
-pub(super) async fn request_index_sync(
+pub(super) async fn request_client_recovery_sync(
     node: &EmbeddedNode,
     p2p: &Arc<dyn P2POps>,
 ) -> Result<Vec<String>> {
@@ -353,7 +358,7 @@ pub(super) async fn request_index_sync(
         Ok(collection.collection_id)
     };
     let mut requested = Vec::new();
-    for collection_name in index_collection_names() {
+    for collection_name in client_recovery_collection_names() {
         let collection_id = resolve_id(collection_name)?;
         p2p_sync_branchable_collection(p2p, &collection_id).await?;
         requested.push(collection_name.to_string());

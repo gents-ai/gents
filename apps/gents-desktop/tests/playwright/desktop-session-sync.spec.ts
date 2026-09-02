@@ -22,13 +22,16 @@ test.describe("mobile session sync fixture", () => {
     await expect(
       page.getByTestId("transcript-panel").getByText("hello from desktop"),
     ).toBeVisible();
-    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
-      "data-hydration-phase",
-      "requested",
+    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+      "data-loading-layer",
+      "sessionSync",
+    );
+    await expect(page.getByTestId("conversation-loading-status")).toContainText(
+      "Requesting conversation history",
     );
 
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.progress(2, 4));
-    await expect(page.getByTestId("session-hydration-status")).toHaveText(/2 of 4/);
+    await expect(page.getByTestId("conversation-loading-status")).toHaveText(/2 of 4/);
     await expect(
       page
         .getByTestId("transcript-panel")
@@ -40,7 +43,7 @@ test.describe("mobile session sync fixture", () => {
         const shell = document.querySelector<HTMLElement>(".app-shell");
         const header = document.querySelector<HTMLElement>(".chat-header");
         const hydration = document.querySelector<HTMLElement>(
-          "[data-testid=session-hydration-status]",
+          "[data-testid=conversation-loading-status]",
         );
         const transcript = document.querySelector<HTMLElement>(
           "[data-testid=transcript-panel]",
@@ -73,11 +76,7 @@ test.describe("mobile session sync fixture", () => {
     }
 
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.complete());
-    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
-      "data-hydration-phase",
-      "complete",
-    );
-    await expect(page.getByTestId("session-hydration-status")).toContainText("4 of 4");
+    await expect(page.getByTestId("conversation-loading-status")).toHaveCount(0);
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "healthy",
@@ -90,8 +89,8 @@ test.describe("mobile session sync fixture", () => {
     await openChatNavigation(page);
     await page.getByTestId("conversation-session-remote").click();
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.fail());
-    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
-      "data-hydration-phase",
+    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+      "data-loading-phase",
       "failed",
     );
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
@@ -99,17 +98,16 @@ test.describe("mobile session sync fixture", () => {
       "healthy",
     );
     await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.observe());
-    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
-      "data-hydration-phase",
+    await expect(page.getByTestId("conversation-loading-status")).toHaveAttribute(
+      "data-loading-phase",
       "failed",
     );
     expect(await page.evaluate(() => window.__GENTS_SESSION_SYNC__?.retryCount())).toBe(
       0,
     );
-    await page.getByTestId("session-hydration-retry").click();
-    await expect(page.getByTestId("session-hydration-status")).toHaveAttribute(
-      "data-hydration-phase",
-      "requested",
+    await page.getByTestId("conversation-loading-retryHydration").click();
+    await expect(page.getByTestId("conversation-loading-status")).toContainText(
+      "Requesting conversation history",
     );
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
@@ -120,19 +118,15 @@ test.describe("mobile session sync fixture", () => {
     );
   });
 
-  test("global indicator distinguishes offline, stalled, and failed", async ({
-    page,
-  }) => {
+  test("global indicator distinguishes offline and failed", async ({ page }) => {
     await gotoHarness(page, "sync-offline");
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
       "offline",
     );
-    await expect(page.getByTestId("sync-health-summary")).toContainText(
-      "Offline since",
-    );
+    await expect(page.getByTestId("sync-health-summary")).toContainText("Offline");
 
-    await gotoHarness(page, "sync-stalled");
+    await gotoHarness(page, "sync-failed");
     await page.evaluate(() => {
       const root = document.documentElement;
       root.style.setProperty("--mobile-safe-area-top", "47px");
@@ -142,11 +136,11 @@ test.describe("mobile session sync fixture", () => {
     });
     await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
       "data-sync-state",
-      "stalled",
+      "failed",
     );
     await page.getByTestId("sync-health-summary").click();
     const details = page.getByTestId("sync-health-details");
-    await expect(details).toContainText("RpcTimeout");
+    await expect(details).toContainText("database DAG quarantined");
     const bounds = await details.evaluate((element) => {
       const rect = element.getBoundingClientRect();
       return {
@@ -170,12 +164,6 @@ test.describe("mobile session sync fixture", () => {
       expect(bounds.bottom).toBeLessThanOrEqual(bounds.viewportHeight - 34);
     }
     await expectNoPageHorizontalOverflow(page);
-
-    await gotoHarness(page, "sync-failed");
-    await expect(page.getByTestId("sync-health-indicator")).toHaveAttribute(
-      "data-sync-state",
-      "failed",
-    );
   });
 
   test("offline recovers through the existing reconnect control", async ({ page }) => {

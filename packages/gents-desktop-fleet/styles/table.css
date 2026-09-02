@@ -45,7 +45,7 @@
 
   .fleet-agent-cell {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: var(--space-5);
     align-items: center;
     min-width: 260px;
@@ -86,7 +86,7 @@
     display: inline-grid;
     place-items: center;
     padding: 0;
-    opacity: 0;
+    opacity: 0.72;
   }
 
   .fleet-row-icon svg {

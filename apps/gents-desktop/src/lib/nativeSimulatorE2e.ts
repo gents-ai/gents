@@ -196,12 +196,15 @@ async function runNativeSimulatorE2e() {
     await waitFor(
       () => {
         const status = document.querySelector<HTMLElement>(
-          '[data-testid="session-hydration-status"]',
+          '[data-testid="conversation-loading-status"]',
         );
-        if (status?.dataset.hydrationPhase === "failed") {
+        if (
+          status?.dataset.loadingLayer === "sessionSync" &&
+          status.dataset.loadingPhase === "failed"
+        ) {
           throw new Error(status.textContent?.trim() || "Session hydration failed");
         }
-        return status?.dataset.hydrationPhase === "complete" ? status : null;
+        return status?.dataset.loadingLayer === "sessionSync" ? null : document.body;
       },
       180_000,
       `${config.agentLabel} completed session hydration`,

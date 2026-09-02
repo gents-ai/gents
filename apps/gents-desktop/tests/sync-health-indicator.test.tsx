@@ -7,14 +7,13 @@ import type { SyncHealthView } from "@source-inc/gents-desktop-client";
 function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
   return {
     state: "healthy",
-    since: null,
-    offlineSince: null,
-    stalledSince: null,
-    lastErrorClass: null,
     lastError: null,
-    pairingRetryCount: 0,
-    routeRetryCount: 0,
     connectedPeerCount: 1,
+    pendingDagCount: 0,
+    persistedPendingDagCount: 0,
+    pushRetryMarkerCount: 0,
+    exhaustedFetchCount: 0,
+    quarantinedDagCount: 0,
     ...overrides,
   };
 }
@@ -22,10 +21,19 @@ function health(overrides: Partial<SyncHealthView> = {}): SyncHealthView {
 describe("SyncHealthIndicator", () => {
   it("does not claim health before a known projection exists", () => {
     const { rerender } = render(<SyncHealthIndicator syncHealth={null} />);
-    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sync-health-indicator")).toHaveAttribute(
+      "data-sync-state",
+      "checking",
+    );
+    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent(
+      "Checking sync",
+    );
 
     rerender(<SyncHealthIndicator syncHealth={health({ state: "future-state" })} />);
-    expect(screen.queryByTestId("sync-health-indicator")).not.toBeInTheDocument();
+    expect(screen.getByTestId("sync-health-indicator")).toHaveAttribute(
+      "data-sync-state",
+      "checking",
+    );
   });
 
   it("renders each product state and opens diagnostics", () => {
@@ -42,54 +50,29 @@ describe("SyncHealthIndicator", () => {
       "syncing",
     );
 
-    rerender(<SyncHealthIndicator syncHealth={health({ state: "stalled" })} />);
-    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Sync stalled");
-
     rerender(
       <SyncHealthIndicator
         syncHealth={health({
           state: "offline",
-          offlineSince: "2020-01-01T00:00:00Z",
         })}
       />,
     );
-    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent(
-      "Offline since",
-    );
+    expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Offline");
 
     rerender(
       <SyncHealthIndicator
-        deployments={[
-          {
-            label: "Studio",
-            agentDid: "did:test:agent",
-            dialSucceeded: false,
-            lastError: "unauthorized",
-            pairing: [
-              {
-                collectionId: "AgentSession",
-                pairingRetryCount: 1,
-                lastRetryAt: null,
-                lastRetryErrorClass: "RemoteUnauthorized",
-                stuckSince: null,
-              },
-            ],
-            routes: [],
-          } as never,
-        ]}
         syncHealth={health({
           state: "failed",
-          lastErrorClass: "RemoteUnauthorized",
-          lastError: "unauthorized",
+          lastError: "DefraDB quarantined a document DAG that could not be merged",
+          quarantinedDagCount: 1,
         })}
       />,
     );
     expect(screen.getByTestId("sync-health-summary")).toHaveTextContent("Sync failed");
     fireEvent.click(screen.getByTestId("sync-health-summary"));
     expect(screen.getByTestId("sync-health-details")).toHaveTextContent(
-      "RemoteUnauthorized",
+      "Quarantined DAGs1",
     );
-    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("AgentSession");
-    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("unauthorized");
+    expect(screen.getByTestId("sync-health-details")).toHaveTextContent("DefraDB");
   });
 });

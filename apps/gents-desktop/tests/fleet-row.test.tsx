@@ -77,6 +77,21 @@ describe("FleetRow", () => {
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
+  it("exposes and commits an explicit saved-label rename", () => {
+    const onRenamePeer = vi.fn();
+    renderRow({ onRenamePeer });
+
+    const rename = screen.getByTestId("fleet-rename-peer-1");
+    expect(rename).toHaveAccessibleName("Rename Local Agent");
+    expect(rename.parentElement).toHaveClass("fleet-agent-cell");
+    fireEvent.click(rename);
+    const input = screen.getByTestId("fleet-rename-input-peer-1");
+    fireEvent.change(input, { target: { value: "Amy" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onRenamePeer).toHaveBeenCalledWith("peer-1", "Amy");
+  });
+
   it("shows the deployment's own runtime heartbeat as Last update", () => {
     renderRow(
       {},
@@ -100,6 +115,19 @@ describe("FleetRow", () => {
 
     fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
     expect(onSetupInference).toHaveBeenCalledWith(missingInference);
+  });
+
+  it("does not infer missing backend setup from redacted enrolled-agent config", () => {
+    const onSetupInference = vi.fn();
+    renderRow(
+      { onSetupInference },
+      { ...deployment, source: "enrollment", inferenceBackends: [] },
+    );
+
+    expect(
+      screen.queryByTestId("fleet-inference-setup-peer-1"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("host-managed")).toBeInTheDocument();
   });
 
   it("claims the local init.json tool ceiling only for local-runtime rows", () => {

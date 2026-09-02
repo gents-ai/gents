@@ -11,8 +11,12 @@ import type {
   ConversationSummary,
   DeploymentView,
   DesktopSessionSnapshot,
+  SyncHealthView,
 } from "@source-inc/gents-desktop-client";
-import { selectedBehaviorReadinessDecision } from "../lib/behaviorReadiness";
+import {
+  projectDeploymentOperationalState,
+  selectedBehaviorReadinessDecision,
+} from "@source-inc/gents-desktop-client";
 import { trackedRequestIdForSession } from "./desktopShellRuntime";
 
 type ChatProjectionStateOptions = {
@@ -24,6 +28,7 @@ type ChatProjectionStateOptions = {
   selectedSessionId: string | null;
   sending: boolean;
   session: DesktopSessionSnapshot | null;
+  syncHealth: SyncHealthView | null;
 };
 
 /** Own local compose state and reconcile it with the bounded durable projection. */
@@ -36,6 +41,7 @@ export function useDesktopChatProjectionState({
   selectedSessionId,
   sending,
   session,
+  syncHealth,
 }: ChatProjectionStateOptions) {
   const [localWorkflow, setLocalWorkflow] = useState<ChatWorkflowState>({
     kind: "ready",
@@ -43,17 +49,30 @@ export function useDesktopChatProjectionState({
   const [optimisticPendingTurn, setOptimisticPendingTurn] =
     useState<OptimisticPendingTurn | null>(null);
   const [draftsByContext, setDraftsByContext] = useState<Record<string, string>>({});
-  const behaviorReadiness = useMemo(
-    () => selectedBehaviorReadinessDecision(selectedDeployment, selectedBehaviorId),
-    [selectedBehaviorId, selectedDeployment],
-  );
-  const retryBehaviorReadiness = useMemo(
+  const operationalState = useMemo(
     () =>
-      selectedBehaviorReadinessDecision(
-        selectedDeployment,
-        session?.behaviorId ?? null,
-      ),
-    [selectedDeployment, session?.behaviorId],
+      selectedDeployment
+        ? projectDeploymentOperationalState(
+            selectedDeployment,
+            selectedBehaviorId,
+            syncHealth,
+          )
+        : null,
+    [selectedBehaviorId, selectedDeployment, syncHealth],
+  );
+  const behaviorReadiness =
+    operationalState?.behaviorReadiness ??
+    selectedBehaviorReadinessDecision(null, selectedBehaviorId);
+  const retryOperationalState = useMemo(
+    () =>
+      selectedDeployment
+        ? projectDeploymentOperationalState(
+            selectedDeployment,
+            session?.behaviorId ?? null,
+            syncHealth,
+          )
+        : null,
+    [selectedDeployment, session?.behaviorId, syncHealth],
   );
   const draftContextKey = JSON.stringify(
     selectedSessionId
@@ -87,17 +106,15 @@ export function useDesktopChatProjectionState({
       session,
       selectedConversation,
       localWorkflow,
-      chatSafe: selectedDeployment?.chatSafe ?? false,
-      behaviorReadiness,
+      operationalState,
     });
   }, [
-    behaviorReadiness,
     clientAvailable,
     draft,
     localWorkflow,
     selectedAgentDid,
     selectedConversation,
-    selectedDeployment,
+    operationalState,
     selectedSessionId,
     sending,
     session,
@@ -112,13 +129,12 @@ export function useDesktopChatProjectionState({
       session,
       selectedConversation,
       localWorkflow,
-      chatSafe: selectedDeployment?.chatSafe ?? false,
-      behaviorReadiness: retryBehaviorReadiness,
+      operationalState: retryOperationalState,
     });
   }, [
     clientAvailable,
     localWorkflow,
-    retryBehaviorReadiness,
+    retryOperationalState,
     selectedAgentDid,
     selectedConversation,
     selectedDeployment,
@@ -158,6 +174,7 @@ export function useDesktopChatProjectionState({
     setLocalWorkflow,
     optimisticPendingTurn,
     setOptimisticPendingTurn,
+    operationalState,
     behaviorReadiness,
     shellProjection,
     retryShellProjection,

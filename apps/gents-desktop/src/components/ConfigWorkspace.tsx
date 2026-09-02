@@ -26,7 +26,7 @@ import type {
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
 } from "@source-inc/gents-desktop-client";
-import { NEW_DOCUMENT_ID, TABS } from "./config-workspace/model";
+import { NEW_DOCUMENT_ID, TABS, type ConfigTab } from "./config-workspace/model";
 import { useConfigWorkspaceSelection } from "./config-workspace/useConfigWorkspaceSelection";
 import {
   AgentConfigPanel,
@@ -49,6 +49,7 @@ type ConfigWorkspaceProps = {
   bootstrap: BootstrapSummary | null;
   selectedDeployment: DeploymentView | null;
   selectedBehaviorId: string | null;
+  initialTab?: ConfigTab;
   saving: boolean;
   runningTask: boolean;
   onBack: () => void;
@@ -92,6 +93,7 @@ export function ConfigWorkspace({
   bootstrap,
   selectedDeployment,
   selectedBehaviorId,
+  initialTab = "behavior",
   saving,
   runningTask,
   onBack,
@@ -146,7 +148,7 @@ export function ConfigWorkspace({
     setSelectedTaskId,
     setSelectedToolSelectionId,
     setSelectedToolServiceId,
-  } = useConfigWorkspaceSelection(selectedDeployment, selectedBehaviorId);
+  } = useConfigWorkspaceSelection(selectedDeployment, selectedBehaviorId, initialTab);
 
   const navigationGuard = useMemo(
     () => ({ reportDirty: onDirtyChange, requestNavigation }),

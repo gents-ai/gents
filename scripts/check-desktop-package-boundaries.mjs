@@ -468,13 +468,15 @@ const desktopShell = readFileSync(
   join(root, "apps/gents-desktop/src/hooks/useDesktopShell.ts"),
   "utf8",
 );
+const desktopShellOwnsInjectedBridge =
+  /export function useDesktopShell\(\{\s*api,\s*listenToUpdates(?:,\s*supportsManagedServer\s*=\s*false)?,?\s*\}: DesktopShellBridge\)/m.test(
+    desktopShell,
+  );
 if (
   !desktopApp.includes("const client = createDesktopClient();") ||
   !desktopApp.includes("const shell = useDesktopShell(bridge);") ||
   !desktopApp.includes("api={bridge.api}") ||
-  !desktopShell.includes(
-    "export function useDesktopShell({ api, listenToUpdates }: DesktopShellBridge)",
-  )
+  !desktopShellOwnsInjectedBridge
 ) {
   failures.push(
     "Gents Desktop production composition must own and inject one instance-bound bridge",

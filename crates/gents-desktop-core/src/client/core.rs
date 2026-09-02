@@ -18,6 +18,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
+use gents::P2pSyncStatusSnapshot;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -288,6 +289,14 @@ impl P2PHealth {
     }
 }
 
+pub(super) fn p2p_health_materially_changed(previous: &P2PHealth, next: &P2PHealth) -> bool {
+    previous.status != next.status
+        || previous.consecutive_failures != next.consecutive_failures
+        || previous.connected_peer_count != next.connected_peer_count
+        || previous.replicator_count != next.replicator_count
+        || previous.last_error != next.last_error
+}
+
 /// One coherent observation of desktop transport and every configured peer.
 ///
 /// The transport counters are diagnostic. Product sync readiness is derived
@@ -296,6 +305,11 @@ impl P2PHealth {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClientSyncStateSnapshot {
     pub transport: P2PHealth,
+    /// Exact sync-coordinator facts from the database. `None` means the
+    /// configured transport does not expose a sync coordinator.
+    pub database_sync: Option<P2pSyncStatusSnapshot>,
+    /// Decode failure from the database's current sync-status envelope.
+    pub database_sync_error: Option<String>,
     /// The exact durable configured-peer revision that caused this snapshot.
     /// Bridge projections consume this copy instead of racing a second
     /// directory read after receiving a sync update.

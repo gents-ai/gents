@@ -5,9 +5,12 @@ import { dirname, join, parse } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type {
+  BehaviorReadinessDecision,
   ConversationSummary,
+  DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
+import { projectDeploymentOperationalState } from "@source-inc/gents-desktop-client";
 import {
   projectChatShell as projectChatShellWithReadiness,
   reconcileProjectedWorkflow,
@@ -23,16 +26,55 @@ const readyBehaviorReadiness = {
   behaviorLabel: "General",
 } as const;
 
+function operationalStateFor(
+  decision: BehaviorReadinessDecision = readyBehaviorReadiness,
+  routeReady = true,
+) {
+  const behaviorId = decision.behaviorId ?? "general";
+  const readinessStatus =
+    decision.kind === "unavailable"
+      ? { state: "unavailable" as const, behaviorId, reason: decision.reason }
+      : { state: "ready" as const, behaviorId };
+  return projectDeploymentOperationalState({
+    agentDid: "did:key:agent",
+    source: "enrollment",
+    dialSucceeded: true,
+    pairingReady: routeReady,
+    chatSafe: routeReady,
+    lastError: null,
+    runtime: null,
+    behaviorReadiness: {
+      source:
+        decision.kind === "unknown"
+          ? { state: "unknown", reason: decision.reason }
+          : { state: "current" },
+      activeGeneration: 1,
+      routerGeneration: 1,
+      defaultBehaviorId: behaviorId,
+      updatedAt: "2026-09-02T00:00:00Z",
+      behaviors: [readinessStatus],
+    },
+    behaviors: [
+      {
+        behaviorId,
+        displayName:
+          decision.kind === "unknown" ? "General" : decision.behaviorLabel,
+        enabled: true,
+        isDefault: true,
+      },
+    ],
+  } as DeploymentView);
+}
+
 function projectChatShell(
   input: Omit<
     Parameters<typeof projectChatShellWithReadiness>[0],
-    "chatSafe" | "behaviorReadiness"
+    "operationalState"
   >,
 ) {
   return projectChatShellWithReadiness({
     ...input,
-    chatSafe: true,
-    behaviorReadiness: readyBehaviorReadiness,
+    operationalState: operationalStateFor(),
   });
 }
 
@@ -186,9 +228,7 @@ function runLeanCommand(proofsDir: string, args: string[]): Promise<string> {
     });
     child.on("error", (error) => {
       reject(
-        new Error(
-          `failed to run ${command} in ${proofsDir}: ${error.message}`,
-        ),
+        new Error(`failed to run ${command} in ${proofsDir}: ${error.message}`),
       );
     });
     child.on("close", (status) => {
@@ -374,19 +414,18 @@ describe("projectChatShell", () => {
       session: null,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: true,
-      behaviorReadiness: {
+      operationalState: operationalStateFor({
         kind: "unavailable",
         behaviorId: "general",
         behaviorLabel: "General",
         reason: "backend_temporarily_unavailable",
-      },
+      }),
     });
 
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "behaviorUnavailable",
-      hint: "Behavior “General” is temporarily unavailable",
+      hint: "Inference backend for “General” is temporarily unavailable",
     });
     expect(projection.nonEmptyContentSendStatus).toEqual(projection.sendStatus);
   });
@@ -401,14 +440,13 @@ describe("projectChatShell", () => {
       session: null,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      chatSafe: false,
-      behaviorReadiness: readyBehaviorReadiness,
+      operationalState: operationalStateFor(readyBehaviorReadiness, false),
     });
 
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "routeNotReady",
-      hint: "Agent route is not ready",
+      hint: "The agent is connected, but its signed conversation route is not ready yet.",
     });
   });
 
@@ -474,6 +512,45 @@ describe("projectChatShell", () => {
       kind: "disabled",
       reason: "awaitingTurnTerminality",
       hint: "Turn still streaming",
+    });
+    expect(projection.activityStatus).toEqual({
+      kind: "working",
+      label: "Agent is working…",
+      detail: "This turn must finish before another message can be sent.",
+      animated: true,
+    });
+  });
+
+  test("does not let an empty draft mask an active turn", () => {
+    const projection = projectChatShell({
+      clientAvailable: true,
+      selectedAgentDid: "did:test:amy",
+      selectedSessionId: "session-1",
+      draft: "",
+      sending: false,
+      selectedConversation: conversation({ turnState: "waitingForClaim" }),
+      session: session({
+        turnState: "waitingForClaim",
+        latestRequestId: "req-1",
+      }),
+      localWorkflow: { kind: "ready" },
+    });
+
+    expect(projection.sendStatus).toEqual({
+      kind: "disabled",
+      reason: "composerEmpty",
+      hint: "Type a message to send",
+    });
+    expect(projection.nonEmptyContentSendStatus).toEqual({
+      kind: "disabled",
+      reason: "awaitingTurnTerminality",
+      hint: "Waiting for the active turn to start",
+    });
+    expect(projection.activityStatus).toEqual({
+      kind: "waiting",
+      label: "Waiting for the agent…",
+      detail: "Your message is queued until the enrolled agent claims it.",
+      animated: true,
     });
   });
 
@@ -600,6 +677,13 @@ describe("projectChatShell", () => {
       kind: "disabled",
       reason: "waitingForRequestObservation",
       hint: "Waiting for request observation",
+    });
+    expect(projection.activityStatus).toEqual({
+      kind: "syncing",
+      label: "Syncing message…",
+      detail:
+        "Your request was created; waiting for it to appear in the shared conversation.",
+      animated: true,
     });
   });
 
