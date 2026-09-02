@@ -344,7 +344,7 @@ pub(crate) async fn create_agent_request(
     behavior_id: Option<&str>,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
-    let prepared = prepare_agent_request(
+    let (prepared, _) = prepare_agent_request(
         graphql,
         agent_did,
         content,
@@ -370,7 +370,7 @@ pub(crate) async fn create_agent_request_retrying_transient(
     request_id: String,
     options: RequestSubmitOptions,
 ) -> Result<SubmittedRequest> {
-    let prepared = prepare_agent_request(
+    let (prepared, _) = prepare_agent_request(
         graphql,
         agent_did,
         content,
@@ -387,7 +387,6 @@ pub(crate) async fn create_agent_request_retrying_transient(
 struct PreparedAgentRequest {
     mutation: String,
     submitted: SubmittedRequest,
-    create: gents_protocol::request_admission::AgentRequestCreate,
 }
 
 async fn prepare_agent_request(
@@ -398,7 +397,10 @@ async fn prepare_agent_request(
     behavior_id: Option<&str>,
     request_id: Option<String>,
     options: RequestSubmitOptions,
-) -> Result<PreparedAgentRequest> {
+) -> Result<(
+    PreparedAgentRequest,
+    gents_protocol::request_admission::AgentRequestCreate,
+)> {
     if options.seed.is_some_and(|seed| seed < 0) {
         anyhow::bail!("seed must be non-negative");
     }
@@ -466,11 +468,13 @@ async fn prepare_agent_request(
         metadata: request_metadata,
         created_at: Some(created_at),
     };
-    Ok(PreparedAgentRequest {
-        mutation,
-        submitted,
+    Ok((
+        PreparedAgentRequest {
+            mutation,
+            submitted,
+        },
         create,
-    })
+    ))
 }
 
 /// Atomically establish a session goal and publish its first runnable request.
@@ -507,7 +511,7 @@ pub(crate) async fn create_goal_backed_agent_request(
         "goal-submit:{}",
         gents::goal::deterministic_goal_creation_key(agent_did, session_id)
     );
-    let prepared = prepare_agent_request(
+    let (prepared, mut create) = prepare_agent_request(
         graphql,
         agent_did,
         content,
@@ -517,7 +521,6 @@ pub(crate) async fn create_goal_backed_agent_request(
         RequestSubmitOptions::default(),
     )
     .await?;
-    let mut create = prepared.create;
     create.retry_key = Some(retry_key);
     // retry_key is part of the signed immutable request semantics.
     gents::sign_agent_request_create_as_registered_target(&mut create).await?;
