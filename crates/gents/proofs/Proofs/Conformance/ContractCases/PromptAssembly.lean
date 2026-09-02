@@ -80,6 +80,7 @@ structure PromptAssemblyBudgetCase where
   effectiveOutputTokens : Nat
   shouldCompact : Bool
   providerSafe : Bool
+  canDispatch : Bool
   deriving Repr
 
 structure PromptAssemblyTurnBudgetCase where
@@ -92,6 +93,7 @@ structure PromptAssemblyTurnBudgetCase where
   turnInputTokens : List Nat
   turnOutputTokens : List Nat
   turnShouldCompact : List Bool
+  turnCanDispatch : List Bool
   deriving Repr
 
 /-! ## Building witness rows -/
@@ -394,7 +396,39 @@ private structure BudgetWitness where
   requestTokens : Nat
 
 private def budgetWitnesses : List BudgetWitness :=
-  [ { name := "configured-threshold-boundary"
+  [ -- Degenerate and one-token contexts pin saturating subtraction and the
+    -- strict positive-output dispatch boundary.
+    { name := "zero-context-zero-output"
+    , contextWindow := 0, maxOutputTokens := 0, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "zero-context-positive-output"
+    , contextWindow := 0, maxOutputTokens := 1, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "one-context-zero-output"
+    , contextWindow := 1, maxOutputTokens := 0, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "one-context-one-output-empty-input"
+    , contextWindow := 1, maxOutputTokens := 1, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "one-context-input-equals-context"
+    , contextWindow := 1, maxOutputTokens := 1, thresholdBasisPoints := 10000
+    , promptTokens := 1, requestTokens := 0 }
+  , { name := "one-context-input-one-over-context"
+    , contextWindow := 1, maxOutputTokens := 1, thresholdBasisPoints := 10000
+    , promptTokens := 2, requestTokens := 0 }
+  , { name := "output-one-below-context"
+    , contextWindow := 1000, maxOutputTokens := 999, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "output-equals-context"
+    , contextWindow := 1000, maxOutputTokens := 1000, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "output-one-above-context"
+    , contextWindow := 1000, maxOutputTokens := 1001, thresholdBasisPoints := 10000
+    , promptTokens := 0, requestTokens := 0 }
+  , { name := "configured-threshold-budget-minus-one"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
+    , promptTokens := 7499, requestTokens := 0 }
+  , { name := "configured-threshold-boundary"
     , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 7500, requestTokens := 0 }
   , { name := "configured-threshold-one-over"
@@ -418,6 +452,9 @@ private def budgetWitnesses : List BudgetWitness :=
   , { name := "output-reserves-entire-context-one-token"
     , contextWindow := 1000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 1, requestTokens := 0 }
+  , { name := "validated-summary-output-maximum"
+    , contextWindow := 65536, maxOutputTokens := 32768, thresholdBasisPoints := 7500
+    , promptTokens := 32768, requestTokens := 0 }
     -- Thresholds that are *not* exactly representable in binary. Computing the
     -- budget as `contextWindow × threshold` in floating point and truncating
     -- lands one token low on each of these, so before #1008 they would have
@@ -431,9 +468,15 @@ private def budgetWitnesses : List BudgetWitness :=
   , { name := "non-dyadic-threshold-69pct-boundary"
     , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 6900
     , promptTokens := 6900, requestTokens := 0 }
-  , { name := "non-dyadic-threshold-29pct-large-window"
+  , { name := "non-dyadic-threshold-69pct-one-over"
+    , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 6900
+    , promptTokens := 6901, requestTokens := 0 }
+  , { name := "non-dyadic-threshold-29pct-large-window-boundary"
     , contextWindow := 200000, maxOutputTokens := 1000, thresholdBasisPoints := 2900
     , promptTokens := 58000, requestTokens := 0 }
+  , { name := "non-dyadic-threshold-29pct-large-window-one-over"
+    , contextWindow := 200000, maxOutputTokens := 1000, thresholdBasisPoints := 2900
+    , promptTokens := 58001, requestTokens := 0 }
   ]
 
 private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
@@ -456,7 +499,9 @@ private def budgetCase (witness : BudgetWitness) : PromptAssemblyBudgetCase :=
   , shouldCompact := decide (PromptAssembly.Budget.ExceedsInputBudget
       witness.promptTokens witness.requestTokens configured witness.contextWindow)
   , providerSafe := decide
-      (inputTokens + outputTokens ≤ witness.contextWindow) }
+      (inputTokens + outputTokens ≤ witness.contextWindow)
+  , canDispatch := decide (PromptAssembly.Budget.CanDispatch inputTokens
+      witness.contextWindow witness.maxOutputTokens) }
 
 def promptAssemblyBudgetCases : List PromptAssemblyBudgetCase :=
   budgetWitnesses.map budgetCase
@@ -483,6 +528,16 @@ private def turnBudgetWitnesses : List TurnBudgetWitness :=
     , maxOutputTokens := 2000
     , thresholdBasisPoints := 7500
     , turnInputTokens := [1000, 4000, 7500] }
+  , { name := "owned-loop-dispatch-capacity-boundaries"
+    , contextWindow := 10000
+    , maxOutputTokens := 1
+    , thresholdBasisPoints := 10000
+    , turnInputTokens := [9999, 10000, 10001] }
+  , { name := "owned-loop-zero-configured-output"
+    , contextWindow := 10000
+    , maxOutputTokens := 0
+    , thresholdBasisPoints := 7500
+    , turnInputTokens := [0, 7499, 7500, 7501] }
   ]
 
 private def turnBudgetCase
@@ -503,7 +558,10 @@ private def turnBudgetCase
         witness.maxOutputTokens
   , turnShouldCompact := witness.turnInputTokens.map fun inputTokens =>
       decide (PromptAssembly.Budget.ExceedsInputBudget inputTokens 0 configured
-        witness.contextWindow) }
+        witness.contextWindow)
+  , turnCanDispatch := witness.turnInputTokens.map fun inputTokens =>
+      decide (PromptAssembly.Budget.CanDispatch inputTokens witness.contextWindow
+        witness.maxOutputTokens) }
 
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase

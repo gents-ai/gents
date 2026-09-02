@@ -7,3 +7,4 @@ import Proofs.Compaction.Properties
 import Proofs.Compaction.Summarize
 import Proofs.Compaction.Executable
 import Proofs.Compaction.DurableReduction
+import Proofs.Compaction.Rolling

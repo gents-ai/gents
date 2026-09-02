@@ -46,6 +46,7 @@ pub(crate) mod lean_vocab_test;
 pub mod oauth_credential;
 pub mod openai_wire;
 pub mod p2p_observability;
+pub(crate) mod provider_input;
 pub(crate) mod provider_usage;
 pub mod startup_readiness;
 pub mod startup_recovery;

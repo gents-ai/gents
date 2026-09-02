@@ -52,6 +52,13 @@ pub(crate) fn loop_config(
     capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
     LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                behavior.backend_provider_kind,
+                behavior.openai_wire_api,
+                behavior.model_name.clone(),
+            ),
+        ),
         preamble: Some(preamble),
         context_message: None,
         temperature: behavior.sampling.temperature,

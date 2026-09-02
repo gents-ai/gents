@@ -104,54 +104,43 @@ fn sanitize_provider_arg_string(text: &str) -> String {
     sanitized
 }
 
-fn serialized_token_estimate<T: serde::Serialize + ?Sized>(value: &T) -> usize {
-    serde_json::to_string(value)
-        .map(|json| crate::compaction::estimate_tokens(&json))
-        .unwrap_or_default()
-}
-
-/// Estimate the complete provider input represented by Rig's rendered request,
-/// including static tool schemas. The production profile deliberately leaves
-/// tokenizer headroom because this estimator is approximate; its job here is to
-/// apply that conservative profile to every turn's assembled request, in
-/// `build_budgeted_request`. Both mid-turn `Repair` rebuild paths recompute these
-/// components before dispatch so the clamp and persisted accounting always
-/// describe the repaired request rather than the rejected one.
+/// Project the complete request through the selected provider wire DTO. Both
+/// mid-turn `Repair` rebuild paths recompute this projection before dispatch so
+/// the clamp and persisted accounting describe the actual repaired wire shape.
 pub(super) fn completion_request_input_components(
     request: &CompletionRequest,
-) -> ContextInputComponents {
-    ContextInputComponents {
-        messages: serialized_token_estimate(&request.chat_history),
-        documents: serialized_token_estimate(&request.documents),
-        tool_schemas: serialized_token_estimate(&request.tools),
-        additional_parameters: serialized_token_estimate(&request.additional_params),
-        output_schema: serialized_token_estimate(&request.output_schema),
-    }
+    counter: &crate::provider_input::ProviderInputCounter,
+) -> Result<crate::provider_input::ProviderInputProjection, StreamingError> {
+    counter.project_request(request).map_err(|error| {
+        StreamingError::Completion(CompletionError::ProviderError(format!(
+            "provider_input_projection_failed: {error:#}"
+        )))
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct TurnContextDecision {
     pub(super) reason: ContextCompactionReason,
     pub(super) pre_compaction_input_tokens: Option<usize>,
-    pub(super) components: ContextInputComponents,
+    pub(super) projection: crate::provider_input::ProviderInputProjection,
 }
 
 pub(super) fn context_accounting_for_request(
     request: &CompletionRequest,
     config: &LoopConfig,
-    components: &ContextInputComponents,
+    projection: &crate::provider_input::ProviderInputProjection,
     turn_index: usize,
     attempt: u32,
     compaction_reason: ContextCompactionReason,
     pre_compaction_input_tokens: Option<usize>,
 ) -> ContextAccounting {
-    let estimated_input_tokens = components.estimated_input_tokens();
+    let estimated_input_tokens = projection.estimated_input_tokens;
     ContextAccounting {
         accounting_version: CONTEXT_ACCOUNTING_VERSION,
         turn_index,
         attempt,
-        estimator: "serialized_json_bytes_div_4_v1".to_string(),
-        components: components.clone(),
+        estimator: projection.estimator.to_string(),
+        components: projection.components.clone(),
         estimated_input_tokens,
         context_window: config.context_window,
         compaction_threshold_basis_points: crate::compaction::threshold_basis_points(
@@ -177,10 +166,15 @@ pub(super) fn clamp_request_output_budget(
     config: &LoopConfig,
     input_tokens: usize,
 ) {
-    let Some(configured_max) = request.max_tokens else {
-        return;
-    };
-    let configured_max = usize::try_from(configured_max).unwrap_or(usize::MAX);
+    // `None` historically delegated the output limit to the provider. At the
+    // owned dispatch boundary that cannot establish a context-fit invariant,
+    // so make the remaining context explicit. Production behavior configs
+    // normally carry `Some`; this preserves the unset compatibility surface
+    // while still reserving positive output locally.
+    let configured_max = request
+        .max_tokens
+        .map(crate::provider_input::saturating_usize_from_u64)
+        .unwrap_or(usize::MAX);
     let effective_max = crate::compaction::effective_output_budget(
         input_tokens,
         config.context_window,
@@ -199,12 +193,41 @@ pub(super) fn clamp_request_output_budget(
     request.max_tokens = u64::try_from(effective_max).ok();
 }
 
-fn compactable_message_estimate(messages: &[Message]) -> usize {
-    let rig_messages = messages
-        .iter()
-        .map(rig_compat::to_rig_message)
-        .collect::<Vec<_>>();
-    serialized_token_estimate(&rig_messages)
+/// Final context-window legality guard. This belongs after reconstruction and
+/// recount but before capture: an input at/above context or a configured zero
+/// output ceiling is locally non-dispatchable, never clamped to one.
+pub(super) fn ensure_context_can_dispatch(
+    request: &CompletionRequest,
+    config: &LoopConfig,
+    input_tokens: usize,
+) -> Result<(), StreamingError> {
+    let configured_max = request
+        .max_tokens
+        .map(crate::provider_input::saturating_usize_from_u64)
+        .unwrap_or_default();
+    if crate::compaction::can_dispatch(input_tokens, config.context_window, configured_max) {
+        return Ok(());
+    }
+    Err(StreamingError::Completion(CompletionError::RequestError(
+        Box::new(
+            crate::provider_input::ProviderInputError::NoOutputCapacity {
+                estimated_input_tokens: input_tokens,
+                context_window: config.context_window,
+                effective_max_output_tokens: configured_max,
+            },
+        ),
+    )))
+}
+
+fn compactable_message_estimate(
+    messages: &[Message],
+    counter: &crate::provider_input::ProviderInputCounter,
+) -> Result<usize, StreamingError> {
+    counter.count_messages(messages).map_err(|error| {
+        StreamingError::Completion(CompletionError::ProviderError(format!(
+            "provider_input_projection_failed: {error:#}"
+        )))
+    })
 }
 
 /// Keep enough room for both the non-compactable request layers (preamble,
@@ -216,28 +239,34 @@ fn turn_keep_recent_target(
     total_input: usize,
     provider_messages: &[Message],
     config: &LoopConfig,
-) -> usize {
+) -> Result<usize, StreamingError> {
     let effective_budget = crate::compaction::effective_input_budget(
         config.context_window,
         config
             .max_tokens
-            .and_then(|tokens| usize::try_from(tokens).ok())
+            .map(crate::provider_input::saturating_usize_from_u64)
             .unwrap_or_default(),
         config.compaction_threshold,
     );
-    let compactable_input = compactable_message_estimate(provider_messages);
+    let compactable_input =
+        compactable_message_estimate(provider_messages, config.provider_input_counter.as_ref())?;
     let static_input = total_input.saturating_sub(compactable_input);
     let message_budget = effective_budget.saturating_sub(static_input);
 
     // Summaries vary with the model and history. Reserve one quarter of the
     // compactable-message budget for the summary and serialization drift.
-    message_budget.saturating_mul(3) / 4
+    Ok(three_quarters(message_budget))
+}
+
+/// Exact floor(3n/4) without overflowing the machine-width intermediate.
+pub(super) fn three_quarters(value: usize) -> usize {
+    ((value as u128 * 3) / 4) as usize
 }
 
 fn completion_request_exceeds_budget(input_tokens: usize, config: &LoopConfig) -> bool {
     let max_output_tokens = config
         .max_tokens
-        .and_then(|tokens| usize::try_from(tokens).ok())
+        .map(crate::provider_input::saturating_usize_from_u64)
         .unwrap_or_default();
     crate::compaction::input_exceeds_budget(
         input_tokens,
@@ -263,8 +292,9 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         .expect("new_messages always retains at least the initial prompt");
     let prior = &new_messages[..new_messages.len() - 1];
     let mut request = build_request(model, current_prompt, history, prior, tools, config).await?;
-    let components = completion_request_input_components(&request);
-    let before_tokens = components.estimated_input_tokens();
+    let projection =
+        completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
+    let before_tokens = projection.estimated_input_tokens;
     clamp_request_output_budget(&mut request, config, before_tokens);
 
     let Some(compactor) = config.turn_compactor.as_ref() else {
@@ -273,7 +303,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             TurnContextDecision {
                 reason: ContextCompactionReason::CompactorUnavailable,
                 pre_compaction_input_tokens: None,
-                components,
+                projection,
             },
         ));
     };
@@ -283,7 +313,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             TurnContextDecision {
                 reason: ContextCompactionReason::BelowThreshold,
                 pre_compaction_input_tokens: None,
-                components,
+                projection,
             },
         ));
     }
@@ -293,7 +323,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         .chain(new_messages.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let keep_recent_target = turn_keep_recent_target(before_tokens, &provider_messages, config);
+    let keep_recent_target = turn_keep_recent_target(before_tokens, &provider_messages, config)?;
     let outcome = compactor(TurnCompactionRequest {
         messages: provider_messages,
         keep_recent_target,
@@ -324,9 +354,15 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     active_reduction_keys.push(outcome.reduction_key);
 
     let mut rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
-    let rebuilt_components = completion_request_input_components(&rebuilt);
-    let after_tokens = rebuilt_components.estimated_input_tokens();
+    let rebuilt_projection =
+        completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
+    let after_tokens = rebuilt_projection.estimated_input_tokens;
     clamp_request_output_budget(&mut rebuilt, config, after_tokens);
+    // Context legality is stronger than the input-driven compaction policy.
+    // Preserve the threshold diagnostic for fitting-but-over-policy requests,
+    // but never let it mask the typed non-dispatchable result when compaction
+    // still leaves no positive provider output capacity.
+    ensure_context_can_dispatch(&rebuilt, config, after_tokens)?;
     tracing::info!(
         target: "gents::agent::loop_stream",
         turn = turn_index,
@@ -343,7 +379,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
             config.context_window,
             config
                 .max_tokens
-                .and_then(|tokens| usize::try_from(tokens).ok())
+                .map(crate::provider_input::saturating_usize_from_u64)
                 .unwrap_or_default(),
             config.compaction_threshold,
         );
@@ -360,7 +396,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         TurnContextDecision {
             reason: ContextCompactionReason::Compacted,
             pre_compaction_input_tokens: Some(before_tokens),
-            components: rebuilt_components,
+            projection: rebuilt_projection,
         },
     ))
 }

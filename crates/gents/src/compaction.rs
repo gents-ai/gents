@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::llm::message::Message;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rig::completion::CompletionModel;
 
 mod history;
@@ -9,11 +9,57 @@ mod summary;
 #[cfg(test)]
 mod tests;
 
-use history::{extract_file_activity, pretruncate_tool_results, split_messages_for_summary};
+use history::{
+    extract_file_activity, pretruncate_tool_results, split_messages_for_summary_with_counter,
+};
 use summary::{
     bounded_error_diagnostic, compaction_json_fallback_prompt, compaction_prompt,
     compaction_request_prompt, format_summary, parse_fallback_checkpoint, ContinuationCheckpoint,
 };
+
+#[derive(Debug, thiserror::Error)]
+pub enum CompactionError {
+    #[error("compaction_deadline_elapsed_before_summary_dispatch")]
+    DeadlineElapsed,
+    #[error(
+        "compaction_indivisible_unit_cannot_fit: start={start}, end={end}, \
+         estimated_input_tokens={estimated_input_tokens}, context_window={context_window}"
+    )]
+    IndivisibleUnitCannotFit {
+        start: usize,
+        end: usize,
+        estimated_input_tokens: usize,
+        context_window: usize,
+    },
+    #[error("compaction_exact_count_overflow: field={field}, value={value}")]
+    ExactCountOverflow { field: &'static str, value: usize },
+    #[error("compaction_invalid_rolling_plan")]
+    InvalidRollingPlan,
+}
+
+pub(crate) fn rolling_plan_is_valid(
+    target_messages: usize,
+    chunk_messages: &[usize],
+    chunk_pair_closed: &[bool],
+    chunk_can_dispatch: &[bool],
+    checkpoint_covered: usize,
+) -> bool {
+    !chunk_messages.is_empty()
+        && chunk_messages.len() == chunk_pair_closed.len()
+        && chunk_messages.len() == chunk_can_dispatch.len()
+        && chunk_messages.iter().all(|messages| *messages > 0)
+        && chunk_pair_closed.iter().all(|pair_closed| *pair_closed)
+        && chunk_can_dispatch.iter().all(|can_dispatch| *can_dispatch)
+        && chunk_messages
+            .iter()
+            .try_fold(0usize, |total, messages| total.checked_add(*messages))
+            == Some(target_messages)
+        && checkpoint_covered == target_messages
+}
+
+pub(crate) fn rolling_step_input<T>(prior_checkpoint: Option<T>, chunk: Vec<T>) -> Vec<T> {
+    prior_checkpoint.into_iter().chain(chunk).collect()
+}
 
 #[derive(Debug, Clone)]
 pub struct CompactionOptions {
@@ -119,6 +165,7 @@ pub trait Compactor: Send + Sync {
 pub struct DefraCompactor<M: CompletionModel> {
     model: Arc<M>,
     config: crate::agent::loop_stream::LoopConfig,
+    now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
 }
 
 impl<M: CompletionModel> DefraCompactor<M> {
@@ -131,7 +178,20 @@ impl<M: CompletionModel> DefraCompactor<M> {
         // whole user request: use the bounded immediate internal budget (#1016).
         config.retry_policy =
             crate::agent::completion_retry::CompletionRetryPolicy::internal_immediate();
-        Self { model, config }
+        Self {
+            model,
+            config,
+            now: Arc::new(chrono::Utc::now),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_now(
+        mut self,
+        now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
+    ) -> Self {
+        self.now = now;
+        self
     }
 }
 
@@ -142,7 +202,10 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         context_window: usize,
         options: &CompactionOptions,
     ) -> Result<CompactionResult> {
-        let original_token_estimate = estimate_message_tokens(&messages);
+        let counter = self.config.provider_input_counter.as_ref();
+        let original_token_estimate = counter
+            .count_messages(&messages)
+            .context("projecting original compaction input")?;
 
         // Normalize to the canonical provider view so `messages_compacted`
         // indexes the same list `drop_compacted_prefix` will later index,
@@ -175,7 +238,9 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             );
         }
 
-        let stripped_token_estimate = estimate_message_tokens(&stripped_messages);
+        let stripped_token_estimate = counter
+            .count_messages(&stripped_messages)
+            .context("projecting normalized compaction input")?;
         // `normalization_removed_rows` stays the outermost refusal: it means any
         // count taken here would be measured in a shifted space, which
         // `force_summarize` must not override — the caller established that the
@@ -183,7 +248,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         if normalization_removed_rows
             || matches!(options.strategy, CompactionStrategy::StripToolResults)
             || (!options.force_summarize
-                && !needs_compaction(&stripped_messages, context_window, options.threshold))
+                && stripped_token_estimate <= threshold_budget(context_window, options.threshold))
         {
             return Ok(CompactionResult {
                 messages: stripped_messages,
@@ -197,8 +262,11 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             });
         }
 
-        let (old_messages, recent_messages) =
-            split_messages_for_summary(stripped_messages.clone(), options.keep_recent_tokens);
+        let (old_messages, recent_messages) = split_messages_for_summary_with_counter(
+            stripped_messages.clone(),
+            options.keep_recent_tokens,
+            counter,
+        )?;
         if old_messages.is_empty() {
             return Ok(CompactionResult {
                 messages: stripped_messages,
@@ -212,15 +280,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             });
         }
 
-        let old_activity = extract_file_activity(&old_messages);
-        let prepared_history =
-            pretruncate_tool_results(old_messages.clone(), options.tool_result_max_chars);
         // The transcript is untrusted source material. Put the summarization
         // contract in the system layer so an unfinished user/tool workflow in
         // `prepared_history` cannot outrank it and turn the internal completion
         // into a continuation of the old task. The final user message is
         // deliberately neutral; it carries no executable transcript content.
         let mut summary_config = self.config.clone();
+        summary_config.context_window = context_window;
         summary_config.preamble = Some(compaction_prompt().to_string());
         summary_config.context_message = None;
         summary_config.tool_choice = None;
@@ -246,117 +312,126 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
             (from_options, from_config) => from_options.or(from_config),
         };
-        let guided_result = crate::agent::loop_stream::run_loop_to_typed(
-            (*self.model).clone(),
-            None,
-            crate::llm::message::Message::user(compaction_request_prompt()),
-            prepared_history.clone(),
-            std::sync::Arc::new(Vec::new()),
-            summary_config.clone(),
-        )
-        .await;
-        let checkpoint: ContinuationCheckpoint = match guided_result {
-            Ok(checkpoint) => checkpoint,
-            Err(guided_error)
-                if is_guided_output_failure(&guided_error)
-                    && !deadline_elapsed(summary_config.deadline) =>
-            {
-                tracing::warn!(
-                    error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
-                    "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
-                );
-                let mut fallback_config = summary_config;
-                fallback_config.structured_output = None;
-                // A distinct capture scope: this is a second provider call for
-                // the same turn, and it must be its own durable fact rather
-                // than a rebinding of the guided attempt's.
-                fallback_config.on_rendered_request =
-                    Some(crate::rendered_request::scope::ambient_arming_sink(
-                        crate::rendered_request::CaptureScopeKind::CompactionFallback,
-                    ));
-                fallback_config.retry_policy =
-                    crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
-                fallback_config.preamble = Some(format!(
-                    "{}\n\n{}",
-                    compaction_prompt(),
-                    compaction_json_fallback_prompt()
-                ));
-                let raw = crate::agent::loop_stream::run_loop_to_text(
-                    (*self.model).clone(),
-                    None,
-                    crate::llm::message::Message::user(compaction_request_prompt()),
-                    prepared_history,
-                    std::sync::Arc::new(Vec::new()),
-                    fallback_config,
-                )
-                .await
-                .map_err(|fallback_error| {
-                    if crate::agent::loop_stream::aggregate_token_budget_exhaustion_message(
-                        &fallback_error,
-                    )
-                    .is_some()
-                    {
-                        fallback_error.context(
-                            "non-guided compaction fallback exhausted the request token budget",
-                        )
-                    } else {
-                        anyhow::anyhow!(
-                            "compaction_provider_failure: guided structured output failed: {}; \
-                             non-guided JSON fallback failed: {}",
-                            bounded_error_diagnostic(&format!("{guided_error:#}")),
-                            bounded_error_diagnostic(&format!("{fallback_error:#}"))
-                        )
-                    }
-                })?;
-                parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
-                    anyhow::anyhow!(
-                        "compaction_provider_failure: guided structured output failed: {}; \
-                         non-guided JSON fallback failed: {}",
-                        bounded_error_diagnostic(&format!("{guided_error:#}")),
-                        bounded_error_diagnostic(&fallback_error)
-                    )
-                })?
-            }
-            Err(error) => {
-                if crate::agent::loop_stream::aggregate_token_budget_exhaustion_message(&error)
-                    .is_some()
-                {
-                    return Err(
-                        error.context("guided compaction exhausted the request token budget")
-                    );
-                }
-                let deadline_context = if deadline_elapsed(summary_config.deadline) {
-                    "compaction deadline elapsed after "
-                } else {
-                    ""
-                };
-                return Err(anyhow::anyhow!(
-                    "compaction_provider_failure: {deadline_context}{}",
-                    bounded_error_diagnostic(&format!("{error:#}"))
-                ));
-            }
-        };
+        summary_config.structured_output = Some(
+            crate::agent::loop_stream::StructuredOutputConfig::for_type::<ContinuationCheckpoint>(),
+        );
 
-        // Structural extraction is the sole source of file activity (#1017):
-        // the model no longer returns lists, so it can neither balloon the
-        // summary nor inject paths the run never touched.
+        // Roll the selected old prefix entirely in memory. Each successful step
+        // feeds its checkpoint into the next bounded pair-safe chunk; the daemon
+        // persists only the one final result after this function returns.
         let FileActivity {
             files_read,
             files_modified,
-        } = old_activity;
+        } = extract_file_activity(&old_messages);
+        let mut consumed = 0usize;
+        let mut rolling_summary = None::<String>;
+        let mut compaction_count = 0usize;
+        let mut chunk_messages = Vec::new();
+        let mut chunk_pair_closed = Vec::new();
+        let mut chunk_can_dispatch = Vec::new();
+        while consumed < old_messages.len() {
+            // Every rolling step is a fresh owned loop. Its retry controller
+            // checks the deadline after a failed attempt, so guard the initial
+            // attempt here as well: a prior chunk may have consumed the shared
+            // request deadline while producing a valid checkpoint.
+            if deadline_elapsed(summary_config.deadline, self.now.as_ref()) {
+                return Err(CompactionError::DeadlineElapsed.into());
+            }
+            let remaining = &old_messages[consumed..];
+            let (chunk_len, chunk_input_tokens) = largest_fitting_summary_chunk(
+                self.model.as_ref(),
+                remaining,
+                rolling_summary.as_deref(),
+                &summary_config,
+                options,
+                consumed,
+                context_window,
+            )
+            .await?;
+            let pair_closed = history::pair_safe_boundaries(remaining).contains(&chunk_len);
+            let configured_output = summary_config
+                .max_tokens
+                .map(crate::provider_input::saturating_usize_from_u64)
+                .unwrap_or_default();
+            let chunk = pretruncate_tool_results(
+                remaining[..chunk_len].to_vec(),
+                options.tool_result_max_chars,
+            );
+            let prior_checkpoint = rolling_summary.as_ref().and_then(|summary| {
+                crate::prompt::compaction_summary_message(std::slice::from_ref(summary))
+            });
+            let prepared_history = rolling_step_input(prior_checkpoint, chunk);
+            let checkpoint = summarize_checkpoint(
+                self.model.as_ref(),
+                prepared_history,
+                summary_config.clone(),
+                self.now.clone(),
+            )
+            .await?;
+            consumed =
+                consumed
+                    .checked_add(chunk_len)
+                    .ok_or(CompactionError::ExactCountOverflow {
+                        field: "messages_compacted",
+                        value: old_messages.len(),
+                    })?;
+            compaction_count =
+                compaction_count
+                    .checked_add(1)
+                    .ok_or(CompactionError::ExactCountOverflow {
+                        field: "compaction_count",
+                        value: usize::MAX,
+                    })?;
+            chunk_messages.push(chunk_len);
+            chunk_pair_closed.push(pair_closed);
+            chunk_can_dispatch.push(crate::compaction::can_dispatch(
+                chunk_input_tokens,
+                context_window,
+                configured_output,
+            ));
+            let (step_files_read, step_files_modified) = if consumed == old_messages.len() {
+                (&files_read[..], &files_modified[..])
+            } else {
+                (&[][..], &[][..])
+            };
+            rolling_summary = Some(bounded_summary(format_summary(
+                &checkpoint,
+                step_files_read,
+                step_files_modified,
+                options
+                    .summary_file_list_max
+                    .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX),
+            )));
+        }
 
-        // Bounded at creation so both consumers — the persisted compaction
-        // entry and per-turn provider-view injection — see the same bound.
-        let summary = bounded_summary(format_summary(
-            &checkpoint,
-            &files_read,
-            &files_modified,
-            options
-                .summary_file_list_max
-                .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX),
-        ));
-        let compacted_token_estimate =
-            estimate_message_tokens(&recent_messages) + estimate_tokens(&summary);
+        let summary = rolling_summary.expect("non-empty old prefix produces a checkpoint");
+        if !rolling_plan_is_valid(
+            old_messages.len(),
+            &chunk_messages,
+            &chunk_pair_closed,
+            &chunk_can_dispatch,
+            consumed,
+        ) {
+            return Err(CompactionError::InvalidRollingPlan.into());
+        }
+        let mut compacted_projection =
+            crate::prompt::compaction_summary_message(std::slice::from_ref(&summary))
+                .into_iter()
+                .collect::<Vec<_>>();
+        compacted_projection.extend(recent_messages.iter().cloned());
+        let compacted_token_estimate = counter
+            .count_messages(&compacted_projection)
+            .context("projecting final compacted provider input")?;
+        let messages_compacted =
+            u32::try_from(old_messages.len()).map_err(|_| CompactionError::ExactCountOverflow {
+                field: "messages_compacted",
+                value: old_messages.len(),
+            })?;
+        let compaction_count =
+            u32::try_from(compaction_count).map_err(|_| CompactionError::ExactCountOverflow {
+                field: "compaction_count",
+                value: compaction_count,
+            })?;
 
         Ok(CompactionResult {
             messages: recent_messages,
@@ -365,9 +440,211 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             compacted_token_estimate,
             files_read,
             files_modified,
-            messages_compacted: old_messages.len() as u32,
-            compaction_count: 1,
+            messages_compacted,
+            compaction_count,
         })
+    }
+}
+
+async fn largest_fitting_summary_chunk<M: CompletionModel>(
+    model: &M,
+    remaining: &[Message],
+    prior_summary: Option<&str>,
+    summary_config: &crate::agent::loop_stream::LoopConfig,
+    options: &CompactionOptions,
+    absolute_start: usize,
+    context_window: usize,
+) -> Result<(usize, usize)> {
+    let boundaries = history::pair_safe_boundaries(remaining);
+    let Some(&first_boundary) = boundaries.first() else {
+        return Err(CompactionError::IndivisibleUnitCannotFit {
+            start: absolute_start,
+            end: remaining.len(),
+            estimated_input_tokens: usize::MAX,
+            context_window,
+        }
+        .into());
+    };
+
+    let mut low = 0usize;
+    let mut high = boundaries.len();
+    let mut best = None;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        let boundary = boundaries[middle];
+        let estimate = summary_candidate_tokens(
+            model,
+            &remaining[..boundary],
+            prior_summary,
+            summary_config,
+            options,
+        )
+        .await?;
+        let configured_output = summary_config
+            .max_tokens
+            .map(crate::provider_input::saturating_usize_from_u64)
+            .unwrap_or_default();
+        if crate::compaction::can_dispatch(estimate, context_window, configured_output) {
+            best = Some((boundary, estimate));
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+
+    if let Some(best) = best {
+        return Ok(best);
+    }
+
+    let estimated_input_tokens = summary_candidate_tokens(
+        model,
+        &remaining[..first_boundary],
+        prior_summary,
+        summary_config,
+        options,
+    )
+    .await?;
+    let absolute_end =
+        absolute_start
+            .checked_add(first_boundary)
+            .ok_or(CompactionError::ExactCountOverflow {
+                field: "indivisible_unit_end",
+                value: absolute_start,
+            })?;
+    Err(CompactionError::IndivisibleUnitCannotFit {
+        start: absolute_start,
+        end: absolute_end,
+        estimated_input_tokens,
+        context_window,
+    }
+    .into())
+}
+
+async fn summary_candidate_tokens<M: CompletionModel>(
+    model: &M,
+    chunk: &[Message],
+    prior_summary: Option<&str>,
+    summary_config: &crate::agent::loop_stream::LoopConfig,
+    options: &CompactionOptions,
+) -> Result<usize> {
+    let prepared_chunk = pretruncate_tool_results(chunk.to_vec(), options.tool_result_max_chars);
+    let prior_checkpoint = prior_summary.and_then(|summary| {
+        let summaries = [summary.to_string()];
+        crate::prompt::compaction_summary_message(&summaries)
+    });
+    let history = rolling_step_input(prior_checkpoint, prepared_chunk);
+    let request = crate::agent::loop_stream::build_request(
+        model,
+        Message::user(compaction_request_prompt()),
+        &history,
+        &[],
+        &[],
+        summary_config,
+    )
+    .await
+    .map_err(anyhow::Error::new)?;
+    Ok(summary_config
+        .provider_input_counter
+        .project_request(&request)
+        .context("projecting rolling compaction summary request")?
+        .estimated_input_tokens)
+}
+
+async fn summarize_checkpoint<M: CompletionModel + 'static>(
+    model: &M,
+    prepared_history: Vec<Message>,
+    summary_config: crate::agent::loop_stream::LoopConfig,
+    now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
+) -> Result<ContinuationCheckpoint> {
+    // Candidate construction is asynchronous. Re-check at the actual owned
+    // loop boundary so expiry during projection cannot leak one provider call.
+    if deadline_elapsed(summary_config.deadline, now.as_ref()) {
+        return Err(CompactionError::DeadlineElapsed.into());
+    }
+    let guided_result = crate::agent::loop_stream::run_loop_to_typed(
+        model.clone(),
+        None,
+        Message::user(compaction_request_prompt()),
+        prepared_history.clone(),
+        std::sync::Arc::new(Vec::new()),
+        summary_config.clone(),
+    )
+    .await;
+    match guided_result {
+        Ok(checkpoint) => Ok(checkpoint),
+        Err(guided_error)
+            if is_guided_output_failure(&guided_error)
+                && !deadline_elapsed(summary_config.deadline, now.as_ref()) =>
+        {
+            tracing::warn!(
+                error = %bounded_error_diagnostic(&format!("{guided_error:#}")),
+                "guided compaction output exhausted recovery; trying one strict non-guided JSON fallback"
+            );
+            let mut fallback_config = summary_config;
+            fallback_config.structured_output = None;
+            fallback_config.on_rendered_request =
+                Some(crate::rendered_request::scope::ambient_arming_sink(
+                    crate::rendered_request::CaptureScopeKind::CompactionFallback,
+                ));
+            fallback_config.retry_policy =
+                crate::agent::completion_retry::CompletionRetryPolicy::no_retry();
+            fallback_config.preamble = Some(format!(
+                "{}\n\n{}",
+                compaction_prompt(),
+                compaction_json_fallback_prompt()
+            ));
+            let raw = crate::agent::loop_stream::run_loop_to_text(
+                model.clone(),
+                None,
+                Message::user(compaction_request_prompt()),
+                prepared_history,
+                std::sync::Arc::new(Vec::new()),
+                fallback_config,
+            )
+            .await
+            .map_err(|fallback_error| {
+                if crate::agent::loop_stream::aggregate_token_budget_exhaustion_message(
+                    &fallback_error,
+                )
+                .is_some()
+                {
+                    fallback_error.context(
+                        "non-guided compaction fallback exhausted the request token budget",
+                    )
+                } else {
+                    anyhow::anyhow!(
+                        "compaction_provider_failure: guided structured output failed: {}; \
+                         non-guided JSON fallback failed: {}",
+                        bounded_error_diagnostic(&format!("{guided_error:#}")),
+                        bounded_error_diagnostic(&format!("{fallback_error:#}"))
+                    )
+                }
+            })?;
+            parse_fallback_checkpoint(&raw).map_err(|fallback_error| {
+                anyhow::anyhow!(
+                    "compaction_provider_failure: guided structured output failed: {}; \
+                     non-guided JSON fallback failed: {}",
+                    bounded_error_diagnostic(&format!("{guided_error:#}")),
+                    bounded_error_diagnostic(&fallback_error)
+                )
+            })
+        }
+        Err(error) => {
+            if crate::agent::loop_stream::aggregate_token_budget_exhaustion_message(&error)
+                .is_some()
+            {
+                return Err(error.context("guided compaction exhausted the request token budget"));
+            }
+            let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
+                "compaction deadline elapsed after "
+            } else {
+                ""
+            };
+            Err(anyhow::anyhow!(
+                "compaction_provider_failure: {deadline_context}{}",
+                bounded_error_diagnostic(&format!("{error:#}"))
+            ))
+        }
     }
 }
 
@@ -377,8 +654,11 @@ fn is_guided_output_failure(error: &anyhow::Error) -> bool {
         || diagnostic.contains("completion produced no visible output")
 }
 
-fn deadline_elapsed(deadline: Option<chrono::DateTime<chrono::Utc>>) -> bool {
-    deadline.is_some_and(|deadline| chrono::Utc::now() >= deadline)
+fn deadline_elapsed(
+    deadline: Option<chrono::DateTime<chrono::Utc>>,
+    now: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
+) -> bool {
+    deadline.is_some_and(|deadline| now() >= deadline)
 }
 
 pub fn estimate_tokens(text: &str) -> usize {
@@ -518,7 +798,26 @@ pub fn split_for_summary(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
 ) -> (Vec<Message>, Vec<Message>) {
-    history::split_messages_for_summary(messages, keep_recent_tokens)
+    #[cfg(test)]
+    {
+        return history::split_messages_for_summary(messages, keep_recent_tokens);
+    }
+    #[cfg(not(test))]
+    {
+        let counter = crate::provider_input::ProviderInputCounter::new(
+            crate::BackendProviderKind::OpenAiCompatible,
+            crate::OpenAiWireApi::ChatCompletions,
+            "default",
+        );
+        match history::split_messages_for_summary_with_counter(
+            messages.clone(),
+            keep_recent_tokens,
+            &counter,
+        ) {
+            Ok(split) => split,
+            Err(_) => (Vec::new(), messages),
+        }
+    }
 }
 
 /// Mirror of Lean `StreamingResponse.Status`, with the same terminal partition,
@@ -697,6 +996,24 @@ pub fn effective_output_budget(
     configured_max_output_tokens: usize,
 ) -> usize {
     configured_max_output_tokens.min(context_window.saturating_sub(input_tokens))
+}
+
+/// Whether an assembled provider request has a legal, strictly positive
+/// dynamic output allowance. The checked sum is intentionally retained even
+/// though the clamp makes overflow unreachable for ordinary values: estimates
+/// that saturated at `usize::MAX` must fail closed. Mirrors Lean
+/// `PromptAssembly.Budget.CanDispatch`.
+pub fn can_dispatch(
+    input_tokens: usize,
+    context_window: usize,
+    configured_max_output_tokens: usize,
+) -> bool {
+    let output_tokens =
+        effective_output_budget(input_tokens, context_window, configured_max_output_tokens);
+    output_tokens > 0
+        && input_tokens
+            .checked_add(output_tokens)
+            .is_some_and(|total| total <= context_window)
 }
 
 /// The shared provider-dispatch gate. It is deliberately expressed over an

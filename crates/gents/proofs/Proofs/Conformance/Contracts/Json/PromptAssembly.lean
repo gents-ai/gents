@@ -80,7 +80,8 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
     ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
     ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
-    ++ "\"provider_safe\":" ++ boolString witness.providerSafe
+    ++ "\"provider_safe\":" ++ boolString witness.providerSafe ++ ","
+    ++ "\"can_dispatch\":" ++ boolString witness.canDispatch
     ++ "}"
 
 def promptAssemblyBudgetCasesJson : String :=
@@ -101,7 +102,9 @@ def promptAssemblyTurnBudgetCaseJson
     ++ "\"turn_output_tokens\":"
       ++ jsonArray (witness.turnOutputTokens.map toString) ++ ","
     ++ "\"turn_should_compact\":"
-      ++ jsonArray (witness.turnShouldCompact.map boolString)
+      ++ jsonArray (witness.turnShouldCompact.map boolString) ++ ","
+    ++ "\"turn_can_dispatch\":"
+      ++ jsonArray (witness.turnCanDispatch.map boolString)
     ++ "}"
 
 def promptAssemblyTurnBudgetCasesJson : String :=

@@ -81,6 +81,7 @@ pub trait PromptBuilder: Send + Sync {
 pub struct LayeredPromptBuilder {
     preamble: String,
     context_window: usize,
+    provider_input_counter: crate::provider_input::ProviderInputCounter,
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
 }
@@ -107,6 +108,11 @@ impl LayeredPromptBuilder {
             builder.preamble.push_str(&catalog);
         }
         builder.skills = behavior.skills.clone();
+        builder.provider_input_counter = crate::provider_input::ProviderInputCounter::new(
+            behavior.backend_provider_kind,
+            behavior.openai_wire_api,
+            behavior.model_name.clone(),
+        );
         builder.skill_ceiling = crate::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
             tool_surface.allowed_mcp_service_ids(),
@@ -150,6 +156,11 @@ impl LayeredPromptBuilder {
         Self {
             preamble,
             context_window,
+            provider_input_counter: crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::config::DEFAULT_MODEL_NAME,
+            ),
             skills: Vec::new(),
             skill_ceiling: crate::skills::SkillToolCeiling::default(),
         }
@@ -160,13 +171,25 @@ impl LayeredPromptBuilder {
     }
 
     pub fn message_budget(&self) -> usize {
-        let preamble_tokens = estimate_tokens(&self.preamble);
+        let preamble_tokens = self
+            .estimate_messages(&[Message::system(self.preamble.clone())])
+            .unwrap_or(usize::MAX);
         self.context_window.saturating_sub(preamble_tokens)
     }
 
     pub fn would_exceed_budget(&self, messages: &[Message]) -> bool {
-        let msg_tokens = estimate_message_tokens(messages);
-        msg_tokens > self.message_budget()
+        self.estimate_with_preamble(messages).unwrap_or(usize::MAX) > self.context_window
+    }
+
+    pub(crate) fn estimate_messages(&self, messages: &[Message]) -> Result<usize> {
+        self.provider_input_counter.count_messages(messages)
+    }
+
+    pub(crate) fn estimate_with_preamble(&self, messages: &[Message]) -> Result<usize> {
+        let provider_messages = std::iter::once(Message::system(self.preamble.clone()))
+            .chain(messages.iter().cloned())
+            .collect::<Vec<_>>();
+        self.estimate_messages(&provider_messages)
     }
 
     pub fn system_reminder(text: &str) -> Message {
@@ -192,13 +215,12 @@ impl PromptBuilder for LayeredPromptBuilder {
 
         assembled.extend_from_slice(messages);
 
-        let preamble_tokens = estimate_tokens(&self.preamble);
-        let message_tokens = estimate_message_tokens(&assembled);
+        let estimated_tokens = self.estimate_with_preamble(&assembled)?;
 
         Ok(BuiltPrompt {
             preamble: self.preamble.clone(),
             messages: assembled,
-            estimated_tokens: preamble_tokens + message_tokens,
+            estimated_tokens,
         })
     }
 }
@@ -223,7 +245,14 @@ pub fn estimate_compaction_summary_tokens(compaction_summaries: &[String]) -> us
     compaction_summary_message(compaction_summaries)
         .as_ref()
         .map(std::slice::from_ref)
-        .map(estimate_message_tokens)
+        .map(|messages| {
+            let counter = crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                crate::config::DEFAULT_MODEL_NAME,
+            );
+            counter.count_messages(messages).unwrap_or(usize::MAX)
+        })
         .unwrap_or_default()
 }
 
@@ -300,15 +329,6 @@ fn direct_tool_guidance(tool_names: &[&str]) -> String {
     } else {
         format!("You have access to these tools: {}.", tool_names.join(", "))
     }
-}
-
-fn estimate_tokens(text: &str) -> usize {
-    text.len() / 4
-}
-
-pub(crate) fn estimate_message_tokens(messages: &[Message]) -> usize {
-    let serialized = serde_json::to_string(messages).unwrap_or_default();
-    estimate_tokens(&serialized)
 }
 
 #[cfg(test)]

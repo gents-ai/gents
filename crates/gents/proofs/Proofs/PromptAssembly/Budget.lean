@@ -23,6 +23,20 @@ def effectiveOutputBudget
     (inputTokens contextWindow configuredMaxOutputTokens : Nat) : Nat :=
   min configuredMaxOutputTokens (contextWindow - inputTokens)
 
+/-- A provider attempt is legal only when the assembled request both fits the
+context and retains strictly positive output capacity. Merely proving the
+non-strict context inequality is insufficient: when `inputTokens ≥
+contextWindow`, natural subtraction saturates to zero and the old safety
+predicate admitted a wire request with `max_tokens = 0` (#719). -/
+def CanDispatch
+    (inputTokens contextWindow configuredMaxOutputTokens : Nat) : Prop :=
+  0 < effectiveOutputBudget inputTokens contextWindow configuredMaxOutputTokens
+
+instance (inputTokens contextWindow configuredMaxOutputTokens : Nat) :
+    Decidable (CanDispatch inputTokens contextWindow configuredMaxOutputTokens) := by
+  unfold CanDispatch
+  infer_instance
+
 /-- The operator's configured share of the context window, in exact integer
 arithmetic over basis points.
 
@@ -79,6 +93,38 @@ theorem dynamic_output_is_provider_safe
       Nat.add_le_add_left (Nat.min_le_right _ _) inputTokens
     _ = contextWindow := Nat.add_sub_of_le hinput
 
+/-- Positive configured output and at least one token of remaining context are
+exactly the missing premises needed to construct a legal provider dispatch. -/
+theorem positive_capacity_can_dispatch
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hinput : inputTokens < contextWindow)
+    (houtput : 0 < configuredMaxOutputTokens) :
+    CanDispatch inputTokens contextWindow configuredMaxOutputTokens := by
+  simp [CanDispatch, effectiveOutputBudget, houtput,
+    Nat.sub_pos_iff_lt.mpr hinput]
+
+/-- Conversely, a legal dispatch witnesses both a positive configured ceiling
+and strict room beyond the assembled input. -/
+theorem can_dispatch_has_positive_capacity
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hdispatch : CanDispatch inputTokens contextWindow configuredMaxOutputTokens) :
+    0 < configuredMaxOutputTokens ∧ inputTokens < contextWindow := by
+  constructor
+  · exact lt_of_lt_of_le hdispatch (Nat.min_le_left _ _)
+  · exact Nat.sub_pos_iff_lt.mp
+      (lt_of_lt_of_le hdispatch (Nat.min_le_right _ _))
+
+/-- Dispatch legality strengthens the old non-strict context inequality: every
+legal request is provider-safe, but a zero-output request is not legal merely
+because that inequality happens to hold. -/
+theorem can_dispatch_is_provider_safe
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hdispatch : CanDispatch inputTokens contextWindow configuredMaxOutputTokens) :
+    inputTokens + effectiveOutputBudget inputTokens contextWindow
+      configuredMaxOutputTokens ≤ contextWindow := by
+  exact dynamic_output_is_provider_safe
+    (Nat.le_of_lt (can_dispatch_has_positive_capacity hdispatch).2)
+
 /-- Staying beneath the effective input budget makes the turn's input fit the
 context, after which the dynamic output clamp makes the complete provider
 request safe. -/
@@ -124,6 +170,7 @@ def EveryDispatchedTurnSafe
       configuredMaxOutputTokens : Nat) : Prop :=
   ∀ inputTokens ∈ inputs,
     ¬ ExceedsInputBudget inputTokens 0 configuredThresholdBudget contextWindow →
+    CanDispatch inputTokens contextWindow configuredMaxOutputTokens →
     inputTokens + effectiveOutputBudget inputTokens contextWindow
       configuredMaxOutputTokens ≤ contextWindow
 
@@ -135,14 +182,7 @@ theorem every_dispatched_turn_is_provider_safe
       configuredMaxOutputTokens : Nat} :
     EveryDispatchedTurnSafe inputs configuredThresholdBudget contextWindow
       configuredMaxOutputTokens := by
-  intro inputTokens _ hnot
-  simpa using
-    (not_exceeds_is_provider_safe
-      (promptTokens := inputTokens)
-      (requestTokens := 0)
-      (configuredThresholdBudget := configuredThresholdBudget)
-      (contextWindow := contextWindow)
-      (configuredMaxOutputTokens := configuredMaxOutputTokens)
-      hnot)
+  intro inputTokens _ _ hdispatch
+  exact can_dispatch_is_provider_safe hdispatch
 
 end PromptAssembly.Budget

@@ -168,19 +168,12 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
     let (first, second) = tokio::join!(first, second);
     let first = first.unwrap();
     let second = second.unwrap();
-    assert_eq!(first.request.doc_id, second.request.doc_id);
-    assert_eq!(
-        [first.created_request, second.created_request]
-            .into_iter()
-            .filter(|created| *created)
-            .count(),
-        1
-    );
 
     let request_query = format!(
         r#"{{
             AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
                 _docID request_id status lifecycle_state
+                superseded_by_request superseded_by_request_doc_id
             }}
         }}"#,
         escape_graphql_string(&parent.session_id)

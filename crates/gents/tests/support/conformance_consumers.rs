@@ -785,6 +785,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_durable_reduction_cases_pin_identity_and_persist_before_send",
         },
         ConformanceConsumer::RustTest {
+            id: "compaction::tests::generated_rolling_cases_drive_the_production_commit_precondition",
+            package: "gents",
+            source_path: "crates/gents/src/compaction/tests.rs",
+            module_path: "compaction::tests",
+            function: "generated_rolling_cases_drive_the_production_commit_precondition",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple",
             package: "gents",
             source_path: "crates/gents/tests/conformance/rendered_capture.rs",

@@ -132,14 +132,23 @@ fn compaction_summary_estimate_includes_the_provider_message_wrapper() {
         "Second checkpoint.".to_string(),
     ];
     let message = compaction_summary_message(&summaries).expect("summary message");
+    let counter = crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+        crate::config::DEFAULT_MODEL_NAME,
+    );
 
     assert_eq!(
         estimate_compaction_summary_tokens(&summaries),
-        estimate_message_tokens(std::slice::from_ref(&message))
+        counter
+            .count_messages(std::slice::from_ref(&message))
+            .expect("provider projection")
     );
     assert!(
         estimate_compaction_summary_tokens(&summaries)
-            > estimate_tokens(&join_compaction_summaries(&summaries))
+            > counter
+                .count_messages(&[Message::user(join_compaction_summaries(&summaries))])
+                .expect("provider projection")
     );
     assert_eq!(estimate_compaction_summary_tokens(&[]), 0);
 }

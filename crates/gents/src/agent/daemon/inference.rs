@@ -48,7 +48,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
     Ok(())
 }
 
-fn render_request_context_message(
+pub(super) fn render_request_context_message(
     node: &defra_node::EmbeddedNode,
     behavior: &AgentBehavior,
     request: &AgentRequest,
@@ -157,7 +157,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
         workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
-        frozen_instruction_manifest: Option<String>,
+        request_context_message: Option<crate::llm::message::Message>,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
@@ -173,13 +173,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .to_string();
         let has_deadline = !deadline_at.is_empty();
         let workspace_cwd_set = workspace.workspace_cwd.is_some();
-
-        let request_context_message = render_request_context_message(
-            self.node.as_ref(),
-            &self.behavior,
-            request,
-            frozen_instruction_manifest.as_deref(),
-        )?;
 
         ensure_request_deadline_open(request_deadline, "starting inference")?;
         if *shutdown.borrow() {

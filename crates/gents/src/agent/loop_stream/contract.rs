@@ -54,7 +54,7 @@ pub(crate) struct StructuredOutputConfig {
 }
 
 impl StructuredOutputConfig {
-    pub(super) fn for_type<T>() -> Self
+    pub(crate) fn for_type<T>() -> Self
     where
         T: DeserializeOwned + schemars::JsonSchema + 'static,
     {
@@ -112,6 +112,9 @@ pub(crate) enum LoopStreamItem<R> {
 
 #[derive(Clone)]
 pub(crate) struct LoopConfig {
+    /// One backend/wire-selected provider projection shared by every budget
+    /// decision in this completion loop and its nested compactor.
+    pub(crate) provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
     pub(crate) preamble: Option<String>,
     pub(crate) context_message: Option<Message>,
     pub(crate) temperature: Option<f64>,

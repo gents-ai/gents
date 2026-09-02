@@ -23,7 +23,7 @@ use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
 use crate::rendered_request::{
     AssemblyBuildPath, AssemblyTrace, ContextAccounting, ContextCompactionReason,
-    ContextInputComponents, CONTEXT_ACCOUNTING_VERSION,
+    CONTEXT_ACCOUNTING_VERSION,
 };
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -66,7 +66,7 @@ pub(crate) use tool_dispatch::dispatch_tool;
 
 use provider_input::{
     build_budgeted_request, clamp_request_output_budget, completion_request_input_components,
-    context_accounting_for_request,
+    context_accounting_for_request, ensure_context_can_dispatch,
 };
 use tool_dispatch::value_to_json_string;
 use turn_threading::{add_usage_saturating, close_streaming_turn};
@@ -170,7 +170,7 @@ where
             let compaction_reason = turn_context_decision.reason;
             let pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
-            let mut context_input_components = turn_context_decision.components;
+            let mut provider_input_projection = turn_context_decision.projection;
             retain_effective_messages_oracle |= matches!(
                 compaction_reason,
                 ContextCompactionReason::Compacted
@@ -217,12 +217,17 @@ where
                     clamp_request_output_budget(
                         &mut request,
                         &config,
-                        context_input_components.estimated_input_tokens(),
+                        provider_input_projection.estimated_input_tokens,
                     );
+                    ensure_context_can_dispatch(
+                        &request,
+                        &config,
+                        provider_input_projection.estimated_input_tokens,
+                    )?;
                     clamp_request_aggregate_token_budget(
                         &mut request,
                         aggregate_token_budget.as_ref(),
-                        context_input_components.estimated_input_tokens(),
+                        provider_input_projection.estimated_input_tokens,
                     )?;
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
                         // `history ++ new_messages` is the effective provider
@@ -243,7 +248,7 @@ where
                         .with_context_accounting(context_accounting_for_request(
                             &request,
                             &config,
-                            &context_input_components,
+                            &provider_input_projection,
                             turn_index,
                             attempt,
                             compaction_reason,
@@ -315,8 +320,11 @@ where
                                         &config,
                                     )
                                     .await?;
-                                    context_input_components =
-                                        completion_request_input_components(&request);
+                                    provider_input_projection =
+                                        completion_request_input_components(
+                                            &request,
+                                            config.provider_input_counter.as_ref(),
+                                        )?;
                                     build_path = AssemblyBuildPath::Repair;
                                     // Repair rewrites `history` and `new_messages` in place, and
                                     // both are declared outside `'turns`. The durable transcript is
@@ -435,8 +443,11 @@ where
                                         &config,
                                     )
                                     .await?;
-                                    context_input_components =
-                                        completion_request_input_components(&request);
+                                    provider_input_projection =
+                                        completion_request_input_components(
+                                            &request,
+                                            config.provider_input_counter.as_ref(),
+                                        )?;
                                     build_path = AssemblyBuildPath::Repair;
                                     // Repair mutates the request-scoped vectors,
                                     // so retain the effective list for later turns.
@@ -961,7 +972,7 @@ fn ensure_rendered_request_was_captured(
     Ok(())
 }
 
-async fn build_request<M: CompletionModel>(
+pub(crate) async fn build_request<M: CompletionModel>(
     model: &M,
     prompt: Message,
     history: &[Message],

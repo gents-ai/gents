@@ -1076,6 +1076,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::durable_reduction::generated_durable_reduction_cases_pin_identity_and_persist_before_send")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "rolling_compaction_cases"
+      "RollingCompactionCases"
+      "compaction::tests::generated_rolling_cases_drive_the_production_commit_precondition")
+      "compaction" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "rendered_capture_cases"
       "RenderedCaptureKeyCases"
       "conformance::rendered_capture::generated_rendered_capture_key_cases_pin_the_capture_key_tuple")

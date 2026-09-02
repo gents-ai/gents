@@ -132,9 +132,12 @@ fn rig_vocabulary_confined_to_the_seam() {
         "crates/gents/src/agent/loop_stream.rs",
         "crates/gents/src/agent/stream_processor.rs",
         "crates/gents/src/agent/loop_stream/tests.rs",
+        "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
         "crates/gents/src/agent/stream_processor/tests.rs",
         "crates/gents/src/compaction/tests.rs",
         "crates/gents/src/completion_factory/tests.rs",
+        "crates/gents/src/provider_input.rs",
+        "crates/gents/src/provider_input/tests.rs",
         "crates/gents-protocol/src/message.rs",
     ]
     .into_iter()
@@ -173,8 +176,8 @@ fn rig_vocabulary_confined_to_the_seam() {
 
     assert!(
         violations.is_empty(),
-        "rig type vocabulary escaped the seam (CLAUDE.md claims one seam; \
-         either route through llm::rig_compat or update the allowlist AND the doc):\n{}",
+        "rig type vocabulary escaped the documented seams (CLAUDE.md confines them; \
+         either route through llm::rig_compat/provider_input or update the allowlist AND the doc):\n{}",
         violations.join("\n")
     );
 }

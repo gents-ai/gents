@@ -444,7 +444,7 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
     true
 }
 
-fn patch_store_false(body: &[u8]) -> Option<Bytes> {
+pub(crate) fn patch_store_false(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let mut changed = false;
     if value.get("store").is_none() {

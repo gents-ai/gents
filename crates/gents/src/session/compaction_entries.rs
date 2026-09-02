@@ -180,12 +180,14 @@ pub(crate) async fn load_prompt_compaction_state(
             .map_or(0, |index| index + 1)
     });
     let active_rows = &rows[..active_len];
+    let total_messages_compacted = active_rows.iter().try_fold(0usize, |total, row| {
+        total
+            .checked_add(row.messages_compacted as usize)
+            .context("CompactionEntry messages_compacted total overflowed usize")
+    })?;
     let state = PromptCompactionState {
         summaries: active_rows.iter().map(|row| row.summary.clone()).collect(),
-        total_messages_compacted: active_rows
-            .iter()
-            .map(|row| row.messages_compacted as usize)
-            .sum(),
+        total_messages_compacted,
         compacted_through_sequence: active_rows
             .last()
             .and_then(|row| row.compacted_through_sequence),

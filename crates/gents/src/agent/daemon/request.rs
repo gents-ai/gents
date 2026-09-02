@@ -11,6 +11,48 @@ use crate::session;
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    async fn complete_provider_input_tokens(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        preamble: String,
+        history: &[crate::llm::message::Message],
+        skill_reminders: &[crate::llm::message::Message],
+        request_context_message: Option<&crate::llm::message::Message>,
+        aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+    ) -> Result<usize> {
+        let mut config = crate::completion_factory::loop_config_for_request(
+            &self.behavior,
+            preamble,
+            request,
+            aggregate_token_budget,
+            self.loop_tools.len(),
+        )?;
+        config.context_message = request_context_message.cloned();
+        let provider_history = skill_reminders
+            .iter()
+            .cloned()
+            .chain(history.iter().cloned())
+            .collect::<Vec<_>>();
+        let context = request_context_message
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let provider_request = crate::agent::loop_stream::build_request(
+            self.model.as_ref(),
+            crate::llm::message::Message::user(request.content.clone()),
+            &provider_history,
+            &context,
+            self.loop_tools.as_ref(),
+            &config,
+        )
+        .await
+        .map_err(anyhow::Error::new)?;
+        Ok(config
+            .provider_input_counter
+            .project_request(&provider_request)?
+            .estimated_input_tokens)
+    }
+
     pub(super) async fn handle_request(
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
@@ -83,8 +125,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let skill_reminders = self
                 .prompt_builder
                 .selected_skill_reminders(&selected_skill_ids);
-            let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
-
+            let overlay = crate::workspace::resolve_request_workspace_overlay(
+                self.node.as_ref(),
+                &request,
+                self.operator_tool_root.as_deref(),
+            )
+            .await?;
+            // Some even when empty: bound requests must not fall through to a live walk.
+            let frozen_instruction_manifest =
+                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
+                    .map(str::to_owned);
+            let request_context_message = super::inference::render_request_context_message(
+                self.node.as_ref(),
+                &self.behavior,
+                &request,
+                frozen_instruction_manifest.as_deref(),
+            )?;
+            let workspace = match overlay {
+                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                    workspace_cwd: Some(overlay.cwd),
+                    workspace_root: Some(overlay.root),
+                    workspace_authority: Some(overlay.authority),
+                },
+                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+                    crate::workspace::request_workspace_cwd(&request),
+                ),
+            };
             let mut built = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
@@ -188,12 +254,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             summary_count = summaries.len(),
                         ))
                         .await?;
-                    built.estimated_tokens =
-                        built.estimated_tokens.saturating_add(skill_reminder_tokens);
-                    let over_threshold = prompt_exceeds_compaction_threshold(
-                        built.estimated_tokens,
-                        &request.content,
+                    let over_threshold = compaction::input_exceeds_budget(
+                        self.complete_provider_input_tokens(
+                            &request,
+                            built.preamble.clone(),
+                            &built.messages,
+                            &skill_reminders,
+                            request_context_message.as_ref(),
+                            aggregate_token_budget.clone(),
+                        )
+                        .await?,
                         self.behavior.context_window,
+                        0,
                         self.behavior.compaction_threshold,
                     );
                     // Runtime counterpart of Lean `PromptView.safeToReduce`,
@@ -263,7 +335,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 result.messages_compacted as usize
                             } else {
                                 total_compacted_messages
-                                    .saturating_add(result.messages_compacted as usize)
+                                    .checked_add(result.messages_compacted as usize)
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!(
+                                            "session compaction provider-prefix count overflow: \
+                                             prior={}, added={}",
+                                            total_compacted_messages,
+                                            result.messages_compacted,
+                                        )
+                                    })?
                             };
                             let candidate_cursor =
                                 compaction::compacted_through_sequence(
@@ -359,8 +439,33 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 compacted = true,
                             ))
                             .await?;
-                        built.estimated_tokens =
-                            built.estimated_tokens.saturating_add(skill_reminder_tokens);
+                    }
+
+                    let final_input_tokens = self
+                        .complete_provider_input_tokens(
+                            &request,
+                            built.preamble.clone(),
+                            &built.messages,
+                            &skill_reminders,
+                            request_context_message.as_ref(),
+                            aggregate_token_budget.clone(),
+                        )
+                        .await?;
+                    let configured_output_tokens = effective_sampling
+                        .max_tokens
+                        .map(crate::provider_input::saturating_usize_from_u64)
+                        .unwrap_or(self.behavior.max_output_tokens);
+                    if may_reduce && !compaction::can_dispatch(
+                        final_input_tokens,
+                        self.behavior.context_window,
+                        configured_output_tokens,
+                    ) {
+                        return Err(crate::provider_input::ProviderInputError::FinalFit {
+                            estimated_input_tokens: final_input_tokens,
+                            context_window: self.behavior.context_window,
+                            configured_max_output_tokens: configured_output_tokens,
+                        }
+                        .into());
                     }
 
                     return Ok::<_, anyhow::Error>(built);
@@ -415,26 +520,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
-            let overlay = crate::workspace::resolve_request_workspace_overlay(
-                self.node.as_ref(),
-                &request,
-                self.operator_tool_root.as_deref(),
-            )
-            .await?;
-            // Some even when empty: bound requests must not fall through to a live walk.
-            let frozen_instruction_manifest =
-                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
-                    .map(str::to_owned);
-            let workspace = match overlay {
-                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
-                    workspace_cwd: Some(overlay.cwd),
-                    workspace_root: Some(overlay.root),
-                    workspace_authority: Some(overlay.authority),
-                },
-                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
-                    crate::workspace::request_workspace_cwd(&request),
-                ),
-            };
             let result = self
                 .run_inference(
                     &request,
@@ -447,7 +532,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     aggregate_token_budget,
                     effective_seed,
                     workspace,
-                    frozen_instruction_manifest,
+                    request_context_message,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -609,14 +694,15 @@ fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn prompt_exceeds_compaction_threshold(
     prompt_tokens: usize,
-    request_text: &str,
+    request_tokens: usize,
     context_window: usize,
     threshold: f64,
 ) -> bool {
     compaction::input_exceeds_budget(
-        prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)),
+        prompt_tokens.saturating_add(request_tokens),
         context_window,
         0,
         threshold,
@@ -647,10 +733,13 @@ mod budget_contract_tests {
             // carries, so the basis-point conversion is exercised rather than
             // bypassed.
             let threshold = case.threshold_basis_points as f64 / 10_000.0;
-            let request_text = "x".repeat(case.request_tokens.saturating_mul(4));
             // Drive the production helper, not a formula duplicated here.
             let configured = crate::compaction::threshold_budget(case.context_window, threshold);
-            let effective = configured.min(case.context_window);
+            let effective = crate::compaction::effective_input_budget(
+                case.context_window,
+                case.max_output_tokens,
+                threshold,
+            );
             let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
             let effective_output = crate::compaction::effective_output_budget(
                 input_tokens,
@@ -680,9 +769,19 @@ mod budget_contract_tests {
                 case.name
             );
             assert_eq!(
+                crate::compaction::can_dispatch(
+                    input_tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                ),
+                case.can_dispatch,
+                "{}: provider dispatch legality drifted from Lean",
+                case.name
+            );
+            assert_eq!(
                 prompt_exceeds_compaction_threshold(
                     case.prompt_tokens,
-                    &request_text,
+                    case.request_tokens,
                     case.context_window,
                     threshold,
                 ),

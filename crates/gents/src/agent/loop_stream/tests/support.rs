@@ -202,8 +202,19 @@ impl CompletionModel for UsageScriptedModel {
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         self.seen_dispatches.lock().await.push((
-            u64::try_from(completion_request_input_components(&request).estimated_input_tokens())
-                .unwrap_or(u64::MAX),
+            u64::try_from(
+                completion_request_input_components(
+                    &request,
+                    &crate::provider_input::ProviderInputCounter::new(
+                        crate::BackendProviderKind::OpenAiCompatible,
+                        crate::OpenAiWireApi::ChatCompletions,
+                        "test-model",
+                    ),
+                )
+                .map(|projection| projection.estimated_input_tokens)
+                .unwrap_or(usize::MAX),
+            )
+            .unwrap_or(u64::MAX),
             request.max_tokens,
         ));
         let turn = self.turns.lock().await.pop_front().unwrap_or_else(|| {
@@ -378,6 +389,13 @@ pub(super) fn tool_result_text(content: &ToolResultContent) -> &str {
 
 pub(super) fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: None,
         context_message: None,
         temperature: None,

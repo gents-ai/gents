@@ -37,7 +37,10 @@ pub const ASSEMBLY_TRACE_VERSION: u32 = 4;
 /// intentionally named as well as versioned: these are the exact values the
 /// runtime used for its dispatch decision, not a claim about a provider's
 /// proprietary tokenizer.
-pub const CONTEXT_ACCOUNTING_VERSION: u32 = 1;
+///
+/// v2: provider-wire projection selected by backend/API, with normalized
+/// documents attributed separately and one authoritative whole-body total.
+pub const CONTEXT_ACCOUNTING_VERSION: u32 = 2;
 
 /// Request paths whose body is a completion request, and the wire shape each
 /// one implies. The capturing transport only claims a pending capture for one

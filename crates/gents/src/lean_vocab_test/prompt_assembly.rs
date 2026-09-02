@@ -70,6 +70,7 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) effective_output_tokens: usize,
     pub(crate) should_compact: bool,
     pub(crate) provider_safe: bool,
+    pub(crate) can_dispatch: bool,
 }
 
 /// A multi-turn provider-input budget trace computed by
@@ -85,6 +86,7 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) turn_input_tokens: Vec<usize>,
     pub(crate) turn_output_tokens: Vec<usize>,
     pub(crate) turn_should_compact: Vec<bool>,
+    pub(crate) turn_can_dispatch: Vec<bool>,
 }
 
 /// A request-wide token-ledger witness computed by

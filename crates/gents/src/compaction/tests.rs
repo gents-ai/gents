@@ -60,12 +60,42 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
     }
 }
 
+#[test]
+fn generated_rolling_cases_drive_the_production_commit_precondition() {
+    for case in crate::lean_vocab_test::lean_rolling_compaction_cases() {
+        let actual_valid = rolling_plan_is_valid(
+            case.target_messages,
+            &case.chunk_messages,
+            &case.chunk_pair_closed,
+            &case.chunk_can_dispatch,
+            case.checkpoint_covered,
+        );
+        assert_eq!(actual_valid, case.plan_valid, "{}", case.name);
+        let actual_cursor = if case.completed && actual_valid {
+            case.target_messages
+        } else {
+            case.before_cursor
+        };
+        assert_eq!(actual_cursor, case.cursor_after, "{}", case.name);
+
+        let actual_step_input = rolling_step_input(case.prior_payload, case.next_chunk.clone());
+        assert_eq!(actual_step_input, case.step_input, "{}", case.name);
+    }
+}
+
 /// Shared `LoopConfig` for tests that only care about compaction behavior, not
 /// loop configuration. `DefraCompactor::new` replaces this policy with its
 /// bounded immediate internal retry budget (#1016), so the fixture does not
 /// accidentally supply behavior that the constructor is meant to own.
 fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: None,
         context_message: None,
         temperature: None,
@@ -748,6 +778,7 @@ fn assert_checkpoint_markers(summary: &str, markers: &[&str]) {
 struct MockSummaryModel {
     response: String,
     last_request: Arc<Mutex<Option<CompletionRequest>>>,
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 
 impl MockSummaryModel {
@@ -755,6 +786,7 @@ impl MockSummaryModel {
         Self {
             response: response.to_string(),
             last_request: Arc::new(Mutex::new(None)),
+            requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -773,7 +805,8 @@ impl CompletionModel for MockSummaryModel {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        *self.last_request.lock().unwrap() = Some(request);
+        *self.last_request.lock().unwrap() = Some(request.clone());
+        self.requests.lock().unwrap().push(request);
         Ok(CompletionResponse {
             choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
                 rig::completion::message::Text {
@@ -792,7 +825,8 @@ impl CompletionModel for MockSummaryModel {
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         // Compaction now summarizes via the owned loop (#400), which uses
         // `stream`; replay the scripted summary as a single text chunk.
-        *self.last_request.lock().unwrap() = Some(request);
+        *self.last_request.lock().unwrap() = Some(request.clone());
+        self.requests.lock().unwrap().push(request);
         let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
             Ok(RawStreamingChoice::Message(self.response.clone())),
             Ok(RawStreamingChoice::FinalResponse(())),
@@ -801,6 +835,285 @@ impl CompletionModel for MockSummaryModel {
             futures::stream::iter(items),
         )))
     }
+}
+
+#[derive(Clone, Default)]
+struct SentinelCheckpointModel {
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+#[derive(Clone, Default)]
+struct AdvancingFirstCheckpointModel {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    now: Arc<Mutex<chrono::DateTime<chrono::Utc>>>,
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for AdvancingFirstCheckpointModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::default()
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        unreachable!("rolling compaction uses streaming completions")
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            let mut now = self.now.lock().unwrap();
+            *now += chrono::Duration::seconds(2);
+        }
+        let checkpoint = serde_json::json!({
+            "goal": "preserve the bounded rolling prefix",
+            "next_actions": ["continue rolling"]
+        })
+        .to_string();
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(vec![
+                Ok(RawStreamingChoice::Message(checkpoint)),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ]),
+        )))
+    }
+}
+
+impl SentinelCheckpointModel {
+    fn checkpoint_for(request: &CompletionRequest) -> String {
+        let rendered = serde_json::to_string(&request.chat_history).unwrap();
+        let mut markers = Vec::new();
+        if rendered.contains("FIRST_SENTINEL") {
+            markers.push("FIRST_SENTINEL");
+        }
+        if rendered.contains("LAST_SENTINEL") {
+            markers.push("LAST_SENTINEL");
+        }
+        serde_json::json!({
+            "goal": format!("Preserve {}", markers.join(" and ")),
+            "next_actions": ["Continue after rolling compaction."]
+        })
+        .to_string()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for SentinelCheckpointModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::default()
+    }
+
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        let response = Self::checkpoint_for(&request);
+        self.requests.lock().unwrap().push(request);
+        Ok(CompletionResponse {
+            choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
+                rig::completion::message::Text { text: response },
+            )),
+            usage: Usage::new(),
+            raw_response: (),
+            message_id: None,
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let response = Self::checkpoint_for(&request);
+        self.requests.lock().unwrap().push(request);
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
+            Ok(RawStreamingChoice::Message(response)),
+            Ok(RawStreamingChoice::FinalResponse(())),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let config = gate_test_loop_config();
+    let counter = config.provider_input_counter.clone();
+    let compactor = DefraCompactor::new(Arc::new(model), config);
+    let mut messages = (0..20)
+        .map(|index| {
+            let marker = if index == 0 {
+                "FIRST_SENTINEL"
+            } else if index == 19 {
+                "LAST_SENTINEL"
+            } else {
+                "middle"
+            };
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("{marker}-{index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+
+    let result = compactor
+        .compact(
+            messages.clone(),
+            6_000,
+            &CompactionOptions {
+                keep_recent_tokens: 20,
+                strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
+                force_summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("the oversized prefix should roll through bounded chunks");
+
+    assert_eq!(result.messages_compacted, 20);
+    assert!(result.compaction_count > 1);
+    assert_eq!(result.messages, vec![messages.last().unwrap().clone()]);
+    let summary = result.summary.expect("rolling checkpoint");
+    assert!(summary.contains("FIRST_SENTINEL"));
+    assert!(summary.contains("LAST_SENTINEL"));
+
+    let requests = observed.lock().unwrap();
+    assert_eq!(requests.len(), result.compaction_count as usize);
+    let first = serde_json::to_string(&requests.first().unwrap().chat_history).unwrap();
+    let last = serde_json::to_string(&requests.last().unwrap().chat_history).unwrap();
+    assert!(first.contains("FIRST_SENTINEL"));
+    assert!(last.contains("FIRST_SENTINEL"));
+    assert!(last.contains("LAST_SENTINEL"));
+    for request in requests.iter() {
+        let output = usize::try_from(request.max_tokens.expect("positive dynamic output")).unwrap();
+        let input = counter
+            .project_request(request)
+            .unwrap()
+            .estimated_input_tokens;
+        assert!(output > 0);
+        assert!(can_dispatch(input, 6_000, output));
+    }
+}
+
+#[tokio::test]
+async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
+    let started = chrono::Utc::now();
+    let clock = Arc::new(Mutex::new(started));
+    let model = AdvancingFirstCheckpointModel {
+        calls: Arc::default(),
+        now: clock.clone(),
+    };
+    let calls = model.calls.clone();
+    let clock_for_compactor = clock.clone();
+    let compactor = DefraCompactor::new(Arc::new(model), gate_test_loop_config())
+        .with_now(Arc::new(move || *clock_for_compactor.lock().unwrap()));
+    let mut messages = (0..20)
+        .map(|index| {
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("chunk {index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+
+    let error = compactor
+        .compact(
+            messages,
+            6_000,
+            &CompactionOptions {
+                keep_recent_tokens: 20,
+                strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
+                force_summarize: true,
+                deadline: Some(started + chrono::Duration::seconds(1)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("the shared deadline must stop the next rolling chunk");
+
+    assert!(error.chain().any(|cause| matches!(
+        cause.downcast_ref::<CompactionError>(),
+        Some(CompactionError::DeadlineElapsed)
+    )));
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the expired shared deadline must prevent a second provider dispatch"
+    );
+}
+
+#[tokio::test]
+async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_checkpoint() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let compactor = DefraCompactor::new(Arc::new(model), gate_test_loop_config());
+    let messages = vec![
+        text_msg("user", "small prefix that fits as the first rolling chunk"),
+        tool_call_msg(
+            "write_file",
+            &serde_json::json!({
+                "file_path": "/tmp/oversized",
+                "content": "x".repeat(40_000)
+            })
+            .to_string(),
+        ),
+        tool_result_msg("call-1", "ok"),
+        text_msg("user", "retained current prompt"),
+    ];
+
+    let error = compactor
+        .compact(
+            messages,
+            6_000,
+            &CompactionOptions {
+                keep_recent_tokens: 20,
+                strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
+                force_summarize: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("an indivisible provider-visible tool turn cannot be discarded");
+
+    assert!(error
+        .chain()
+        .any(|cause| cause
+            .downcast_ref::<CompactionError>()
+            .is_some_and(|typed| {
+                matches!(
+                    typed,
+                    CompactionError::IndivisibleUnitCannotFit {
+                        start: 1,
+                        end: 3,
+                        ..
+                    }
+                )
+            })));
+    assert_eq!(
+        observed.lock().unwrap().len(),
+        1,
+        "the first in-memory checkpoint may succeed, but no partial result is returned"
+    );
 }
 
 #[tokio::test]
@@ -1101,7 +1414,7 @@ async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
         std::time::Duration::from_secs(10),
         compactor.compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1141,6 +1454,13 @@ fn summary_worthy_messages() -> Vec<Message> {
 
 fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: None,
         context_message: None,
         temperature: None,
@@ -1292,7 +1612,7 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
     let result = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1346,7 +1666,7 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
     let result = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1400,7 +1720,7 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
     let result = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1465,7 +1785,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
         compactor
             .compact(
                 summary_worthy_messages(),
-                500,
+                6_000,
                 &CompactionOptions {
                     threshold: 0.50,
                     keep_recent_tokens: 50,
@@ -1527,7 +1847,7 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
     let result = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1568,12 +1888,12 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
 }
 
 #[tokio::test(start_paused = true)]
-async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_provider_call() {
+async fn expired_deadline_stops_before_the_first_summary_provider_call() {
     // #1016 review: the internal ladder is deadline-aware only if the request's
     // claimed deadline actually reaches the compactor — the daemon-lifetime
     // config it stores has `deadline: None`. `CompactionOptions.deadline` is
     // the request-scoped carrier: with it already expired, an empty first
-    // attempt must fail on the deadline check instead of consuming the ladder.
+    // attempt must be rejected before provider dispatch.
     let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::malformed_summary_turn()]);
     let calls = model.calls.clone();
     let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
@@ -1581,7 +1901,7 @@ async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_prov
     let error = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1599,8 +1919,8 @@ async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_prov
     );
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "no retry may be taken once the deadline has passed"
+        0,
+        "no provider attempt may be taken once the deadline has passed"
     );
 }
 
@@ -1622,7 +1942,7 @@ async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
     let result = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -1659,7 +1979,7 @@ async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
     let error = compactor
         .compact(
             summary_worthy_messages(),
-            500,
+            6_000,
             &CompactionOptions {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
@@ -2011,6 +2331,22 @@ fn pair_safe_boundary_retreats_to_the_turn_start() {
 }
 
 #[test]
+fn linear_pair_safe_boundaries_match_the_production_boundary_predicate() {
+    let messages = vec![
+        text_msg("user", "before"),
+        tool_call_msg("read", r#"{"file_path":"/tmp/a"}"#),
+        tool_result_msg("call-1", "result"),
+        text_msg("assistant", "after"),
+        tool_call_msg("read", r#"{"file_path":"/tmp/b"}"#),
+    ];
+    let actual = super::history::pair_safe_boundaries(&messages);
+    let expected = (1..=messages.len())
+        .filter(|limit| super::history::pair_safe_boundary(&messages, *limit) == *limit)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn provider_view_is_idempotent() {
     let history = vec![
         tool_result_msg("orphan-1", "result with no call"),
@@ -2300,6 +2636,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .to_string(),
     );
     let config = crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: Some("You are a helpful coding agent.".to_string()),
         context_message: None,
         temperature: None,

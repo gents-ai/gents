@@ -836,6 +836,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "DurableReductionCases".to_string(),
         ));
     }
+    if !snapshot.rolling_compaction_cases.is_empty() {
+        emitted.insert((
+            "rolling_compaction_cases".to_string(),
+            "RollingCompactionCases".to_string(),
+        ));
+    }
     if !snapshot.rendered_capture_key_cases.is_empty() {
         emitted.insert((
             "rendered_capture_cases".to_string(),
@@ -1185,6 +1191,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "prompt_assembly_cases",
         "rendered_capture_cases",
         "durable_reduction_cases",
+        "rolling_compaction_cases",
         "streaming_response_cases",
         "streaming_response_interrupt_flow_cases",
         "event_delivery_cases",
