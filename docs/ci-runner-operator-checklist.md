@@ -21,7 +21,7 @@ All four registrations must have the common
 Confirm the live pool through GitHub rather than relying on local process state:
 
 ```bash
-gh api repos/source-inc/gents/actions/runners --paginate \
+gh api repos/gents-ai/gents/actions/runners --paginate \
   --jq '.runners[] | select(.name|startswith("studio-")) | [.name,.status,.busy,([.labels[].name]|join(","))] | @tsv'
 ```
 
@@ -56,7 +56,7 @@ the OS, sccache, and other host services. The repository variable can override
 this without a workflow edit:
 
 ```bash
-gh variable set CARGO_BUILD_JOBS --repo source-inc/gents --body 12
+gh variable set CARGO_BUILD_JOBS --repo gents-ai/gents --body 12
 ```
 
 Watch CPU pressure and job duration before increasing it. Lean can spawn work
@@ -178,7 +178,7 @@ Lake directory. Do not replace the interpreter invocation with
 
 ## Public-repository security boundary
 
-`source-inc/gents` is public. Pull-request jobs execute repository code on
+`gents-ai/gents` is public. Pull-request jobs execute repository code on
 persistent self-hosted machines, so contributor approval is not an isolation
 boundary: an approved fork can modify code run by Cargo, build scripts, tests,
 and shell steps. Treat moving pull-request execution into ephemeral macOS VMs

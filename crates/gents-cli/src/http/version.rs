@@ -86,7 +86,7 @@ mod tests {
     fn version_response_reports_canonical_repository() {
         assert_eq!(
             version_response().repository,
-            "https://github.com/source-inc/gents"
+            "https://github.com/gents-ai/gents"
         );
     }
 }

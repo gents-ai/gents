@@ -799,7 +799,7 @@ of the release version and is what compatibility decisions key on.
 
 - **Rust: git-tag pinning, not crates.io.** The DefraDB git dependencies make
   registry publication impossible for this dependency cone, so the supported
-  mechanism is `gents-desktop-bridge = { git = "ssh://git@github.com/source-inc/gents.git", tag = "vX.Y.Z" }`
+  mechanism is `gents-desktop-bridge = { git = "ssh://git@github.com/gents-ai/gents.git", tag = "vX.Y.Z" }`
   (downstream needs repo access — true today for any consumer of this private repo).
   Note the transitive cost: the consumer's Cargo must also fetch the ssh-pinned
   DefraDB revisions, so external access is validated from Amygdala CI in phase 5
@@ -809,7 +809,7 @@ of the release version and is what compatibility decisions key on.
   prerequisite for downstream CI, so the implemented release workflow uses the
   documented fallback: it uploads each clean-install-verified `npm pack` tarball as
   a GitHub Release asset, and downstream pins the asset URL per package
-  (`"@source-inc/gents-desktop-client": "https://github.com/source-inc/gents/releases/download/vX.Y.Z/source-inc-gents-desktop-client-X.Y.Z.tgz"`).
+  (`"@source-inc/gents-desktop-client": "https://github.com/gents-ai/gents/releases/download/vX.Y.Z/source-inc-gents-desktop-client-X.Y.Z.tgz"`).
   npm git dependencies are **not** a viable fallback — a Git URL installs only the
   repository-root package and explicitly does not install its workspaces, so it
   cannot address nested `@source-inc/gents-desktop-*` packages. What downstream

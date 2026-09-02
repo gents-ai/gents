@@ -12,7 +12,7 @@ import {
   NEEDS_TRIAGE,
 } from "./reconcile.mjs";
 
-const REPO = process.env.GITHUB_REPOSITORY ?? "source-inc/gents";
+const REPO = process.env.GITHUB_REPOSITORY ?? "gents-ai/gents";
 const TOKEN = process.env.GITHUB_TOKEN;
 // Labels are idempotent and cheap; comments are permanent and mail everyone
 // watching. A single renamed or stray `roadmap:` label turns the whole backlog
