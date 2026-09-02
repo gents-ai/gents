@@ -55,9 +55,7 @@ export function FleetHostDashboard({
   ...fleetProps
 }: FleetHostDashboardProps) {
   const supportsLocalRuntime = !isMobileTauriShell();
-  const indicator = (
-    <SyncHealthIndicator syncHealth={syncHealth} />
-  );
+  const indicator = <SyncHealthIndicator syncHealth={syncHealth} />;
   return (
     <FleetDashboard
       {...fleetProps}
