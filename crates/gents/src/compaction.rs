@@ -23,18 +23,34 @@ pub enum CompactionError {
     DeadlineElapsed,
     #[error(
         "compaction_indivisible_unit_cannot_fit: start={start}, end={end}, \
-         estimated_input_tokens={estimated_input_tokens}, context_window={context_window}"
+         estimated_input_tokens={estimated_input_tokens}, input_budget={input_budget}, \
+         reserved_output_tokens={reserved_output_tokens}, context_window={context_window}"
     )]
     IndivisibleUnitCannotFit {
         start: usize,
         end: usize,
         estimated_input_tokens: usize,
+        input_budget: usize,
+        reserved_output_tokens: usize,
         context_window: usize,
     },
     #[error("compaction_exact_count_overflow: field={field}, value={value}")]
     ExactCountOverflow { field: &'static str, value: usize },
     #[error("compaction_invalid_rolling_plan")]
     InvalidRollingPlan,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ContextBudgetError {
+    #[error(
+        "provider_input_has_no_output_capacity: estimated_input_tokens={estimated_input_tokens}, \
+         context_window={context_window}, effective_max_output_tokens={effective_max_output_tokens}"
+    )]
+    NoOutputCapacity {
+        estimated_input_tokens: usize,
+        context_window: usize,
+        effective_max_output_tokens: usize,
+    },
 }
 
 pub(crate) fn rolling_plan_is_valid(
@@ -149,7 +165,6 @@ pub struct CompactionResult {
     pub files_read: Vec<String>,
     pub files_modified: Vec<String>,
     pub messages_compacted: u32,
-    pub compaction_count: u32,
 }
 
 pub trait Compactor: Send + Sync {
@@ -185,6 +200,29 @@ impl<M: CompletionModel> DefraCompactor<M> {
         }
     }
 
+    /// Compute the one retention policy used by both session-entry and
+    /// between-turn compaction with this compactor's provider projection.
+    pub(crate) fn retention_target(
+        &self,
+        configured_keep_recent: usize,
+        complete_input_tokens: usize,
+        compactable_messages: &[Message],
+        context_window: usize,
+        threshold: f64,
+    ) -> Result<usize> {
+        let compactable_input_tokens = self
+            .config
+            .provider_input_counter
+            .estimate_message_request(compactable_messages)
+            .context("projecting compactable provider messages")?;
+        let fixed_input_tokens = complete_input_tokens.saturating_sub(compactable_input_tokens);
+        Ok(compaction_retention_target(
+            configured_keep_recent,
+            effective_input_budget(context_window, threshold),
+            fixed_input_tokens,
+        ))
+    }
+
     #[cfg(test)]
     fn with_now(
         mut self,
@@ -204,7 +242,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
     ) -> Result<CompactionResult> {
         let counter = self.config.provider_input_counter.as_ref();
         let original_token_estimate = counter
-            .count_messages(&messages)
+            .estimate_message_request(&messages)
             .context("projecting original compaction input")?;
 
         // Normalize to the canonical provider view so `messages_compacted`
@@ -239,7 +277,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         }
 
         let stripped_token_estimate = counter
-            .count_messages(&stripped_messages)
+            .estimate_message_request(&stripped_messages)
             .context("projecting normalized compaction input")?;
         // `normalization_removed_rows` stays the outermost refusal: it means any
         // count taken here would be measured in a shifted space, which
@@ -248,7 +286,11 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         if normalization_removed_rows
             || matches!(options.strategy, CompactionStrategy::StripToolResults)
             || (!options.force_summarize
-                && stripped_token_estimate <= threshold_budget(context_window, options.threshold))
+                && !input_exceeds_budget(
+                    stripped_token_estimate,
+                    context_window,
+                    options.threshold,
+                ))
         {
             return Ok(CompactionResult {
                 messages: stripped_messages,
@@ -258,7 +300,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
                 files_read: stripped_activity.files_read,
                 files_modified: stripped_activity.files_modified,
                 messages_compacted: 0,
-                compaction_count: 0,
             });
         }
 
@@ -276,7 +317,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
                 files_read: stripped_activity.files_read,
                 files_modified: stripped_activity.files_modified,
                 messages_compacted: 0,
-                compaction_count: 0,
             });
         }
 
@@ -295,9 +335,11 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         // The summary completion has its own output budget, deliberately
         // independent of the user turn's max_output_tokens (#1017): a large
         // turn budget must not let the model balloon the internal summary.
-        let summary_max_output_tokens = options
+        let configured_summary_max_output_tokens = options
             .summary_max_output_tokens
             .clamp(1, crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS);
+        let summary_max_output_tokens =
+            summary_output_ceiling(configured_summary_max_output_tokens, context_window);
         summary_config.max_tokens = Some(summary_max_output_tokens as u64);
         summary_config.aggregate_token_budget = options.aggregate_token_budget.clone();
         summary_config.additional_params = crate::completion_factory::merge_optional_params(
@@ -325,7 +367,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
         } = extract_file_activity(&old_messages);
         let mut consumed = 0usize;
         let mut rolling_summary = None::<String>;
-        let mut compaction_count = 0usize;
         let mut chunk_messages = Vec::new();
         let mut chunk_pair_closed = Vec::new();
         let mut chunk_can_dispatch = Vec::new();
@@ -349,10 +390,7 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             )
             .await?;
             let pair_closed = history::pair_safe_boundaries(remaining).contains(&chunk_len);
-            let configured_output = summary_config
-                .max_tokens
-                .map(crate::provider_input::saturating_usize_from_u64)
-                .unwrap_or_default();
+            let configured_output = configured_output_ceiling(summary_config.max_tokens);
             let chunk = pretruncate_tool_results(
                 remaining[..chunk_len].to_vec(),
                 options.tool_result_max_chars,
@@ -374,13 +412,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
                     .ok_or(CompactionError::ExactCountOverflow {
                         field: "messages_compacted",
                         value: old_messages.len(),
-                    })?;
-            compaction_count =
-                compaction_count
-                    .checked_add(1)
-                    .ok_or(CompactionError::ExactCountOverflow {
-                        field: "compaction_count",
-                        value: usize::MAX,
                     })?;
             chunk_messages.push(chunk_len);
             chunk_pair_closed.push(pair_closed);
@@ -420,19 +451,13 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
                 .collect::<Vec<_>>();
         compacted_projection.extend(recent_messages.iter().cloned());
         let compacted_token_estimate = counter
-            .count_messages(&compacted_projection)
+            .estimate_message_request(&compacted_projection)
             .context("projecting final compacted provider input")?;
         let messages_compacted =
             u32::try_from(old_messages.len()).map_err(|_| CompactionError::ExactCountOverflow {
                 field: "messages_compacted",
                 value: old_messages.len(),
             })?;
-        let compaction_count =
-            u32::try_from(compaction_count).map_err(|_| CompactionError::ExactCountOverflow {
-                field: "compaction_count",
-                value: compaction_count,
-            })?;
-
         Ok(CompactionResult {
             messages: recent_messages,
             summary: Some(summary),
@@ -441,7 +466,6 @@ impl<M: CompletionModel + 'static> Compactor for DefraCompactor<M> {
             files_read,
             files_modified,
             messages_compacted,
-            compaction_count,
         })
     }
 }
@@ -456,11 +480,24 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
     context_window: usize,
 ) -> Result<(usize, usize)> {
     let boundaries = history::pair_safe_boundaries(remaining);
+    let configured_output = configured_output_ceiling(summary_config.max_tokens);
+    let input_budget = rolling_summary_input_budget(context_window, configured_output);
     let Some(&first_boundary) = boundaries.first() else {
+        let estimated_input_tokens =
+            summary_candidate_tokens(model, remaining, prior_summary, summary_config, options)
+                .await?;
+        let absolute_end = absolute_start.checked_add(remaining.len()).ok_or(
+            CompactionError::ExactCountOverflow {
+                field: "indivisible_unit_end",
+                value: absolute_start,
+            },
+        )?;
         return Err(CompactionError::IndivisibleUnitCannotFit {
             start: absolute_start,
-            end: remaining.len(),
-            estimated_input_tokens: usize::MAX,
+            end: absolute_end,
+            estimated_input_tokens,
+            input_budget,
+            reserved_output_tokens: configured_output,
             context_window,
         }
         .into());
@@ -480,11 +517,15 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
             options,
         )
         .await?;
-        let configured_output = summary_config
-            .max_tokens
-            .map(crate::provider_input::saturating_usize_from_u64)
-            .unwrap_or_default();
-        if crate::compaction::can_dispatch(estimate, context_window, configured_output) {
+        // Do not pack a summary request all the way to the raw context edge:
+        // doing so is technically dispatchable but can reduce a structured
+        // checkpoint to a one-token output allowance. The rolling summary
+        // budget reserves the configured summary ceiling whenever it can
+        // coexist with input. The owned loop still applies the dynamic output
+        // clamp immediately before dispatch.
+        if estimate <= input_budget
+            && crate::compaction::can_dispatch(estimate, context_window, configured_output)
+        {
             best = Some((boundary, estimate));
             low = middle + 1;
         } else {
@@ -515,6 +556,8 @@ async fn largest_fitting_summary_chunk<M: CompletionModel>(
         start: absolute_start,
         end: absolute_end,
         estimated_input_tokens,
+        input_budget,
+        reserved_output_tokens: configured_output,
         context_window,
     }
     .into())
@@ -545,9 +588,8 @@ async fn summary_candidate_tokens<M: CompletionModel>(
     .map_err(anyhow::Error::new)?;
     Ok(summary_config
         .provider_input_counter
-        .project_request(&request)
-        .context("projecting rolling compaction summary request")?
-        .estimated_input_tokens)
+        .estimate_request(&request)
+        .context("projecting rolling compaction summary request")?)
 }
 
 async fn summarize_checkpoint<M: CompletionModel + 'static>(
@@ -659,15 +701,6 @@ fn deadline_elapsed(
     now: &(dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync),
 ) -> bool {
     deadline.is_some_and(|deadline| now() >= deadline)
-}
-
-pub fn estimate_tokens(text: &str) -> usize {
-    text.len() / 4
-}
-
-pub fn estimate_message_tokens(messages: &[Message]) -> usize {
-    let serialized = serde_json::to_string(messages).unwrap_or_default();
-    estimate_tokens(&serialized)
 }
 
 pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
@@ -797,27 +830,12 @@ pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
 pub fn split_for_summary(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
-) -> (Vec<Message>, Vec<Message>) {
-    #[cfg(test)]
-    {
-        return history::split_messages_for_summary(messages, keep_recent_tokens);
-    }
-    #[cfg(not(test))]
-    {
-        let counter = crate::provider_input::ProviderInputCounter::new(
-            crate::BackendProviderKind::OpenAiCompatible,
-            crate::OpenAiWireApi::ChatCompletions,
-            "default",
-        );
-        match history::split_messages_for_summary_with_counter(
-            messages.clone(),
-            keep_recent_tokens,
-            &counter,
-        ) {
-            Ok(split) => split,
-            Err(_) => (Vec::new(), messages),
-        }
-    }
+    provider: crate::BackendProviderKind,
+    wire: crate::OpenAiWireApi,
+    model: &str,
+) -> Result<(Vec<Message>, Vec<Message>)> {
+    let counter = crate::provider_input::ProviderInputCounter::new(provider, wire, model);
+    history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }
 
 /// Mirror of Lean `StreamingResponse.Status`, with the same terminal partition,
@@ -978,12 +996,60 @@ pub fn threshold_budget(context_window: usize, threshold: f64) -> usize {
 /// a ceiling, not a reservation: each completion dispatch clamps that ceiling
 /// with [`effective_output_budget`]. Mirrors Lean
 /// `PromptAssembly.Budget.effectiveInputBudget`.
-pub fn effective_input_budget(
-    context_window: usize,
-    _max_output_tokens: usize,
-    threshold: f64,
-) -> usize {
+pub fn effective_input_budget(context_window: usize, threshold: f64) -> usize {
     threshold_budget(context_window, threshold).min(context_window)
+}
+
+/// Preserve one interpretation of an optional provider output ceiling across
+/// pointer widths. `None` retains the historical provider-unbounded meaning;
+/// the owned dispatch path always replaces it with an explicit dynamic clamp.
+pub(crate) fn configured_output_ceiling(max_tokens: Option<u64>) -> usize {
+    max_tokens
+        .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
+        .unwrap_or(usize::MAX)
+}
+
+/// Recent-message retention target after fixed provider layers. One quarter
+/// of the remaining message budget is reserved for the generated checkpoint
+/// and projection drift. Mirrors Lean
+/// `PromptAssembly.Budget.compactionRetentionTarget`.
+pub(crate) fn compaction_retention_target(
+    configured_keep_recent: usize,
+    effective_input_budget: usize,
+    fixed_input_tokens: usize,
+) -> usize {
+    let message_budget = effective_input_budget.saturating_sub(fixed_input_tokens);
+    configured_keep_recent.min(((message_budget as u128 * 3) / 4) as usize)
+}
+
+/// Bound an internal summary's output ceiling to one rounded-up quarter of
+/// its actual context window. This makes the ceiling usable on small-context
+/// models while leaving ordinary completion ceilings untouched. Mirrors Lean
+/// `PromptAssembly.Budget.summaryOutputCeiling`.
+pub(crate) fn summary_output_ceiling(
+    configured_max_output_tokens: usize,
+    context_window: usize,
+) -> usize {
+    configured_max_output_tokens.min(context_window.div_ceil(4).max(1))
+}
+
+/// Maximum rolling-summary input that preserves a useful dynamic output
+/// allowance. The already-bounded ceiling is reserved when it is smaller than
+/// the context. A ceiling equal to the whole tiny context cannot coexist with
+/// nonempty summary input, so that degenerate configuration falls back to the
+/// ordinary dynamic dispatch rule. This policy is local to internal summary
+/// chunk sizing and does not change ordinary turns' dynamic output ceilings.
+/// Mirrors Lean
+/// `PromptAssembly.Budget.rollingSummaryInputBudget`.
+pub(crate) fn rolling_summary_input_budget(
+    context_window: usize,
+    configured_max_output_tokens: usize,
+) -> usize {
+    if configured_max_output_tokens < context_window {
+        context_window - configured_max_output_tokens
+    } else {
+        context_window
+    }
 }
 
 /// Per-turn output allowance after the assembled provider input is known.
@@ -1019,16 +1085,6 @@ pub fn can_dispatch(
 /// The shared provider-dispatch gate. It is deliberately expressed over an
 /// already-assembled input estimate so callers at request entry and inside the
 /// owned completion loop apply exactly the same threshold rule.
-pub fn input_exceeds_budget(
-    input_tokens: usize,
-    context_window: usize,
-    max_output_tokens: usize,
-    threshold: f64,
-) -> bool {
-    input_tokens > effective_input_budget(context_window, max_output_tokens, threshold)
-}
-
-pub fn needs_compaction(messages: &[Message], context_window: usize, threshold: f64) -> bool {
-    let tokens = estimate_message_tokens(messages);
-    tokens > threshold_budget(context_window, threshold)
+pub fn input_exceeds_budget(input_tokens: usize, context_window: usize, threshold: f64) -> bool {
+    input_tokens > effective_input_budget(context_window, threshold)
 }

@@ -741,10 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn build_path_records_whether_the_output_clamp_ran() {
-        assert!(AssemblyBuildPath::Budgeted.applies_output_clamp());
-        assert!(!AssemblyBuildPath::Repair.applies_output_clamp());
-
+    fn build_path_records_the_request_assembly_route() {
         let budgeted = build(0, 0, empty_trace(), components());
         let repaired = build(
             0,

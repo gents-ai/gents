@@ -14,36 +14,6 @@ use serde_json::{Map, Value};
 use crate::backend_provider::BackendProviderKind;
 use crate::openai_wire::OpenAiWireApi;
 
-/// Preserve a positive provider ceiling across pointer widths. Provider
-/// options are `u64`; an out-of-range value on a narrower target means
-/// "larger than any locally representable budget", not zero or a fallback to
-/// an unrelated behavior default.
-pub(crate) fn saturating_usize_from_u64(value: u64) -> usize {
-    usize::try_from(value).unwrap_or(usize::MAX)
-}
-
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum ProviderInputError {
-    #[error(
-        "provider_input_has_no_output_capacity: estimated_input_tokens={estimated_input_tokens}, \
-         context_window={context_window}, effective_max_output_tokens={effective_max_output_tokens}"
-    )]
-    NoOutputCapacity {
-        estimated_input_tokens: usize,
-        context_window: usize,
-        effective_max_output_tokens: usize,
-    },
-    #[error(
-        "provider_input_final_fit_failed: estimated_input_tokens={estimated_input_tokens}, \
-         context_window={context_window}, configured_max_output_tokens={configured_max_output_tokens}"
-    )]
-    FinalFit {
-        estimated_input_tokens: usize,
-        context_window: usize,
-        configured_max_output_tokens: usize,
-    },
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProviderInputProfile {
     OpenAiChatCompletions,
@@ -88,9 +58,6 @@ pub(crate) struct ProviderInputCounter {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProviderInputProjection {
-    /// The provider request after Rig conversion and every deterministic body
-    /// rewrite performed below the model client.
-    pub(crate) body: Value,
     pub(crate) components: gents_protocol::rendered_request::ContextInputComponents,
     /// One authoritative estimate over the composed provider projection. It is
     /// deliberately not a sum of independently floored component estimates.
@@ -128,11 +95,17 @@ impl ProviderInputCounter {
             Some(self.project_body(&documentless)?)
         };
 
-        projected_accounting(
-            body,
-            documentless_body.as_ref(),
-            self.profile.estimator_name(),
-        )
+        projected_accounting(body, documentless_body, self.profile.estimator_name())
+    }
+
+    /// Estimate one complete provider request without computing the diagnostic
+    /// component partition. Candidate search and admission use this scalar hot
+    /// path; rendered-request accounting calls `project_request` once for the
+    /// request that may actually be dispatched.
+    pub(crate) fn estimate_request(&self, request: &CompletionRequest) -> Result<usize> {
+        let mut body = self.project_body(request)?;
+        remove_output_limits(&mut body);
+        estimate_json(&body)
     }
 
     fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
@@ -173,7 +146,9 @@ impl ProviderInputCounter {
         Ok(body)
     }
 
-    pub(crate) fn count_messages(
+    /// Estimate a messages-only provider request. The result includes the
+    /// selected wire API's request framing; it is not an additive per-row cost.
+    pub(crate) fn estimate_message_request(
         &self,
         messages: &[crate::llm::message::Message],
     ) -> Result<usize> {
@@ -206,7 +181,7 @@ impl ProviderInputCounter {
             additional_params: None,
             output_schema: None,
         };
-        Ok(self.project_request(&request)?.estimated_input_tokens)
+        self.estimate_request(&request)
     }
 
     fn responses_body(&self, request: &CompletionRequest) -> Result<Value> {
@@ -312,29 +287,19 @@ fn rewrite_bytes(body: Value, rewrite: fn(&[u8]) -> Option<bytes::Bytes>) -> Res
 }
 
 fn projected_accounting(
-    body: Value,
-    documentless_body: Option<&Value>,
+    mut body: Value,
+    mut documentless_body: Option<Value>,
     estimator: &'static str,
 ) -> Result<ProviderInputProjection> {
-    // Output limits are a dispatch parameter, not provider input. Excluding
-    // them also avoids circular accounting when the dynamic clamp changes the
-    // number of digits in the field itself.
-    let mut input = body.clone();
-    if let Some(object) = input.as_object_mut() {
-        object.remove("max_tokens");
-        object.remove("max_output_tokens");
-    }
-    let estimated_input_tokens = estimate_json(&input)?;
+    remove_output_limits(&mut body);
+    let estimated_input_tokens = estimate_json(&body)?;
 
-    let provider_messages = field_estimate(&input, &["messages", "input", "instructions"])?;
+    let provider_messages = field_estimate(&body, &["messages", "input", "instructions"])?;
     let documentless_messages = documentless_body
+        .as_mut()
         .map(|body| {
-            let mut input = body.clone();
-            if let Some(object) = input.as_object_mut() {
-                object.remove("max_tokens");
-                object.remove("max_output_tokens");
-            }
-            field_estimate(&input, &["messages", "input", "instructions"])
+            remove_output_limits(body);
+            field_estimate(body, &["messages", "input", "instructions"])
         })
         .transpose()?
         .unwrap_or(provider_messages);
@@ -342,8 +307,8 @@ fn projected_accounting(
         .checked_sub(documentless_messages)
         .context("provider document projection reduced the provider message estimate")?;
     let messages = documentless_messages;
-    let tool_schemas = field_estimate(&input, &["tools", "tool_choice"])?;
-    let output_schema = field_estimate(&input, &["response_format", "text"])?;
+    let tool_schemas = field_estimate(&body, &["tools", "tool_choice"])?;
+    let output_schema = field_estimate(&body, &["response_format", "text"])?;
     let classified = messages
         .checked_add(documents)
         .and_then(|total| total.checked_add(tool_schemas))
@@ -366,11 +331,20 @@ fn projected_accounting(
     };
 
     Ok(ProviderInputProjection {
-        body,
         components,
         estimated_input_tokens,
         estimator,
     })
+}
+
+fn remove_output_limits(body: &mut Value) {
+    // Output limits are dispatch parameters, not provider input. Excluding
+    // them also avoids circular accounting when the dynamic clamp changes the
+    // number of digits in the field itself.
+    if let Some(object) = body.as_object_mut() {
+        object.remove("max_tokens");
+        object.remove("max_output_tokens");
+    }
 }
 
 fn field_estimate(value: &Value, fields: &[&str]) -> Result<usize> {

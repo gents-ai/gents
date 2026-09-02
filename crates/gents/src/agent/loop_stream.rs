@@ -48,23 +48,21 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 mod aggregate_budget;
 mod contract;
 mod one_shot;
-mod provider_input;
+mod request_assembly;
 mod tool_dispatch;
 mod turn_threading;
 
-#[allow(unused_imports)]
-pub(crate) use contract::TurnCompactor;
 pub(crate) use contract::{
     LoopConfig, LoopStreamItem, RenderedRequestSink, StructuredOutputConfig, TurnCompactionOutcome,
     TurnCompactionRequest,
 };
 pub(crate) use one_shot::{run_loop_to_text, run_loop_to_typed};
-pub(crate) use provider_input::{
+pub(crate) use request_assembly::{
     assemble_new_messages, is_request_context_message, repair_provider_input,
 };
 pub(crate) use tool_dispatch::dispatch_tool;
 
-use provider_input::{
+use request_assembly::{
     build_budgeted_request, clamp_request_output_budget, completion_request_input_components,
     context_accounting_for_request, ensure_context_can_dispatch,
 };

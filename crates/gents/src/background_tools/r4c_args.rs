@@ -12,9 +12,8 @@ const DEFAULT_LIST_LIMIT: u32 = 20;
 const MAX_LIST_LIMIT: u32 = 50;
 const MAX_TRANSCRIPT_LIMIT: u32 = 100;
 
-/// Token budget for `read_subagent`. The runtime estimates tokens with the
-/// codebase-wide `chars ≈ 4 × tokens` approximation (see
-/// `crate::compaction::estimate_tokens`); the rendered transcript is capped at
+/// Token budget for `read_subagent`. This display/read limit uses the local
+/// `chars ≈ 4 × tokens` approximation; the rendered transcript is capped at
 /// `max_tokens × CHARS_PER_TOKEN_ESTIMATE` characters and `has_more`/
 /// `next_sequence` always describe where to resume when the budget caps a read.
 pub(crate) const CHARS_PER_TOKEN_ESTIMATE: u32 = 4;

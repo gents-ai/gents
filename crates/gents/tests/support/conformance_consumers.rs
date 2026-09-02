@@ -771,6 +771,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_turn_budget_cases_drive_every_completion_dispatch",
         },
         ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_retention_cases_drive_production_compaction_target",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_retention_cases_drive_production_compaction_target",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/capture.rs",
@@ -822,14 +829,14 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
         ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_layer_cases_pin_the_assembled_request_order",
             package: "gents",
-            source_path: "crates/gents/src/agent/loop_stream/tests/provider_input.rs",
+            source_path: "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
             module_path: "agent::loop_stream::tests",
             function: "generated_layer_cases_pin_the_assembled_request_order",
         },
         ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_repair_cases_drive_tool_argument_repair",
             package: "gents",
-            source_path: "crates/gents/src/agent/loop_stream/tests/provider_input.rs",
+            source_path: "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
             module_path: "agent::loop_stream::tests",
             function: "generated_repair_cases_drive_tool_argument_repair",
         },

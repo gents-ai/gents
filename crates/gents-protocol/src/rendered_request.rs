@@ -346,34 +346,19 @@ impl ProvenanceManifest {
 /// Which of the owned loop's two request builders produced the captured
 /// `CompletionRequest`.
 ///
-/// This is one of the four unrecoverable inputs. `build_budgeted_request`
-/// applies `clamp_request_output_budget` before returning
-/// (`agent/loop_stream.rs`), but the completion-retry `Repair` directive calls
-/// `build_request` directly (`agent/loop_stream.rs:353,447`) and never clamps.
-/// A repaired attempt therefore carries the raw configured `max_tokens` while
-/// the original attempt for the same turn carries the clamped one. Without this
-/// discriminator a reconstructor cannot tell which of the two it should
-/// reproduce, and both are legal.
-///
-/// The clamp *value* is deliberately not stored: it is a pure function of the
-/// assembled request plus durable config, and `completion_request_input_estimate`
-/// does not read `max_tokens`, so a single reconstruction pass reproduces it.
+/// This is one of the four unrecoverable inputs. The completion-retry `Repair`
+/// directive rebuilds directly after payload repair, while `Budgeted` performs
+/// ordinary assembly and optional per-turn compaction. Every resulting request
+/// is provider-projected, recounted, and output-clamped at the final dispatch
+/// boundary; this discriminator records the assembly route, not budget policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssemblyBuildPath {
-    /// `build_budgeted_request`: ordinary assembly, output clamp applied, and
-    /// per-turn compaction when the request exceeded the input budget.
+    /// `build_budgeted_request`: ordinary assembly and per-turn compaction when
+    /// the request exceeded the input budget.
     Budgeted,
-    /// `build_request` invoked directly by a completion-retry repair. No output
-    /// clamp is applied on this path.
+    /// `build_request` invoked directly by a completion-retry repair.
     Repair,
-}
-
-impl AssemblyBuildPath {
-    /// Whether the loop applied `clamp_request_output_budget` on this path.
-    pub fn applies_output_clamp(self) -> bool {
-        matches!(self, Self::Budgeted)
-    }
 }
 
 /// A provider-assigned assistant message id, positioned in the effective
@@ -437,7 +422,7 @@ pub enum ContextCompactionReason {
     CompactorUnavailable,
 }
 
-/// Token-estimate components for the exact native completion request that was
+/// Token-estimate components for the exact provider-wire request that was
 /// captured. Their saturating sum is `estimated_input_tokens`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextInputComponents {

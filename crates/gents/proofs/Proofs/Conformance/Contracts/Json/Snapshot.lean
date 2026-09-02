@@ -268,6 +268,8 @@ def snapshotJson : String :=
       ++ promptAssemblyBudgetCasesJson ++ ","
     ++ "\"prompt_assembly_turn_budget_cases\":"
       ++ promptAssemblyTurnBudgetCasesJson ++ ","
+    ++ "\"prompt_assembly_retention_cases\":"
+      ++ promptAssemblyRetentionCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"

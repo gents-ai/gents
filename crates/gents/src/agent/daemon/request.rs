@@ -11,7 +11,10 @@ use crate::session;
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
-    async fn complete_provider_input_tokens(
+    /// Estimate the exact first-turn provider request for session-compaction
+    /// admission. The owned loop rebuilds it and remains the sole final
+    /// legality/dispatch authority.
+    async fn estimate_initial_provider_input(
         &self,
         request: &crate::watcher::AgentRequest,
         preamble: String,
@@ -20,14 +23,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         request_context_message: Option<&crate::llm::message::Message>,
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
     ) -> Result<usize> {
-        let mut config = crate::completion_factory::loop_config_for_request(
+        let config = crate::completion_factory::loop_config_for_request(
             &self.behavior,
             preamble,
             request,
             aggregate_token_budget,
             self.loop_tools.len(),
         )?;
-        config.context_message = request_context_message.cloned();
         let provider_history = skill_reminders
             .iter()
             .cloned()
@@ -49,8 +51,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         .map_err(anyhow::Error::new)?;
         Ok(config
             .provider_input_counter
-            .project_request(&provider_request)?
-            .estimated_input_tokens)
+            .estimate_request(&provider_request)?)
     }
 
     pub(super) async fn handle_request(
@@ -254,8 +255,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             summary_count = summaries.len(),
                         ))
                         .await?;
-                    let over_threshold = compaction::input_exceeds_budget(
-                        self.complete_provider_input_tokens(
+                    let complete_input_tokens = self
+                        .estimate_initial_provider_input(
                             &request,
                             built.preamble.clone(),
                             &built.messages,
@@ -263,9 +264,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             request_context_message.as_ref(),
                             aggregate_token_budget.clone(),
                         )
-                        .await?,
+                        .await?;
+                    let over_threshold = compaction::input_exceeds_budget(
+                        complete_input_tokens,
                         self.behavior.context_window,
-                        0,
                         self.behavior.compaction_threshold,
                     );
                     // Runtime counterpart of Lean `PromptView.safeToReduce`,
@@ -314,17 +316,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         false
                     };
                     if may_reduce {
+                        let mut options = self.compaction_options_for_request(
+                            lifecycle.claimed_deadline_at(),
+                            aggregate_token_budget.clone(),
+                            effective_seed,
+                        );
+                        options.keep_recent_tokens = self.compactor.retention_target(
+                            options.keep_recent_tokens,
+                            complete_input_tokens,
+                            &history,
+                            self.behavior.context_window,
+                            self.behavior.compaction_threshold,
+                        )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
                             1,
                             self.compactor.compact(
                                 history,
                                 self.behavior.context_window,
-                                &self.compaction_options_for_request(
-                                    lifecycle.claimed_deadline_at(),
-                                    aggregate_token_budget.clone(),
-                                    effective_seed,
-                                ),
+                                &options,
                             ),
                         )
                         .await?;
@@ -439,33 +449,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 compacted = true,
                             ))
                             .await?;
-                    }
-
-                    let final_input_tokens = self
-                        .complete_provider_input_tokens(
-                            &request,
-                            built.preamble.clone(),
-                            &built.messages,
-                            &skill_reminders,
-                            request_context_message.as_ref(),
-                            aggregate_token_budget.clone(),
-                        )
-                        .await?;
-                    let configured_output_tokens = effective_sampling
-                        .max_tokens
-                        .map(crate::provider_input::saturating_usize_from_u64)
-                        .unwrap_or(self.behavior.max_output_tokens);
-                    if may_reduce && !compaction::can_dispatch(
-                        final_input_tokens,
-                        self.behavior.context_window,
-                        configured_output_tokens,
-                    ) {
-                        return Err(crate::provider_input::ProviderInputError::FinalFit {
-                            estimated_input_tokens: final_input_tokens,
-                            context_window: self.behavior.context_window,
-                            configured_max_output_tokens: configured_output_tokens,
-                        }
-                        .into());
                     }
 
                     return Ok::<_, anyhow::Error>(built);
@@ -694,28 +677,12 @@ fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[cfg(test)]
-fn prompt_exceeds_compaction_threshold(
-    prompt_tokens: usize,
-    request_tokens: usize,
-    context_window: usize,
-    threshold: f64,
-) -> bool {
-    compaction::input_exceeds_budget(
-        prompt_tokens.saturating_add(request_tokens),
-        context_window,
-        0,
-        threshold,
-    )
-}
-
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
     format!("{error:#}").contains("stale compaction generation")
 }
 
 #[cfg(test)]
 mod budget_contract_tests {
-    use super::prompt_exceeds_compaction_threshold;
     use crate::lean_vocab_test::lean_prompt_assembly_budget_cases;
 
     /// Drives the production compaction trigger and per-turn output clamp from
@@ -735,11 +702,8 @@ mod budget_contract_tests {
             let threshold = case.threshold_basis_points as f64 / 10_000.0;
             // Drive the production helper, not a formula duplicated here.
             let configured = crate::compaction::threshold_budget(case.context_window, threshold);
-            let effective = crate::compaction::effective_input_budget(
-                case.context_window,
-                case.max_output_tokens,
-                threshold,
-            );
+            let effective =
+                crate::compaction::effective_input_budget(case.context_window, threshold);
             let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
             let effective_output = crate::compaction::effective_output_budget(
                 input_tokens,
@@ -779,9 +743,8 @@ mod budget_contract_tests {
                 case.name
             );
             assert_eq!(
-                prompt_exceeds_compaction_threshold(
-                    case.prompt_tokens,
-                    case.request_tokens,
+                crate::compaction::input_exceeds_budget(
+                    input_tokens,
                     case.context_window,
                     threshold,
                 ),

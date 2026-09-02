@@ -246,6 +246,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 }
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
+                let turn_compaction_threshold = self.behavior.compaction_threshold;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
                     aggregate_token_budget,
@@ -270,12 +271,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 > {
                     let compactor = turn_compactor.clone();
                     let mut options: CompactionOptions = turn_compaction_options.clone();
-                    options.keep_recent_tokens =
-                        options.keep_recent_tokens.min(compaction_request.keep_recent_target);
                     let node = turn_node.clone();
                     let request = turn_request.clone();
                     let request_commit_cid = turn_request_commit_cid.clone();
                     Box::pin(async move {
+                        options.keep_recent_tokens = compactor.retention_target(
+                            options.keep_recent_tokens,
+                            compaction_request.estimated_input_tokens,
+                            &compaction_request.messages,
+                            turn_context_window,
+                            turn_compaction_threshold,
+                        )?;
                         if crate::session::session_has_other_live_response(
                             node.as_ref(),
                             &request.session_id,
@@ -1216,8 +1222,6 @@ mod tests {
             &behavior.behavior_id,
             &[],
             false,
-            behavior.context_window,
-            behavior.max_output_tokens,
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
@@ -1344,8 +1348,6 @@ mod tests {
             &behavior.behavior_id,
             &[],
             false,
-            behavior.context_window,
-            behavior.max_output_tokens,
             &[],
         );
         let calls = Arc::new(AtomicUsize::new(0));

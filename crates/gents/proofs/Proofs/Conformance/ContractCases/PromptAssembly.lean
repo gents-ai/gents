@@ -96,6 +96,18 @@ structure PromptAssemblyTurnBudgetCase where
   turnCanDispatch : List Bool
   deriving Repr
 
+structure PromptAssemblyRetentionCase where
+  name : String
+  configuredKeepRecent : Nat
+  effectiveInputBudget : Nat
+  fixedInput : Nat
+  availableInput : Nat
+  retentionTarget : Nat
+  summaryMaxOutput : Nat
+  effectiveSummaryOutput : Nat
+  rollingSummaryInputBudget : Nat
+  deriving Repr
+
 /-! ## Building witness rows -/
 
 private def itemCase : Item → PromptAssemblyItemCase
@@ -565,5 +577,65 @@ private def turnBudgetCase
 
 def promptAssemblyTurnBudgetCases : List PromptAssemblyTurnBudgetCase :=
   turnBudgetWitnesses.map turnBudgetCase
+
+/-! ## Static-overhead-aware compaction retention
+
+These rows keep the configured cap, saturating fixed-layer subtraction, and
+exact three-quarter reservation under one Lean-owned calculation. -/
+
+private structure RetentionWitness where
+  name : String
+  configuredKeepRecent : Nat
+  effectiveInputBudget : Nat
+  fixedInput : Nat
+  summaryMaxOutput : Nat
+
+private def retentionWitnesses : List RetentionWitness :=
+  [ { name := "zero-capacity", configuredKeepRecent := 0
+    , effectiveInputBudget := 0, fixedInput := 0, summaryMaxOutput := 0 }
+  , { name := "one-token-capacity", configuredKeepRecent := 1
+    , effectiveInputBudget := 1, fixedInput := 0, summaryMaxOutput := 1 }
+  , { name := "configured-cap-wins", configuredKeepRecent := 2
+    , effectiveInputBudget := 100, fixedInput := 0, summaryMaxOutput := 2 }
+  , { name := "quarter-boundary-minus-one", configuredKeepRecent := 100
+    , effectiveInputBudget := 3, fixedInput := 0, summaryMaxOutput := 1 }
+  , { name := "quarter-boundary-exact", configuredKeepRecent := 100
+    , effectiveInputBudget := 4, fixedInput := 0, summaryMaxOutput := 4 }
+  , { name := "quarter-boundary-one-over", configuredKeepRecent := 100
+    , effectiveInputBudget := 5, fixedInput := 0, summaryMaxOutput := 5 }
+  , { name := "fixed-input-leaves-one", configuredKeepRecent := 100
+    , effectiveInputBudget := 100, fixedInput := 99, summaryMaxOutput := 25 }
+  , { name := "fixed-input-consumes-capacity", configuredKeepRecent := 100
+    , effectiveInputBudget := 100, fixedInput := 100, summaryMaxOutput := 100 }
+  , { name := "fixed-input-exceeds-capacity", configuredKeepRecent := 100
+    , effectiveInputBudget := 100, fixedInput := 101, summaryMaxOutput := 101 }
+  , { name := "large-uncapped-json-safe", configuredKeepRecent := 200000
+    , effectiveInputBudget := 200000, fixedInput := 1, summaryMaxOutput := 32768 }
+  , { name := "large-configured-cap", configuredKeepRecent := 20000
+    , effectiveInputBudget := 200000, fixedInput := 58000, summaryMaxOutput := 200000 }
+  , { name := "small-context-large-summary-ceiling", configuredKeepRecent := 20
+    , effectiveInputBudget := 2000, fixedInput := 0, summaryMaxOutput := 32768 }
+  , { name := "summary-ceiling-smaller-than-quarter", configuredKeepRecent := 20
+    , effectiveInputBudget := 6000, fixedInput := 0, summaryMaxOutput := 512 }
+  ]
+
+private def retentionCase (witness : RetentionWitness) : PromptAssemblyRetentionCase :=
+  let summaryOutput := PromptAssembly.Budget.summaryOutputCeiling
+    witness.summaryMaxOutput witness.effectiveInputBudget
+  { name := witness.name
+  , configuredKeepRecent := witness.configuredKeepRecent
+  , effectiveInputBudget := witness.effectiveInputBudget
+  , fixedInput := witness.fixedInput
+  , availableInput := witness.effectiveInputBudget - witness.fixedInput
+  , retentionTarget := PromptAssembly.Budget.compactionRetentionTarget
+      witness.configuredKeepRecent witness.effectiveInputBudget witness.fixedInput
+  , summaryMaxOutput := witness.summaryMaxOutput
+  , effectiveSummaryOutput := summaryOutput
+  , rollingSummaryInputBudget := PromptAssembly.Budget.rollingSummaryInputBudget
+      witness.effectiveInputBudget summaryOutput
+  }
+
+def promptAssemblyRetentionCases : List PromptAssemblyRetentionCase :=
+  retentionWitnesses.map retentionCase
 
 end Conformance.ContractCases

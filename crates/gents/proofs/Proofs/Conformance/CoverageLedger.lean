@@ -1066,6 +1066,11 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_turn_budget_cases_drive_every_completion_dispatch")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyRetentionCases"
+      "agent::loop_stream::tests::generated_retention_cases_drive_production_compaction_target")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "rendered_capture_cases"
       "RenderedCaptureCases"
       "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send")

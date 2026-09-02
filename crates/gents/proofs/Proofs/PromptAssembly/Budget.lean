@@ -56,6 +56,81 @@ def effectiveInputBudget
     (configuredThresholdBudget contextWindow : Nat) : Nat :=
   min configuredThresholdBudget contextWindow
 
+/-- Pair-safe history retention is capped by the operator's configured recent
+history ceiling. After fixed provider-input layers consume part of the effective
+input budget, three quarters of the remaining capacity may be retained; the
+last quarter stays available for the rolling checkpoint and serialization
+framing. Natural subtraction matches Rust's saturating subtraction. -/
+def compactionRetentionTarget
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) : Nat :=
+  min configuredKeepRecent (3 * (effectiveInputBudget - fixedInput) / 4)
+
+/-- Internal summaries cap their configured output ceiling at one rounded-up
+quarter of the context. The one-token floor keeps the configured ceiling
+positive for tiny contexts; dispatch legality still rejects requests with no
+actual input/output capacity. -/
+def summaryOutputCeiling
+    (configuredMaxOutputTokens contextWindow : Nat) : Nat :=
+  min configuredMaxOutputTokens (max 1 ((contextWindow + 3) / 4))
+
+/-- Rolling summary requests reserve their already-bounded output ceiling
+whenever it is smaller than the context. A ceiling equal to the entire tiny
+context cannot coexist with nonempty summary input, so that degenerate case
+falls back to the ordinary dynamic dispatch rule. This is a chunk-sizing policy
+only: final provider dispatch still uses `effectiveOutputBudget`. -/
+def rollingSummaryInputBudget
+    (contextWindow effectiveMaxOutputTokens : Nat) : Nat :=
+  if effectiveMaxOutputTokens < contextWindow
+  then contextWindow - effectiveMaxOutputTokens
+  else contextWindow
+
+/-- Dynamic retention never exceeds the configured recent-history ceiling. -/
+theorem compaction_retention_le_configured
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
+      configuredKeepRecent := by
+  exact Nat.min_le_left _ _
+
+/-- Dynamic retention never exceeds the input capacity left after fixed layers. -/
+theorem compaction_retention_le_available
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
+      effectiveInputBudget - fixedInput := by
+  unfold compactionRetentionTarget
+  have htarget : min configuredKeepRecent
+      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
+      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+  omega
+
+/-- Retention leaves at least the rounded-up final quarter of the available
+input capacity for the checkpoint and provider framing. -/
+theorem compaction_retention_reserves_quarter
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput +
+      ((effectiveInputBudget - fixedInput + 3) / 4) ≤
+      effectiveInputBudget - fixedInput := by
+  unfold compactionRetentionTarget
+  have htarget : min configuredKeepRecent
+      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
+      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+  omega
+
+/-- Whenever the configured summary ceiling can coexist with input, every
+rolling chunk admitted by its input budget retains that complete ceiling under
+the dynamic output clamp. -/
+theorem rolling_summary_preserves_configured_output
+    {inputTokens contextWindow effectiveMaxOutputTokens : Nat}
+    (hceiling : effectiveMaxOutputTokens < contextWindow)
+    (hinput : inputTokens ≤
+      rollingSummaryInputBudget contextWindow effectiveMaxOutputTokens) :
+    effectiveOutputBudget inputTokens contextWindow effectiveMaxOutputTokens =
+      effectiveMaxOutputTokens := by
+  unfold rollingSummaryInputBudget at hinput
+  rw [if_pos hceiling] at hinput
+  unfold effectiveOutputBudget
+  apply Nat.min_eq_left
+  omega
+
 /-- The assembled prompt and the incoming request no longer fit beneath the
 effective input budget. Equality is admitted; one token beyond it compacts. -/
 def ExceedsInputBudget

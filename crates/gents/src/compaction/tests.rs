@@ -32,6 +32,13 @@ fn text_msg(role: &str, text: &str) -> Message {
     }
 }
 
+fn test_message_tokens(messages: &[Message]) -> usize {
+    gate_test_loop_config()
+        .provider_input_counter
+        .estimate_message_request(messages)
+        .expect("test messages project to the provider wire shape")
+}
+
 fn tool_call_msg(name: &str, args: &str) -> Message {
     Message::Assistant {
         id: None,
@@ -734,13 +741,13 @@ fn live_mobile_triage_history(
             ),
         ));
 
-        if estimate_message_tokens(&messages) >= target_tokens {
+        if test_message_tokens(&messages) >= target_tokens {
             break;
         }
     }
 
     assert!(
-        estimate_message_tokens(&messages) >= target_tokens,
+        test_message_tokens(&messages) >= target_tokens,
         "live fixture must reach its requested provider-input size"
     );
     messages
@@ -988,14 +995,13 @@ async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
         .expect("the oversized prefix should roll through bounded chunks");
 
     assert_eq!(result.messages_compacted, 20);
-    assert!(result.compaction_count > 1);
     assert_eq!(result.messages, vec![messages.last().unwrap().clone()]);
     let summary = result.summary.expect("rolling checkpoint");
     assert!(summary.contains("FIRST_SENTINEL"));
     assert!(summary.contains("LAST_SENTINEL"));
 
     let requests = observed.lock().unwrap();
-    assert_eq!(requests.len(), result.compaction_count as usize);
+    assert!(requests.len() > 1);
     let first = serde_json::to_string(&requests.first().unwrap().chat_history).unwrap();
     let last = serde_json::to_string(&requests.last().unwrap().chat_history).unwrap();
     assert!(first.contains("FIRST_SENTINEL"));
@@ -1007,8 +1013,12 @@ async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
             .project_request(request)
             .unwrap()
             .estimated_input_tokens;
-        assert!(output > 0);
+        assert_eq!(
+            output, 512,
+            "rolling chunk selection must preserve the configured summary ceiling when the exact threshold budget leaves room"
+        );
         assert!(can_dispatch(input, 6_000, output));
+        assert!(input <= rolling_summary_input_budget(6_000, 512));
     }
 }
 
@@ -1142,7 +1152,7 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
         .collect::<Vec<_>>();
 
     assert!(
-        !needs_compaction(&messages, 100_000, 0.75),
+        !input_exceeds_budget(test_message_tokens(&messages), 100_000, 0.75),
         "the history-only guard must be below threshold for this regression"
     );
     let result = compactor
@@ -1231,7 +1241,10 @@ async fn summary_completion_uses_independent_output_cap() {
         .expect("summary request");
     assert_eq!(
         request.max_tokens,
-        Some(crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64),
+        Some(summary_output_ceiling(
+            crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            100_000,
+        ) as u64),
         "summary completion must use its own output budget, not the turn's"
     );
 }
@@ -1419,6 +1432,7 @@ async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         ),
@@ -1617,6 +1631,7 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         )
@@ -1671,6 +1686,7 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         )
@@ -1725,6 +1741,7 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         )
@@ -1790,6 +1807,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
                     threshold: 0.50,
                     keep_recent_tokens: 50,
                     strategy: CompactionStrategy::Summarize,
+                    summary_max_output_tokens: 512,
                     ..Default::default()
                 },
             )
@@ -1852,6 +1870,7 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 sampling_seed: Some(1234),
                 ..Default::default()
             },
@@ -1906,6 +1925,7 @@ async fn expired_deadline_stops_before_the_first_summary_provider_call() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 deadline: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
                 ..Default::default()
             },
@@ -1947,6 +1967,7 @@ async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         )
@@ -1984,6 +2005,7 @@ async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
                 threshold: 0.50,
                 keep_recent_tokens: 50,
                 strategy: CompactionStrategy::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
         )
@@ -2594,25 +2616,6 @@ fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
     assert!(!safe_to_reduce(&messages, &StreamingIndex));
 }
 
-#[test]
-fn needs_compaction_under_threshold() {
-    let messages = vec![text_msg("user", "hi")];
-    assert!(!needs_compaction(&messages, 100000, 0.75));
-}
-
-#[test]
-fn needs_compaction_over_threshold() {
-    let big = "x".repeat(10000);
-    let messages = vec![text_msg("user", &big)];
-    assert!(needs_compaction(&messages, 1000, 0.75));
-}
-
-#[test]
-fn estimate_tokens_rough() {
-    assert_eq!(estimate_tokens("hello world!"), 3);
-    assert_eq!(estimate_tokens(""), 0);
-}
-
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
@@ -2801,8 +2804,6 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "general",
         &["list_files", "read_file", "bash"],
         true,
-        crate::config::DEFAULT_CONTEXT_WINDOW,
-        crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         &[],
     );
     let summaries = entries

@@ -89,6 +89,21 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) turn_can_dispatch: Vec<bool>,
 }
 
+/// A static-overhead-aware compaction retention target computed by
+/// `PromptAssembly.Budget.compactionRetentionTarget`.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanPromptAssemblyRetentionCase {
+    pub(crate) name: String,
+    pub(crate) configured_keep_recent: usize,
+    pub(crate) effective_input_budget: usize,
+    pub(crate) fixed_input: usize,
+    pub(crate) available_input: usize,
+    pub(crate) retention_target: usize,
+    pub(crate) summary_max_output: usize,
+    pub(crate) effective_summary_output: usize,
+    pub(crate) rolling_summary_input_budget: usize,
+}
+
 /// A request-wide token-ledger witness computed by
 /// `PromptAssembly.AggregateBudget`.
 #[derive(Debug, Deserialize, Clone)]

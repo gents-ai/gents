@@ -67,7 +67,6 @@ Workflow: discover_tools -> describe_tool -> call_tool
 pub struct BuiltPrompt {
     pub preamble: String,
     pub messages: Vec<Message>,
-    pub estimated_tokens: usize,
 }
 
 pub trait PromptBuilder: Send + Sync {
@@ -80,8 +79,6 @@ pub trait PromptBuilder: Send + Sync {
 
 pub struct LayeredPromptBuilder {
     preamble: String,
-    context_window: usize,
-    provider_input_counter: crate::provider_input::ProviderInputCounter,
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
 }
@@ -99,8 +96,6 @@ impl LayeredPromptBuilder {
             &behavior.behavior_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
-            behavior.context_window,
-            behavior.max_output_tokens,
             allowed_targets,
         );
         if let Some(catalog) = crate::skills::render_skill_catalog(&behavior.skills) {
@@ -108,11 +103,6 @@ impl LayeredPromptBuilder {
             builder.preamble.push_str(&catalog);
         }
         builder.skills = behavior.skills.clone();
-        builder.provider_input_counter = crate::provider_input::ProviderInputCounter::new(
-            behavior.backend_provider_kind,
-            behavior.openai_wire_api,
-            behavior.model_name.clone(),
-        );
         builder.skill_ceiling = crate::skills::skill_tool_ceiling(
             tool_names.iter().cloned(),
             tool_surface.allowed_mcp_service_ids(),
@@ -142,8 +132,6 @@ impl LayeredPromptBuilder {
         behavior_name: &str,
         tool_names: &[&str],
         include_meta_tool_guidance: bool,
-        context_window: usize,
-        _max_output_tokens: usize,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let preamble = build_preamble_with_targets(
@@ -155,12 +143,6 @@ impl LayeredPromptBuilder {
         );
         Self {
             preamble,
-            context_window,
-            provider_input_counter: crate::provider_input::ProviderInputCounter::new(
-                crate::BackendProviderKind::OpenAiCompatible,
-                crate::OpenAiWireApi::ChatCompletions,
-                crate::config::DEFAULT_MODEL_NAME,
-            ),
             skills: Vec::new(),
             skill_ceiling: crate::skills::SkillToolCeiling::default(),
         }
@@ -168,28 +150,6 @@ impl LayeredPromptBuilder {
 
     pub fn preamble(&self) -> &str {
         &self.preamble
-    }
-
-    pub fn message_budget(&self) -> usize {
-        let preamble_tokens = self
-            .estimate_messages(&[Message::system(self.preamble.clone())])
-            .unwrap_or(usize::MAX);
-        self.context_window.saturating_sub(preamble_tokens)
-    }
-
-    pub fn would_exceed_budget(&self, messages: &[Message]) -> bool {
-        self.estimate_with_preamble(messages).unwrap_or(usize::MAX) > self.context_window
-    }
-
-    pub(crate) fn estimate_messages(&self, messages: &[Message]) -> Result<usize> {
-        self.provider_input_counter.count_messages(messages)
-    }
-
-    pub(crate) fn estimate_with_preamble(&self, messages: &[Message]) -> Result<usize> {
-        let provider_messages = std::iter::once(Message::system(self.preamble.clone()))
-            .chain(messages.iter().cloned())
-            .collect::<Vec<_>>();
-        self.estimate_messages(&provider_messages)
     }
 
     pub fn system_reminder(text: &str) -> Message {
@@ -215,12 +175,9 @@ impl PromptBuilder for LayeredPromptBuilder {
 
         assembled.extend_from_slice(messages);
 
-        let estimated_tokens = self.estimate_with_preamble(&assembled)?;
-
         Ok(BuiltPrompt {
             preamble: self.preamble.clone(),
             messages: assembled,
-            estimated_tokens,
         })
     }
 }
@@ -238,22 +195,6 @@ pub fn compaction_summary_message(compaction_summaries: &[String]) -> Option<Mes
     Some(LayeredPromptBuilder::system_reminder(
         &continuation_checkpoint_reminder(&summary_text),
     ))
-}
-
-/// Estimate the provider-visible summary prefix using its actual message wrapper.
-pub fn estimate_compaction_summary_tokens(compaction_summaries: &[String]) -> usize {
-    compaction_summary_message(compaction_summaries)
-        .as_ref()
-        .map(std::slice::from_ref)
-        .map(|messages| {
-            let counter = crate::provider_input::ProviderInputCounter::new(
-                crate::BackendProviderKind::OpenAiCompatible,
-                crate::OpenAiWireApi::ChatCompletions,
-                crate::config::DEFAULT_MODEL_NAME,
-            );
-            counter.count_messages(messages).unwrap_or(usize::MAX)
-        })
-        .unwrap_or_default()
 }
 
 pub(crate) fn build_preamble_with_targets(

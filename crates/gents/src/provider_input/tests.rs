@@ -144,7 +144,7 @@ async fn chat_projection_matches_actual_rig_wire_body_and_omits_reasoning() {
         "test-model",
     );
     let request = core_request(&"private-reasoning-sentinel".repeat(128 * 1024));
-    let projection = counter.project_request(&request).expect("projection");
+    let projected_body = counter.project_body(&request).expect("provider body");
     let mut actual = serde_json::to_value(
         rig::providers::openai::completion::CompletionRequest::try_from((
             "test-model".to_string(),
@@ -155,9 +155,8 @@ async fn chat_projection_matches_actual_rig_wire_body_and_omits_reasoning() {
     .expect("serialize Rig Chat DTO");
     set_streaming_fields(&mut actual, true);
 
-    assert_eq!(projection.body, actual);
-    assert!(!projection
-        .body
+    assert_eq!(projected_body, actual);
+    assert!(!projected_body
         .to_string()
         .contains("private-reasoning-sentinel"));
 
@@ -179,7 +178,7 @@ async fn chat_projection_matches_actual_rig_wire_body_and_omits_reasoning() {
         let _ = response.next().await;
     }
     assert_eq!(
-        projection.body,
+        projected_body,
         bodies.lock().unwrap().pop().expect("captured wire body")
     );
 }
@@ -197,8 +196,14 @@ fn megabytes_of_chat_history_reasoning_do_not_change_provider_accounting() {
     let huge = counter
         .project_request(&core_request(&"huge hidden thought".repeat(200_000)))
         .expect("huge projection");
+    let small_body = counter
+        .project_body(&core_request("small hidden thought"))
+        .expect("small provider body");
+    let huge_body = counter
+        .project_body(&core_request(&"huge hidden thought".repeat(200_000)))
+        .expect("huge provider body");
 
-    assert_eq!(small.body, huge.body);
+    assert_eq!(small_body, huge_body);
     assert_eq!(small.estimated_input_tokens, huge.estimated_input_tokens);
     assert_eq!(
         small.components.estimated_input_tokens(),
@@ -226,7 +231,10 @@ fn reasoning_only_chat_history_has_zero_provider_visible_message_cost() {
         )],
     }];
 
-    assert_eq!(counter.count_messages(&reasoning_only).unwrap(), 0);
+    assert_eq!(
+        counter.estimate_message_request(&reasoning_only).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -260,7 +268,7 @@ fn responses_projection_matches_rig_then_production_normalization() {
         ProviderInputProfile::OpenAiResponsesNormalized
     );
     let request = core_request("provider-visible reasoning");
-    let projection = counter.project_request(&request).expect("projection");
+    let projected_body = counter.project_body(&request).expect("provider body");
     let dto = rig::providers::openai::responses_api::CompletionRequest::try_from((
         "test-model".to_string(),
         request,
@@ -270,9 +278,8 @@ fn responses_projection_matches_rig_then_production_normalization() {
     set_streaming_fields(&mut actual, false);
     crate::llm::responses_normalize::normalize_responses_assistant_items(&mut actual);
 
-    assert_eq!(projection.body, actual);
-    assert!(projection
-        .body
+    assert_eq!(projected_body, actual);
+    assert!(projected_body
         .to_string()
         .contains("provider-visible reasoning"));
 }
@@ -291,19 +298,18 @@ async fn normalized_responses_projection_matches_the_terminal_wire_body() {
     .expect("OpenAI Responses client");
     let model = client.completion_model("test-model");
     let request = core_request("provider-visible reasoning");
-    let projection = ProviderInputCounter::new(
+    let counter = ProviderInputCounter::new(
         BackendProviderKind::OpenAiCompatible,
         OpenAiWireApi::Responses,
         "test-model",
-    )
-    .project_request(&request)
-    .expect("projection");
+    );
+    let projected_body = counter.project_body(&request).expect("provider body");
 
     if let Ok(mut response) = model.stream(request).await {
         let _ = response.next().await;
     }
     assert_eq!(
-        projection.body,
+        projected_body,
         bodies.lock().unwrap().pop().expect("captured wire body")
     );
 }
@@ -323,19 +329,18 @@ async fn codex_responses_projection_matches_the_terminal_rewritten_body() {
     .expect("Codex Responses client");
     let model = client.completion_model("test-model");
     let request = core_request("codex-visible reasoning");
-    let projection = ProviderInputCounter::new(
+    let counter = ProviderInputCounter::new(
         BackendProviderKind::ChatGptCodex,
         OpenAiWireApi::Responses,
         "test-model",
-    )
-    .project_request(&request)
-    .expect("projection");
+    );
+    let projected_body = counter.project_body(&request).expect("provider body");
 
     if let Ok(mut response) = model.stream(request).await {
         let _ = response.next().await;
     }
     assert_eq!(
-        projection.body,
+        projected_body,
         bodies.lock().unwrap().pop().expect("captured wire body")
     );
 }
@@ -355,19 +360,18 @@ async fn xai_responses_projection_matches_the_terminal_rewritten_body() {
     .expect("xAI Responses client");
     let model = client.completion_model("test-model");
     let request = core_request("xai-visible reasoning");
-    let projection = ProviderInputCounter::new(
+    let counter = ProviderInputCounter::new(
         BackendProviderKind::XaiGrokOAuth,
         OpenAiWireApi::Responses,
         "test-model",
-    )
-    .project_request(&request)
-    .expect("projection");
+    );
+    let projected_body = counter.project_body(&request).expect("provider body");
 
     if let Ok(mut response) = model.stream(request).await {
         let _ = response.next().await;
     }
     assert_eq!(
-        projection.body,
+        projected_body,
         bodies.lock().unwrap().pop().expect("captured wire body")
     );
 }
@@ -389,12 +393,12 @@ async fn openrouter_projection_matches_the_actual_rig_wire_body() {
         OpenAiWireApi::ChatCompletions,
         "test-model",
     );
-    let projection = counter.project_request(&request).expect("projection");
+    let projected_body = counter.project_body(&request).expect("provider body");
 
     if let Ok(mut response) = model.stream(request).await {
         let _ = response.next().await;
     }
     let actual = bodies.lock().unwrap().pop().expect("captured wire body");
-    assert_eq!(projection.body, actual);
+    assert_eq!(projected_body, actual);
     assert!(actual.to_string().contains("openrouter-visible-reasoning"));
 }

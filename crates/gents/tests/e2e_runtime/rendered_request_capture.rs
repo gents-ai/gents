@@ -816,9 +816,13 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     const BIG_OUTPUT_CHARS: usize = 40_000;
     const CONTEXT_WINDOW: usize = 40_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
-    // `estimate_tokens` is `len / 4`, so the same budget in characters is 4x the
-    // token budget: 10 000 tokens, 40 000 characters.
-    let budget_chars = ((CONTEXT_WINDOW as f64 * COMPACTION_THRESHOLD) as usize) * 4;
+    // Size the fixture through the production exact threshold helper. The
+    // provider counter uses serialized-byte estimates; four plain characters
+    // per token keeps this payload near that boundary without copying the
+    // threshold formula or reintroducing floating-point budget arithmetic.
+    let budget_chars =
+        gents::compaction::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
+            .saturating_mul(4);
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
     let marker = "capture-compaction";

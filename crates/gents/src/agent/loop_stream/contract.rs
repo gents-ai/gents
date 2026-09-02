@@ -22,7 +22,7 @@ pub(crate) type RenderedRequestSink = Arc<
 #[derive(Clone, Debug)]
 pub(crate) struct TurnCompactionRequest {
     pub(crate) messages: Vec<Message>,
-    pub(crate) keep_recent_target: usize,
+    pub(crate) estimated_input_tokens: usize,
     pub(crate) turn_index: usize,
     pub(crate) prior_reduction_keys: Vec<String>,
 }

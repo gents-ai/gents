@@ -1,3 +1,4 @@
+// Owned-loop request assembly, repair, compaction, and dispatch-boundary tests.
 #[tokio::test]
 async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     let model = ScriptedModel::new(vec![
@@ -692,8 +693,6 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
             "fence",
             &["bash"],
             false,
-            100_000,
-            8_192,
             &[],
         );
 

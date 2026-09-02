@@ -354,7 +354,7 @@ pub(super) fn split_messages_for_summary_with_counter(
     let mut split_index = messages.len() - 1;
     while low <= high {
         let index = low + (high - low) / 2;
-        let fits = counter.count_messages(&messages[index..])? <= keep_recent_tokens;
+        let fits = counter.estimate_message_request(&messages[index..])? <= keep_recent_tokens;
         if fits {
             split_index = index;
             if index == 0 {
@@ -402,7 +402,7 @@ pub(super) fn split_messages_for_summary_with_counter(
     // initial user prompt with a summary would change the request rather than
     // compact its history. The full-list check then refuses to end on a tool
     // call still awaiting its result.
-    let retained_tokens = counter.count_messages(&messages[split_index..])?;
+    let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
     if split_index < raw_split_index
         && retained_tokens > keep_recent_tokens
         && pair_safe_boundary(&messages, messages.len()) == messages.len()
@@ -440,45 +440,10 @@ pub(super) fn split_messages_for_summary(
 /// with its own call ids, a tool result erases one, and anything else clears it.
 pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     let limit = limit.min(messages.len());
-    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut boundary = 0usize;
-
-    for (index, message) in messages.iter().take(limit).enumerate() {
-        if pending.is_empty() {
-            boundary = index;
-        }
-        match message {
-            Message::Assistant { content, .. } => {
-                pending = content
-                    .iter()
-                    .filter_map(|item| match item {
-                        AssistantContent::ToolCall(tool_call) => Some(tool_call_key(tool_call)),
-                        _ => None,
-                    })
-                    .collect();
-            }
-            Message::User { content } => {
-                let has_plain_content = content
-                    .iter()
-                    .any(|item| !matches!(item, UserContent::ToolResult(_)));
-                for item in content.iter() {
-                    if let UserContent::ToolResult(tool_result) = item {
-                        pending.remove(&tool_result_key(tool_result));
-                    }
-                }
-                if has_plain_content {
-                    pending.clear();
-                }
-            }
-            Message::System { .. } => pending.clear(),
-        }
-    }
-
-    if pending.is_empty() {
-        limit
-    } else {
-        boundary
-    }
+    pair_safe_boundaries(&messages[..limit])
+        .last()
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Every positive prefix length at which no tool call is awaiting its result.

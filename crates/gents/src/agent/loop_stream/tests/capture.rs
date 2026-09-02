@@ -193,10 +193,8 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
 /// * `attempt` is part of the capture key, so retries must arrive as distinct
 ///   attempts within one turn.
 /// * `AssemblyBuildPath` must flip to `Repair` exactly on the attempt that the
-///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. That
-///   attempt skips `clamp_request_output_budget`, so a reconstructor that
-///   assumes the budgeted path would produce a different `max_tokens` and a
-///   false mismatch.
+///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. The
+///   final dispatch boundary still recounts and clamps that repaired request.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poison = format!("bad{}value", '\u{0007}');
