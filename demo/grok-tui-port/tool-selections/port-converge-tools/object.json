@@ -7,7 +7,7 @@
   "file_tool_root": "${GENTS_GROK_PORT_GENTS_ROOT:-.}",
   "enable_bash": true,
   "bash_mode": "Unrestricted",
-  "command_execution_policy": "unrestricted",
+  "command_execution_policy": "workspace_write",
   "command_network_mode": "disabled",
   "cli_tool_names": [],
   "enable_meta_tools": false,

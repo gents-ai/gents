@@ -9,7 +9,9 @@ use chrono::{DateTime, Utc};
 use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::{
+    execute_graphql_async, graphql_error_is_retryable, GraphqlRequestOptions,
+};
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -24,10 +26,7 @@ pub(crate) const MAX_TRANSIENT_GRAPHQL_RETRIES: usize = 4;
 /// safe. Keep this shared between protocol shims so they do not drift on the
 /// backend's contention vocabulary.
 pub(crate) fn graphql_error_is_transient(error: &anyhow::Error) -> bool {
-    let message = error.to_string();
-    message.contains("transaction conflict")
-        || message.contains("Transaction conflict")
-        || message.contains("database is locked")
+    graphql_error_is_retryable(error)
 }
 
 /// Small bounded linear backoff used for transient GraphQL contention.
@@ -566,7 +565,12 @@ async fn submit_prepared_agent_request(
         },
     )
     .await
-    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    .with_context(|| {
+        format!(
+            "submitting prepared AgentRequest {}",
+            prepared.submitted.request_id
+        )
+    })?;
     Ok(prepared.submitted.clone())
 }
 
@@ -1126,7 +1130,14 @@ mod tests {
         submit_prepared_agent_request_with_retry, transient_graphql_retry_delay,
         PreparedAgentRequest, RequestSubmitOptions, SubmittedRequest,
     };
-    use axum::{extract::State, routing::post, Json, Router};
+    use axum::{
+        body::{Body, Bytes},
+        extract::State,
+        response::{IntoResponse, Response},
+        routing::post,
+        Json, Router,
+    };
+    use futures_util::stream;
     use serde_json::{json, Value};
     use std::collections::BTreeSet;
     use std::sync::{Arc, Mutex};
@@ -1135,12 +1146,13 @@ mod tests {
     struct AmbiguousSubmitState {
         durable_ids: Arc<Mutex<BTreeSet<String>>>,
         mutation_count: Arc<std::sync::atomic::AtomicUsize>,
+        lose_transport_response: Arc<std::sync::atomic::AtomicBool>,
     }
 
     async fn ambiguous_submit_endpoint(
         State(state): State<AmbiguousSubmitState>,
         Json(body): Json<Value>,
-    ) -> Json<Value> {
+    ) -> Response {
         let query = body
             .get("query")
             .and_then(Value::as_str)
@@ -1154,9 +1166,24 @@ mod tests {
                 .lock()
                 .expect("durable ids")
                 .insert("stable-request-id".to_string());
+            if state
+                .lose_transport_response
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                // The durable write happened, then the response body failed.
+                // reqwest retains this decode/transport error in the anyhow
+                // cause chain, which recovery must classify before querying
+                // the stable request id.
+                let body = Body::from_stream(stream::once(async {
+                    Err::<Bytes, std::io::Error>(std::io::Error::other(
+                        "connection closed before message completed",
+                    ))
+                }));
+                return Response::new(body);
+            }
             // The mutation committed, but its response was lost/replaced by a
             // transient error at the transport boundary.
-            return Json(json!({"errors": [{"message": "database is locked"}]}));
+            return Json(json!({"errors": [{"message": "database is locked"}]})).into_response();
         }
         let rows: Vec<Value> = state
             .durable_ids
@@ -1165,23 +1192,11 @@ mod tests {
             .iter()
             .map(|request_id| json!({"request_id": request_id}))
             .collect();
-        Json(json!({"data": {"AgentRequest": rows}}))
+        Json(json!({"data": {"AgentRequest": rows}})).into_response()
     }
 
-    #[tokio::test]
-    async fn transient_submission_recovers_committed_identity_without_reposting() {
-        let state = AmbiguousSubmitState::default();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test endpoint");
-        let address = listener.local_addr().expect("test endpoint address");
-        let router = Router::new()
-            .route("/", post(ambiguous_submit_endpoint))
-            .with_state(state.clone());
-        let server = tokio::spawn(async move {
-            let _ = axum::serve(listener, router).await;
-        });
-        let prepared = PreparedAgentRequest {
+    fn stable_test_prepared_request() -> PreparedAgentRequest {
+        PreparedAgentRequest {
             // Keep the fixture byte-identical on the wire without placing the
             // raw production-write spelling in this source file. The runtime
             // fence scans the whole file (including tests) for direct writers.
@@ -1204,7 +1219,23 @@ mod tests {
                 metadata: None,
                 created_at: None,
             },
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_submission_recovers_committed_identity_without_reposting() {
+        let state = AmbiguousSubmitState::default();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test endpoint");
+        let address = listener.local_addr().expect("test endpoint address");
+        let router = Router::new()
+            .route("/", post(ambiguous_submit_endpoint))
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let prepared = stable_test_prepared_request();
         let submitted =
             submit_prepared_agent_request_with_retry(&format!("http://{address}/"), &prepared)
                 .await
@@ -1216,6 +1247,39 @@ mod tests {
                 .load(std::sync::atomic::Ordering::SeqCst),
             1,
             "a committed mutation must not be posted again"
+        );
+        assert_eq!(state.durable_ids.lock().expect("durable ids").len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transport_response_loss_recovers_committed_identity_without_reposting() {
+        let state = AmbiguousSubmitState {
+            lose_transport_response: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            ..Default::default()
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test endpoint");
+        let address = listener.local_addr().expect("test endpoint address");
+        let router = Router::new()
+            .route("/", post(ambiguous_submit_endpoint))
+            .with_state(state.clone());
+        let server = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let prepared = stable_test_prepared_request();
+        let submitted =
+            submit_prepared_agent_request_with_retry(&format!("http://{address}/"), &prepared)
+                .await
+                .expect("recover committed request after transport response loss");
+        assert_eq!(submitted.request_id, "stable-request-id");
+        assert_eq!(
+            state
+                .mutation_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a committed mutation must not be posted again after response loss"
         );
         assert_eq!(state.durable_ids.lock().expect("durable ids").len(), 1);
         server.abort();

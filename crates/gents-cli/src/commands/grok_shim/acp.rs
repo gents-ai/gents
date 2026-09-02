@@ -1268,10 +1268,10 @@ impl AcpDelegate for AcpService {
             };
             let dispatch = self.dispatch_with_sender(payload, &sender).await;
             for notification in &dispatch.notifications {
-                outbound.send(notification.clone())?;
+                outbound.send(notification.clone()).await?;
             }
             if let Some(response) = dispatch.response {
-                outbound.send(response)?;
+                outbound.send(response).await?;
             }
             Ok(())
         })

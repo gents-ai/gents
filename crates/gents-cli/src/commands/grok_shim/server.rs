@@ -204,7 +204,23 @@ enum FrameSender {
 }
 
 impl FrameSender {
-    fn send(&self, envelope: ServerEnvelope) -> Result<()> {
+    async fn send(&self, envelope: ServerEnvelope) -> Result<()> {
+        match self {
+            FrameSender::Bounded(frames) => frames
+                .send(envelope)
+                .await
+                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+            #[cfg(test)]
+            FrameSender::Unbounded(frames) => frames
+                .send(envelope)
+                .map_err(|_| anyhow!("the grok shim leader connection is closed")),
+        }
+    }
+
+    /// Nonblocking connection-loop send. Protocol/control/lifecycle frames
+    /// cannot park the reader behind a saturated data queue; saturation is a
+    /// fatal connection condition for these callers.
+    fn try_send(&self, envelope: ServerEnvelope) -> Result<()> {
         match self {
             FrameSender::Bounded(frames) => {
                 frames.try_send(envelope).map_err(|error| match error {
@@ -238,8 +254,16 @@ impl AcpOutbound {
     }
 
     /// Queue one ACP JSON-RPC line for the pager client.
-    pub(crate) fn send(&self, payload: impl Into<String>) -> Result<()> {
-        self.frames.send(ServerEnvelope::Acp {
+    pub(crate) async fn send(&self, payload: impl Into<String>) -> Result<()> {
+        self.frames
+            .send(ServerEnvelope::Acp {
+                payload: payload.into(),
+            })
+            .await
+    }
+
+    fn try_send(&self, payload: impl Into<String>) -> Result<()> {
+        self.frames.try_send(ServerEnvelope::Acp {
             payload: payload.into(),
         })
     }
@@ -704,7 +728,7 @@ async fn handle_connection(
             }
         };
 
-    let _ = frames_tx.send(ServerEnvelope::Registered {
+    let _ = frames_tx.try_send(ServerEnvelope::Registered {
         client_id,
         ready: true,
         leader_protocol_version: LEADER_PROTOCOL_VERSION,
@@ -737,7 +761,7 @@ async fn handle_connection(
                     Ok(envelope) => {
                         // Forward `shutting_down` and `shutdown`; the closed
                         // channel below ends the loop.
-                        if frames_tx.send(envelope).is_err() {
+                        if frames_tx.try_send(envelope).is_err() {
                             break;
                         }
                     }
@@ -756,7 +780,7 @@ async fn handle_connection(
             frame = client_frames_rx.recv() => {
                 match frame {
                     Some(Ok(ClientEnvelope::Ping)) => {
-                        if frames_tx.send(ServerEnvelope::Pong).is_err() {
+                        if frames_tx.try_send(ServerEnvelope::Pong).is_err() {
                             break;
                         }
                     }
@@ -769,7 +793,7 @@ async fn handle_connection(
                                 "grok shim leader rejected ACP dispatch at the per-connection limit"
                             );
                             if let Some(response) = internal_error_response(&payload) {
-                                if outbound.send(response).is_err() {
+                                if outbound.try_send(response).is_err() {
                                     break;
                                 }
                             } else {
@@ -797,7 +821,7 @@ async fn handle_connection(
                             command = %command,
                             "grok shim leader received an unsupported control command"
                         );
-                        if frames_tx.send(ServerEnvelope::Error {
+                        if frames_tx.try_send(ServerEnvelope::Error {
                             code: ENVELOPE_ERROR_METHOD_NOT_FOUND,
                             message: format!(
                                 "the Gents leader shim does not implement control commands \
@@ -859,6 +883,7 @@ async fn handle_connection(
         acp_tasks.abort_all();
         while acp_tasks.join_next().await.is_some() {}
     }
+    drop(outbound);
     drop(frames_tx);
     reader_task.abort();
     let _ = reader_task.await;
@@ -899,7 +924,7 @@ async fn register_client(
                         reason = %format!("{reason:#}"),
                         "grok shim leader rejected an invalid register frame"
                     );
-                    let _ = frames.send(ServerEnvelope::Error {
+                    let _ = frames.try_send(ServerEnvelope::Error {
                         code: ENVELOPE_ERROR_INVALID_REQUEST,
                         message: format!("{reason:#}"),
                     });
@@ -945,7 +970,7 @@ fn validate_register(client_type: &str, _mode: &RegisterMode) -> Result<()> {
 
 fn protocol_violation(frames: &FrameSender, message: &str) {
     tracing::warn!(target: LOG_TARGET, message, "grok shim leader protocol violation");
-    let _ = frames.send(ServerEnvelope::Error {
+    let _ = frames.try_send(ServerEnvelope::Error {
         code: ENVELOPE_ERROR_INVALID_REQUEST,
         message: message.to_string(),
     });
@@ -983,7 +1008,7 @@ fn spawn_acp_dispatch(
             // A request must never hang: answer it with a JSON-RPC internal
             // error through the ACP channel so the pager can recover.
             if let Some(response) = internal_error_response(&payload) {
-                if let Err(error) = outbound.send(response) {
+                if let Err(error) = outbound.send(response).await {
                     tracing::debug!(
                         target: LOG_TARGET,
                         %error,
@@ -1595,19 +1620,21 @@ mod tests {
                     .lock()
                     .expect("payload log")
                     .push(payload.to_string());
-                outbound.send(payload.to_string())?;
+                outbound.send(payload.to_string()).await?;
                 if self.late_push {
                     let outbound = outbound.clone();
                     tokio::spawn(async move {
                         sleep(Duration::from_millis(10)).await;
-                        let _ = outbound.send(
-                            json!({
-                                "jsonrpc": "2.0",
-                                "method": "deferred",
-                                "params": {},
-                            })
-                            .to_string(),
-                        );
+                        let _ = outbound
+                            .send(
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "method": "deferred",
+                                    "params": {},
+                                })
+                                .to_string(),
+                            )
+                            .await;
                     });
                 }
                 Ok(())
@@ -1994,15 +2021,30 @@ mod tests {
         assert_eq!(value["error"]["code"], json!(JSONRPC_INTERNAL_ERROR));
     }
 
-    #[test]
-    fn production_outbound_queue_is_bounded_and_fails_without_dropping_silently() {
+    #[tokio::test]
+    async fn production_outbound_queue_backpressures_until_the_writer_drains() {
         let (frames, mut receiver) = mpsc::channel(1);
         let outbound = AcpOutbound {
             frames: FrameSender::Bounded(frames),
         };
-        outbound.send("first").expect("first frame fits");
-        let error = outbound.send("second").expect_err("full queue must fail");
-        assert!(error.to_string().contains("outbound queue is full"));
+        outbound.send("first").await.expect("first frame fits");
+        let blocked = tokio::spawn({
+            let outbound = outbound.clone();
+            async move { outbound.send("second").await }
+        });
+        tokio::task::yield_now().await;
+        assert!(
+            !blocked.is_finished(),
+            "the second send must wait while the bounded queue is full"
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ServerEnvelope::Acp { .. })
+        ));
+        blocked
+            .await
+            .expect("backpressured sender joins")
+            .expect("send resumes after drain");
         assert!(matches!(
             receiver.try_recv(),
             Ok(ServerEnvelope::Acp { .. })
