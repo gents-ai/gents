@@ -1123,6 +1123,45 @@ async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration)
     )
 }
 
+/// `server --apply-root` opens HTTP before its applied configuration has
+/// crossed the authoritative readiness fence. Demo-run dependencies must not
+/// mutate configuration in that interval: doing so changes the fingerprint
+/// the server is waiting to publish and can make it shut itself down while a
+/// prematurely seeded request is already streaming.
+async fn wait_for_server_ready_marker(
+    log: &Path,
+    server: &mut tokio::process::Child,
+    deadline: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < deadline {
+        if let Ok(text) = std::fs::read_to_string(log) {
+            if server_ready_marker(&text) {
+                return Ok(());
+            }
+        }
+        if let Ok(Some(status)) = server.try_wait() {
+            bail!(
+                "demo server exited before publishing post-apply readiness ({status}); check {}",
+                log.display()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!(
+        "timed out after {}s waiting for the server's post-apply readiness marker; check {}",
+        deadline.as_secs(),
+        log.display()
+    )
+}
+
+fn server_ready_marker(log: &str) -> bool {
+    log.lines().any(|line| {
+        let line = strip_ansi(line);
+        line.contains("gents server is running ") && line.contains("Press Ctrl-C to stop.")
+    })
+}
+
 fn event_source_ready(log: &str, collection: &str) -> bool {
     let mut observes_target = false;
     let mut subscription_open = false;
@@ -3184,6 +3223,12 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     )?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
+        wait_for_server_ready_marker(
+            &log,
+            &mut server,
+            Duration::from_secs(manifest.await_timeout_secs),
+        )
+        .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         install_bundled_graph_dependencies(
             &bin,
@@ -3551,6 +3596,19 @@ mod tests {
     #[test]
     fn observe_line_alone_is_not_ready_to_seed() {
         assert!(!event_source_ready(COLOURED, "ExperimentJob"));
+    }
+
+    #[test]
+    fn post_apply_server_marker_is_required_before_pack_mutations() {
+        assert!(!server_ready_marker(
+            "gents ready runnable_behaviors=1 unavailable_behaviors=0"
+        ));
+        assert!(server_ready_marker(
+            "gents server is running local-only. Press Ctrl-C to stop."
+        ));
+        assert!(server_ready_marker(
+            "\u{1b}[32mgents server is running with IROH P2P. Press Ctrl-C to stop.\u{1b}[0m"
+        ));
     }
 
     #[test]
