@@ -1,7 +1,3 @@
-import {
-  interruptRequest as _interruptRequest,
-  previewInterruptCascade as _previewInterruptCascade,
-} from "@source-inc/gents-desktop-client";
 import type {
   CascadeCancelPreview,
   InterruptRequestResult,
@@ -27,14 +23,10 @@ export type DesktopInterruptRequestArgs = {
   expectedPreviewSignature?: string;
 };
 
-export async function previewChatInterruptCascade(
+export type PreviewChatInterruptCascade = (
   request: DesktopPreviewInterruptCascadeArgs,
-): Promise<CascadeCancelPreview> {
-  return _previewInterruptCascade(request);
-}
+) => Promise<CascadeCancelPreview>;
 
-export async function interruptChatRequest(
+export type InterruptChatRequest = (
   request: DesktopInterruptRequestArgs,
-): Promise<InterruptRequestResult> {
-  return _interruptRequest(request);
-}
+) => Promise<InterruptRequestResult>;

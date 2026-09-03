@@ -149,6 +149,31 @@ fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
+    let bytes = bundled_graph_package_asset(package_name, path)
+        .with_context(|| format!("bundled package references missing asset {path:?}"))?;
+    let selection: serde_json::Value = serde_json::from_slice(bytes)
+        .with_context(|| format!("bundled tool selection asset {path:?} is malformed"))?;
+    let object = selection
+        .as_object()
+        .with_context(|| format!("bundled tool selection asset {path:?} must be an object"))?;
+
+    if object.get("tool_policy_version")
+        != Some(&serde_json::json!(crate::tool_surface::TOOL_POLICY_V1))
+    {
+        anyhow::bail!(
+            "bundled tool selection asset {path:?} must declare tool_policy_version {:?}",
+            crate::tool_surface::TOOL_POLICY_V1
+        );
+    }
+    for field in ["enable_goal_tools", "enable_goal_creation"] {
+        if object.get(field) != Some(&serde_json::Value::Bool(false)) {
+            anyhow::bail!("bundled tool selection asset {path:?} must explicitly disable {field}");
+        }
+    }
+    Ok(())
+}
+
 fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
     let manifest_bytes = bundled_graph_package_asset(package_name, "manifest.json")
         .with_context(|| format!("bundled package {package_name:?} has no manifest"))?;
@@ -200,6 +225,7 @@ fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
     ];
     assets.extend(manifest.schemas.iter().cloned());
     for capability in &capabilities {
+        validate_tool_selection_asset(package_name, &capability.tool_selection_asset)?;
         assets.extend([
             capability.behavior_asset.clone(),
             capability.system_prompt_asset.clone(),
@@ -274,6 +300,17 @@ mod tests {
         assert_eq!(plan.nodes.len(), 4);
         assert_eq!(plan.results.len(), 2);
         assert_eq!(plan.entries[0].name, "review");
+    }
+
+    #[test]
+    fn bundled_tool_selections_declare_current_policy_and_goal_authority() {
+        for package_name in BUNDLED_GRAPH_PACKAGE_NAMES {
+            let package = load_bundled_graph_package(package_name).unwrap();
+            for capability in &package.capabilities {
+                validate_tool_selection_asset(package_name, &capability.tool_selection_asset)
+                    .unwrap();
+            }
+        }
     }
 
     #[test]

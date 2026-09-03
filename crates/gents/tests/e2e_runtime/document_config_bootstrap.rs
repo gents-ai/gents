@@ -63,28 +63,56 @@ async fn ensure_agent_principal_creates_and_reuses_default_behavior() {
 }
 
 #[tokio::test]
-async fn ensure_agent_principal_backfills_missing_default_behavior() {
-    let db = test_db("principal-bootstrap-backfill").await;
-    let agent_did = "did:test:backfill";
+async fn ensure_agent_principal_rejects_missing_default_behavior_binding() {
+    let db = test_db("principal-bootstrap-unbound").await;
+    let agent_did = "did:test:unbound";
     insert_principal(db.node.as_ref(), agent_did, "").await;
 
-    let bootstrap = ensure_agent_principal(db.node.as_ref(), agent_did)
+    let error = ensure_agent_principal(db.node.as_ref(), agent_did)
         .await
-        .expect("bootstrap succeeds");
-    assert!(!bootstrap.created_principal);
-    assert!(bootstrap.created_default_behavior);
-    assert!(bootstrap.created_default_inference_profile);
-    assert_eq!(
-        bootstrap.principal.default_behavior_id.as_deref(),
-        Some(default_behavior_id_for_agent(agent_did).as_str())
-    );
-    assert_eq!(
-        bootstrap.default_behavior.inference_profile_id.as_deref(),
-        Some(
-            default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(agent_did))
-                .as_str()
-        )
-    );
+        .expect_err("partial principal must fail closed");
+    assert!(error.to_string().contains("has no default_behavior_id"));
+    assert!(list_agent_behaviors(db.node.as_ref(), agent_did)
+        .await
+        .expect("list behaviors")
+        .is_empty());
+}
+
+#[tokio::test]
+async fn ensure_agent_principal_rejects_default_behavior_without_profile_binding() {
+    let db = test_db("principal-bootstrap-unbound-profile").await;
+    let agent_did = "did:test:unbound-profile";
+    let behavior_id = "unbound-profile-behavior";
+    insert_principal(db.node.as_ref(), agent_did, behavior_id).await;
+    upsert_agent_behavior(
+        db.node.as_ref(),
+        &AgentBehaviorDocument {
+            behavior_id: behavior_id.to_string(),
+            agent_did: agent_did.to_string(),
+            display_name: Some("Unbound profile".to_string()),
+            description: None,
+            summary: None,
+            system_prompt: None,
+            request_context_template: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
+            enabled: true,
+            created_at: None,
+        },
+    )
+    .await
+    .expect("seed behavior");
+
+    let error = ensure_agent_principal(db.node.as_ref(), agent_did)
+        .await
+        .expect_err("partial behavior must fail closed");
+    assert!(error.to_string().contains("has no inference_profile_id"));
 }
 
 #[tokio::test]

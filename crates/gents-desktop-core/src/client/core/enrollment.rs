@@ -64,6 +64,7 @@ pub struct EnrollmentRequestResult {
     pub server_peer: String,
     pub owner_agent: String,
     pub state: String,
+    pub expires_at: String,
 }
 
 #[derive(Deserialize)]
@@ -208,7 +209,124 @@ impl ClientCore {
             server_peer: request.server_peer,
             owner_agent: request.owner_agent,
             state: "pending_approval".to_string(),
+            expires_at: request.expires_at,
         })
+    }
+
+    pub async fn active_status_enrollment_requests(&self) -> Result<Vec<EnrollmentRequestResult>> {
+        let response = self.node.execute(STATUS_ENROLLMENT_QUERY).await;
+        ensure_no_errors(&response, "load desktop enrollment requests")?;
+        let pins = rows::<EnrollmentPinRow>(&response, "NetworkAdminPin")?
+            .into_iter()
+            .fold(BTreeMap::<String, Vec<String>>::new(), |mut pins, row| {
+                pins.entry(row.network_id).or_default().push(row.admin_did);
+                pins
+            });
+        let decisions = rows::<EnrollmentDecisionRow>(&response, "NetworkEnrollmentDecision")?;
+        let mut active = Vec::new();
+
+        for row in rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")? {
+            if row.candidate_did != self.principal.did() || row.candidate_peer != self.local_peer_id
+            {
+                continue;
+            }
+            let request = row.to_record()?;
+            let [admin_did] = pins
+                .get(&request.network_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            else {
+                anyhow::bail!("network has no unique durable admin pin");
+            };
+            anyhow::ensure!(
+                admin_did == &request.admin_did,
+                "request admin does not match the durable network pin"
+            );
+            let offer = decode_offer(&request.offer_token)
+                .context("decoding persisted enrollment offer")?;
+            request.validate_against_offer(&offer)?;
+            anyhow::ensure!(
+                offer.schema_fingerprint == enrollment_schema_fingerprint(),
+                "persisted enrollment offer has an incompatible schema"
+            );
+            anyhow::ensure!(
+                self.principal
+                    .verify(&offer.admin_did, &offer.signing_payload(), &offer.admin_sig)
+                    .await?,
+                "persisted enrollment offer signature is invalid"
+            );
+            anyhow::ensure!(
+                self.principal
+                    .verify(
+                        &request.candidate_did,
+                        &request.signing_payload(),
+                        &request.candidate_sig,
+                    )
+                    .await?,
+                "persisted enrollment request signature is invalid"
+            );
+            let expires_at = DateTime::parse_from_rfc3339(&request.expires_at)
+                .context("parsing enrollment request expiry")?
+                .with_timezone(&Utc);
+            if expires_at <= Utc::now() {
+                continue;
+            }
+
+            let mut authenticated_decision = None;
+            for row in decisions
+                .iter()
+                .filter(|decision| decision.request_id == request.request_id)
+            {
+                let decision = row.to_record()?;
+                decision.validate_against_request(&request)?;
+                anyhow::ensure!(
+                    self.principal
+                        .verify(
+                            &decision.signer_did,
+                            &decision.signing_payload(),
+                            &decision.admin_sig,
+                        )
+                        .await?,
+                    "persisted enrollment decision signature is invalid"
+                );
+                anyhow::ensure!(
+                    authenticated_decision.is_none(),
+                    "enrollment request has multiple authenticated decisions"
+                );
+                authenticated_decision = Some(decision);
+            }
+
+            let state = match authenticated_decision {
+                Some(decision) if decision.decision == EnrollmentDecisionKind::Denied => continue,
+                Some(decision)
+                    if gents_protocol::enrollment::authorization_lease_is_fresh_at(
+                        &decision.authorization_expires_at,
+                        Utc::now(),
+                    ) =>
+                {
+                    "approved"
+                }
+                Some(_) => continue,
+                None => "pending_approval",
+            };
+            if self.sync_state.records().iter().any(|peer| {
+                peer.enrollment_request_id.as_deref() == Some(&request.request_id)
+                    && peer.is_chat_ready_at(Utc::now())
+            }) {
+                continue;
+            }
+            active.push(EnrollmentRequestResult {
+                request_id: request.request_id,
+                network_id: request.network_id,
+                admin_did: request.admin_did,
+                server_peer: request.server_peer,
+                owner_agent: request.owner_agent,
+                state: state.to_string(),
+                expires_at: request.expires_at,
+            });
+        }
+        active.sort_by(|left, right| left.request_id.cmp(&right.request_id));
+        Ok(active)
     }
 
     async fn confirm_admin_pin(

@@ -25,6 +25,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -156,6 +157,7 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -460,6 +462,7 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -647,6 +650,7 @@ async fn config_apply_force_rebinds_concrete_manifest_to_home_identity_locally()
             agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -796,6 +800,7 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

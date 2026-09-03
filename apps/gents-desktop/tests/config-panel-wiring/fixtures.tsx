@@ -35,13 +35,11 @@ export const deployment: DeploymentView = {
   source: "local",
   graphql: null,
   dialSucceeded: true,
-  pairingReady: true,
   chatSafe: true,
   behaviorReadiness: {
     source: { state: "current" },
     activeGeneration: 1,
     routerGeneration: 1,
-    defaultBehaviorId: "default",
     updatedAt: "2026-08-28T00:00:00Z",
     behaviors: [
       { state: "ready", behaviorId: "default" },
@@ -49,7 +47,6 @@ export const deployment: DeploymentView = {
     ],
   },
   pairing: [],
-  defaultBehaviorId: "default",
   agentPrincipal: {
     agentDid: "did:key:z6MkAgent",
     displayName: "Local Agent",
@@ -115,7 +112,7 @@ export const deployment: DeploymentView = {
     {
       backendId: "backend-a",
       name: "Backend A",
-      providerKind: "openai",
+      providerKind: "OpenAiCompatible",
       endpoint: "http://127.0.0.1:8000/v1",
       apiKeyConfigured: false,
       enabled: true,
@@ -124,7 +121,7 @@ export const deployment: DeploymentView = {
     {
       backendId: "backend-b",
       name: "Backend B",
-      providerKind: "openai",
+      providerKind: "OpenAiCompatible",
       endpoint: "http://127.0.0.1:9000/v1",
       apiKeyConfigured: false,
       enabled: true,
@@ -155,7 +152,6 @@ export const deployment: DeploymentView = {
       cliToolNames: ["grep"],
       enableMetaTools: true,
       allowedMcpServiceIds: ["service-a"],
-      delegateTo: [],
     },
     {
       selectionId: "tools-b",
@@ -168,7 +164,6 @@ export const deployment: DeploymentView = {
       cliToolNames: [],
       enableMetaTools: false,
       allowedMcpServiceIds: [],
-      delegateTo: [],
     },
   ],
   toolServiceRegistries: [

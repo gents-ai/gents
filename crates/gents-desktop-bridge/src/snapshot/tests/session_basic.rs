@@ -205,7 +205,7 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
     assert_eq!(last.compaction_reason, "below_threshold");
 
     store.messages[1].sequence = None;
-    let legacy_fallback = build_session_snapshot_from_store_for_agent(
+    let unsequenced_projection = build_session_snapshot_from_store_for_agent(
         &store,
         Some("did:test:amy"),
         "session-context",
@@ -213,8 +213,8 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
     )
     .expect("snapshot with partially replicated sequence");
     assert_eq!(
-        legacy_fallback.context.provider_message_count, 2,
-        "a missing sequence must use full projection plus cumulative count"
+        unsequenced_projection.context.provider_message_count, 3,
+        "a missing sequence must project durable rows without inferring a compaction boundary"
     );
 }
 
@@ -459,7 +459,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
 }
 
 #[test]
-fn replica_forks_of_an_older_turn_do_not_swallow_a_later_pending_turn() {
+fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
     let store = ClientStore::from_rows(ClientStoreRows {
         conversations: vec![AgentConversationRow {
             session_id: "session-1".to_string(),
@@ -565,7 +565,7 @@ fn replica_forks_of_an_older_turn_do_not_swallow_a_later_pending_turn() {
         ],
         messages: vec![
             AgentMessageRow {
-                message_key: "legacy-msg-1".to_string(),
+                message_key: "unbound-msg-1".to_string(),
                 session_id: Some("session-1".to_string()),
                 request_id: None,
                 requester_did: None,
@@ -602,7 +602,7 @@ fn replica_forks_of_an_older_turn_do_not_swallow_a_later_pending_turn() {
 
     let mut materialized_rows = store.to_rows();
     materialized_rows.messages.push(AgentMessageRow {
-        message_key: "legacy-msg-2".to_string(),
+        message_key: "unbound-msg-2".to_string(),
         session_id: Some("session-1".to_string()),
         request_id: None,
         requester_did: None,
@@ -616,5 +616,11 @@ fn replica_forks_of_an_older_turn_do_not_swallow_a_later_pending_turn() {
     let materialized =
         build_session_snapshot_from_store(&materialized_store, "session-1", Some("req-2"))
             .expect("materialized snapshot");
-    assert!(materialized.pending_turn.is_none());
+    assert_eq!(
+        materialized
+            .pending_turn
+            .as_ref()
+            .map(|turn| turn.request_id.as_str()),
+        Some("req-2")
+    );
 }

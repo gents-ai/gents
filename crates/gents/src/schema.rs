@@ -32,35 +32,10 @@ pub use gents_protocol::schemas::{
     TOOL_SERVICE_REGISTRY as TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 
-/// Replaced by the full baseline. Kept as a name alias so docs/tests that
-/// still mention the six-collection init subset compile; calling
-/// [`ensure_config_bootstrap_schemas`] registers the **full** baseline.
-#[deprecated(
-    note = "partial bootstrap forks lineage; use ensure_migrations / ensure_runtime_schemas"
-)]
-pub const CONFIG_BOOTSTRAP: &[&str] = &[
-    AGENT_PRINCIPAL_SCHEMA,
-    AGENT_BEHAVIOR_SCHEMA,
-    TOOL_SELECTION_SCHEMA,
-    OAUTH_CREDENTIAL_SCHEMA,
-    INFERENCE_BACKEND_SCHEMA,
-    INFERENCE_PROFILE_SCHEMA,
-];
-
 /// Register baseline + verify lineage (full engine). Feature-invariant.
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     gents_migration::ensure_migrations(node)
         .await
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!(e))
-}
-
-/// Alias of [`ensure_runtime_schemas`] — full baseline, not a subset.
-pub async fn ensure_config_bootstrap_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_runtime_schemas(node).await
-}
-
-/// Alias of [`ensure_runtime_schemas`]. Historical name for test helpers.
-pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
-    ensure_runtime_schemas(node).await
 }

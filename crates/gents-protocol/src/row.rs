@@ -842,8 +842,6 @@ pub struct ToolSelectionRow {
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub required_mcp_service_ids: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
-    pub delegate_to: Vec<String>,
-    #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub backgroundable_tool_names: Vec<String>,
     #[serde(default, deserialize_with = "deserialize_string_vec")]
     pub subagent_targets: Vec<String>,
@@ -1194,7 +1192,6 @@ mod tests {
         assert_eq!(row.enable_goal_creation, None);
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.delegate_to.is_empty());
         assert!(row.backgroundable_tool_names.is_empty());
         assert!(row.subagent_targets.is_empty());
         assert!(row.write_tools.is_empty());
@@ -1224,14 +1221,12 @@ mod tests {
             "agent_did": "did:test:amy",
             "cli_tool_names": null,
             "allowed_mcp_service_ids": null,
-            "delegate_to": null,
             "backgroundable_tool_names": null,
             "subagent_targets": null
         }"#;
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.delegate_to.is_empty());
         assert!(row.backgroundable_tool_names.is_empty());
         assert!(row.subagent_targets.is_empty());
     }
@@ -1243,7 +1238,6 @@ mod tests {
             "agent_did": "did:test:amy",
             "cli_tool_names": "",
             "allowed_mcp_service_ids": "",
-            "delegate_to": "",
             "backgroundable_tool_names": "",
             "subagent_targets": "",
             "write_tools": ""
@@ -1251,7 +1245,6 @@ mod tests {
         let row: ToolSelectionRow = serde_json::from_str(json).expect("parse");
         assert!(row.cli_tool_names.is_empty());
         assert!(row.allowed_mcp_service_ids.is_empty());
-        assert!(row.delegate_to.is_empty());
         assert!(row.backgroundable_tool_names.is_empty());
         assert!(row.subagent_targets.is_empty());
         assert!(row.write_tools.is_empty());

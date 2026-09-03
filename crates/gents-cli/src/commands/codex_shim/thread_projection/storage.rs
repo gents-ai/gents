@@ -126,19 +126,6 @@ pub(super) async fn load_conversation(
             ) {{
                 title preview_text status created_at updated_at latest_request_id forked_from_session_id
             }}
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_thread_id}" }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }},
-                order: [{{ created_at: DESC }}, {{ request_id: DESC }}],
-                limit: 1
-            ) {{
-                request_id
-                lifecycle_state
-                failure_reason
-            }}
         }}"#
     );
     let response = query_node_json(&state.node, &query).await?;
@@ -150,16 +137,7 @@ pub(super) async fn load_conversation(
         .map(serde_json::from_value)
         .transpose()
         .context("decoding AgentConversation row")?;
-    let fallback_turn = GraphqlTurnState {
-        request: response
-            .pointer("/data/AgentRequest/0")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .context("decoding latest AgentRequest row")?,
-        response: None,
-    };
-    let mut conversation = attach_latest_request(conversation, Some(&fallback_turn));
+    let mut conversation = conversation;
     let request_id = conversation
         .as_ref()
         .map(|row| row.latest_request_id.trim())
@@ -285,30 +263,6 @@ fn absolute_cwd(base_cwd: &Path, cwd: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn pending_request_projects_without_persisting_a_conversation() {
-        let request = serde_json::from_value(json!({
-            "request_id": "request-1",
-            "lifecycle_state": "pending",
-            "failure_reason": ""
-        }))
-        .expect("decode request");
-        let turn = GraphqlTurnState {
-            request: Some(request),
-            response: None,
-        };
-        let conversation = attach_latest_request(None, Some(&turn))
-            .expect("a durable request should provide an adapter projection shell");
-        assert_eq!(conversation.latest_request_id, "request-1");
-        assert_eq!(
-            conversation
-                .latest_request_projection
-                .map(|head| head.request_state),
-            Some(gents_protocol::client_protocol::RequestLifecycleState::Pending)
-        );
-    }
 
     #[test]
     fn metadata_json_cwd_reads_codex_shim_cwd() {

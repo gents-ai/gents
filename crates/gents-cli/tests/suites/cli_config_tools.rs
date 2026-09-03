@@ -27,6 +27,7 @@ async fn tool_selection_upsert_defaults_enabled_modes_and_persists_command_polic
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -208,6 +209,7 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

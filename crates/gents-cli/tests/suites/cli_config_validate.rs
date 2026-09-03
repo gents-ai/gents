@@ -58,6 +58,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
             &dir.join("object.json"),
             &serde_json::json!({
                 "selection_id": tool_selection_id.clone(),
+            "tool_policy_version": "tool-policy/v1",
                 "agent_did": agent_did.clone(),
                 "display_name": "Standard",
                 "enable_file_tools": true,
@@ -82,6 +83,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
             &serde_json::json!({
                 "backend_id": "default-backend",
                 "name": "default-backend",
+                "provider_kind": "OpenAiCompatible",
                 "endpoint": "http://127.0.0.1:8000/v1",
                 "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 2,
@@ -262,6 +264,7 @@ async fn config_validate_reports_command_policy_errors() -> Result<()> {
         &dir.join("object.json"),
         &serde_json::json!({
             "selection_id": "policy-tools",
+            "tool_policy_version": "tool-policy/v1",
             "agent_did": agent_did,
             "display_name": "Policy Tools",
             "enable_file_tools": true,
@@ -370,6 +373,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
             &dir.join("object.json"),
             &serde_json::json!({
                 "selection_id": tool_selection_id.clone(),
+            "tool_policy_version": "tool-policy/v1",
                 "agent_did": agent_did.clone(),
                 "display_name": "Standard",
                 "enable_file_tools": true,
@@ -389,6 +393,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
             &serde_json::json!({
                 "backend_id": "default-backend",
                 "name": "default-backend",
+                "provider_kind": "OpenAiCompatible",
                 "endpoint": "http://127.0.0.1:8000/v1",
                 "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
                 "max_concurrent": 2,
@@ -800,6 +805,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
             .join("object.json"),
         &serde_json::json!({
             "selection_id": tool_selection_id,
+            "tool_policy_version": "tool-policy/v1",
             "agent_did": agent_did,
             "display_name": "Standard",
             "enable_file_tools": true,
@@ -822,6 +828,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
         &serde_json::json!({
             "backend_id": "default-backend",
             "name": "default-backend",
+                "provider_kind": "OpenAiCompatible",
             "endpoint": "http://127.0.0.1:8000/v1",
             "api_key_env_var": "GENTS_TEST_MANIFEST_API_KEY",
             "max_concurrent": 2,

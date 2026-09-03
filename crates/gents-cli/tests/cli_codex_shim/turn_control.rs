@@ -19,6 +19,7 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -29,7 +30,6 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -225,6 +225,7 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -235,7 +236,6 @@ async fn codex_shim_interrupt_completes_with_running_background_tool() -> Result
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -390,6 +390,7 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -400,7 +401,6 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

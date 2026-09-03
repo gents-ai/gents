@@ -27,6 +27,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

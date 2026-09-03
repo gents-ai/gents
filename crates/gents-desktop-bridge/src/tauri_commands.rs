@@ -35,6 +35,6 @@ pub(crate) async fn emit_config_update_and_snapshot<R: Runtime>(
     );
     build_client_snapshot_with_grants(Some(core), Some(&state.policy), snapshot_grants(state))
         .await
-        .map_err(BridgeError::from_legacy_message)
+        .map_err(BridgeError::untyped)
 }
 pub mod workspace;

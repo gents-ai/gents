@@ -249,11 +249,6 @@ Examples:
   gents task run host-check --args '{\"scope\":\"host\"}' --wait
   gents task run durable-task --session-id stable-invocation-key --wait
   gents task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
-const SHOW_AFTER_HELP: &str = "\
-Examples:
-  gents status
-  gents request show REQUEST_ID
-  gents response show REQUEST_ID";
 const TRACE_AFTER_HELP: &str = "\
 Exports one JSON object per persisted AgentToolCall row. The command reads
 AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and
@@ -326,29 +321,13 @@ const CONFIG_EXPORT_AFTER_HELP: &str = "\
 Exports the desired configuration documents for one agent principal as a
 manifest root directory (per-document subdirectories, optional prompt sidecars).
 The output is designed to be committed to version control and applied with
-`config apply --root <dir>`. This is distinct from the legacy JSON bundle
-format that `config import` consumes.
+`config apply --root <dir>`.
 
 Examples:
   gents config export --root ./my-agent
   gents config export --root ./my-agent --force
   gents config export --root ./my-agent --agent-did <AGENT_DID>
   gents config export --root ./my-agent --home /path/to/home --bind-agent-did home";
-const CONFIG_IMPORT_AFTER_HELP: &str = "\
-Imports desired configuration documents from a legacy JSON bundle file.
-
-NOTE: `config import` reads the legacy JSON bundle format and is decoupled from
-`config export --root`. To apply a manifest root produced by `config export`,
-use `config apply --root <dir>` instead.
-
-Default behavior is insert-only and will fail if a document already exists.
-Use --override to switch to upsert mode.
-
-Examples:
-  gents config import agent-config.json
-  cat agent-config.json | gents config import
-  gents config import agent-config.json --override";
-pub(crate) const CONFIG_EXPORT_FORMAT_V1: &str = "gents-config/v1";
 pub(crate) const CONFIG_EXPORT_FORMAT: &str = "gents-config/v2";
 
 pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
@@ -381,7 +360,7 @@ const CONFIG_SCHEMA_COLLECTIONS: &[&str] = &[
 pub(crate) const EXPORT_AGENT_PRINCIPAL_FIELDS: &str =
     "agent_did display_name default_behavior_id enabled created_at created_by";
 pub(crate) const EXPORT_AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary system_prompt request_context_template backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
-pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids delegate_to backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
+pub(crate) const EXPORT_TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name tool_policy_version enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids backgroundable_tool_names approval_required_tools enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_default_await_mode subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
 pub(crate) const EXPORT_DATASTORE_TOOL_SURFACE_FIELDS: &str =
     "surface_id agent_did display_name enabled entries";
 pub(crate) const EXPORT_CHAIN_KEY_BINDING_FIELDS: &str =
@@ -416,11 +395,7 @@ pub fn run_cli() -> Result<()> {
 }
 
 async fn async_main() -> Result<()> {
-    let argv = std::env::args().collect::<Vec<_>>();
-    if let Some(warning) = cli::deprecations::deprecation_warning(&argv) {
-        eprintln!("{warning}");
-    }
-    let cli = Cli::parse_from(argv);
+    let cli = Cli::parse();
     let command = match cli.command {
         Command::NativeFsRunner(args) => {
             return commands::native_fs_runner::native_fs_runner(args);
@@ -449,7 +424,6 @@ async fn async_main() -> Result<()> {
         Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,
-        Command::Show { command } => commands::show::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,
         Command::Status(args) => commands::status::status(args).await,
         Command::Query(args) => commands::query::query(args).await,
@@ -736,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_inference_backend_drops_deprecated_capability_fields() {
+    fn sanitize_inference_backend_does_not_translate_unknown_capability_fields() {
         let input = serde_json::json!({
             "backend_id": "local",
             "name": "Local",
@@ -767,143 +741,58 @@ mod tests {
             "supports_json_schema",
             "context_window",
             "max_output_tokens",
-            "last_probe",
         ] {
-            assert!(!obj.contains_key(field), "{field} should be stripped");
+            assert!(
+                obj.contains_key(field),
+                "{field} must not be silently translated"
+            );
         }
+        assert!(
+            !obj.contains_key("last_probe"),
+            "runtime health is never imported"
+        );
         assert_eq!(obj.get("backend_id").and_then(Value::as_str), Some("local"));
     }
 
     #[test]
-    fn sanitize_tool_selection_drops_retired_orchestration_field() {
-        let input = serde_json::json!({
-            "selection_id": "legacy-tools",
-            "orchestration_enabled": true
-        });
-
-        let out = sanitize_import_document("ToolSelection", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert!(!obj.contains_key("orchestration_enabled"));
-        assert_eq!(
-            obj.get("selection_id").and_then(Value::as_str),
-            Some("legacy-tools")
-        );
-    }
-
-    #[test]
-    fn read_config_import_bundle_migrates_v1_backend_capability_fields() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("config.json");
-        fs::write(
-            &path,
-            serde_json::to_string(&serde_json::json!({
-                "format": CONFIG_EXPORT_FORMAT_V1,
-                "agent_did": "did:test:test",
-                "exported_at": "2026-04-15T00:00:00Z",
-                "access_mode": "local",
-                "agent_principal": null,
-                "agent_behaviors": [],
-                "tool_selections": [],
-                "inference_backends": [{
-                    "backend_id": "local",
-                    "name": "Local",
-                    "provider_kind": "OpenAiCompatible",
-                    "endpoint": "http://127.0.0.1:11434/v1",
-                    "api_key": null,
-                    "api_key_env_var": null,
-                    "max_concurrent": 1,
-                    "max_queue_depth": 100,
-                    "enabled": true,
-                    "supports_tool_calls": true,
-                    "supports_streaming": true,
-                    "supports_structured_outputs": false,
-                    "supports_json_schema": false,
-                    "models": ["test-model"],
-                    "probe_status": "healthy"
-                }],
-                "inference_profiles": [],
-                "tool_service_registries": []
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let bundle = read_config_import_bundle(Some(&path)).unwrap();
-        validate_config_import_bundle(&bundle).unwrap();
-        assert_eq!(bundle.format, CONFIG_EXPORT_FORMAT);
-        let backend = bundle.inference_backends[0].as_object().unwrap();
-        assert!(!backend.contains_key("supports_tool_calls"));
-        assert!(!backend.contains_key("supports_streaming"));
-        assert!(!backend.contains_key("supports_structured_outputs"));
-        assert!(!backend.contains_key("supports_json_schema"));
-    }
-
-    #[test]
-    fn read_config_import_bundle_drops_retired_tool_selection_field() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let path = tempdir.path().join("config.json");
-        fs::write(
-            &path,
-            serde_json::to_string(&serde_json::json!({
-                "format": CONFIG_EXPORT_FORMAT,
-                "agent_did": "did:test:test",
-                "exported_at": "2026-08-21T00:00:00Z",
-                "access_mode": "local",
-                "agent_principal": null,
-                "agent_behaviors": [],
-                "tool_selections": [{
-                    "selection_id": "legacy-tools",
-                    "orchestration_enabled": false
-                }],
-                "inference_backends": [],
-                "inference_profiles": [],
-                "tool_service_registries": []
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let bundle = read_config_import_bundle(Some(&path)).unwrap();
-        let selection = bundle.tool_selections[0].as_object().unwrap();
-        assert!(!selection.contains_key("orchestration_enabled"));
-    }
-
-    #[test]
-    fn sanitize_tool_service_registry_defaults_status_online_when_absent() {
+    fn sanitize_tool_service_registry_does_not_invent_status_when_absent() {
         let input = serde_json::json!({
             "service_id": "observability-mcp",
             "hostname": "studio-1",
             "tailscale_ip": "100.69.4.79",
-            "mcp_port": 9201
+            "mcp_port": 9201,
+            "mcp_path": "/mcp"
         });
         let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
         let obj = out.as_object().unwrap();
-        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("online"));
+        assert!(obj.get("status").is_none());
     }
 
     #[test]
-    fn sanitize_tool_service_registry_fills_status_when_null() {
+    fn sanitize_tool_service_registry_drops_runtime_status_when_null() {
         let input = serde_json::json!({
             "service_id": "observability-mcp",
             "status": null,
             "hostname": "studio-1",
-            "mcp_port": 9201
+            "mcp_port": 9201,
+            "mcp_path": "/mcp"
         });
         let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
         let obj = out.as_object().unwrap();
-        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("online"));
+        assert!(obj.get("status").is_none());
     }
 
     #[test]
-    fn sanitize_tool_service_registry_preserves_explicit_status() {
+    fn sanitize_tool_service_registry_drops_runtime_status_when_explicit() {
         let input = serde_json::json!({
             "service_id": "observability-mcp",
             "status": "offline",
-            "mcp_port": 9201
+            "mcp_port": 9201,
+            "mcp_path": "/mcp"
         });
         let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
         let obj = out.as_object().unwrap();
-        assert_eq!(obj.get("status").and_then(|v| v.as_str()), Some("offline"));
+        assert!(obj.get("status").is_none());
     }
 
     #[test]
@@ -928,15 +817,15 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_tool_service_registry_defaults_mcp_path() {
+    fn sanitize_tool_service_registry_rejects_missing_mcp_path() {
         let input = serde_json::json!({
             "service_id": "observability-mcp",
             "hostname": "studio-1",
             "mcp_port": 9201
         });
-        let out = sanitize_import_document("ToolServiceRegistry", &input, false).unwrap();
-        let obj = out.as_object().unwrap();
-        assert_eq!(obj.get("mcp_path").and_then(|v| v.as_str()), Some("/mcp"));
+        let error = sanitize_import_document("ToolServiceRegistry", &input, false)
+            .expect_err("missing MCP path must fail closed");
+        assert!(error.to_string().contains("mcp_path is required"));
     }
 
     #[test]
@@ -944,6 +833,7 @@ mod tests {
         let input = serde_json::json!({
             "service_id": "observability-mcp",
             "mcp_port": 9201,
+            "mcp_path": "/mcp",
             "tools": [{"name": "x", "description": "y"}],
             "version": "1.2.3",
             "updated_at": "2026-04-14T00:00:00Z"

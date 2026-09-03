@@ -142,7 +142,7 @@ pub async fn desktop_managed_server_start<R: Runtime>(
             managed.last_error = Some(message.clone());
             drop(managed);
             emit_status(&app, &state).await;
-            return Err(BridgeError::from_legacy_message(message));
+            return Err(BridgeError::untyped(message));
         }
     }
 
@@ -206,7 +206,7 @@ pub async fn desktop_managed_server_stop<R: Runtime>(
         server
             .shutdown()
             .await
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
     }
     if disable_auto_start {
         let mut stored = load_preference(&state).await?.unwrap_or_default();
@@ -302,9 +302,9 @@ async fn load_preference(
     match tokio::fs::read(&path).await {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map(Some)
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string())),
+            .map_err(|error| BridgeError::untyped(error.to_string())),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(BridgeError::from_legacy_message(error.to_string())),
+        Err(error) => Err(BridgeError::untyped(error.to_string())),
     }
 }
 
@@ -317,17 +317,17 @@ async fn save_preference(
         .desktop_paths
         .ensure_root_dirs()
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let path = state
         .policy
         .desktop_paths
         .root()
         .join(MANAGED_SERVER_CONFIG);
     let bytes = serde_json::to_vec_pretty(stored)
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     tokio::fs::write(path, bytes)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[cfg(test)]

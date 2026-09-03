@@ -68,40 +68,6 @@ fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn has_legacy_materialized_user_owner(
-    messages: &[MessageView],
-    request: &AgentRequestRow,
-    content: &str,
-) -> bool {
-    let Some(request_created_at) = request
-        .created_at
-        .as_deref()
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-    else {
-        return false;
-    };
-
-    messages.iter().any(|message| {
-        let role = message
-            .display_role
-            .as_deref()
-            .or(message.role.as_deref())
-            .unwrap_or_default();
-        let message_content = normalize_optional(message.display_content.as_deref())
-            .or_else(|| normalize_optional(message.content.as_deref()));
-        let timestamp = message
-            .timestamp
-            .as_deref()
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok());
-
-        normalize_optional(message.request_id.as_deref()).is_none()
-            && role.eq_ignore_ascii_case("user")
-            && !message.runtime_control
-            && message_content.as_deref() == Some(content)
-            && timestamp.is_some_and(|timestamp| timestamp >= request_created_at)
-    })
-}
-
 pub(super) fn build_pending_turn(
     store: &ClientStore,
     transcript_store: &ClientStore,
@@ -170,8 +136,7 @@ pub(super) fn build_pending_turn(
         .collect::<Vec<_>>();
 
     let exact_owner = has_materialized_user_owner(&messages, request_id);
-    let legacy_owner = has_legacy_materialized_user_owner(&messages, request, &content);
-    if exact_owner || legacy_owner {
+    if exact_owner {
         return None;
     }
 

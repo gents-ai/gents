@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import type {
@@ -196,7 +196,6 @@ export function ToolSelectionConfigEditor({
   const [goalCreationMode, setGoalCreationMode] =
     useState<NullableBooleanMode>("inherit");
   const [allowedMcpServiceIds, setAllowedMcpServiceIds] = useState("");
-  const [delegateTo, setDelegateTo] = useState("");
   const [backgroundableToolNames, setBackgroundableToolNames] = useState("");
   const [subagentTargets, setSubagentTargets] = useState("");
   const [subagentSpawnEnabled, setSubagentSpawnEnabled] = useState(false);
@@ -212,21 +211,10 @@ export function ToolSelectionConfigEditor({
     crossDeploymentSpawnTimeoutSeconds,
     { min: 1 },
   );
-  const toolServiceIdKey = useMemo(
-    () =>
-      toolServiceRegistries
-        .map((service) => service.serviceId)
-        .sort()
-        .join("\n"),
-    [toolServiceRegistries],
-  );
-  const hydrationToolServiceIdKey = useRef(toolServiceIdKey);
-
   const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
-    hydrationToolServiceIdKey.current = toolServiceIdKey;
-    const b = toolSelectionFormValues(toolSelection, toolServiceIdKey);
+    const b = toolSelectionFormValues(toolSelection);
     setSelectionId(b.selectionId);
     setDisplayName(b.displayName);
     setEnableFileTools(b.enableFileTools);
@@ -243,7 +231,6 @@ export function ToolSelectionConfigEditor({
     setGoalToolsMode(b.goalToolsMode);
     setGoalCreationMode(b.goalCreationMode);
     setAllowedMcpServiceIds(b.allowedMcpServiceIds);
-    setDelegateTo(b.delegateTo);
     setBackgroundableToolNames(b.backgroundableToolNames);
     setSubagentTargets(b.subagentTargets);
     setSubagentSpawnEnabled(b.subagentSpawnEnabled);
@@ -300,7 +287,6 @@ export function ToolSelectionConfigEditor({
         enableGoalCreation: nullableBooleanValue(goalCreationMode),
         allowedMcpServiceIds: linesToArray(allowedMcpServiceIds),
         requiredMcpServiceIds: toolSelection?.requiredMcpServiceIds ?? [],
-        delegateTo: linesToArray(delegateTo),
         backgroundableToolNames: linesToArray(backgroundableToolNames),
         subagentTargets: linesToArray(subagentTargets),
         subagentSpawnEnabled,
@@ -338,7 +324,6 @@ export function ToolSelectionConfigEditor({
             goalToolsMode,
             goalCreationMode,
             allowedMcpServiceIds,
-            delegateTo,
             backgroundableToolNames,
             subagentTargets,
             subagentSpawnEnabled,
@@ -347,7 +332,7 @@ export function ToolSelectionConfigEditor({
             crossDeploymentSpawnTimeoutSeconds,
             defraQueryCollections,
           },
-          toolSelectionFormValues(toolSelection, hydrationToolServiceIdKey.current),
+          toolSelectionFormValues(toolSelection),
         )}
         eyebrow="Tool Selection"
         saved={savedStatus === `tool:${selectionId.trim()}`}
@@ -370,7 +355,7 @@ export function ToolSelectionConfigEditor({
         <div>
           <dt>Policy version</dt>
           <dd className="mono" data-testid="tool-policy-version">
-            {toolSelection?.toolPolicyVersion ?? "legacy (unversioned)"}
+            {toolSelection?.toolPolicyVersion ?? "missing (runtime rejects)"}
           </dd>
         </div>
         <div>
@@ -614,15 +599,6 @@ export function ToolSelectionConfigEditor({
         </div>
       </div>
       <label className="field">
-        <span>Delegate agent DIDs</span>
-        <textarea
-          className="config-small-textarea"
-          data-testid="tool-delegate-to"
-          onChange={(event) => setDelegateTo(event.currentTarget.value)}
-          value={delegateTo}
-        />
-      </label>
-      <label className="field">
         <span>Backgroundable tool names</span>
         <textarea
           className="config-small-textarea"
@@ -811,17 +787,8 @@ function displayToolCeiling(value: ReturnType<typeof normalizeToolCeiling>) {
   }
 }
 
-function toolSelectionFormValues(
-  toolSelection: ToolSelectionView | null,
-  toolServiceIdKey: string,
-) {
-  const knownServiceIds = new Set(toolServiceIdKey.split("\n").filter(Boolean));
+function toolSelectionFormValues(toolSelection: ToolSelectionView | null) {
   const existingAllowedServiceIds = toolSelection?.allowedMcpServiceIds ?? [];
-  const existingDelegateTo = toolSelection?.delegateTo ?? [];
-  const legacyServiceDelegates =
-    existingAllowedServiceIds.length === 0
-      ? existingDelegateTo.filter((value) => knownServiceIds.has(value))
-      : [];
   return {
     selectionId: toolSelection?.selectionId ?? "",
     displayName: toolSelection?.displayName ?? toolSelection?.selectionId ?? "",
@@ -847,13 +814,7 @@ function toolSelectionFormValues(
     enableMetaTools: toolSelection?.enableMetaTools ?? false,
     goalToolsMode: nullableBooleanMode(toolSelection?.enableGoalTools),
     goalCreationMode: nullableBooleanMode(toolSelection?.enableGoalCreation),
-    allowedMcpServiceIds: (existingAllowedServiceIds.length > 0
-      ? existingAllowedServiceIds
-      : legacyServiceDelegates
-    ).join("\n"),
-    delegateTo: existingDelegateTo
-      .filter((value) => !knownServiceIds.has(value))
-      .join("\n"),
+    allowedMcpServiceIds: existingAllowedServiceIds.join("\n"),
     backgroundableToolNames: (toolSelection?.backgroundableToolNames ?? []).join("\n"),
     subagentTargets: (toolSelection?.subagentTargets ?? []).join("\n"),
     subagentSpawnEnabled: toolSelection?.subagentSpawnEnabled ?? false,

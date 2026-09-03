@@ -36,6 +36,7 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -600,6 +601,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -641,7 +643,6 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         "command_forbidden_argv_prefixes",
         "cli_tool_names",
         "allowed_mcp_service_ids",
-        "delegate_to",
         "backgroundable_tool_names",
         "subagent_targets",
         "defra_query_collections",
@@ -703,7 +704,6 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
                     read_only_command_allowlist
                     cli_tool_names
                     allowed_mcp_service_ids
-                    delegate_to
                     backgroundable_tool_names
                     subagent_targets
                     subagent_spawn_enabled
@@ -728,7 +728,6 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         "command_forbidden_argv_prefixes",
         "cli_tool_names",
         "allowed_mcp_service_ids",
-        "delegate_to",
         "backgroundable_tool_names",
         "subagent_targets",
         "defra_query_collections",
@@ -793,6 +792,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1170,6 +1170,7 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1330,6 +1331,7 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

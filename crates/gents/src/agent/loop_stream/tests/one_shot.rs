@@ -3,7 +3,6 @@ async fn run_loop_to_text_persists_assistant_reply() {
     // Regression: one-shot (run_loop_to_text) must persist the assistant reply,
     // not just the user prompt.
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("the answer".to_string()),
         RawStreamingChoice::FinalResponse(()),
@@ -40,7 +39,6 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
     // the tool-result message must be persisted (tool-result persistence gates on
     // the assistant turn being persisted first).
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
         vec![
@@ -90,7 +88,6 @@ async fn run_loop_to_text_retract_persists_only_the_resample() {
     // the transcript that feeds future history and training capture, even though
     // the returned string is correct. This fences that exact regression.
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::TurnWithMidStreamError(
             vec![RawStreamingChoice::Message("Based on".to_string())],

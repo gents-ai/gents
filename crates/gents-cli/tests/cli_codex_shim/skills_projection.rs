@@ -18,6 +18,7 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -29,7 +30,6 @@ async fn codex_shim_lists_and_toggles_skills() -> Result<()> {
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -243,6 +243,7 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -254,7 +255,6 @@ async fn codex_shim_explicit_skill_selection_injects_body_into_turn() -> Result<
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -391,6 +391,7 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -402,7 +403,6 @@ async fn codex_shim_explicit_selection_respects_effective_set() -> Result<()> {
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

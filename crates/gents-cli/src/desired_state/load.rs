@@ -57,12 +57,11 @@ pub(crate) fn load_manifest_root(
     let event_triggers: Vec<DesiredEventTrigger> =
         load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
     let callback_bindings: Vec<DesiredCallbackBinding> =
-        load_per_doc_dir(root, CALLBACK_BINDINGS_DIR, "binding_id", None, &mut errors);
+        load_per_doc_dir(root, CALLBACK_BINDINGS_DIR, "binding_id", &mut errors);
     let repository_placements: Vec<DesiredRepositoryPlacement> = load_per_doc_dir(
         root,
         REPOSITORY_PLACEMENTS_DIR,
         "repository_id",
-        None,
         &mut errors,
     );
 
@@ -233,20 +232,13 @@ where
     let dir_name = collection
         .dir_name()
         .expect("load_per_doc_collection called with a non-directory collection");
-    load_per_doc_dir(
-        root,
-        dir_name,
-        collection.unique_field(),
-        Some(collection),
-        errors,
-    )
+    load_per_doc_dir(root, dir_name, collection.unique_field(), errors)
 }
 
 pub(crate) fn load_per_doc_dir<T>(
     root: &Path,
     dir_name: &str,
     unique_field: &str,
-    collection: Option<Collection>,
     errors: &mut Vec<String>,
 ) -> Vec<T>
 where
@@ -317,21 +309,13 @@ where
         let Some(bytes) = read_document_json(&object_path, errors) else {
             continue;
         };
-        let parsed: T =
-            match serde_json::from_slice::<serde_json::Value>(&bytes).and_then(|mut value| {
-                if collection == Some(Collection::ToolSelection) {
-                    if let Some(object) = value.as_object_mut() {
-                        super::strip_retired_tool_selection_fields(object);
-                    }
-                }
-                serde_json::from_value(value)
-            }) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    errors.push(format!("invalid {}: {error}", object_path.display()));
-                    continue;
-                }
-            };
+        let parsed: T = match serde_json::from_slice(&bytes) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                errors.push(format!("invalid {}: {error}", object_path.display()));
+                continue;
+            }
+        };
 
         if let Some(prior) = id_to_handle.get(parsed.unique_id()) {
             errors.push(format!(

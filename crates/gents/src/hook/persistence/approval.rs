@@ -38,20 +38,13 @@ enum ApprovalDecision {
     Denied { reason: Option<String> },
 }
 
-struct ApprovalPoll {
-    decision: Option<ApprovalDecision>,
-    ignored_legacy_unbound: bool,
-}
-
 async fn first_approval_decision(
     node: &defra_node::EmbeddedNode,
     agent_did: &str,
     tool_call_doc_id: &str,
     tool_call_id: &str,
-) -> anyhow::Result<ApprovalPoll> {
-    // Physical tool-call identity is the authorization boundary. A legacy
-    // logical-only approval must not authorize a different document that
-    // happens to reuse the same tool_call_id.
+) -> anyhow::Result<Option<ApprovalDecision>> {
+    // Physical tool-call identity is the authorization boundary.
     let escaped_tool_call_id = escape_graphql_string(tool_call_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
@@ -85,13 +78,6 @@ async fn first_approval_decision(
         .context("decode AgentToolApproval rows")?
         .unwrap_or_default();
 
-    let saw_legacy_unbound = rows.iter().any(|row| {
-        row.tool_call_doc_id
-            .as_deref()
-            .map(str::trim)
-            .map(str::is_empty)
-            .unwrap_or(true)
-    });
     for row in rows {
         if row.tool_call_doc_id.as_deref().map(str::trim) != Some(tool_call_doc_id) {
             continue;
@@ -103,10 +89,7 @@ async fn first_approval_decision(
                     approver_did = row.approver_did.as_deref().unwrap_or(""),
                     "tool call approved"
                 );
-                return Ok(ApprovalPoll {
-                    decision: Some(ApprovalDecision::Approved),
-                    ignored_legacy_unbound: saw_legacy_unbound,
-                });
+                return Ok(Some(ApprovalDecision::Approved));
             }
             Some("denied") => {
                 tracing::info!(
@@ -114,10 +97,7 @@ async fn first_approval_decision(
                     approver_did = row.approver_did.as_deref().unwrap_or(""),
                     "tool call denied"
                 );
-                return Ok(ApprovalPoll {
-                    decision: Some(ApprovalDecision::Denied { reason: row.reason }),
-                    ignored_legacy_unbound: saw_legacy_unbound,
-                });
+                return Ok(Some(ApprovalDecision::Denied { reason: row.reason }));
             }
             other => {
                 tracing::warn!(
@@ -128,10 +108,7 @@ async fn first_approval_decision(
             }
         }
     }
-    Ok(ApprovalPoll {
-        decision: None,
-        ignored_legacy_unbound: saw_legacy_unbound,
-    })
+    Ok(None)
 }
 
 impl DefraSessionHook {
@@ -140,7 +117,6 @@ impl DefraSessionHook {
         tool_name: &str,
         internal_call_id: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let mut warned_legacy_unbound = false;
         loop {
             let observed = {
                 let map = self.in_flight_lifecycles.lock().await;
@@ -205,22 +181,14 @@ impl DefraSessionHook {
                 )));
             }
 
-            let poll = first_approval_decision(
+            let decision = first_approval_decision(
                 &self.node,
                 &self.agent_did,
                 &tool_call_doc_id,
                 internal_call_id,
             )
             .await?;
-            if poll.ignored_legacy_unbound && !warned_legacy_unbound {
-                warned_legacy_unbound = true;
-                tracing::warn!(
-                    tool_call_id = internal_call_id,
-                    expected_tool_call_doc_id = %tool_call_doc_id,
-                    "ignoring legacy AgentToolApproval without physical tool-call provenance",
-                );
-            }
-            match poll.decision {
+            match decision {
                 Some(ApprovalDecision::Approved) => {
                     let approved = {
                         let mut map = self.in_flight_lifecycles.lock().await;
@@ -270,16 +238,16 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn legacy_logical_only_approval_cannot_authorize_a_physical_tool_call() {
+    async fn unbound_approval_cannot_authorize_a_physical_tool_call() {
         let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-        crate::ensure_schemas(&node).await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         let mutation = r#"mutation {
-            legacy: create_AgentToolApproval(input: {
-                approval_id: "approval-legacy",
+            unbound: create_AgentToolApproval(input: {
+                approval_id: "approval-unbound",
                 tool_call_id: "call-shared",
                 agent_did: "did:test:agent",
                 decision: "approved",
-                approver_did: "did:test:legacy-operator",
+                approver_did: "did:test:unbound-operator",
                 created_at: "2026-08-10T00:00:00Z"
             }) { _docID }
             exact: create_AgentToolApproval(input: {
@@ -299,17 +267,15 @@ mod tests {
             response.errors
         );
 
-        let legacy_poll =
+        let unbound_decision =
             first_approval_decision(&node, "did:test:agent", "different-tool-doc", "call-shared")
                 .await
                 .unwrap();
-        assert!(legacy_poll.decision.is_none());
-        assert!(legacy_poll.ignored_legacy_unbound);
+        assert!(unbound_decision.is_none());
         assert!(matches!(
             first_approval_decision(&node, "did:test:agent", "tool-doc-exact", "call-shared",)
                 .await
-                .unwrap()
-                .decision,
+                .unwrap(),
             Some(ApprovalDecision::Denied { .. })
         ));
         node.shutdown().await;

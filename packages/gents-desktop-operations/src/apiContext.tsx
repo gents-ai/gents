@@ -1,9 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 
-import {
-  getDesktopApiAdapter,
-  type DesktopApiAdapter,
-} from "@source-inc/gents-desktop-client";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 const OperationsApiContext = createContext<DesktopApiAdapter | null>(null);
 
@@ -27,5 +24,9 @@ export function useOperationsApi(
   explicit?: DesktopApiAdapter,
 ): DesktopApiAdapter {
   const context = useContext(OperationsApiContext);
-  return explicit ?? context ?? getDesktopApiAdapter();
+  const api = explicit ?? context;
+  if (!api) {
+    throw new Error("Operations API owner is required");
+  }
+  return api;
 }

@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
+  DesktopApiAdapter,
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
@@ -45,12 +46,10 @@ const deployment = {
   source: "local",
   graphql: null,
   dialSucceeded: true,
-  pairingReady: true,
   pairing: [],
   chatSafe: true,
   routes: [],
   lastError: null,
-  defaultBehaviorId: "default",
   agentPrincipal: { agentDid: "did:test:agent", displayName: "Local" },
   runtime: null,
   behaviors: [
@@ -69,12 +68,22 @@ const deployment = {
   mailboxItems: [],
 } as unknown as DeploymentView;
 
+const api = {
+  previewInterruptCascade: vi.fn(async () => ({
+    rootRequestId: "",
+    requests: [],
+    total: 0,
+  })),
+  interruptRequest: vi.fn(async () => undefined),
+} as unknown as DesktopApiAdapter;
+
 function workspace(
   session: DesktopSessionSnapshot | null,
   selectedSessionId = "session-1",
 ) {
   return (
     <ActiveChatWorkspace
+      api={api}
       activeRequestId={null}
       approxSerializedBytes={0}
       canSend

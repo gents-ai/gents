@@ -21,8 +21,6 @@ pub struct PeerRecord {
     pub addr: String,
     pub agent_did: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default_behavior_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pairing_network_id: Option<String>,
@@ -102,7 +100,6 @@ impl PeerRecord {
             label: label.into(),
             addr: addr.into(),
             agent_did: agent_did.into(),
-            default_behavior_id: None,
             source: None,
             pairing_network_id: None,
             pairing_template: None,
@@ -295,7 +292,7 @@ impl PeerDirectory {
         }) {
             anyhow::bail!(
                 "authenticated enrollment conflicts with {}-owned peer {}",
-                conflict.source.as_deref().unwrap_or("legacy"),
+                conflict.source.as_deref().unwrap_or("unscoped"),
                 conflict.peer_id
             );
         }
@@ -313,7 +310,6 @@ impl PeerDirectory {
             label: label.to_string(),
             addr: addr.to_string(),
             agent_did: agent_did.to_string(),
-            default_behavior_id: None,
             source: Some("enrollment".to_string()),
             pairing_network_id: Some(network_id.to_string()),
             pairing_template: Some("client".to_string()),
@@ -344,7 +340,7 @@ impl PeerDirectory {
         record.peer_id = peer_id.to_string();
         // The enrollment label seeds a new record only. Once saved, the label is
         // user-owned presentation state and must survive authority refreshes.
-        // Reapplying the enrollment fallback here made every successful status
+        // Reapplying the enrollment label here made every successful status
         // sweep undo a manual rename.
         record.addr = addr.to_string();
         record.agent_did = agent_did.to_string();
@@ -643,10 +639,10 @@ mod tests {
 
     #[test]
     fn source_less_peer_is_not_an_immediate_chat_authority() {
-        let legacy = PeerRecord::new("Legacy bridge", "iroh://legacy", "did:test:legacy");
-        assert!(!legacy.is_chat_ready_at(Utc::now()));
+        let unscoped = PeerRecord::new("Unscoped bridge", "iroh://unscoped", "did:test:unscoped");
+        assert!(!unscoped.is_chat_ready_at(Utc::now()));
         assert!(validate_fresh_directory(&StoredPeerDirectory {
-            peers: vec![legacy],
+            peers: vec![unscoped],
             pending_removals: Vec::new(),
         })
         .is_err());

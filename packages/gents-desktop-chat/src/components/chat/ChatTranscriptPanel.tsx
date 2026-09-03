@@ -52,7 +52,6 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.tools.map((tool) => [
               tool.itemKey,
               tool.statusKind,
-              tool.status ?? "",
               tool.presentation,
               tool.partialOutputSeq ?? 0,
               tool.partialOutputTail?.length ?? 0,

@@ -145,8 +145,7 @@ impl DefraSessionHook {
                 ));
             }
         };
-        let response =
-            handle_list_subagents(&self.node, &request_id, &self.agent_did, parsed).await?;
+        let response = handle_list_subagents(&self.node, &request_id, parsed).await?;
         let result = serde_json::to_value(response)
             .map_err(|error| anyhow::anyhow!("serialize list_subagents response: {error}"))?;
         Ok(self.skip_tool_result(LIST_SUBAGENTS_TOOL_NAME, json_string(result)))

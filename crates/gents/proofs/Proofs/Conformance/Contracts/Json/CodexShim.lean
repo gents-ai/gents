@@ -473,7 +473,6 @@ structure CodexShimSubagentThreadShapeCase where
   leanTheorems : List String
   parentThreadId : String
   nativeSourceParent : Option String
-  legacyTopLevelParent : Option String
   replayStages : List String
 
 def codexShimSubagentThreadShapeCaseJson
@@ -484,8 +483,6 @@ def codexShimSubagentThreadShapeCaseJson
     ++ "\"parent_thread_id\":" ++ jsonString witness.parentThreadId ++ ","
     ++ "\"native_source_parent\":"
       ++ jsonOptionalString witness.nativeSourceParent ++ ","
-    ++ "\"legacy_top_level_parent\":"
-      ++ jsonOptionalString witness.legacyTopLevelParent ++ ","
     ++ "\"replay_stages\":" ++ jsonStringArray witness.replayStages
     ++ "}"
 
@@ -493,12 +490,10 @@ def codexShimSubagentThreadShapeCases : List CodexShimSubagentThreadShapeCase :=
   [ { witness := "codex_shim.subagent_thread.native_shape"
     , leanTheorems :=
         [ "CodexShim.subagent_parent_uses_native_source"
-        , "CodexShim.subagent_parent_omits_legacy_top_level"
         , "CodexShim.completed_compaction_replay_matches_runtime_order"
         ]
     , parentThreadId := "parent-thread"
     , nativeSourceParent := some "parent-thread"
-    , legacyTopLevelParent := none
     , replayStages := ["user", "compaction", "modelItems"]
     }
   ]

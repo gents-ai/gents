@@ -2,4 +2,4 @@
 import type { BehaviorReadinessSourceView } from "./BehaviorReadinessSourceView.js";
 import type { BehaviorReadinessStatusView } from "./BehaviorReadinessStatusView.js";
 
-export type BehaviorReadinessView = { source: BehaviorReadinessSourceView, activeGeneration: number | null, routerGeneration: number | null, defaultBehaviorId: string | null, updatedAt: string | null, behaviors: Array<BehaviorReadinessStatusView>, };
+export type BehaviorReadinessView = { source: BehaviorReadinessSourceView, activeGeneration: number | null, routerGeneration: number | null, updatedAt: string | null, behaviors: Array<BehaviorReadinessStatusView>, };

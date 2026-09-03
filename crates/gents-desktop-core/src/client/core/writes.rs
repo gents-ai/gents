@@ -90,21 +90,11 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
     }
 }
 
-fn behavior_id_for_write(
-    requested_behavior_id: Option<&str>,
-    peer_record: Option<&PeerRecord>,
-) -> Option<String> {
+fn behavior_id_for_write(requested_behavior_id: Option<&str>) -> Option<String> {
     requested_behavior_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned)
-        .or_else(|| {
-            peer_record
-                .and_then(|record| record.default_behavior_id.as_deref())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-        })
 }
 
 fn ensure_peer_chat_ready_at(
@@ -219,7 +209,7 @@ impl ClientCore {
         let (signer, admission, requester_did) = self
             .request_authority(agent_did, peer_record.as_ref())
             .await?;
-        let behavior_id = behavior_id_for_write(behavior_id, peer_record.as_ref());
+        let behavior_id = behavior_id_for_write(behavior_id);
         match mutations::submit_request(
             self.node.as_ref(),
             snapshot.as_ref(),
@@ -2240,10 +2230,9 @@ mod delete_source_tests {
         .expect("tool selection row")
     }
 
-    fn peer_record(source: Option<&str>, default_behavior_id: Option<&str>) -> PeerRecord {
+    fn peer_record(source: Option<&str>) -> PeerRecord {
         let mut record = PeerRecord::new("Amy", "endpoint-amy", "did:key:amy");
         record.source = source.map(str::to_owned);
-        record.default_behavior_id = default_behavior_id.map(str::to_owned);
         if source == Some("enrollment") {
             record.pairing_network_id = Some("network-a".into());
             record.enrollment_request_digest = Some("digest-a".into());
@@ -2254,24 +2243,21 @@ mod delete_source_tests {
     }
 
     #[test]
-    fn enrolled_peer_default_is_used_when_caller_omits_behavior() {
-        let mut peer = peer_record(Some("enrollment"), Some("default"));
+    fn only_the_requested_behavior_is_forwarded_to_the_db_binding() {
+        let mut peer = peer_record(Some("enrollment"));
         peer.pairing_ready = true;
 
         ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
+        assert_eq!(behavior_id_for_write(None), None);
         assert_eq!(
-            behavior_id_for_write(None, Some(&peer)).as_deref(),
-            Some("default")
-        );
-        assert_eq!(
-            behavior_id_for_write(Some(" review "), Some(&peer)).as_deref(),
+            behavior_id_for_write(Some(" review ")).as_deref(),
             Some("review")
         );
     }
 
     #[tokio::test(start_paused = true)]
     async fn expired_enrollment_cannot_admit_a_request_without_waiting_for_the_sweep() {
-        let mut peer = peer_record(Some("enrollment"), Some("default"));
+        let mut peer = peer_record(Some("enrollment"));
         peer.pairing_ready = true;
         peer.enrollment_authorization_expires_at = Some("2026-08-30T12:00:01Z".into());
         let before = "2026-08-30T12:00:00Z".parse::<DateTime<Utc>>().unwrap();
@@ -2287,7 +2273,7 @@ mod delete_source_tests {
 
     #[test]
     fn machine_pairing_never_claims_an_unlisted_child_agent() {
-        let mut machine = peer_record(Some("enrollment"), Some("default"));
+        let mut machine = peer_record(Some("enrollment"));
         machine.pairing_template = Some("machine".to_string());
         machine.pairing_ready = true;
         assert!(peer_record_owning_agent_at(&[machine], "did:key:child", Utc::now()).is_none());
@@ -2295,7 +2281,7 @@ mod delete_source_tests {
 
     #[test]
     fn pending_enrollment_peer_rejects_chat_writes() {
-        let peer = peer_record(Some("enrollment"), Some("default"));
+        let peer = peer_record(Some("enrollment"));
 
         assert!(
             ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now())
@@ -2307,7 +2293,7 @@ mod delete_source_tests {
 
     #[test]
     fn malformed_source_and_missing_owner_reject_chat_writes() {
-        let peer = peer_record(None, Some("default"));
+        let peer = peer_record(None);
         assert!(ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).is_err());
         assert!(
             ensure_peer_chat_ready_at("did:key:missing", None, Utc::now())
@@ -2319,7 +2305,7 @@ mod delete_source_tests {
 
     #[test]
     fn local_standard_is_explicitly_exempt_from_route_readiness() {
-        let peer = peer_record(Some("local-standard"), Some("default"));
+        let peer = peer_record(Some("local-standard"));
         ensure_peer_chat_ready_at(&peer.agent_did, Some(&peer), Utc::now()).unwrap();
     }
 

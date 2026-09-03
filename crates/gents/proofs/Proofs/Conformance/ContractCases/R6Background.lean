@@ -245,21 +245,21 @@ def r6WakeFailureBoundaryCase
     (some SessionQueue.QueueSource.backgroundCompletion.toDefraDB)
     (some "background_completion:900")
 
-def r6LegacyQueueAliasCase : R6BackgroundingCase :=
-  let legacy := "subagent_completion"
-  let parsed := SessionQueue.QueueSource.fromDefraDB? legacy
+def r6NoncanonicalQueueSourceCase : R6BackgroundingCase :=
+  let noncanonical := "subagent_completion"
+  let parsed := SessionQueue.QueueSource.fromDefraDB? noncanonical
   r6Case
-    "legacy_subagent_completion_source_aliases_canonical_key"
+    "noncanonical_subagent_completion_source_is_rejected"
     "queue_source"
-    "parse_legacy_subagent_completion"
-    parsed.isSome
+    "reject_noncanonical_subagent_completion"
+    parsed.isNone
     1
     "completed"
     (some "done")
     none
     none
-    (some legacy)
-    (parsed.map fun source => source.toDefraDB ++ ":900")
+    (some noncanonical)
+    none
 
 def processScope
     (requestId sessionId agentDid : String)
@@ -357,7 +357,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6WakeFailureBoundaryCase
       "acknowledgement_projection_restart_is_atomic"
       .duringAcknowledgement
-  , r6LegacyQueueAliasCase
+  , r6NoncanonicalQueueSourceCase
   , r6ProcessControlCase
       "list_processes_same_requester_next_turn_authorized"
       "list_processes" "same_requester_next_turn"
@@ -379,8 +379,8 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (processScope "request-2" "session-1" "did:agent" (some "did:requester"))
       (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
   , r6ProcessControlCase
-      "originating_request_authorizes_legacy_row_without_requester"
-      "read_process" "originating_request_legacy_row"
+      "originating_request_without_matching_requester_is_denied"
+      "read_process" "originating_request_missing_requester"
       (processScope "request-1" "session-1" "did:agent" (some "did:requester"))
       (processScope "request-1" "session-1" "did:agent" none)
   , r6ProcessControlCase
@@ -482,9 +482,9 @@ theorem r6BackgroundingCases_pinned :
       , ("acknowledgement_projection_restart_is_atomic", true,
           "background", none, "completed", some "background_completion",
           some "background_completion:900")
-      , ("legacy_subagent_completion_source_aliases_canonical_key", true,
+      , ("noncanonical_subagent_completion_source_is_rejected", true,
           "background", none, "completed", some "subagent_completion",
-          some "background_completion:900")
+          none)
       , ("list_processes_same_requester_next_turn_authorized", true,
           "background", none, "running", none, none)
       , ("read_process_same_requester_next_turn_authorized", true,
@@ -493,7 +493,7 @@ theorem r6BackgroundingCases_pinned :
           "background", none, "running", none, none)
       , ("cancel_process_same_requester_next_turn_authorized", true,
           "background", none, "running", none, none)
-      , ("originating_request_authorizes_legacy_row_without_requester", true,
+      , ("originating_request_without_matching_requester_is_denied", false,
           "background", none, "running", none, none)
       , ("absent_requester_next_turn_authorized", true,
           "background", none, "running", none, none)

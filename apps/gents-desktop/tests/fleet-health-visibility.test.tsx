@@ -61,7 +61,6 @@ describe("fleet health visibility", () => {
       ...deployment,
       source: "enrollment",
       dialSucceeded: true,
-      pairingReady: true,
       lastError: null,
       behaviorReadiness: {
         ...deployment.behaviorReadiness,

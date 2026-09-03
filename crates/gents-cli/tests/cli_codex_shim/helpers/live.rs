@@ -67,7 +67,7 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
         init_args.push("GENTS_CLI_E2E_API_KEY");
     }
     if write_tools {
-        init_args.push("--write-tools");
+        init_args.push("--write");
     }
     if let Some(tool_root) = &tool_root_string {
         init_args.push("--tool-root");
@@ -88,7 +88,6 @@ pub(super) async fn start_live_codex_shim_with_write_tools(
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

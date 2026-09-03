@@ -29,7 +29,10 @@ pub(crate) fn tool_service_registry_from_live_value(
         tailscale_ip: optional_string_from_value("tailscale_ip", object.get("tailscale_ip"))?,
         lan_ip: optional_string_from_value("lan_ip", object.get("lan_ip"))?,
         mcp_port: optional_i64_from_value("mcp_port", object.get("mcp_port"))?,
-        mcp_path: optional_string_from_value("mcp_path", object.get("mcp_path"))?,
+        mcp_path: normalize_tool_service_mcp_path(
+            optional_string_from_value("mcp_path", object.get("mcp_path"))?
+                .ok_or_else(|| anyhow!("ToolServiceRegistry live row is missing mcp_path"))?,
+        )?,
         send_agent_did: object
             .get("send_agent_did")
             .and_then(Value::as_bool)
@@ -46,10 +49,10 @@ pub(crate) fn normalize_tool_service_registry_storage_fields(
         object.insert((*field).to_string(), Value::String(normalized));
     }
 
-    let mcp_path = normalize_tool_service_mcp_path(optional_string_from_value(
-        "mcp_path",
-        object.get("mcp_path"),
-    )?);
+    let mcp_path = normalize_tool_service_mcp_path(
+        optional_string_from_value("mcp_path", object.get("mcp_path"))?
+            .ok_or_else(|| anyhow!("ToolServiceRegistry field mcp_path is required"))?,
+    )?;
     object.insert("mcp_path".to_string(), Value::String(mcp_path));
 
     Ok(())
@@ -125,7 +128,7 @@ pub(crate) fn manifest_from_export_bundle(
             .datastore_tool_surfaces
             .iter()
             .map(|value| {
-                desired_from_value(
+                desired_from_storage_value(
                     value,
                     &[
                         "surface_id",
@@ -134,6 +137,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "enabled",
                         "entries",
                     ],
+                    &["entries"],
                 )
             })
             .collect::<Result<Vec<_>>>()?,
@@ -179,7 +183,7 @@ pub(crate) fn manifest_from_export_bundle(
             .tool_selections
             .iter()
             .map(|value| {
-                desired_from_value(
+                desired_from_storage_value(
                     value,
                     &[
                         "selection_id",
@@ -202,7 +206,6 @@ pub(crate) fn manifest_from_export_bundle(
                         "enable_goal_creation",
                         "allowed_mcp_service_ids",
                         "required_mcp_service_ids",
-                        "delegate_to",
                         "backgroundable_tool_names",
                         "enable_memory",
                         "enable_session_history_tool",
@@ -226,6 +229,7 @@ pub(crate) fn manifest_from_export_bundle(
                         "enable_lsp",
                         "lsp_config",
                     ],
+                    &["write_tools"],
                 )
             })
             .collect::<Result<Vec<_>>>()?,
@@ -468,6 +472,53 @@ pub(crate) fn desired_from_value<T>(value: &Value, allowed_fields: &[&str]) -> R
 where
     T: for<'de> Deserialize<'de>,
 {
+    Ok(serde_json::from_value(project_desired_value(
+        value,
+        allowed_fields,
+    )?)?)
+}
+
+fn desired_from_storage_value<T>(
+    value: &Value,
+    allowed_fields: &[&str],
+    encoded_object_list_fields: &[&str],
+) -> Result<T>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut projected = project_desired_value(value, allowed_fields)?;
+    let object = projected
+        .as_object_mut()
+        .expect("project_desired_value always returns an object");
+    for field in encoded_object_list_fields {
+        let Some(encoded) = object.get_mut(*field) else {
+            continue;
+        };
+        let items = encoded.as_array().ok_or_else(|| {
+            anyhow!("live desired-state field {field} must be a list of JSON strings")
+        })?;
+        let decoded = items
+            .iter()
+            .map(|item| {
+                let raw = item.as_str().ok_or_else(|| {
+                    anyhow!("live desired-state field {field} must contain only JSON strings")
+                })?;
+                let value: Value = serde_json::from_str(raw)
+                    .map_err(|error| anyhow!("invalid {field} storage JSON: {error}"))?;
+                if !value.is_object() {
+                    return Err(anyhow!(
+                        "live desired-state field {field} must encode objects"
+                    ));
+                }
+                Ok(value)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        *encoded = Value::Array(decoded);
+    }
+    Ok(serde_json::from_value(projected)?)
+}
+
+fn project_desired_value(value: &Value, allowed_fields: &[&str]) -> Result<Value> {
     let object = value
         .as_object()
         .ok_or_else(|| anyhow!("expected object while projecting desired-state document"))?;
@@ -480,5 +531,5 @@ where
                 .map(|value| ((*field).to_string(), value.clone()))
         })
         .collect::<Map<String, Value>>();
-    Ok(serde_json::from_value(Value::Object(projected))?)
+    Ok(Value::Object(projected))
 }

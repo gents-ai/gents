@@ -388,7 +388,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::TOOL_SELECTION_NAME,
         TOOL_SELECTION_BASELINE_SDL,
-        "bafyreie4seb5qunpvokrmvdumozlefwovchlc3arpwr7afldydpfyeozfy"
+        "bafyreifdr2gaba4tyjixvdhl3ksay3wytxq6cujpvgb2cymtyw7dankgee"
     ),
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
@@ -540,7 +540,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreicok6ibr6xcnu4c25wec4pp4ed2h6d4onb7lmsm5m337ijua6e4fa"
+        "bafyreigb4fvfiyixw73psc5xqsxlzuhyoy7dxkowesrrpke6ktla74d5ji"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_APPROVAL_NAME,
@@ -720,7 +720,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         patch: TOOL_SELECTION_ADD_LSP_FIELDS_PATCH,
         lens: None,
         // Authored by applying the inactive patch to the frozen ToolSelection baseline.
-        expected_version: Some("bafyreibzvuogmrsg7z5mz2mlnmb2f5avdas54a35fpoghu2bbwyt4fiame"),
+        expected_version: Some("bafyreihyt6oslmynrjdmayvbljsj3ctu3tb2dohkk4fzwpnxytxvmnykne"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["enable_lsp", "lsp_config"]),
     },
@@ -730,7 +730,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         patch: TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH,
         lens: None,
         // Pin is authored by applying this inactive patch after the LSP step.
-        expected_version: Some("bafyreihwtdnzzstrwzbdr2gfiebsqtdvujhwtilcjf2xkk47tm4dr3pcpq"),
+        expected_version: Some("bafyreic3lmedyjtjwokmidt4ezkq6t4y2ayx47e47zhbdmkidiocvn5bte"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&[
             "enable_lsp",
@@ -743,7 +743,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
         patch: TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH,
         lens: None,
-        expected_version: Some("bafyreiam46672yl2mse4lbuqukdb56wg5dfkaxm4deozti7zud4qecperm"),
+        expected_version: Some("bafyreidukeawdy34oyw3gginz2qqrbhi2z6alsulv6qkp6h2wffzli5egi"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&[
             "enable_lsp",
@@ -758,7 +758,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         patch: TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH,
         lens: None,
         // Authored by applying this inactive patch after the eth-tool step.
-        expected_version: Some("bafyreigunxcipqewwn6ma3eh5vqjrehnsh3jjbwnam27ehydop75ta5hqy"),
+        expected_version: Some("bafyreihipolad5f5pjxqurbunxt6rhwxnjf5ko7guwsu5bdb3mdfcdos3a"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&[
             "enable_lsp",

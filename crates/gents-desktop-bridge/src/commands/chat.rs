@@ -91,14 +91,7 @@ pub async fn rename_conversation(
     core: &ClientCore,
     request: ConversationRenameRequest,
 ) -> Result<()> {
-    let agent_did = request
-        .agent_did
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| core.selected_agent_did())
-        .unwrap_or_default();
+    let agent_did = request.agent_did.trim().to_string();
     if agent_did.is_empty() {
         bail!("agent_did is required");
     }

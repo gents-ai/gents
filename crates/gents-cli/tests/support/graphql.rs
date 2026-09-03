@@ -40,6 +40,14 @@ pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Val
         .ok_or_else(|| anyhow!("missing {field} row in GraphQL response: {response}"))
 }
 
+pub fn doc_id_from_create(response: &Value, field: &str) -> Result<String> {
+    response
+        .pointer(&format!("/data/{field}/0/_docID"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .with_context(|| format!("missing _docID in {field} response: {response}"))
+}
+
 pub async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<String> {
     let response = graphql_query(
         graphql,

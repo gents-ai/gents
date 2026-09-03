@@ -26,11 +26,13 @@ function statusLabel(tool: RenderedToolCallView) {
     case "success":
       return "completed";
     case "error":
-      return tool.status?.trim() || "failed";
+      return "failed";
     case "awaitingapproval":
       return "awaiting approval";
+    case "unknown":
+      return "unknown";
     default:
-      return tool.status?.trim() || "working";
+      return "working";
   }
 }
 

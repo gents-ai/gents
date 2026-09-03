@@ -5,7 +5,7 @@ export type ConversationLifecycleGroup = "attention" | "active" | "recent";
 export function conversationLifecycleGroup(
   conversation: ConversationSummary,
 ): ConversationLifecycleGroup {
-  const state = (conversation.turnState ?? conversation.status ?? "").toLowerCase();
+  const state = (conversation.turnState ?? "").toLowerCase();
   if (
     [
       "failed",

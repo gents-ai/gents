@@ -1,5 +1,5 @@
 use gents::graphql::escape_graphql_string;
-use gents::tool_call_lifecycle::{FailureClass, ToolCallState};
+use gents::tool_call_lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::ClientTurnState;
 use serde_json::{json, Value};
@@ -11,7 +11,6 @@ use super::subagent_projection::LinkedSubagentThread;
 pub(super) struct GentsToolCallProgress {
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
-    pub(super) status: String,
     pub(super) lifecycle_state: Option<String>,
     pub(super) await_mode: Option<String>,
     pub(super) child_request_id: Option<String>,
@@ -74,7 +73,6 @@ pub(super) fn gents_turn_progress_query(request_id: &str, session_id: &str) -> S
             ) {{
                 tool_call_key
                 tool_name
-                status
                 lifecycle_state
                 await_mode
                 child_request_id
@@ -124,7 +122,6 @@ pub(super) fn gents_tool_progress_query(request_id: &str, session_id: &str) -> S
             ) {{
                 tool_call_key
                 tool_name
-                status
                 lifecycle_state
                 await_mode
                 child_request_id
@@ -149,7 +146,6 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
     Some(GentsToolCallProgress {
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
         tool_name: row.get("tool_name")?.as_str()?.to_string(),
-        status: row.get("status")?.as_str()?.to_string(),
         lifecycle_state: row
             .get("lifecycle_state")
             .and_then(Value::as_str)
@@ -284,50 +280,21 @@ pub(super) fn timestamp_millis(raw: &str) -> Option<i64> {
 }
 
 pub(super) fn observed_tool_status(tool: &GentsToolCallProgress) -> ProjectionStatus {
-    let persisted_failure = tool
-        .tool_failure_class
-        .as_deref()
-        .map(str::trim)
-        .filter(|class| !class.is_empty())
-        .and_then(FailureClass::from_persisted)
-        .is_some();
-    if persisted_failure {
-        return ProjectionStatus::Failed;
-    }
-
-    if let Some(lifecycle_state) = tool
+    let lifecycle_state = tool
         .lifecycle_state
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        return match ToolCallState::from_persisted(lifecycle_state.trim()) {
-            Some(ToolCallState::Completed) => ProjectionStatus::Completed,
-            Some(ToolCallState::Failed | ToolCallState::TimedOut | ToolCallState::Cancelled) => {
-                ProjectionStatus::Failed
-            }
-            _ => ProjectionStatus::InProgress,
-        };
+        .map(str::trim)
+        .and_then(ToolCallState::from_persisted);
+    match lifecycle_state {
+        Some(ToolCallState::Completed) => ProjectionStatus::Completed,
+        Some(ToolCallState::Failed | ToolCallState::TimedOut | ToolCallState::Cancelled) => {
+            ProjectionStatus::Failed
+        }
+        Some(ToolCallState::Pending | ToolCallState::AwaitingApproval | ToolCallState::Running) => {
+            ProjectionStatus::InProgress
+        }
+        None => ProjectionStatus::Failed,
     }
-
-    // Compatibility is intentionally isolated to rows written before the
-    // durable lifecycle field existed. Current rows never derive execution
-    // semantics from model-facing result text.
-    let status = tool.status.trim().to_ascii_lowercase();
-    if matches!(
-        status.as_str(),
-        "cancelled" | "dead" | "error" | "failed" | "failure" | "timedout"
-    ) || tool_result_looks_error(&tool.result)
-        || gents_exec_result_failed(&tool.result)
-    {
-        return ProjectionStatus::Failed;
-    }
-    if matches!(
-        status.as_str(),
-        "completed" | "complete" | "success" | "succeeded"
-    ) {
-        return ProjectionStatus::Completed;
-    }
-    ProjectionStatus::InProgress
 }
 
 pub(super) fn content_delta(previous: &str, current: &str) -> String {
@@ -410,22 +377,6 @@ fn gents_tool_result_content(result: &str) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-fn tool_result_looks_error(result: &str) -> bool {
-    let trimmed = result.trim_start();
-    trimmed.starts_with("Toolset error:") || trimmed.starts_with("JsonError:")
-}
-
-fn gents_exec_result_failed(result: &str) -> bool {
-    let Some(metadata) = gents_exec_metadata(result) else {
-        return false;
-    };
-    metadata.get("ok").and_then(Value::as_bool) == Some(false)
-        || metadata
-            .get("status")
-            .and_then(Value::as_str)
-            .is_some_and(|status| status != "success")
-}
-
 pub(super) fn gents_exec_metadata(result: &str) -> Option<Value> {
     let first_line = result.lines().next()?.trim();
     let raw = first_line.strip_prefix("gents_exec:")?.trim();
@@ -461,42 +412,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_tool_errors_render_as_failed_codex_tool_calls() {
-        let mut tool = test_tool("glob", "completed", r#"{"pattern":"**/*.lean"}"#)
-            .with_result("Toolset error: missing runner");
-        tool.lifecycle_state = None;
-
-        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Failed);
-        let item = gents_tool_item(&tool, codex::McpToolCallStatus::Failed);
-        let codex::ThreadItem::McpToolCall {
-            server,
-            tool: tool_name,
-            arguments,
-            status,
-            error,
-            ..
-        } = item
-        else {
-            panic!("expected MCP tool call item");
-        };
-        assert_eq!(server, "gents");
-        assert_eq!(tool_name, "glob");
-        assert_eq!(arguments["pattern"], "**/*.lean");
-        assert_eq!(status, codex::McpToolCallStatus::Failed);
-        assert_eq!(
-            error.expect("failed tool should carry error").message,
-            "Toolset error: missing runner"
-        );
-    }
-
-    #[test]
-    fn persisted_failure_class_overrides_legacy_completed_status() {
-        let mut tool = test_tool("bash", "completed", r#"{"command":"false"}"#)
-            .with_result("legacy row without a parseable command envelope");
+    fn lifecycle_state_overrides_failure_metadata() {
+        let mut tool =
+            test_tool("bash", "completed", r#"{"command":"false"}"#).with_result("display output");
         tool.lifecycle_state = Some("completed".to_string());
         tool.tool_failure_class = Some("toolReturnedError".to_string());
 
-        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Failed);
+        assert_eq!(observed_tool_status(&tool), ProjectionStatus::Completed);
     }
 
     #[test]
@@ -661,7 +583,6 @@ mod tests {
         GentsToolCallProgress {
             tool_call_key: "session:call".to_string(),
             tool_name: tool_name.to_string(),
-            status: status.to_string(),
             lifecycle_state: Some(status.to_string()),
             await_mode: None,
             child_request_id: None,

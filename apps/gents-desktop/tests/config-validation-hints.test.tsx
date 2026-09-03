@@ -18,7 +18,7 @@ const deployment = {
     {
       backendId: "backend-a",
       name: "Backend A",
-      providerKind: "openai",
+      providerKind: "OpenAiCompatible",
       endpoint: "http://localhost:1234/v1",
       models: ["m-1"],
       enabled: true,

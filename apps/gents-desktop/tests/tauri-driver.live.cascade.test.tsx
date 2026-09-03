@@ -26,7 +26,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
     await withLiveDesktop(async ({ runner, driver, deployment }) => {
       const defaultBehavior = deployment.behaviors.find(
         (behavior) =>
-          behavior.behaviorId === deployment.behaviorReadiness.defaultBehaviorId,
+          behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
       );
       const defaultTools = deployment.toolSelections.find(
         (s) => s.selectionId === defaultBehavior?.toolSelectionId,

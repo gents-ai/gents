@@ -24,6 +24,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -39,6 +40,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -59,6 +61,7 @@ async fn runtime_state_reset_is_explicit() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -114,6 +117,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

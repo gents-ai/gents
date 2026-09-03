@@ -21,12 +21,12 @@ use crate::lean_vocab_test::{
     lean_fleet_slot_accounting_case, lean_inference_slot_accounting_cases, lean_vocabulary_values,
     LeanContractVocabulary, LeanFleetSlotAccountingCase,
 };
-use crate::schema::ensure_schemas;
+use crate::schema::ensure_runtime_schemas;
 use crate::watcher::AgentRequest;
 
 async fn test_node() -> Arc<EmbeddedNode> {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    ensure_schemas(node.as_ref()).await.unwrap();
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node
 }
 

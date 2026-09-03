@@ -167,10 +167,12 @@ impl ExecutionOrigin {
         }
     }
 
-    pub(crate) fn from_persisted(value: Option<&str>) -> Self {
+    pub(crate) fn from_persisted(value: Option<&str>) -> anyhow::Result<Self> {
         match value {
-            Some("scheduled") => Self::Scheduled,
-            _ => Self::Interactive,
+            Some("interactive") => Ok(Self::Interactive),
+            Some("scheduled") => Ok(Self::Scheduled),
+            Some(other) => anyhow::bail!("unknown execution_origin {other:?}"),
+            None => anyhow::bail!("execution_origin is required"),
         }
     }
 }
@@ -688,17 +690,15 @@ mod tests {
             r#"["pending", "claimed", "processing"]"#
         );
         assert_eq!(
-            ExecutionOrigin::from_persisted(Some("scheduled")),
+            ExecutionOrigin::from_persisted(Some("scheduled")).unwrap(),
             ExecutionOrigin::Scheduled
         );
         assert_eq!(
-            ExecutionOrigin::from_persisted(Some("interactive")),
+            ExecutionOrigin::from_persisted(Some("interactive")).unwrap(),
             ExecutionOrigin::Interactive
         );
-        assert_eq!(
-            ExecutionOrigin::from_persisted(None),
-            ExecutionOrigin::Interactive
-        );
+        assert!(ExecutionOrigin::from_persisted(None).is_err());
+        assert!(ExecutionOrigin::from_persisted(Some("legacy")).is_err());
     }
 
     #[test]
@@ -823,7 +823,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",
@@ -902,7 +902,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

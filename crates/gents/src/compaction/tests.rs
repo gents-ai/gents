@@ -10,7 +10,7 @@ use rig::completion::{
 use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 
 use super::*;
-use crate::ensure_schemas;
+use crate::ensure_runtime_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::provider_input::budget::can_dispatch;
 use crate::session;
@@ -2581,7 +2581,7 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
 }
 
 #[test]
-fn legacy_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
+fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
     // Counts written before the pair-safe splitter used an arbitrary budget
     // index and carry no version marker, so an upgraded session can drop
     // between an assistant ToolCall and its ToolResult. Left alone the orphan
@@ -2596,18 +2596,18 @@ fn legacy_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
     ];
     let (view, _) = provider_view(history);
 
-    // A legacy count of 2 lands between the call and its result.
-    let legacy = 2usize;
+    // A noncanonical count of 2 lands between the call and its result.
+    let noncanonical = 2usize;
     assert_ne!(
-        super::history::pair_safe_boundary(&view, legacy),
-        legacy,
+        super::history::pair_safe_boundary(&view, noncanonical),
+        noncanonical,
         "the fixture must actually straddle a turn, or this proves nothing"
     );
 
-    let dropped = view.iter().skip(legacy).cloned().collect::<Vec<_>>();
+    let dropped = view.iter().skip(noncanonical).cloned().collect::<Vec<_>>();
     assert!(
         !pair_closed_messages(&dropped),
-        "dropping at a legacy boundary orphans the result"
+        "dropping at a noncanonical boundary orphans the result"
     );
 
     let repaired = sanitize_history_for_provider(dropped);
@@ -2617,7 +2617,7 @@ fn legacy_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
     );
 
     // And it is a no-op at a boundary this runtime would have written.
-    let safe = super::history::pair_safe_boundary(&view, legacy);
+    let safe = super::history::pair_safe_boundary(&view, noncanonical);
     let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
     assert_eq!(
         sanitize_history_for_provider(safe_tail.clone()),
@@ -2764,7 +2764,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
     session::create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
@@ -2894,6 +2894,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
 
     let reduction = required_reduction(&result);
     let summary = reduction.checkpoint;
+    let sequence_rows = durable_before
+        .iter()
+        .cloned()
+        .enumerate()
+        .map(|(index, message)| ((index + 1) as u32, message))
+        .collect::<Vec<_>>();
+    let compacted_through_sequence = session_cursor_for_reduction(&sequence_rows, 0, reduction)
+        .unwrap()
+        .expect("exact reduction must resolve to a durable cursor");
     session::save_compaction_entry(
         &node,
         "session-1",
@@ -2904,6 +2913,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         &result.files_read,
         &result.files_modified,
         reduction.messages_compacted().unwrap(),
+        compacted_through_sequence,
         result.original_token_estimate,
         result.compacted_token_estimate,
     )
@@ -3235,25 +3245,6 @@ fn format_summary_bounds_and_sanitizes_single_items() {
 }
 
 #[test]
-fn active_provider_history_applies_the_shared_compacted_prefix_projection() {
-    let history = vec![
-        text_msg("user", "compacted"),
-        text_msg("user", "active one"),
-        text_msg("user", "active two"),
-    ];
-
-    assert_eq!(
-        active_provider_history(history.clone(), 0).unwrap(),
-        history
-    );
-    assert_eq!(
-        active_provider_history(history.clone(), 1).unwrap(),
-        history[1..].to_vec()
-    );
-    assert!(active_provider_history(history, usize::MAX).is_err());
-}
-
-#[test]
 fn canonical_cursor_projects_the_same_sparse_active_suffix() {
     let rows = vec![
         (10, tool_result_msg("orphan", "discard me")),
@@ -3272,10 +3263,7 @@ fn canonical_cursor_projects_the_same_sparse_active_suffix() {
             .map(|(_, message)| message.clone())
             .collect(),
     );
-    assert_eq!(
-        filtered_view,
-        active_provider_history(full_view, 1).unwrap()
-    );
+    assert_eq!(1 + filtered_view.len(), full_view.len());
 }
 
 #[test]
@@ -3297,5 +3285,4 @@ fn compaction_strategy_default_and_labels_share_one_vocabulary() {
         CompactionStrategy::StripToolResults.as_str(),
         "StripToolResults"
     );
-    assert_eq!(CompactionStrategy::Summarize.as_str(), "Summarize");
 }

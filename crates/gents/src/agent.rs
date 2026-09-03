@@ -460,7 +460,6 @@ fn parse_compaction_strategy(value: Option<&str>) -> anyhow::Result<CompactionSt
     match normalize_optional_string(value) {
         None => Ok(CompactionStrategy::StripThenSummarize),
         Some("StripToolResults") => Ok(CompactionStrategy::StripToolResults),
-        Some("Summarize") => Ok(CompactionStrategy::Summarize),
         Some("StripThenSummarize") => Ok(CompactionStrategy::StripThenSummarize),
         Some(other) => anyhow::bail!("unknown compaction strategy {other}"),
     }

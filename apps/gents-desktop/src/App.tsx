@@ -128,7 +128,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     newConversation: () => {
       const behaviorId =
         shell.selectedBehaviorId ??
-        shell.selectedDeployment?.behaviorReadiness.defaultBehaviorId ??
+        shell.selectedDeployment?.agentPrincipal.defaultBehaviorId ??
         null;
       if (behaviorId) {
         requestWorkspaceNavigation(() => {
@@ -224,6 +224,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
             addingPeer={shell.addingPeer}
             bootstrap={shell.snapshot?.bootstrap ?? null}
             deployments={shell.deployments}
+            enrollmentRequests={shell.snapshot?.client?.enrollmentRequests ?? null}
             loading={shell.loading}
             p2pHealth={shell.runtimeHealth}
             syncHealth={shell.snapshot?.client?.syncHealth ?? null}
@@ -380,7 +381,7 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
                 sending={shell.sending}
                 session={shell.session}
                 optimisticPendingTurn={shell.optimisticPendingTurn}
-                turnState={shell.turnState ?? shell.session?.turnState ?? null}
+                turnState={shell.turnState}
                 onOpenMobileNavigation={() => setMobileChatPane("navigation")}
                 onInterruptAccepted={async () => {
                   await shell.refreshSession(shell.selectedSessionId);

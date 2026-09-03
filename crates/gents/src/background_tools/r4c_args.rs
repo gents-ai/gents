@@ -169,14 +169,16 @@ pub struct ListSubagentsEntry {
     pub immediate_parent_request_id: String,
     pub parent_tool_call_id: String,
     pub child_request_id: String,
-    pub child_session_id: String,
-    /// Friendly model-facing name of the subagent target (from the spawn args).
-    /// Matches the `name` passed to `spawn_subagent`. Empty string if the
-    /// bridge args did not carry a name (legacy or malformed record).
-    pub name: String,
-    pub principal_did: String,
-    pub behavior_id: String,
-    pub deployment_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal_did: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub behavior_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deployment_id: Option<String>,
     pub await_mode: String,
     pub cancel_policy: Option<String>,
     pub status: String,
@@ -232,7 +234,8 @@ pub(crate) struct ListBackgroundToolsResponse {
 pub struct ReadSubagentResponse {
     pub edge: DescendantEdge,
     pub child_request_id: String,
-    pub child_session_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_session_id: Option<String>,
     pub from_sequence: u64,
     pub through_sequence: u64,
     /// Resume cursor: pass as `since_sequence` on the next read to continue

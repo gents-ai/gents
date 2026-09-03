@@ -610,18 +610,6 @@ impl DefraSessionHook {
         self.state.lock().await.session_id.clone()
     }
 
-    pub async fn set_active_request_id(&self, request_id: Option<String>) {
-        if let Err(error) = self.set_active_request_lineage(request_id, None).await {
-            // Resolution happens before the binding mutation, so preserve the
-            // last coherent binding rather than silently clearing provenance
-            // on a transient/missing/ambiguous lookup.
-            tracing::error!(
-                %error,
-                "failed to bind active request id; preserving previous coherent binding",
-            );
-        }
-    }
-
     pub async fn set_active_request_lineage(
         &self,
         request_id: Option<String>,
@@ -672,37 +660,22 @@ impl DefraSessionHook {
         self.state.lock().await.current_request_doc_id.clone()
     }
 
-    async fn active_request_doc_id_or_reload(
-        &self,
-        request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
+    async fn active_request_doc_id_for(&self, request_id: &str) -> anyhow::Result<Option<String>> {
         // Hooks may also be used for session-only transcript capture, where
         // there is deliberately no AgentRequest to bind. Keep that state
         // wholly unbound instead of trying to resolve an empty logical id.
         if request_id.trim().is_empty() {
             return Ok(None);
         }
-        {
-            let state = self.state.lock().await;
-            if state.current_request_id.as_deref() != Some(request_id) {
-                anyhow::bail!("active request changed while resolving document provenance");
-            }
-            if state.current_request_doc_id.is_some() {
-                return Ok(state.current_request_doc_id.clone());
-            }
-        }
-
-        let Some(doc_id) = self.request_doc_id_for_request(request_id).await? else {
-            return Ok(None);
-        };
-        let mut state = self.state.lock().await;
+        let state = self.state.lock().await;
         if state.current_request_id.as_deref() != Some(request_id) {
             anyhow::bail!("active request changed while resolving document provenance");
         }
-        if state.current_request_doc_id.is_none() {
-            state.current_request_doc_id = Some(doc_id);
-        }
-        Ok(state.current_request_doc_id.clone())
+        let doc_id = state
+            .current_request_doc_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("active request is missing its physical document id"))?;
+        Ok(Some(doc_id))
     }
 
     async fn request_doc_id_for_request(&self, request_id: &str) -> anyhow::Result<Option<String>> {

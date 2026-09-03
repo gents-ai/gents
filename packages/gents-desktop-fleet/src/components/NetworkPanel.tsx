@@ -1,15 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import {
-  getDesktopApiAdapter,
-  type DesktopApiAdapter,
-  type NetworkStatusView,
+import type {
+  DesktopApiAdapter,
+  NetworkStatusView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
 import { formatRelativeTime } from "../fleetMetrics.js";
 
-export function NetworkPanel({ api }: { api?: DesktopApiAdapter } = {}) {
-  const desktopApi = getDesktopApiAdapter(api);
+export function NetworkPanel({ api }: { api: DesktopApiAdapter }) {
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<NetworkStatusView | null>(null);
   const [loading, setLoading] = useState(false);
@@ -21,7 +19,7 @@ export function NetworkPanel({ api }: { api?: DesktopApiAdapter } = {}) {
     setLoading(true);
     setError(null);
     try {
-      const next = await desktopApi.fetchNetworkStatus();
+      const next = await api.fetchNetworkStatus();
       if (generationRef.current === generation) {
         setStatus(next);
       }
@@ -34,7 +32,7 @@ export function NetworkPanel({ api }: { api?: DesktopApiAdapter } = {}) {
         setLoading(false);
       }
     }
-  }, [desktopApi]);
+  }, [api]);
 
   useEffect(() => {
     if (open && !status && !loading) {

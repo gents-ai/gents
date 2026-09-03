@@ -777,7 +777,6 @@ mod tests {
         GentsToolCallProgress {
             tool_call_key: "session:call".to_string(),
             tool_name: tool_name.to_string(),
-            status: status.to_string(),
             lifecycle_state: Some(status.to_string()),
             await_mode: None,
             child_request_id: None,

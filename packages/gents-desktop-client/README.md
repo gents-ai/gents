@@ -35,10 +35,5 @@ extract or implement that coordinator explicitly.
 
 `createDesktopClient(transport)` exposes both the lifecycle/snapshot methods and
 a full `client.api` adapter bound to that exact transport. Pass `client.api`
-into reusable package providers or component `api` props for multi-client and
-non-Tauri hosts. The exported global wrappers remain a compatibility fallback
-for the first-party shell and older tests.
-
-The command surface is split under `src/api/` by lifecycle, chat, fleet,
-configuration, and operations domains; `api.ts` is only the compatibility
-facade.
+into reusable package providers or required component `api` props. There is no
+process-global adapter; every command has an explicit transport owner.

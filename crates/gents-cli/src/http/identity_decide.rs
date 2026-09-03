@@ -192,11 +192,11 @@ mod tests {
     struct DefraDbDecisionRequest {
         actor: String,
         permission: String,
-        #[serde(rename = "policyID", alias = "policy_id")]
+        #[serde(rename = "policyID")]
         policy_id: String,
-        #[serde(rename = "resourceName", alias = "resource_name")]
+        #[serde(rename = "resourceName")]
         resource_name: String,
-        #[serde(rename = "docID", alias = "doc_id")]
+        #[serde(rename = "docID")]
         doc_id: String,
     }
 

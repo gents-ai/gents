@@ -131,10 +131,8 @@ pub struct ProjectionProvenance {
     pub source_projection_version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_did: Option<String>,
-    /// Always serialized on Gents-authored envelopes; defaulted on ingest so
-    /// external captures and envelopes exported before this field existed
-    /// keep deserializing (the published schema does not require it).
-    #[serde(default)]
+    /// Explicitly records whether the projection came from current durable
+    /// state. Missing provenance must not be interpreted as a known status.
     pub source_version_status: ProjectionSourceVersionStatus,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rendered_request_refs: Vec<RenderedRequestProvenanceRef>,
@@ -1541,7 +1539,7 @@ fn provenance_schema() -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["runtime", "source_projection_id", "source_projection_version"],
+        "required": ["runtime", "source_projection_id", "source_projection_version", "source_version_status"],
         "properties": {
             "runtime": { "const": "gents" },
             "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },

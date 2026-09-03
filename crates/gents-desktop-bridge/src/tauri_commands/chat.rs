@@ -83,7 +83,7 @@ pub async fn desktop_session_snapshot(
             requester_scope.as_deref(),
         );
         let (page, context) = tokio::join!(page_read, context_read);
-        let page = page.map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        let page = page.map_err(|error| BridgeError::untyped(error.to_string()))?;
         let context = match context {
             Ok(store) => Some(store),
             Err(error) => {
@@ -101,7 +101,7 @@ pub async fn desktop_session_snapshot(
         (
             page_read
                 .await
-                .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
+                .map_err(|error| BridgeError::untyped(error.to_string()))?,
             None,
         )
     };
@@ -123,7 +123,7 @@ pub async fn desktop_session_snapshot(
             timeline_limit,
             Some(&transcript_page),
         )
-        .map_err(BridgeError::from_legacy_message)?;
+        .map_err(BridgeError::untyped)?;
     }
     Ok(snapshot)
 }
@@ -135,9 +135,7 @@ pub async fn desktop_session_hydration_retry(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
     let agent_did = agent_did
         .or_else(|| {
@@ -149,13 +147,13 @@ pub async fn desktop_session_hydration_retry(
                 .and_then(|conversation| conversation.agent_did.clone())
         })
         .ok_or_else(|| {
-            BridgeError::from_legacy_message(
+            BridgeError::untyped(
                 "session hydration retry requires an agent for the selected session",
             )
         })?;
     core.retry_session_hydration(&session_id, &agent_did)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -193,14 +191,12 @@ pub async fn desktop_chat_send(
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     send_chat_message(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -209,14 +205,12 @@ pub async fn desktop_conversation_rename(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     rename_conversation(core.as_ref(), request)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
@@ -232,15 +226,13 @@ pub async fn desktop_request_resend(
     state: State<'_, DesktopAppState>,
 ) -> Result<RequestResendResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let submitted = core
         .resend_request(&request_id)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     Ok(RequestResendResultView {
         request_id: submitted.request_id,
         session_id: submitted.session_id,
@@ -253,9 +245,7 @@ pub async fn desktop_request_retry(
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let parent = core
@@ -266,14 +256,14 @@ pub async fn desktop_request_retry(
         .find(|request| request.request_id == request_id)
         .cloned()
         .ok_or_else(|| {
-            BridgeError::from_legacy_message(format!(
+            BridgeError::untyped(format!(
                 "retry parent request not found: request_id={request_id}"
             ))
         })?;
     let submitted = core
         .retry_request(&parent)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     Ok(ChatSendResult {
         session_id: submitted.session_id,
         request_id: submitted.request_id,
@@ -289,15 +279,12 @@ pub async fn desktop_request_timeline(
     state: State<'_, DesktopAppState>,
 ) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let timeline = core
         .request_timeline(&agent_did, &request_id)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
-    serde_json::to_value(&timeline)
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    serde_json::to_value(&timeline).map_err(|error| BridgeError::untyped(error.to_string()))
 }

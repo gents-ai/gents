@@ -32,7 +32,7 @@ const inferenceBackends: InferenceBackendView[] = [
   {
     backendId: "default-backend",
     name: "Default Backend",
-    providerKind: "openai",
+    providerKind: "OpenAiCompatible",
     endpoint: "http://127.0.0.1:8000/v1",
     apiKeyConfigured: false,
     maxConcurrent: 2,
@@ -55,7 +55,6 @@ const toolSelections: ToolSelectionView[] = [
     displayName: "Default Tools",
     cliToolNames: [],
     allowedMcpServiceIds: [],
-    delegateTo: [],
   },
 ];
 
@@ -279,7 +278,7 @@ describe("BehaviorConfigEditor", () => {
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
   });
 
-  it("preserves the document profile when it drops out, then restores it", async () => {
+  it("fails closed on a missing document profile, then restores the exact binding", async () => {
     const remote = { ...behavior, inferenceProfileId: "profile-remote" };
     const onSaveBehaviorConfig = vi.fn(() => Promise.resolve());
     const { rerender } = render(
@@ -288,18 +287,14 @@ describe("BehaviorConfigEditor", () => {
       />,
     );
 
-    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("default-profile");
+    expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile-remote");
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId("behavior-system-prompt"), {
       target: { value: "edited while the profile is registering" },
     });
     fireEvent.click(screen.getByTestId("behavior-save"));
-    await waitFor(() =>
-      expect(onSaveBehaviorConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ inferenceProfileId: "profile-remote" }),
-      ),
-    );
+    expect(onSaveBehaviorConfig).not.toHaveBeenCalled();
 
     rerender(
       <BehaviorConfigEditor
@@ -312,6 +307,12 @@ describe("BehaviorConfigEditor", () => {
           onSaveBehaviorConfig,
         })}
       />,
+    );
+    fireEvent.click(screen.getByTestId("behavior-save"));
+    await waitFor(() =>
+      expect(onSaveBehaviorConfig).toHaveBeenCalledWith(
+        expect.objectContaining({ inferenceProfileId: "profile-remote" }),
+      ),
     );
     expect(screen.getByTestId("behavior-profile-id")).toHaveValue("profile-remote");
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();

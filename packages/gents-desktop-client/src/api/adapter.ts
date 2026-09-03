@@ -1,4 +1,4 @@
-import { tauriTransport, type DesktopTransport } from "../transport.js";
+import type { DesktopTransport } from "../transport.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type {
   CascadeCancelPreview,
@@ -32,41 +32,6 @@ import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 
-type InitSummaryWire = InitSummary & {
-  status_endpoint?: string | null;
-  agent_home?: string;
-  desktop_home?: string;
-  peer_directory?: string;
-  agent_name?: string;
-  agent_did?: string;
-  p2p_transport?: string;
-  p2p_peer_id?: string;
-  p2p_listen_address?: string;
-  peer_record_id?: string;
-  next_steps?: string[];
-};
-
-export function normalizeInitSummary(summary: InitSummaryWire): InitSummary {
-  return {
-    status: summary.status,
-    source: summary.source,
-    statusEndpoint: summary.statusEndpoint ?? summary.status_endpoint ?? null,
-    agentHome: summary.agentHome ?? summary.agent_home ?? "",
-    desktopHome: summary.desktopHome ?? summary.desktop_home ?? "",
-    peerDirectory: summary.peerDirectory ?? summary.peer_directory ?? "",
-    label: summary.label,
-    agentName: summary.agentName ?? summary.agent_name ?? "",
-    agentDid: summary.agentDid ?? summary.agent_did ?? "",
-    graphql: summary.graphql,
-    p2pTransport: summary.p2pTransport ?? summary.p2p_transport ?? "",
-    p2pPeerId: summary.p2pPeerId ?? summary.p2p_peer_id ?? "",
-    p2pListenAddress:
-      summary.p2pListenAddress ?? summary.p2p_listen_address ?? "",
-    peerRecordId: summary.peerRecordId ?? summary.peer_record_id ?? "",
-    nextSteps: summary.nextSteps ?? summary.next_steps ?? [],
-  };
-}
-
 export function createDesktopApiAdapter(
   transport: DesktopTransport,
   options: { requireTauriBridge?: boolean } = {},
@@ -79,13 +44,8 @@ export function createDesktopApiAdapter(
   return {
     fetchDesktopSnapshot: () =>
       invokeDesktop<DesktopClientSnapshot>("desktop_client_snapshot"),
-    async initLocalStandardRuntime(request) {
-      return normalizeInitSummary(
-        await invokeDesktop<InitSummaryWire>("desktop_init_local_standard", {
-          request,
-        }),
-      );
-    },
+    initLocalStandardRuntime: (request) =>
+      invokeDesktop<InitSummary>("desktop_init_local_standard", { request }),
     startDesktopClient: () =>
       invokeDesktop<DesktopClientSnapshot>("desktop_client_start"),
     shutdownDesktopClient: () =>
@@ -317,21 +277,4 @@ export function createDesktopApiAdapter(
         request,
       }),
   };
-}
-
-const defaultDesktopApiAdapter = createDesktopApiAdapter(tauriTransport(), {
-  requireTauriBridge: true,
-});
-let desktopApiAdapterOverride: DesktopApiAdapter | null = null;
-
-export function getDesktopApiAdapter(
-  adapter?: DesktopApiAdapter | null,
-): DesktopApiAdapter {
-  return adapter ?? desktopApiAdapterOverride ?? defaultDesktopApiAdapter;
-}
-
-export function setDesktopApiAdapterForTests(
-  adapter: DesktopApiAdapter | null,
-) {
-  desktopApiAdapterOverride = adapter;
 }

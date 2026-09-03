@@ -463,18 +463,16 @@ impl DefraSessionHook {
             .session_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("session hook missing session id"))?;
-        let request_id = state.current_request_id.clone().unwrap_or_else(|| {
-            tracing::warn!(
-                "tool call has no active request id; persisting with empty request link"
-            );
-            String::new()
-        });
-        let deadline_at = state.request_deadline_at.unwrap_or_else(|| {
-            tracing::warn!(
-                "tool call has no active request deadline; using default lifecycle deadline"
-            );
-            chrono::Utc::now() + chrono::Duration::seconds(DEFAULT_DEADLINE_DURATION_SECS as i64)
-        });
+        let request_id = state
+            .current_request_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("tool call is missing its active request id"))?;
+        if state.current_request_doc_id.is_none() {
+            anyhow::bail!("tool call is missing its active request document id");
+        }
+        let deadline_at = state
+            .request_deadline_at
+            .ok_or_else(|| anyhow::anyhow!("tool call is missing its request deadline"))?;
 
         let sequence = state.begin_or_continue_assistant_turn();
 

@@ -1166,7 +1166,9 @@ mod tests {
             KeyIdentity::load_or_create(member_dir.path().join("member.key"), None).unwrap(),
         );
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::schema::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .unwrap();
 
         let mut generation_one = active_enrollment(1, "2030-01-01T00:10:00Z");
         generation_one.request.candidate_did = member.did().to_string();

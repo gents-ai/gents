@@ -25,6 +25,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
             "cli-subagent-list",
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -457,14 +458,6 @@ async fn seed_spawn_bridge(
     .await?;
     let doc_id = doc_id_from_create(&response, "add_AgentToolCall")?;
     Ok((tool_call_id, doc_id))
-}
-
-fn doc_id_from_create(response: &Value, field: &str) -> Result<String> {
-    response
-        .pointer(&format!("/data/{field}/0/_docID"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .with_context(|| format!("missing _docID in {field} response: {response}"))
 }
 
 fn assert_lineage_row(

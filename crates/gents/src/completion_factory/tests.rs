@@ -25,7 +25,7 @@ fn request() -> AgentRequest {
         max_tokens: None,
         max_total_tokens: None,
         metadata: None,
-        execution_origin: None,
+        execution_origin: Some("interactive".to_string()),
         created_at: String::new(),
         deadline: None,
         subagent_depth: 0,
@@ -380,18 +380,16 @@ fn loop_config_for_request_resolves_completion_retry_policy_and_deadline() {
 }
 
 #[test]
-fn loop_config_for_request_defaults_unknown_retry_origin_to_scheduled() {
+fn loop_config_for_request_rejects_unknown_retry_origin() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
     let mut request = request();
     request.execution_origin = Some("legacy-or-missing".to_string());
 
-    let config =
-        loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0).unwrap();
-
-    assert_eq!(
-        config.retry_policy,
-        CompletionRetryPolicy::scheduled_default()
-    );
+    let Err(error) = loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0)
+    else {
+        panic!("unknown execution origin must fail closed");
+    };
+    assert!(error.to_string().contains("unknown execution_origin"));
 }
 
 #[test]
@@ -577,11 +575,11 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
-    use crate::schema::ensure_schemas;
+    use crate::schema::ensure_runtime_schemas;
     use defra_node::EmbeddedNode;
 
     let node = EmbeddedNode::builder().build().await.unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let request_doc_id = "doc-budget-rehydrate";
     let seed = r#"mutation {

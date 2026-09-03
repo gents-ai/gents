@@ -20,7 +20,8 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
-            "--write-tools",
+            "--write",
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -31,7 +32,6 @@ async fn codex_shim_fs_routes_are_unsupported() -> Result<()> {
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -160,7 +160,8 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
-            "--write-tools",
+            "--write",
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -171,7 +172,6 @@ async fn codex_shim_host_runtime_routes_cover_low_risk_paths() -> Result<()> {
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

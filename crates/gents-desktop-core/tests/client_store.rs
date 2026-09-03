@@ -199,7 +199,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 session_id: Some("session-1".to_string()),
                 content: None,
                 reasoning: None,
-                status: Some("completed".to_string()),
+                status: Some("complete".to_string()),
                 error_message: None,
                 token_count: None,
                 progress_seq: Some(2),

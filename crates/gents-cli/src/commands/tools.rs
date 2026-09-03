@@ -195,9 +195,8 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
             .and_then(|id| selection_rows.get(id))
             .and_then(|selection| selection.tool_policy_version.clone());
         let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
-            Ok(ToolPolicyVersion::LegacyDefaults) => "legacy-permissive",
             Ok(ToolPolicyVersion::V1) => "tool-policy/v1",
-            Err(_) => "unknown",
+            Err(_) => "invalid",
         };
         behaviors.push(json!({
             "behavior_id": behavior.behavior_id,

@@ -18,24 +18,25 @@ function deployment(
   status: BehaviorReadinessStatusView,
   options: {
     chatSafe?: boolean;
-    readinessDefault?: string | null;
+    principalDefault?: string | null;
     sourceReason?: BehaviorReadinessUnknownReasonView;
   } = {},
 ): DeploymentView {
   return {
     agentDid: "did:key:z6MkRemote",
     dialSucceeded: true,
-    pairingReady: options.chatSafe ?? true,
     chatSafe: options.chatSafe ?? true,
-    defaultBehaviorId: "default",
+    agentPrincipal: {
+      agentDid: "did:key:z6MkRemote",
+      defaultBehaviorId:
+        options.principalDefault === undefined ? "default" : options.principalDefault,
+    },
     behaviorReadiness: {
       source: options.sourceReason
         ? { state: "unknown", reason: options.sourceReason }
         : { state: "current" },
       activeGeneration: 4,
       routerGeneration: 4,
-      defaultBehaviorId:
-        options.readinessDefault === undefined ? "default" : options.readinessDefault,
       updatedAt: "2026-08-28T00:00:00Z",
       behaviors: [status],
     },
@@ -157,7 +158,7 @@ describe("selectedBehaviorReadinessDecision", () => {
     },
   );
 
-  it("uses only explicit selection or the runtime-authored default", () => {
+  it("uses only explicit selection or the database principal default", () => {
     const current = deployment({ state: "ready", behaviorId: "default" });
     expect(selectedBehaviorReadinessDecision(current, "unassigned")).toEqual({
       kind: "unknown",
@@ -165,12 +166,11 @@ describe("selectedBehaviorReadinessDecision", () => {
       reason: "behavior_not_assigned",
     });
 
-    const noRuntimeDefault = deployment(
+    const noPrincipalDefault = deployment(
       { state: "ready", behaviorId: "default" },
-      { readinessDefault: null },
+      { principalDefault: null },
     );
-    expect(noRuntimeDefault.defaultBehaviorId).toBe("default");
-    expect(selectedBehaviorReadinessDecision(noRuntimeDefault, null)).toEqual({
+    expect(selectedBehaviorReadinessDecision(noPrincipalDefault, null)).toEqual({
       kind: "unknown",
       behaviorId: null,
       reason: "behavior_not_assigned",

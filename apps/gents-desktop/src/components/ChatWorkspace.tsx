@@ -9,8 +9,6 @@ import type {
 import { displayBehaviorLabel } from "@source-inc/gents-desktop-client";
 import {
   CascadeCancelDialog,
-  interruptChatRequest,
-  previewChatInterruptCascade,
   type ChatActivityStatus,
   type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
@@ -25,7 +23,7 @@ import type { ConversationLoadingStatus as ConversationLoadingStatusView } from 
 import { ConversationLoadingStatus } from "./ConversationLoadingStatus";
 
 export type ChatWorkspaceProps = {
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   activeRequestId: string | null;
   activityStatus: ChatActivityStatus | null;
   selectedDeployment: DeploymentView | null;
@@ -83,7 +81,7 @@ export function ChatWorkspace(props: ChatWorkspaceProps) {
 }
 
 export function ActiveChatWorkspace({
-  api: explicitApi,
+  api,
   activeRequestId,
   activityStatus,
   selectedDeployment,
@@ -116,13 +114,10 @@ export function ActiveChatWorkspace({
   onOpenMobileNavigation,
   onInterruptAccepted,
 }: ActiveChatWorkspaceProps) {
-  const previewInterrupt =
-    explicitApi?.previewInterruptCascade ?? previewChatInterruptCascade;
-  const interrupt = explicitApi?.interruptRequest ?? interruptChatRequest;
+  const previewInterrupt = api.previewInterruptCascade;
+  const interrupt = api.interruptRequest;
   const activeBehaviorId =
-    selectedBehaviorId ??
-    selectedDeployment.behaviorReadiness.defaultBehaviorId ??
-    null;
+    selectedBehaviorId ?? selectedDeployment.agentPrincipal.defaultBehaviorId ?? null;
   const activeBehavior =
     selectedDeployment.behaviors.find(
       (behavior) => behavior.behaviorId === activeBehaviorId,
@@ -223,11 +218,7 @@ export function ActiveChatWorkspace({
             onLoadOlder={onLoadOlderTimeline}
           />
 
-          <HoldsPanel
-            agentDid={selectedDeployment.agentDid}
-            api={explicitApi}
-            hideWhenIdle
-          />
+          <HoldsPanel agentDid={selectedDeployment.agentDid} api={api} hideWhenIdle />
 
           <ChatComposer
             activeRequestId={activeRequestId}

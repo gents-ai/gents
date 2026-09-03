@@ -42,10 +42,9 @@ impl MetaToolContext {
 }
 
 pub(super) fn mcp_service_allowed(allowed_mcp_service_ids: &[String], service_id: &str) -> bool {
-    allowed_mcp_service_ids.is_empty()
-        || allowed_mcp_service_ids
-            .iter()
-            .any(|allowed| allowed == service_id)
+    allowed_mcp_service_ids
+        .iter()
+        .any(|allowed| allowed == service_id)
 }
 
 #[derive(Debug)]
@@ -339,6 +338,10 @@ pub(super) async fn lookup_service(
             "service '{service_id}' is missing hostname/tailscale_ip/lan_ip in the registry"
         ));
     }
+    anyhow::ensure!(
+        !entry.mcp_path.trim().is_empty(),
+        "service '{service_id}' is missing mcp_path in the registry"
+    );
 
     let endpoint = resolve_mcp_url(
         &entry.hostname,

@@ -816,38 +816,53 @@ pub(crate) async fn serve_with_control(
                 Some(bound.spawn())
             }
             Err(error) if error.is_dependency_missing() => {
-                let bound_behavior_id =
-                    crate::commands::codex_shim::resolve_codex_shim_behavior_id(
-                        node.as_ref(),
-                        args.codex_shim_behavior_id.as_deref(),
-                        identity.did(),
-                    )
-                    .await;
-                eprintln!("Codex endpoint pending: {:#}", error.error());
-                eprintln!(
-                    "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
-                     becomes runnable (for example after `gents config apply`) — no restart needed."
-                );
-                codex_shim_output = Some(json!({
-                    "pending": true,
-                    "bound_behavior_id": bound_behavior_id,
-                    "reason": format!("{:#}", error.error()),
-                }));
-                set_codex_shim_health(
-                    &codex_shim_health,
-                    CodexShimHealth::Pending {
-                        bound_behavior_id: bound_behavior_id.clone(),
-                        reason: format!("{:#}", error.error()),
-                    },
-                );
-                spawn_codex_shim_supervisor(
-                    codex_shim_bind_args.clone(),
-                    bound_behavior_id,
-                    runnable_rx,
-                    args.codex_shim_public_url.clone(),
-                    args.codex_shim_auth_token_env.clone(),
-                    codex_shim_health.clone(),
-                );
+                match crate::commands::codex_shim::resolve_codex_shim_behavior_id(
+                    node.as_ref(),
+                    args.codex_shim_behavior_id.as_deref(),
+                    identity.did(),
+                )
+                .await
+                {
+                    Ok(bound_behavior_id) => {
+                        eprintln!("Codex endpoint pending: {:#}", error.error());
+                        eprintln!(
+                            "The server keeps running. The shim binds by itself once behavior {bound_behavior_id:?} \
+                             becomes runnable (for example after `gents config apply`) — no restart needed."
+                        );
+                        codex_shim_output = Some(json!({
+                            "pending": true,
+                            "bound_behavior_id": bound_behavior_id,
+                            "reason": format!("{:#}", error.error()),
+                        }));
+                        set_codex_shim_health(
+                            &codex_shim_health,
+                            CodexShimHealth::Pending {
+                                bound_behavior_id: bound_behavior_id.clone(),
+                                reason: format!("{:#}", error.error()),
+                            },
+                        );
+                        spawn_codex_shim_supervisor(
+                            codex_shim_bind_args.clone(),
+                            bound_behavior_id,
+                            runnable_rx,
+                            args.codex_shim_public_url.clone(),
+                            args.codex_shim_auth_token_env.clone(),
+                            codex_shim_health.clone(),
+                        );
+                    }
+                    Err(binding_error) => {
+                        let reason = format!("{binding_error:#}");
+                        eprintln!("Codex endpoint disabled: {reason}");
+                        codex_shim_output = Some(json!({
+                            "disabled": true,
+                            "reason": reason,
+                        }));
+                        set_codex_shim_health(
+                            &codex_shim_health,
+                            CodexShimHealth::Disabled { reason },
+                        );
+                    }
+                }
                 None
             }
             Err(error) => {

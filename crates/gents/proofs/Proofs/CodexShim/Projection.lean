@@ -256,21 +256,15 @@ theorem unauthorized_child_never_listed (filters : List ThreadSourceFilter) :
 
 structure SubagentThreadParentProjection where
   nativeSourceParent : Option String
-  legacyTopLevelParent : Option String
   deriving DecidableEq, Repr
 
 def projectSubagentThreadParent (parentThreadId : String) :
     SubagentThreadParentProjection :=
-  { nativeSourceParent := some parentThreadId
-  , legacyTopLevelParent := none
-  }
+  { nativeSourceParent := some parentThreadId }
 
 theorem subagent_parent_uses_native_source (parentThreadId : String) :
     (projectSubagentThreadParent parentThreadId).nativeSourceParent =
       some parentThreadId := rfl
-
-theorem subagent_parent_omits_legacy_top_level (parentThreadId : String) :
-    (projectSubagentThreadParent parentThreadId).legacyTopLevelParent = none := rfl
 
 inductive ReasoningProjectionEvent where
   | started

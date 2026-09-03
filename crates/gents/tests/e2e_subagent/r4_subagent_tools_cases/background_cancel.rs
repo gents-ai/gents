@@ -216,6 +216,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 REMOTE_DID,

@@ -11,6 +11,7 @@ import type {
   DesktopOperationsSnapshot,
   DesktopSessionSnapshot,
   DeploymentView,
+  EnrollmentRequestView,
   InitSummary,
   InferenceBackendView,
   InterruptRequestResult,
@@ -204,6 +205,7 @@ export function createDesktopUiHarness(
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
+  let enrollmentRequests: EnrollmentRequestView[] = [];
   let hydrationRetryCalls = 0;
   let updateEvents = 0;
   let storeVersion = 1;
@@ -560,6 +562,7 @@ export function createDesktopUiHarness(
         listenAddresses: ["/ip4/127.0.0.1/tcp/9292"],
         p2pHealth: health,
         syncHealth,
+        enrollmentRequests,
         bootstrapErrors: [],
         lastMutationError: null,
         focusedRequestId: null,
@@ -617,7 +620,7 @@ export function createDesktopUiHarness(
     const session: DesktopSessionSnapshot = {
       sessionId,
       agentDid: deployment.agentDid,
-      behaviorId: behaviorId || deployment.defaultBehaviorId,
+      behaviorId: behaviorId || deployment.agentPrincipal.defaultBehaviorId,
       title,
       previewText: response,
       status: "completed",
@@ -819,7 +822,7 @@ export function createDesktopUiHarness(
         toolSelectionId: "default-tools",
         toolSelectionSource: "document",
         toolPolicyVersion: null,
-        toolPolicySemantics: "legacy-permissive",
+        toolPolicySemantics: "tool-policy/v1",
         ceilingSource: "init_json",
         mcpServicesOnline: true,
         surface: {
@@ -865,7 +868,7 @@ export function createDesktopUiHarness(
       };
     },
     async requestStatusEnrollment() {
-      return {
+      const request: EnrollmentRequestView = {
         requestId: "enrollment-request-harness",
         networkId: "network-harness",
         adminDid: AGENT_DID,
@@ -873,7 +876,10 @@ export function createDesktopUiHarness(
         serverLabel: "Bombadil UI Agent",
         ownerAgent: AGENT_DID,
         state: "pending_approval",
+        expiresAt: "2026-09-03T15:00:00.000Z",
       };
+      enrollmentRequests = [request];
+      return request;
     },
     async repairP2P() {
       p2pStatus = "healthy";
@@ -1071,11 +1077,10 @@ export function createDesktopUiHarness(
       deployment = {
         ...deployment,
         label: request.displayName.trim() || deployment.label,
-        defaultBehaviorId: request.defaultBehaviorId || deployment.defaultBehaviorId,
         agentPrincipal: {
           ...deployment.agentPrincipal,
           displayName: request.displayName.trim() || deployment.label,
-          defaultBehaviorId: request.defaultBehaviorId || deployment.defaultBehaviorId,
+          defaultBehaviorId: request.defaultBehaviorId,
           enabled: request.enabled ?? deployment.agentPrincipal.enabled,
         },
       };
@@ -1097,7 +1102,7 @@ export function createDesktopUiHarness(
         compactionStrategy: request.compactionStrategy,
         compactionThreshold: request.compactionThreshold,
         enabled: request.enabled ?? true,
-        isDefault: behaviorId === deployment.defaultBehaviorId,
+        isDefault: behaviorId === deployment.agentPrincipal.defaultBehaviorId,
         skillRefs: request.skillRefs,
         skillExcludes: request.skillExcludes,
       };
@@ -1357,11 +1362,12 @@ export function createDesktopUiHarness(
       return snapshot();
     },
     async testToolService(request) {
+      if (!request.hostname || !request.mcpPort || !request.mcpPath) {
+        throw new Error("complete MCP route is required");
+      }
       const result: ToolServiceTestResult = {
         serviceId: request.serviceId,
-        endpoint: `http://${request.hostname || "localhost"}:${request.mcpPort || 7331}${
-          request.mcpPath || "/mcp"
-        }`,
+        endpoint: `http://${request.hostname}:${request.mcpPort}${request.mcpPath}`,
         status: "ok",
         toolCount: 1,
         tools: [{ name: "whoami", description: "Returns bound caller identity" }],
@@ -1431,7 +1437,7 @@ export function createDesktopUiHarness(
             requestId: request.rootRequestId,
             sessionId: findSessionByRequest(request.rootRequestId)?.sessionId ?? null,
             agentDid: deployment.agentDid,
-            behaviorId: deployment.defaultBehaviorId,
+            behaviorId: deployment.agentPrincipal.defaultBehaviorId,
             lifecycleState: "completed",
             status: "completed",
             subagentDepth: 0,
@@ -1449,7 +1455,7 @@ export function createDesktopUiHarness(
       const rows: BackendHealth[] = backends.map((backend) => ({
         backendId: backend.backendId,
         name: backend.name ?? backend.backendId,
-        providerKind: backend.providerKind ?? "openai",
+        providerKind: backend.providerKind ?? "OpenAiCompatible",
         endpoint: backend.endpoint ?? "http://127.0.0.1:8000/v1",
         enabled: backend.enabled ?? true,
         probeStatus: backend.probeStatus ?? "healthy",
@@ -1543,7 +1549,7 @@ export function createDesktopUiHarness(
                 {
                   requestId: request.requestId,
                   lifecycleState: "completed",
-                  behaviorId: deployment.defaultBehaviorId,
+                  behaviorId: deployment.agentPrincipal.defaultBehaviorId,
                 },
               ]),
         ],
@@ -1591,7 +1597,7 @@ export function createDesktopUiHarness(
 
   function runHarnessTask(taskId: string): TaskRunResult {
     const task = deployment.tasks.find((row) => row.taskId === taskId);
-    const behaviorId = deployment.behaviorReadiness.defaultBehaviorId;
+    const behaviorId = deployment.agentPrincipal.defaultBehaviorId;
     if (!behaviorId) {
       throw new Error("runtime readiness did not assign a default behavior");
     }
@@ -1868,13 +1874,11 @@ function createDeployment(): DeploymentView {
     source: "bombadil-harness",
     graphql: "http://127.0.0.1:9181/api/v0/graphql",
     dialSucceeded: true,
-    pairingReady: true,
     chatSafe: true,
     behaviorReadiness: {
       source: { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
-      defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
       updatedAt: STARTED_AT,
       behaviors: [
         { state: "ready", behaviorId: DEFAULT_BEHAVIOR_ID },
@@ -1884,7 +1888,6 @@ function createDeployment(): DeploymentView {
     routes: [],
     pairing: [],
     lastError: null,
-    defaultBehaviorId: DEFAULT_BEHAVIOR_ID,
     agentPrincipal: {
       agentDid: AGENT_DID,
       displayName: "Bombadil UI Agent",
@@ -1969,7 +1972,7 @@ function createDeployment(): DeploymentView {
       {
         backendId: "backend-openai",
         name: "OpenAI Harness",
-        providerKind: "openai",
+        providerKind: "OpenAiCompatible",
         endpoint: "http://127.0.0.1:8000/v1",
         apiKeyConfigured: true,
         apiKeyEnvVar: "OPENAI_API_KEY",
@@ -2010,7 +2013,6 @@ function createDeployment(): DeploymentView {
         cliToolNames: ["rg", "git"],
         enableMetaTools: true,
         allowedMcpServiceIds: ["mcp-observability"],
-        delegateTo: [],
         backgroundableToolNames: ["cargo test"],
         subagentTargets: [],
         subagentSpawnEnabled: true,

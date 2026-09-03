@@ -55,6 +55,15 @@ async fn transcript_hook_fixture(test_name: &str) -> (support::TestDb, DefraSess
         "2026-05-01T00:00:00Z",
     )
     .await;
+    let request_id = format!("{test_name}-request");
+    support::create_request(
+        db.node.as_ref(),
+        &request_id,
+        &session_id,
+        "processing",
+        "2026-05-01T00:00:01Z",
+    )
+    .await;
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,
@@ -64,8 +73,9 @@ async fn transcript_hook_fixture(test_name: &str) -> (support::TestDb, DefraSess
     )
     .await
     .expect("resume transcript hook");
-    hook.set_active_request_id(Some(format!("{test_name}-request")))
-        .await;
+    hook.set_active_request_lineage(Some(request_id), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;
     (db, hook, session_id)

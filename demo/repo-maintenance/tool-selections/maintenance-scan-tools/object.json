@@ -1,5 +1,6 @@
 {
   "selection_id": "maintenance-scan-tools",
+  "tool_policy_version": "tool-policy/v1",
   "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
   "display_name": "Scan: inspect repository deeply and write results",
   "enable_file_tools": true,

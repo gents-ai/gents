@@ -7,7 +7,7 @@ fn tool_selection_doc(bash_mode: &str) -> ToolSelectionDocument {
         selection_id: "tools".to_string(),
         agent_did: "did:key:zAgent".to_string(),
         display_name: Some("Tools".to_string()),
-        tool_policy_version: None,
+        tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
         enable_file_tools: Some(false),
         file_tools_mode: Some("Off".to_string()),
         file_tool_root: None,

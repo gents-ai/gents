@@ -586,8 +586,7 @@ pub struct ToolSelectionDocument {
     )]
     pub cli_tool_names: Option<Vec<String>>,
     pub enable_meta_tools: Option<bool>,
-    /// Independent goal get/update capability. Unset inherits
-    /// `enable_meta_tools` when decoded, preserving legacy documents.
+    /// Independent goal get/update capability. Unset is disabled.
     pub enable_goal_tools: Option<bool>,
     /// Additional opt-in for model-facing goal creation. Unset is disabled.
     pub enable_goal_creation: Option<bool>,
@@ -678,10 +677,7 @@ pub fn wide_open_tool_selection_id_for_agent(agent_did: &str) -> String {
 }
 
 /// The seeded `wide-open` preset for a principal: a `ToolSelection` that
-/// reproduces today's permissive behavior, expressed explicitly and stamped at
-/// the current policy version. Built by running the legacy-permissive backfill
-/// over an empty document, so the preset value-set can never drift from the
-/// backfill the secure-default flip relies on (single source of truth).
+/// reproduces the explicitly permissive behavior at the current policy version.
 pub fn wide_open_tool_selection_document(agent_did: &str) -> ToolSelectionDocument {
     ToolSelectionDocument {
         selection_id: wide_open_tool_selection_id_for_agent(agent_did),
@@ -689,46 +685,25 @@ pub fn wide_open_tool_selection_document(agent_did: &str) -> ToolSelectionDocume
         display_name: Some("Wide-open (permissive preset)".to_string()),
         ..Default::default()
     }
-    .with_legacy_policy_defaults_backfilled()
+    .with_wide_open_policy()
 }
 
 impl ToolSelectionDocument {
-    pub fn with_legacy_policy_defaults_backfilled(&self) -> Self {
-        let mut backfilled = self.clone();
-        if backfilled
-            .tool_policy_version
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|version| !version.is_empty())
-        {
-            return backfilled;
-        }
-
-        // The legacy default-TRUE capabilities: materialize them as `true` so a
-        // backfilled V1 doc reproduces the historical permissive surface
-        // bit-for-bit. `enable_meta_tools` and `enable_context_budget` are still
-        // version-gated in `ToolSelection::from_document` via
-        // `default_enabled(true)`; `enable_defra_query` is opt-in for every
-        // policy version since #592, so this materialized `true` is the ONLY
-        // thing keeping the wide-open preset (and legacy-doc upgrades)
-        // defra_query-enabled. Omitting `enable_context_budget` here would
-        // silently drop the (always-on) context-budget tool on the
-        // secure-default flip.
-        backfilled.enable_meta_tools.get_or_insert(true);
-        backfilled.enable_defra_query.get_or_insert(true);
-        backfilled.enable_context_budget.get_or_insert(true);
-        backfilled.enable_file_tools.get_or_insert(false);
-        backfilled.enable_bash.get_or_insert(false);
-        backfilled.subagent_spawn_enabled.get_or_insert(false);
-        backfilled.subagent_steering_enabled.get_or_insert(false);
-        backfilled.subagent_background_enabled.get_or_insert(false);
-        backfilled
-            .subagent_allow_cross_deployment
-            .get_or_insert(false);
-        backfilled.enable_memory.get_or_insert(false);
-        backfilled.enable_session_history_tool.get_or_insert(false);
-        backfilled.tool_policy_version = Some(TOOL_POLICY_V1.to_string());
-        backfilled
+    fn with_wide_open_policy(&self) -> Self {
+        let mut preset = self.clone();
+        preset.enable_meta_tools.get_or_insert(true);
+        preset.enable_defra_query.get_or_insert(true);
+        preset.enable_context_budget.get_or_insert(true);
+        preset.enable_file_tools.get_or_insert(false);
+        preset.enable_bash.get_or_insert(false);
+        preset.subagent_spawn_enabled.get_or_insert(false);
+        preset.subagent_steering_enabled.get_or_insert(false);
+        preset.subagent_background_enabled.get_or_insert(false);
+        preset.subagent_allow_cross_deployment.get_or_insert(false);
+        preset.enable_memory.get_or_insert(false);
+        preset.enable_session_history_tool.get_or_insert(false);
+        preset.tool_policy_version = Some(TOOL_POLICY_V1.to_string());
+        preset
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -785,9 +760,7 @@ impl ToolSelectionDocument {
                         "required_mcp_service_ids[{i}] is empty; service ids must be non-empty strings"
                     );
                 }
-                if !allowed.is_empty()
-                    && !allowed.iter().any(|allowed| allowed.trim() == service_id)
-                {
+                if !allowed.iter().any(|allowed| allowed.trim() == service_id) {
                     anyhow::bail!(
                         "required MCP service {service_id:?} is not permitted by allowed_mcp_service_ids"
                     );

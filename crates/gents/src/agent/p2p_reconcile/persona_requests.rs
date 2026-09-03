@@ -1304,6 +1304,7 @@ mod tests {
             create_InferenceBackend(input: {{
                 backend_id: "openai",
                 name: "OpenAI",
+                provider_kind: "OpenAiCompatible",
                 enabled: true,
                 models: ["gpt-5"]
             }}) {{ _docID }}
@@ -1437,6 +1438,7 @@ mod tests {
             create_InferenceBackend(input: {
                 backend_id: "openai",
                 name: "OpenAI",
+                provider_kind: "OpenAiCompatible",
                 enabled: true,
                 models: ["gpt-5"]
             }) { _docID }

@@ -5,18 +5,40 @@ import type {
 } from "@source-inc/gents-desktop-client";
 
 export function resolveTargets(deployment: DeploymentView) {
-  const behavior =
-    deployment.behaviors.find((entry) => entry.isDefault) ??
-    deployment.behaviors[0] ??
-    null;
+  const defaultBehaviorId = deployment.agentPrincipal.defaultBehaviorId;
+  if (!defaultBehaviorId) {
+    return {
+      behavior: null,
+      backend: null,
+      backendId: null,
+      error: "AgentPrincipal has no default behavior binding",
+    };
+  }
+  const behavior = deployment.behaviors.find(
+    (entry) => entry.behaviorId === defaultBehaviorId,
+  );
+  if (!behavior) {
+    return {
+      behavior: null,
+      backend: null,
+      backendId: null,
+      error: `AgentPrincipal default behavior ${defaultBehaviorId} is not replicated`,
+    };
+  }
+  const backendId = behavior.backendId;
+  if (!backendId) {
+    return {
+      behavior,
+      backend: null,
+      backendId: null,
+      error: `Behavior ${behavior.behaviorId} has no backend binding`,
+    };
+  }
   const backend =
     deployment.inferenceBackends.find(
-      (entry) => entry.backendId === behavior?.backendId,
-    ) ??
-    deployment.inferenceBackends[0] ??
-    null;
-  const backendId = backend?.backendId ?? behavior?.backendId ?? "default";
-  return { behavior, backend, backendId };
+      (entry) => entry.backendId === backendId,
+    ) ?? null;
+  return { behavior, backend, backendId, error: null };
 }
 
 export function behaviorSaveFrom(

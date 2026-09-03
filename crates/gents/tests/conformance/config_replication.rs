@@ -28,7 +28,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                 create_InferenceBackend(input: {
                     backend_id: "amy-backend",
                     name: "Amy inference",
-                    provider_kind: "openai",
+                    provider_kind: "OpenAiCompatible",
                     enabled: true
                 }) { _docID }
                 create_InferenceProfile(input: {

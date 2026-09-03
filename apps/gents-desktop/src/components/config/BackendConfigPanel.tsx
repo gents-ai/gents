@@ -115,7 +115,7 @@ export function BackendConfigEditor({
   }
   const [backendId, setBackendId] = useState("");
   const [name, setName] = useState("");
-  const [providerKind, setProviderKind] = useState("openai");
+  const [providerKind, setProviderKind] = useState("OpenAiCompatible");
   const [endpoint, setEndpoint] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyEnvVar, setApiKeyEnvVar] = useState("");
@@ -240,8 +240,8 @@ export function BackendConfigEditor({
             onChange={(event) => setProviderKind(event.currentTarget.value)}
             value={providerKind}
           >
-            <option value="openai">OpenAI compatible</option>
-            <option value="openrouter">OpenRouter</option>
+            <option value="OpenAiCompatible">OpenAI compatible</option>
+            <option value="OpenRouter">OpenRouter</option>
           </select>
         </label>
         <label className="field">
@@ -372,10 +372,7 @@ function backendFormValues(backend: InferenceBackendView | null) {
   return {
     backendId: backend?.backendId ?? "",
     name: backend?.name ?? backend?.backendId ?? "",
-    providerKind:
-      backend?.providerKind === "OpenRouter" || backend?.providerKind === "openrouter"
-        ? "openrouter"
-        : "openai",
+    providerKind: backend?.providerKind ?? "OpenAiCompatible",
     endpoint: backend?.endpoint ?? "",
     apiKey: "",
     apiKeyEnvVar: backend?.apiKeyEnvVar ?? "",

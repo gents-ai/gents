@@ -25,6 +25,7 @@ async fn config_skill_cli_disable_enable_and_rm_round_trip() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -233,6 +234,7 @@ async fn config_skill_import_export_roundtrip_hermes() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

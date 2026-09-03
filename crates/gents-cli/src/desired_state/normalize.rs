@@ -1,5 +1,3 @@
-use serde_json::{Map, Value};
-
 use super::DesiredStateManifest;
 
 pub(crate) fn normalize_manifest(manifest: &mut DesiredStateManifest) {
@@ -119,21 +117,4 @@ fn normalize_optional_string(value: &mut Option<String>) {
         .map(str::trim)
         .filter(|candidate| !candidate.is_empty())
         .map(ToOwned::to_owned);
-}
-
-pub(crate) fn strip_deprecated_inference_backend_fields(object: &mut Map<String, Value>) {
-    for field in [
-        "supports_tool_calls",
-        "supports_streaming",
-        "supports_structured_outputs",
-        "supports_json_schema",
-        "context_window",
-        "max_output_tokens",
-    ] {
-        object.remove(field);
-    }
-}
-
-pub(crate) fn strip_retired_tool_selection_fields(object: &mut Map<String, Value>) {
-    object.remove("orchestration_enabled");
 }

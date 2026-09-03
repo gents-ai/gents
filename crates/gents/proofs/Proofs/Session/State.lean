@@ -22,7 +22,6 @@ def toDefraDB : QueueSource → String
 def fromDefraDB? : String → Option QueueSource
   | "user" => some .user
   | "background_completion" => some .backgroundCompletion
-  | "subagent_completion" => some .backgroundCompletion
   | "steering" => some .steering
   | _ => none
 

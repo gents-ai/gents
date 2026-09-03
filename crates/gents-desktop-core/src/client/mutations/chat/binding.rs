@@ -84,21 +84,12 @@ fn resolve_behavior_id(
                 .find(|row| row.agent_did == agent_did)
                 .and_then(|row| normalize_optional_string(row.default_behavior_id.as_deref()))
         })
-        .or_else(|| {
-            store
-                .behaviors
-                .iter()
-                .find(|row| {
-                    row.agent_did.as_deref() == Some(agent_did) && row.enabled != Some(false)
-                })
-                .map(|row| row.behavior_id.as_str())
-        })
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no behavior is bound to this session and AgentPrincipal {agent_did} has no default_behavior_id"
+            )
+        })?
+        .to_owned();
 
     Ok(normalize_optional_string(Some(&resolved)).map(ToOwned::to_owned))
-}
-
-pub(super) fn default_behavior_id_for_agent(agent_did: &str) -> String {
-    gents::default_behavior_id_for_agent(agent_did)
 }

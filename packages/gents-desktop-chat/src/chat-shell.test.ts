@@ -39,10 +39,13 @@ function operationalStateFor(
     agentDid: "did:key:agent",
     source: "enrollment",
     dialSucceeded: true,
-    pairingReady: routeReady,
     chatSafe: routeReady,
     lastError: null,
     runtime: null,
+    agentPrincipal: {
+      agentDid: "did:key:agent",
+      defaultBehaviorId: behaviorId,
+    },
     behaviorReadiness: {
       source:
         decision.kind === "unknown"
@@ -50,7 +53,6 @@ function operationalStateFor(
           : { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
-      defaultBehaviorId: behaviorId,
       updatedAt: "2026-09-02T00:00:00Z",
       behaviors: [readinessStatus],
     },

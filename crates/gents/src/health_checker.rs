@@ -510,6 +510,22 @@ pub async fn run_health_check_cycle(
             .await;
             continue;
         }
+        if service.mcp_path.trim().is_empty() {
+            apply_probe_failure(
+                mcp_pool,
+                health_map,
+                &service_id,
+                previous_model,
+                previous_last_seen,
+                previous_endpoint,
+                previous_tool_count,
+                "registry entry missing mcp_path".to_string(),
+                now,
+                options,
+            )
+            .await;
+            continue;
+        }
 
         let endpoint = resolve_mcp_url(
             &service.hostname,

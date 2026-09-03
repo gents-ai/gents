@@ -71,7 +71,6 @@ pub(crate) struct LeanCodexShimSubagentThreadShapeCase {
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) parent_thread_id: String,
     pub(crate) native_source_parent: Option<String>,
-    pub(crate) legacy_top_level_parent: Option<String>,
     pub(crate) replay_stages: Vec<String>,
 }
 

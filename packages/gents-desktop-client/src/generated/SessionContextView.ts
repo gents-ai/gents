@@ -5,8 +5,7 @@ import type { SessionRequestContextView } from "./SessionRequestContextView.js";
 /**
  * Observable context pressure for the session. `last_request` is the exact,
  * prompt-free accounting captured at the most recent provider boundary; the
- * remaining fields project the durable conversation and remain available as
- * a fallback for sessions created before request accounting was introduced.
+ * remaining fields are estimates computed directly from the durable rows.
  */
 export type SessionContextView = {
 /**

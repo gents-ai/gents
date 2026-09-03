@@ -27,6 +27,11 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     // a readiness write wakes the bridge before the rebuilt view can see it.
     let sync_state = core.sync_state();
     let store = core.store().snapshot();
+    let enrollment_requests = core
+        .active_status_enrollment_requests()
+        .await
+        .map(|requests| requests.into_iter().map(Into::into).collect())
+        .ok();
     let peer_statuses_by_id: HashMap<String, ClientPeerStatus> = sync_state
         .peers
         .iter()
@@ -70,16 +75,15 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 })
                 .unwrap_or_else(|| AgentPrincipalView {
                     agent_did: peer.agent_did.clone(),
-                    display_name: Some(peer.label.clone()),
+                    display_name: None,
                     default_behavior_id: None,
-                    enabled: Some(true),
+                    enabled: None,
                     created_at: None,
                     created_by: None,
                 });
             let mut default_behavior_id = store
                 .default_behavior_id_for_agent(&peer.agent_did)
-                .map(str::to_owned)
-                .or_else(|| normalize_optional(peer.default_behavior_id.as_deref()));
+                .map(str::to_owned);
             let mut runtime = store
                 .latest_runtime(&peer.agent_did)
                 .map(|row| RuntimeView {
@@ -202,7 +206,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     enable_goal_creation: row.enable_goal_creation,
                     allowed_mcp_service_ids: row.allowed_mcp_service_ids.clone(),
                     required_mcp_service_ids: row.required_mcp_service_ids.clone(),
-                    delegate_to: row.delegate_to.clone(),
                     backgroundable_tool_names: row.backgroundable_tool_names.clone(),
                     subagent_targets: row.subagent_targets.clone(),
                     subagent_spawn_enabled: row.subagent_spawn_enabled,
@@ -467,7 +470,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 &conversations,
             );
 
-            let pairing_ready = peer.is_chat_ready_at(Utc::now());
+            let chat_safe = peer.is_chat_ready_at(Utc::now());
             let behavior_readiness = redact_unpaired_behavior_readiness(
                 project_behavior_readiness(
                     store.behavior_readiness(&peer.agent_did),
@@ -477,9 +480,9 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                         .map(|behavior| behavior.behavior_id.as_str()),
                     default_behavior_id.as_deref(),
                 ),
-                pairing_ready,
+                chat_safe,
             );
-            if !pairing_ready {
+            if !chat_safe {
                 default_behavior_id = None;
                 agent_principal.default_behavior_id = None;
                 runtime = None;
@@ -504,8 +507,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                 source: peer.source,
                 graphql: peer.graphql,
                 dial_succeeded: status.is_some_and(|status| status.dial_succeeded),
-                pairing_ready,
-                chat_safe: pairing_ready,
+                chat_safe,
                 routes: status
                     .map(|status| {
                         status
@@ -542,7 +544,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
                     })
                     .unwrap_or_default(),
                 last_error: status.and_then(|status| status.last_error.clone()),
-                default_behavior_id,
                 agent_principal,
                 runtime,
                 behavior_readiness,
@@ -569,6 +570,7 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         listen_addresses: core.listen_addresses().to_vec(),
         p2p_health: to_health_view(&sync_state.transport),
         sync_health: super::project_client_sync_health(&sync_state),
+        enrollment_requests,
         bootstrap_errors: core.bootstrap_errors().to_vec(),
         last_mutation_error: core.last_mutation_error(),
         focused_request_id: core.store().focused_request_id(),
@@ -611,7 +613,6 @@ pub(crate) fn project_behavior_readiness<'a>(
         },
         active_generation: projection.active_generation,
         router_generation: projection.router_generation,
-        default_behavior_id: projection.default_behavior_id,
         updated_at: normalize_optional(projection.updated_at.as_deref()),
         behaviors: projection
             .behaviors
@@ -817,11 +818,7 @@ fn bash_access_label(selection: Option<&ToolSelectionView>) -> &'static str {
 }
 
 fn conversation_is_active(conversation: &ConversationSummary) -> bool {
-    let state = conversation
-        .turn_state
-        .as_deref()
-        .or(conversation.status.as_deref());
-    let Some(state) = state else {
+    let Some(state) = conversation.turn_state.as_deref() else {
         return false;
     };
     !matches!(
@@ -871,7 +868,6 @@ mod behavior_readiness_conformance_tests {
             source: BehaviorReadinessSourceView::Current,
             active_generation: Some(7),
             router_generation: Some(7),
-            default_behavior_id: Some("private-default".to_string()),
             updated_at: Some("2026-08-29T00:00:00Z".to_string()),
             behaviors: vec![BehaviorReadinessStatusView::Ready {
                 behavior_id: "private-default".to_string(),
@@ -958,7 +954,6 @@ mod behavior_environment_tests {
             enable_goal_creation: None,
             allowed_mcp_service_ids: vec![],
             required_mcp_service_ids: vec![],
-            delegate_to: vec![],
             backgroundable_tool_names: vec![],
             subagent_targets: vec![],
             subagent_spawn_enabled: None,
@@ -972,7 +967,7 @@ mod behavior_environment_tests {
             enable_defra_query: None,
             defra_query_collections: vec![],
             write_tools: vec![],
-            tool_policy_version: None,
+            tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
             subagent_default_await_mode: None,
         }
     }
@@ -1050,7 +1045,7 @@ mod behavior_environment_tests {
         assert_eq!(environment.bash_access, "read-only");
         assert_eq!(environment.skill_names, vec!["Host diagnostics"]);
         assert_eq!(environment.session_count, 3);
-        assert_eq!(environment.active_session_count, 2);
+        assert_eq!(environment.active_session_count, 1);
     }
 
     #[test]

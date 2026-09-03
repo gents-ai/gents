@@ -3,20 +3,14 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
-  assertCompatibleBridgeContract,
+  assertExactBridgeContract,
   createDesktopClient,
   EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
-  MINIMUM_BRIDGE_CONTRACT_VERSION,
+  BRIDGE_CONTRACT_VERSION,
   PACKAGE_VERSION,
   type DesktopBridgeContract,
 } from "./client.js";
 import { createMemoryTransport } from "./testing.js";
-
-function versionParts(version: string): [number, number] {
-  const match = /^(\d+)\.(\d+)$/.exec(version);
-  if (!match) throw new Error(`invalid test version ${version}`);
-  return [Number(match[1]), Number(match[2])];
-}
 
 function contract(
   contractVersion: string,
@@ -34,28 +28,23 @@ function contract(
   };
 }
 
-describe("desktop bridge compatibility", () => {
-  it("accepts the supported additive range and rejects incompatible versions", () => {
-    const [major, minor] = versionParts(MINIMUM_BRIDGE_CONTRACT_VERSION);
-
+describe("desktop bridge contract", () => {
+  it("requires the exact contract version", () => {
     expect(() =>
-      assertCompatibleBridgeContract(contract(`${major}.${minor}`)),
-    ).not.toThrow();
-    expect(() =>
-      assertCompatibleBridgeContract(contract(`${major}.${minor + 1}`)),
+      assertExactBridgeContract(contract(BRIDGE_CONTRACT_VERSION)),
     ).not.toThrow();
 
     for (const version of [
       "1.6",
-      `${major}.${minor - 1}`,
-      `${major - 1}.${minor}`,
-      `${major + 1}.0`,
-      `${major}`,
-      `${major}.${minor}.0`,
-      ` ${major}.${minor}`,
+      "4.2",
+      "5.1",
+      "6.1",
+      "5",
+      "5.0.0",
+      " 5.0",
       "NaN.6",
     ]) {
-      expect(() => assertCompatibleBridgeContract(contract(version))).toThrow(
+      expect(() => assertExactBridgeContract(contract(version))).toThrow(
         "Incompatible Gents desktop bridge contract",
       );
     }
@@ -63,16 +52,16 @@ describe("desktop bridge compatibility", () => {
 
   it("keeps package release identity exact", () => {
     expect(() =>
-      assertCompatibleBridgeContract(
-        contract(MINIMUM_BRIDGE_CONTRACT_VERSION, "0.13.0"),
+      assertExactBridgeContract(
+        contract(BRIDGE_CONTRACT_VERSION, "0.13.0"),
       ),
     ).toThrow("Gents desktop package mismatch");
   });
 
   it("rejects a mismatched generated wire schema", () => {
     expect(() =>
-      assertCompatibleBridgeContract({
-        ...contract(MINIMUM_BRIDGE_CONTRACT_VERSION),
+      assertExactBridgeContract({
+        ...contract(BRIDGE_CONTRACT_VERSION),
         wireSchemaHash: "stale-wire-schema",
       }),
     ).toThrow("Incompatible Gents desktop wire schema");
@@ -86,7 +75,7 @@ describe("desktop bridge compatibility", () => {
       ),
     ) as DesktopBridgeContract;
 
-    expect(() => assertCompatibleBridgeContract(fingerprint)).not.toThrow();
+    expect(() => assertExactBridgeContract(fingerprint)).not.toThrow();
   });
 
   it("rejects an old bridge on the default app API before starting", async () => {

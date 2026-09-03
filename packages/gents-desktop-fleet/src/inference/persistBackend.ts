@@ -28,6 +28,9 @@ export async function persistInferenceBackend({
   onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
 }) {
   const targets = resolveTargets(deployment);
+  if (!targets.behavior || !targets.backendId) {
+    throw new Error(targets.error ?? "Inference target binding is unavailable");
+  }
   await onSaveBackendConfig({
     backendId: targets.backendId,
     name: options.name,
@@ -41,13 +44,11 @@ export async function persistInferenceBackend({
     models: options.models,
     enabled: true,
   });
-  if (targets.behavior) {
-    await onSaveBehaviorConfig(
-      behaviorSaveFrom(
-        targets.behavior,
-        deployment.agentDid,
-        targets.backendId,
-      ),
-    );
-  }
+  await onSaveBehaviorConfig(
+    behaviorSaveFrom(
+      targets.behavior,
+      deployment.agentDid,
+      targets.backendId,
+    ),
+  );
 }

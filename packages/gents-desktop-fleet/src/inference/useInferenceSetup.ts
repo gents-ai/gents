@@ -49,7 +49,7 @@ export function useInferenceSetup({
   // Only browser sign-in can wait indefinitely, so cancellation also aborts
   // the backend login server and frees its loopback port.
   const [signingIn, setSigningIn] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(targets.error);
   const [done, setDone] = useState<string | null>(null);
   const [openaiKey, setOpenaiKey] = useState("");
   const [openaiModel, setOpenaiModel] = useState(OPENAI_DEFAULT_MODEL);

@@ -1002,7 +1002,7 @@ mod tests {
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
-            allowed_mcp_service_ids: Vec::new(),
+            allowed_mcp_service_ids: vec!["missing-service".to_string()],
         });
 
         let error = tool

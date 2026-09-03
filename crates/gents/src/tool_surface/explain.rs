@@ -241,8 +241,8 @@ fn explain_meta(
         );
         if surface.allowed_mcp_service_ids.is_empty() {
             builder.warn(
-                "mcp_empty_allowlist_all",
-                "allowed_mcp_service_ids is empty, which currently means all online MCP services.",
+                "mcp_empty_allowlist_none",
+                "allowed_mcp_service_ids is empty, so no MCP service is callable.",
             );
         }
         return;
@@ -256,10 +256,17 @@ fn explain_meta(
         }
     }
     if config.meta_tools_requested() {
-        builder.warn(
-            "meta_requested_no_online_mcp",
-            "Meta tools are configured on, but no ToolServiceRegistry row is currently online.",
-        );
+        if config.allowed_mcp_service_ids().is_empty() {
+            builder.warn(
+                "mcp_empty_allowlist_none",
+                "Meta tools are configured on, but allowed_mcp_service_ids grants no MCP service.",
+            );
+        } else {
+            builder.warn(
+                "meta_requested_no_online_mcp",
+                "Meta tools are configured on, but no allowed ToolServiceRegistry row is currently online.",
+            );
+        }
     }
 }
 

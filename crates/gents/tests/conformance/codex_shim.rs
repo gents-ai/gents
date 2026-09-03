@@ -287,7 +287,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         shape.native_source_parent.as_deref(),
         Some(shape.parent_thread_id.as_str())
     );
-    assert_eq!(shape.legacy_top_level_parent, None);
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
     let reasoning_cases = lean_codex_shim_reasoning_projection_cases();

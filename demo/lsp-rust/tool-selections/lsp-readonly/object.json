@@ -1,5 +1,6 @@
 {
   "selection_id": "lsp-readonly",
+  "tool_policy_version": "tool-policy/v1",
   "agent_did": "did:key:zExperimentAgentPlaceholder00000000000000000000000000",
   "display_name": "ReadOnly files + lsp (bash off)",
   "enable_file_tools": true,

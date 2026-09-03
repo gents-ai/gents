@@ -23,8 +23,6 @@ type ToolSelection @branchable {
     cli_tool_names: [String]
     enable_meta_tools: Boolean
     allowed_mcp_service_ids: [String]
-    # deprecated: delegate_to_agent removed; field retained for schema-compat, unused.
-    delegate_to: [String]
     backgroundable_tool_names: [String]
     # Tool names that require an AgentToolApproval document before dispatch.
     # A matched call holds in lifecycle_state "awaitingApproval" until an
@@ -32,7 +30,6 @@ type ToolSelection @branchable {
     approval_required_tools: [String]
     subagent_targets: [String]
     subagent_spawn_enabled: Boolean
-    orchestration_enabled: Boolean
     subagent_steering_enabled: Boolean
     subagent_background_enabled: Boolean
     subagent_default_await_mode: String

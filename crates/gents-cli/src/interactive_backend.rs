@@ -258,7 +258,6 @@ mod tests {
             keychain_label: None,
             secure_enclave_label: None,
             inference_endpoint: None,
-            inference_endpoint_legacy: None,
             backend_id: None,
             backend_name: None,
             backend_preset: None,
@@ -290,10 +289,6 @@ mod tests {
         let mut endpoint = bare_init_args();
         endpoint.inference_endpoint = Some("http://127.0.0.1:8080/v1".to_string());
         assert!(has_backend_arg(&endpoint));
-
-        let mut legacy = bare_init_args();
-        legacy.inference_endpoint_legacy = Some("http://127.0.0.1:8080/v1".to_string());
-        assert!(has_backend_arg(&legacy));
 
         let mut preset = bare_init_args();
         preset.backend_preset = Some(BackendPresetArg::OpenAi);

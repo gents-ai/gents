@@ -16,16 +16,14 @@ fn wide_open_preset_is_permissive_and_versioned() {
         preset.tool_policy_version.as_deref(),
         Some(crate::tool_surface::TOOL_POLICY_V1)
     );
-    // Reproduces today's permissive surface against an EXPLICIT expected set, so
-    // a change to the underlying backfill is caught (not a tautology that
-    // recomputes the same call). meta + DefraDB query on; everything privilege-bearing
-    // backfills to secure (false).
+    // Pin the explicit permissive surface instead of recomputing expectations
+    // from the preset builder. Meta and DefraDB query are on; every other
+    // privilege-bearing capability is explicitly false.
     assert_eq!(preset.enable_meta_tools, Some(true));
     assert_eq!(preset.enable_goal_tools, None);
     assert_eq!(preset.enable_goal_creation, None);
     assert_eq!(preset.enable_defra_query, Some(true));
-    // The third legacy default-true capability — must be backfilled too, else the
-    // preset (and the secure-default-flip migration) silently drops it under V1.
+    // Context budget is the third capability explicitly enabled by this preset.
     assert_eq!(preset.enable_context_budget, Some(true));
     assert_eq!(preset.enable_file_tools, Some(false));
     assert_eq!(preset.enable_bash, Some(false));

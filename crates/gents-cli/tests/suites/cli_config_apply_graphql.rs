@@ -30,6 +30,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_over_graphql() -> Res
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

@@ -285,7 +285,7 @@ pub(crate) async fn apply_control_update(
     }
 
     if let Some(credential) =
-        crate::chatgpt_codex::lookup_oauth_credential_by_doc_id(node, doc_id).await?
+        crate::oauth_credential::lookup_oauth_credential_by_doc_id(node, doc_id).await?
     {
         if credential.agent_did != agent_did {
             return Ok(ControlUpdateOutcome::Irrelevant);

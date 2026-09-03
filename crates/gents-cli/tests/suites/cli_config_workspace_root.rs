@@ -34,6 +34,7 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

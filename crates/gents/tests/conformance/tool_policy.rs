@@ -186,7 +186,6 @@ pub(super) fn generated_goal_capability_resolution_matches_rust_decoder() {
     assert_eq!(cases.len(), 6, "goal capability resolution matrix drifted");
     for case in cases {
         let (goal_tools, goal_creation) = gents::tool_surface::resolve_goal_capabilities(
-            case.meta,
             case.explicit_goal_tools,
             case.explicit_goal_create,
         );

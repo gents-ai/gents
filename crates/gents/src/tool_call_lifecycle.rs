@@ -365,7 +365,7 @@ impl ToolCallLifecycle {
         }
     }
 
-    pub(crate) fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
+    pub fn with_requester_did(mut self, requester_did: Option<String>) -> Self {
         self.requester_did = requester_did.and_then(|did| {
             let did = did.trim();
             (!did.is_empty()).then(|| did.to_string())

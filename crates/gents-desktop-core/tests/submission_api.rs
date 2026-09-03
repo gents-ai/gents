@@ -70,8 +70,14 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
+    let behavior_id = format!("{agent_did}:default");
     let submitted = core
-        .submit_request(&session_id, &agent_did, "  hello   there\noperator  ", None)
+        .submit_request(
+            &session_id,
+            &agent_did,
+            "  hello   there\noperator  ",
+            Some(&behavior_id),
+        )
         .await?;
 
     let request: RequestRow = query_single(
@@ -129,6 +135,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     let (runtime, core, agent_did) = start_core_with_local_route(tempdir.path()).await?;
 
     let session_id = Uuid::new_v4().to_string();
+    let behavior_id = format!("{agent_did}:default");
 
     let metadata_value = r#"{"key":"preserve-me"}"#.to_string();
     let options = SubmitRequestOptions {
@@ -145,7 +152,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
             &session_id,
             &agent_did,
             "please preserve my overrides",
-            None,
+            Some(&behavior_id),
             options,
         )
         .await?;

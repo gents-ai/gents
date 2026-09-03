@@ -1,8 +1,7 @@
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{
-    AgentBehaviorRow, AgentPrincipalRow, InferenceBackendRow, InferenceProfileRow, SkillRow,
-    ToolSelectionRow,
+    AgentBehaviorRow, InferenceBackendRow, InferenceProfileRow, SkillRow, ToolSelectionRow,
 };
 
 use super::super::types::{
@@ -32,14 +31,7 @@ pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveReques
         .iter()
         .find(|row| row.agent_did == agent_did)
         .cloned()
-        .unwrap_or_else(|| AgentPrincipalRow {
-            agent_did: agent_did.clone(),
-            display_name: None,
-            default_behavior_id: None,
-            enabled: Some(true),
-            created_at: None,
-            created_by: Some(agent_did.clone()),
-        });
+        .with_context(|| format!("AgentPrincipal {agent_did} is not present in the database"))?;
     row.display_name = Some(display_name);
     row.default_behavior_id = Some(default_behavior_id);
     row.enabled = Some(request.enabled.unwrap_or(true));
@@ -234,6 +226,10 @@ pub async fn save_backend_config(core: &ClientCore, request: BackendSaveRequest)
     let backend_id = require_trimmed("backend_id", request.backend_id)?;
     let name = require_trimmed("name", request.name)?;
     let provider_kind = require_trimmed("provider_kind", request.provider_kind)?;
+    let provider_kind =
+        gents::backend_provider::BackendProviderKind::parse_optional(Some(provider_kind.as_str()))?
+            .as_str()
+            .to_string();
     let endpoint = require_trimmed("endpoint", request.endpoint)?;
     let models = request
         .models
@@ -373,7 +369,7 @@ pub async fn save_tool_selection_config(
             selection_id: selection_id.clone(),
             agent_did: Some(agent_did.clone()),
             display_name: None,
-            tool_policy_version: None,
+            tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
             subagent_default_await_mode: None,
             write_tools: Vec::new(),
             datastore_tool_surface_ids: Vec::new(),
@@ -400,7 +396,6 @@ pub async fn save_tool_selection_config(
             enable_goal_creation: None,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
-            delegate_to: Vec::new(),
             backgroundable_tool_names: Vec::new(),
             subagent_targets: Vec::new(),
             subagent_spawn_enabled: Some(false),
@@ -416,6 +411,7 @@ pub async fn save_tool_selection_config(
         });
     row.agent_did = Some(agent_did);
     row.display_name = Some(display_name);
+    row.tool_policy_version = Some(gents::tool_surface::TOOL_POLICY_V1.to_string());
     row.enable_file_tools = request.enable_file_tools.or(row.enable_file_tools);
     row.file_tools_mode = trim_optional(request.file_tools_mode);
     row.file_tool_root = trim_optional(request.file_tool_root);
@@ -459,12 +455,6 @@ pub async fn save_tool_selection_config(
         .collect();
     row.required_mcp_service_ids = request
         .required_mcp_service_ids
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    row.delegate_to = request
-        .delegate_to
         .into_iter()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

@@ -38,7 +38,6 @@ pub struct ExternalAdapterSource {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExternalAdapterMapping {
-    #[serde(alias = "projection_id")]
     pub projection: AdapterProjectionKind,
     #[serde(default)]
     pub scenario_id: Option<String>,

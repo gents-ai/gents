@@ -48,6 +48,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 behavior_id.clone(),
                 &agent_did,
@@ -240,9 +241,12 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
         "prompt": "background child work",
-        "await_mode": "background"
+        "await_mode": "background",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -260,7 +264,8 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id))
+    .with_requester_did(Some(running.booted.agent_did.clone()));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -285,7 +290,6 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,
-        &running.booted.agent_did,
         ListSubagentsArgs::default(),
     )
     .await
@@ -295,7 +299,10 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
         .iter()
         .find(|e| e.child_request_id == child_request_id)
         .expect("list_subagents must reflect the running background child");
-    assert_eq!(entry.behavior_id, running.behavior_id);
+    assert_eq!(
+        entry.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str())
+    );
 
     running.booted.shutdown().await;
 }
@@ -345,7 +352,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "agent_did": "did:key:z6MkUnclaimedRemoteTarget",
         "behavior_id": "remote-coder-behavior",
         "prompt": "cross-deployment child work",
-        "await_mode": "background"
+        "await_mode": "background",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -363,7 +371,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         child_request_id.to_string(),
         "did:key:z6MkUnclaimedRemoteTarget".to_string(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id))
+    .with_requester_did(Some(agent_did.clone()));
     lifecycle.start_running().await.unwrap();
 
     let escaped_child = escape_graphql_string(child_request_id);
@@ -379,7 +388,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
 
     let all: ListSubagentsArgs =
         serde_json::from_value(serde_json::json!({ "status": "all" })).unwrap();
-    let resp = handle_list_subagents(db.node.as_ref(), parent_request_id, &agent_did, all)
+    let resp = handle_list_subagents(db.node.as_ref(), parent_request_id, all)
         .await
         .expect("handle_list_subagents must not error");
     let entry = resp
@@ -390,12 +399,9 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     assert_eq!(entry.status, AWAITING_CHILD_MATERIALIZATION);
     assert_eq!(entry.status, "awaiting_child_materialization");
     assert_eq!(entry.await_mode, "background");
-    assert_eq!(entry.name, "remote-coder");
-    assert_eq!(entry.behavior_id, "remote-coder-behavior");
-    assert!(
-        entry.child_session_id.is_empty(),
-        "no session exists until the child materializes"
-    );
+    assert_eq!(entry.name.as_deref(), Some("remote-coder"));
+    assert_eq!(entry.behavior_id.as_deref(), Some("remote-coder-behavior"));
+    assert_eq!(entry.child_session_id, None);
     let list_diagnostic = entry
         .diagnostic
         .as_deref()
@@ -408,7 +414,6 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,
-        &agent_did,
         ListSubagentsArgs::default(),
     )
     .await
@@ -430,7 +435,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     assert!(!read.terminal);
     assert_eq!(read.lifecycle_state, AWAITING_CHILD_MATERIALIZATION);
     assert!(read.transcript.is_empty());
-    assert!(read.child_session_id.is_empty());
+    assert_eq!(read.child_session_id, None);
     assert!(!read.has_more);
     let read_diagnostic = read
         .diagnostic
@@ -476,7 +481,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         "agent_did": "did:key:z6MkUnclaimedRemoteTarget",
         "behavior_id": "remote-coder-behavior",
         "prompt": "cross-deployment foreground child work",
-        "await_mode": "foreground"
+        "await_mode": "foreground",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut foreground_lifecycle = ToolCallLifecycle::new_subagent(
@@ -496,7 +502,8 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
     )
     .with_request_doc_id(Some(
         crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await,
-    ));
+    ))
+    .with_requester_did(Some(agent_did.clone()));
     foreground_lifecycle.start_running().await.unwrap();
     assert!(matches!(
         load_steer_subagent_target(
@@ -546,15 +553,18 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "foreground child work"
+        "prompt": "foreground child work",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -565,7 +575,8 @@ async fn local_foreground_spawn_materializes_child_via_source() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id))
+    .with_requester_did(Some(running.booted.agent_did.clone()));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;

@@ -10,8 +10,8 @@
 
 use std::time::Duration;
 
-use gents::chatgpt_codex::{normalize_provider, upsert_oauth_credential, OAuthCredential};
-use gents::oauth_credential::list_oauth_credentials;
+use gents::chatgpt_codex::normalize_provider;
+use gents::oauth_credential::{list_oauth_credentials, upsert_oauth_credential, OAuthCredential};
 use gents_chatgpt_login::{run_login_server, LoginOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,19 +133,16 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<CodexLoginResult, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
     let agent_did = request.agent_did.trim().to_string();
     if agent_did.is_empty() {
-        return Err(BridgeError::from_legacy_message("agent_did is required"));
+        return Err(BridgeError::untyped("agent_did is required"));
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
 
-    let server = run_login_server(LoginOptions::default()).map_err(|error| {
-        BridgeError::from_legacy_message(format!("starting ChatGPT login server: {error}"))
-    })?;
+    let server = run_login_server(LoginOptions::default())
+        .map_err(|error| BridgeError::untyped(format!("starting ChatGPT login server: {error}")))?;
     let _ = app.emit(
         "desktop://codex-login-url",
         CodexLoginUrl {
@@ -165,11 +162,11 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     }
     let tokens = match wait {
         Ok(result) => result.map_err(|error| {
-            BridgeError::from_legacy_message(format!("ChatGPT browser login failed: {error}"))
+            BridgeError::untyped(format!("ChatGPT browser login failed: {error}"))
         })?,
         Err(_elapsed) => {
             cancel.shutdown();
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "ChatGPT sign-in timed out waiting for the browser",
             ));
         }
@@ -186,9 +183,7 @@ pub(crate) async fn desktop_codex_login<R: Runtime>(
     let node = core.node_arc();
     let doc_id = upsert_oauth_credential(&node, &credential)
         .await
-        .map_err(|error| {
-            BridgeError::from_legacy_message(format!("storing ChatGPT credential: {error}"))
-        })?;
+        .map_err(|error| BridgeError::untyped(format!("storing ChatGPT credential: {error}")))?;
 
     // Storing the credential is exactly the signal the runtime reconciles on to
     // flip a ChatGptCodex behavior available; nudge the UI to refetch health.
@@ -214,7 +209,7 @@ pub(crate) fn desktop_codex_login_cancel(
         let mut bridge = state
             .bridge
             .lock()
-            .map_err(|_| BridgeError::from_legacy_message("desktop bridge lock poisoned"))?;
+            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
         bridge.codex_login_cancel.take()
     };
     if let Some(handle) = handle {
@@ -309,11 +304,11 @@ pub(crate) async fn desktop_provider_accounts_list(
     state: State<'_, DesktopAppState>,
 ) -> Result<Vec<ProviderAccountView>, BridgeError> {
     let core = current_core(&state)
-        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let agent_did = request.agent_did.trim();
     let credentials = list_oauth_credentials(core.node(), agent_did)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     Ok(credentials.iter().map(ProviderAccountView::from).collect())
 }
 
@@ -324,18 +319,18 @@ pub(crate) async fn desktop_provider_account_disconnect<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<(), BridgeError> {
     let core = current_core(&state)
-        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))?;
+        .ok_or_else(|| BridgeError::untyped("desktop client is not running"))?;
     let credentials = list_oauth_credentials(core.node(), request.agent_did.trim())
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let mut credential = credentials
         .into_iter()
         .find(|entry| entry.credential_id == request.credential_id)
-        .ok_or_else(|| BridgeError::from_legacy_message("provider account not found"))?;
+        .ok_or_else(|| BridgeError::untyped("provider account not found"))?;
     credential.enabled = false;
     upsert_oauth_credential(core.node(), &credential)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let _ = app.emit(
         "desktop://client-updated",
         ClientUpdateEvent::coarse("config"),
@@ -359,13 +354,11 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     };
 
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
     let agent_did = request.agent_did.trim().to_string();
     if agent_did.is_empty() {
-        return Err(BridgeError::from_legacy_message("agent_did is required"));
+        return Err(BridgeError::untyped("agent_did is required"));
     }
     let provider = normalize_xai_provider(request.provider.as_deref().unwrap_or_default());
 
@@ -398,13 +391,13 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     let tokens = match login {
         Ok(Ok(tokens)) => tokens,
         Ok(Err(error)) => {
-            return Err(BridgeError::from_legacy_message(format!(
+            return Err(BridgeError::untyped(format!(
                 "Grok device-code login failed: {error}"
             )));
         }
         Err(_elapsed) => {
             cancel.store(true, Ordering::SeqCst);
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "Grok sign-in timed out waiting for browser approval",
             ));
         }
@@ -415,9 +408,7 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
     let node = core.node_arc();
     let doc_id = upsert_oauth_credential(&node, &credential)
         .await
-        .map_err(|error| {
-            BridgeError::from_legacy_message(format!("storing Grok credential: {error}"))
-        })?;
+        .map_err(|error| BridgeError::untyped(format!("storing Grok credential: {error}")))?;
 
     let _ = app.emit(
         "desktop://client-updated",
@@ -468,7 +459,7 @@ pub(crate) fn desktop_grok_login_cancel(
         let mut bridge = state
             .bridge
             .lock()
-            .map_err(|_| BridgeError::from_legacy_message("desktop bridge lock poisoned"))?;
+            .map_err(|_| BridgeError::untyped("desktop bridge lock poisoned"))?;
         bridge.grok_login_cancel.take()
     };
     if let Some(flag) = flag {

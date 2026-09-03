@@ -45,7 +45,7 @@ import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
 
 type ConfigWorkspaceProps = {
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   bootstrap: BootstrapSummary | null;
   selectedDeployment: DeploymentView | null;
   selectedBehaviorId: string | null;

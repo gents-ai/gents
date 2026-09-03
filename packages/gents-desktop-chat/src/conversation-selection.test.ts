@@ -19,28 +19,17 @@ describe("conversation behavior selection", () => {
       conversationBelongsToBehavior(
         conversation("session-classifier"),
         "default",
-        "default",
       ),
     ).toBe(false);
     expect(
       conversationBelongsToBehavior(
         conversation("session-classifier"),
         "session-classifier",
-        "default",
       ),
     ).toBe(true);
   });
 
-  it("places legacy unscoped conversations only under the default behavior", () => {
-    expect(
-      conversationBelongsToBehavior(conversation(null), "default", "default"),
-    ).toBe(true);
-    expect(
-      conversationBelongsToBehavior(
-        conversation(null),
-        "session-classifier",
-        "default",
-      ),
-    ).toBe(false);
+  it("does not assign an unbound conversation to a behavior", () => {
+    expect(conversationBelongsToBehavior(conversation(null), "default")).toBe(false);
   });
 });

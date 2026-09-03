@@ -27,6 +27,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

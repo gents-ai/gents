@@ -160,7 +160,7 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         selection_id: args.selection_id.clone(),
         agent_did: args.agent_did.clone(),
         display_name,
-        tool_policy_version: None,
+        tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
         enable_file_tools,
         file_tools_mode: file_tools_mode.clone(),
         file_tool_root: file_tool_root.clone(),

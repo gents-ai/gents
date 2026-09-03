@@ -13,37 +13,19 @@ import type {
 export type DesktopBridgeContract = GeneratedBridgeContract;
 
 export const PACKAGE_VERSION = "0.15.0";
-// The client consumes the 5.0 sync contract plus durable-goal capabilities,
-// Task declarations, and presence-aware goal save patches through 5.2.
-export const MINIMUM_BRIDGE_CONTRACT_VERSION = "5.2";
+// The client and bridge share one exact breaking contract. Sync status comes
+// from database-owned gauges; goal permissions are explicit fields.
+export const BRIDGE_CONTRACT_VERSION = "6.0";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "13bdf77c3f8a6d9c7b6710762f7cd653c9c7734eeb2c64855ad318fef65f066b";
+  "bc2cb1e3ebc4879b73fcca4dd171d381a19a10f92152fe64fb54fea16b51ae34";
 
-function parseBridgeContractVersion(version: string): [number, number] | null {
-  const match = /^(\d+)\.(\d+)$/.exec(version);
-  if (!match) return null;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  return Number.isSafeInteger(major) && Number.isSafeInteger(minor)
-    ? [major, minor]
-    : null;
-}
-
-export function assertCompatibleBridgeContract(
+export function assertExactBridgeContract(
   contract: DesktopBridgeContract,
 ) {
-  const required = parseBridgeContractVersion(MINIMUM_BRIDGE_CONTRACT_VERSION);
-  const actual = parseBridgeContractVersion(contract.contractVersion);
-  if (!required) {
-    throw new Error(
-      `Invalid desktop client bridge requirement ${MINIMUM_BRIDGE_CONTRACT_VERSION}`,
-    );
-  }
-  const [requiredMajor, requiredMinor] = required;
-  if (!actual || actual[0] !== requiredMajor || actual[1] < requiredMinor) {
+  if (contract.contractVersion !== BRIDGE_CONTRACT_VERSION) {
     throw new Error(
       `Incompatible Gents desktop bridge contract ${contract.contractVersion}; ` +
-        `client requires ${requiredMajor}.${requiredMinor} or a newer compatible minor`,
+        `client requires exactly ${BRIDGE_CONTRACT_VERSION}`,
     );
   }
   if (contract.packageVersion !== PACKAGE_VERSION) {
@@ -94,7 +76,7 @@ export function createDesktopClient(
   }
 
   async function clientStart(): Promise<DesktopClientSnapshot> {
-    assertCompatibleBridgeContract(
+    assertExactBridgeContract(
       await invoke<DesktopBridgeContract>("desktop_bridge_contract"),
     );
     return invoke("desktop_client_start");

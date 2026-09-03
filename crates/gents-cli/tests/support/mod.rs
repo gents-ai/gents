@@ -14,7 +14,8 @@ pub use fs::{
     write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{
-    doc_id_for_selection, escape_graphql_string, exec, first_graphql_row, graphql_query,
+    doc_id_for_selection, doc_id_from_create, escape_graphql_string, exec, first_graphql_row,
+    graphql_query,
 };
 pub use mocks::{
     completion_text_sse, request_contains_role_text, request_has_tool_result_message,

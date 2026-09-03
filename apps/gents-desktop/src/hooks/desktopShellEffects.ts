@@ -224,7 +224,6 @@ export function useDesktopShellEffects({
       return;
     }
 
-    const defaultBehaviorId = selectedDeployment.behaviorReadiness.defaultBehaviorId;
     const effectiveBehaviorId = selectedBehaviorIdForDeployment(
       selectedDeployment,
       selectedBehaviorId,
@@ -239,11 +238,7 @@ export function useDesktopShellEffects({
       (selectedDeployment.conversations.some(
         (conversation) =>
           conversation.sessionId === selectedSessionId &&
-          conversationBelongsToBehavior(
-            conversation,
-            effectiveBehaviorId,
-            defaultBehaviorId,
-          ),
+          conversationBelongsToBehavior(conversation, effectiveBehaviorId),
       ) ||
         ((localWorkflow.kind === "awaitingObservation" ||
           localWorkflow.kind === "turnInProgress") &&
@@ -256,11 +251,7 @@ export function useDesktopShellEffects({
 
     setSelectedSessionId(
       selectedDeployment.conversations.find((conversation) =>
-        conversationBelongsToBehavior(
-          conversation,
-          effectiveBehaviorId,
-          defaultBehaviorId,
-        ),
+        conversationBelongsToBehavior(conversation, effectiveBehaviorId),
       )?.sessionId ?? null,
     );
   }, [

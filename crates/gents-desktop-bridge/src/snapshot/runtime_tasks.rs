@@ -168,8 +168,7 @@ pub(super) fn request_backed_conversation_summaries(
                 session_id,
                 title: None,
                 preview_text: normalize_optional(request.content.as_deref()),
-                status: normalize_optional(request.status.as_deref())
-                    .or_else(|| normalize_optional(request.lifecycle_state.as_deref())),
+                status: normalize_optional(request.lifecycle_state.as_deref()),
                 behavior_id: normalize_optional(request.behavior_id.as_deref()),
                 latest_request_id: Some(latest_request_id.clone()),
                 task_id: task_tag.as_ref().map(|tag| tag.task_id.clone()),

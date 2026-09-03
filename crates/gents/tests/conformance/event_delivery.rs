@@ -446,6 +446,7 @@ impl ProductionEventDeliveryDriver {
                 "agent_did": agent_did,
                 "behavior_id": AGENT_NAME,
                 "prompt": "materialize event-delivery child",
+                "parent_subagent_depth": 0,
             })
             .to_string(),
         );
@@ -469,6 +470,7 @@ impl ProductionEventDeliveryDriver {
                     await_mode: "foreground",
                     cancel_policy: "cascade",
                     child_request_id: "{child_request_id}",
+                    spawn_target_did: "{agent_did}",
                     selected_service_id: null,
                     selected_tool_name: null,
                     tool_failure_class: null,
@@ -790,6 +792,7 @@ async fn install_subagent_source_fixture(
         &ToolSelectionDocument {
             selection_id: TOOL_SELECTION_ID.to_string(),
             agent_did: agent_did.to_string(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 AGENT_NAME, agent_did, AGENT_NAME, None,
             )]),

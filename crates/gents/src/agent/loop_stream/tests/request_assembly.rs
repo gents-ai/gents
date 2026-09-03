@@ -151,7 +151,6 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
     // multi-turn run, every request's history must pair calls with results and
     // keep assistant content provider-ordered — by construction, no sanitizer.
     let (_node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![
         // Turn 1: text + reasoning + two tool calls in one assistant turn.
@@ -209,7 +208,6 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     // call, orphaned result, text-after-call ordering) and assert the request
     // on the wire satisfies the provider invariants.
     let (_node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     let unpaired_call = crate::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
@@ -366,7 +364,6 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
     }
 
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     // The wire parser could not parse the corrupt bytes, so rig carries them as
     // a raw Value::String — exactly the shape persisted in the production store.
@@ -463,7 +460,6 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
     }
 
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![

@@ -104,7 +104,7 @@ pub(crate) async fn load_document_runtime_view(
         );
     }
 
-    match crate::chatgpt_codex::list_oauth_credentials(node, agent_did).await {
+    match crate::oauth_credential::list_oauth_credentials(node, agent_did).await {
         Ok(credentials) => {
             for credential in credentials {
                 let doc_id = credential.doc_id.clone().unwrap_or_default();

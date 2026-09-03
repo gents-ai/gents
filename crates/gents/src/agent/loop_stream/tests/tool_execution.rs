@@ -1,7 +1,6 @@
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let prompt = Message::user("use the echo tool");
 
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
@@ -102,7 +101,6 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
     // design collected tool calls and dispatched only after the stream drained,
     // so a mid-stream stall left the tool unrun with nothing to mark.
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let prompt = Message::user("use the echo tool then stall");
 
     // One turn: emit a tool call, then hang (no FinalResponse, no EOF).
@@ -176,7 +174,6 @@ async fn tool_definition_receives_prompt_rag_text() {
     // P3/compat: tool definitions must be built with the prompt's rag text (rig
     // parity), not String::new(), so prompt-aware tools keep the task context.
     let (_node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
     let seen = Arc::new(Mutex::new(None));
     let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
         seen_prompt: seen.clone(),
@@ -213,7 +210,6 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     // tool result is folded in (turn 2) must still advertise the toolset, or the
     // provider sees a tool-result conversation with no tools.
     let (_node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
     let model = ScriptedModel::new_turns(vec![
@@ -253,7 +249,6 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
 async fn oversized_tool_result_is_bounded_before_threading() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("read the big thing");
-    ready_hook_for(&hook).await;
 
     // A tool returning far more than the default limits: the model-facing
     // (threaded/yielded) result must be bounded, while on_tool_result still
@@ -467,7 +462,6 @@ async fn unparseable_tool_args_notify_model_and_terminalize_failed() {
     }
 
     let (node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     // Valid JSON, but missing the required `findings` field: a Malformed parse
     // failure that no repair can recover into the typed args.

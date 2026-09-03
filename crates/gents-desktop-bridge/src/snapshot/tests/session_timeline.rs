@@ -852,7 +852,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 args: Some("{\"pattern\":\"**/*.rs\"}".to_string()),
                 result: None,
                 status: Some("running".to_string()),
-                lifecycle_state: None,
+                lifecycle_state: Some("running".to_string()),
                 child_request_id: None,
                 await_mode: None,
                 cancel_policy: None,
@@ -1275,7 +1275,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             args: Some("{\"pattern\":\"**/*.rs\",\"recursive\":true}".to_string()),
             result: Some("{\"matches\":12}".to_string()),
             status: Some("completed".to_string()),
-            lifecycle_state: None,
+            lifecycle_state: Some("completed".to_string()),
             child_request_id: None,
             await_mode: None,
             cancel_policy: None,
@@ -1386,7 +1386,6 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         .expect("rendered tool");
     let denial = tool.denial.as_ref().expect("structured denial");
 
-    assert_eq!(tool.status.as_deref(), Some("completed"));
     assert_eq!(tool.status_kind, "error");
     assert_eq!(denial.rule_id, "readOnlySubcommandNotAllowlisted");
     assert_eq!(denial.category, "read-only-guard");

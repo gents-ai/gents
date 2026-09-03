@@ -1,7 +1,7 @@
 use crate::llm::message::{AssistantContent, Message};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::tool_call_lifecycle::ToolCallState;
 
@@ -127,118 +127,44 @@ pub struct AmyToolCallTraceRecord {
     pub retry_count: Option<i64>,
 }
 
-pub fn analyze_tool_call(
-    tool_name: &str,
-    raw_args: &str,
-    result: &str,
-    status: &str,
-) -> ToolCallTraceAnalysis {
-    analyze_tool_call_with_persisted_outcome(tool_name, raw_args, result, status, None, None)
-}
-
 pub fn analyze_tool_call_with_persisted_outcome(
     tool_name: &str,
     raw_args: &str,
     result: &str,
-    legacy_status: &str,
-    lifecycle_state: Option<&str>,
+    lifecycle_state: ToolCallState,
     persisted_failure_class: Option<&str>,
 ) -> ToolCallTraceAnalysis {
     let mut analysis = analyze_arguments(tool_name, raw_args);
     analysis.native_tool_output = native_tool_output_from_result(tool_name, result);
 
-    if let Some(lifecycle_state) = lifecycle_state.filter(|state| !state.trim().is_empty()) {
-        let lifecycle_state = ToolCallState::from_persisted(lifecycle_state.trim());
-        let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
-        let failure_class = persisted_failure_class.or_else(|| match lifecycle_state {
-            Some(ToolCallState::TimedOut) => Some(ToolFailureClass::External),
-            Some(ToolCallState::Failed) => Some(ToolFailureClass::ToolReturnedError),
-            _ => None,
-        });
-        let completed = lifecycle_state == Some(ToolCallState::Completed);
+    let persisted_failure_class = persisted_failure_class.and_then(failure_class_from_str);
+    let failure_class = persisted_failure_class.or_else(|| match lifecycle_state {
+        ToolCallState::TimedOut => Some(ToolFailureClass::External),
+        ToolCallState::Failed => Some(ToolFailureClass::ToolReturnedError),
+        _ => None,
+    });
+    let completed = lifecycle_state == ToolCallState::Completed;
 
-        // Current rows carry their outcome explicitly. Keep result parsing useful
-        // for trace shape, but never let model-facing text override durable state.
-        analysis.tool_failure_class = failure_class;
-        analysis.tool_result_ok = completed && failure_class.is_none();
-        analysis.tool_error = failure_class.map(|failure_class| TraceToolError {
-            failure_class,
-            service_id: analysis.selected_service_id.clone(),
-            tool_name: analysis.selected_tool_name.clone(),
-            requested_tool_name: None,
-            path: analysis
-                .validation_errors
-                .first()
-                .map(|error| error.path.clone()),
-            message: analysis
-                .validation_errors
-                .first()
-                .map(|error| error.message.clone()),
-            retryable: retryable_for_failure_class(failure_class),
-            available_tools: None,
-            raw_error_text: raw_tool_error_text(result, &analysis),
-        });
-        return analysis;
-    }
-
-    let structured_tool_error = structured_tool_error_from_result(result);
-    if let Some(error) = &structured_tool_error {
-        analysis.tool_failure_class = Some(error.failure_class);
-        if error.failure_class == ToolFailureClass::ArgumentInvalid {
-            analysis.schema_validation_result = SchemaValidationResult::Failed;
-        }
-        if let (Some(path), Some(message)) = (&error.path, &error.message) {
-            analysis.validation_errors.push(TraceValidationError {
-                code: structured_tool_error_code_from_result(result)
-                    .unwrap_or_else(|| failure_class_code(error.failure_class).to_string()),
-                path: path.clone(),
-                message: message.clone(),
-                retryable: error.retryable.unwrap_or(false),
-            });
-        }
-    } else if let Some(native) = analysis.native_tool_output.as_ref() {
-        if !native.ok {
-            analysis.tool_failure_class =
-                native_tool_failure_class(native).or_else(|| classify_result_text(result));
-        }
-    } else if analysis.tool_failure_class.is_none() {
-        analysis.tool_failure_class = classify_result_text(result);
-    }
-
-    let completed = legacy_status.trim().eq_ignore_ascii_case("completed");
-    if analysis.tool_failure_class.is_none()
-        && analysis
-            .native_tool_output
-            .as_ref()
-            .is_some_and(|output| !output.ok)
-    {
-        analysis.tool_failure_class = Some(ToolFailureClass::ToolReturnedError);
-    }
-    if analysis.tool_failure_class.is_none() && !completed {
-        analysis.tool_failure_class = Some(ToolFailureClass::ToolReturnedError);
-    }
-
+    // Result parsing contributes trace shape only. The durable lifecycle owns
+    // the outcome and model-facing text can never override it.
+    analysis.tool_failure_class = failure_class;
     analysis.tool_result_ok = completed && analysis.tool_failure_class.is_none();
-    analysis.tool_error = structured_tool_error.or_else(|| {
-        analysis
-            .tool_failure_class
-            .map(|failure_class| TraceToolError {
-                failure_class,
-                service_id: analysis.selected_service_id.clone(),
-                tool_name: analysis.selected_tool_name.clone(),
-                requested_tool_name: None,
-                path: analysis
-                    .validation_errors
-                    .first()
-                    .map(|error| error.path.clone()),
-                message: analysis
-                    .validation_errors
-                    .first()
-                    .map(|error| error.message.clone()),
-                retryable: retryable_for_failure_class(failure_class),
-                available_tools: None,
-                raw_error_text: raw_tool_error_text(result, &analysis),
-            })
+    analysis.tool_error = failure_class.map(|failure_class| TraceToolError {
+        failure_class,
+        service_id: analysis.selected_service_id.clone(),
+        tool_name: analysis.selected_tool_name.clone(),
+        requested_tool_name: None,
+        path: analysis
+            .validation_errors
+            .first()
+            .map(|error| error.path.clone()),
+        message: analysis
+            .validation_errors
+            .first()
+            .map(|error| error.message.clone()),
+        retryable: retryable_for_failure_class(failure_class),
+        available_tools: None,
+        raw_error_text: raw_tool_error_text(result, &analysis),
     });
     analysis
 }
@@ -357,7 +283,16 @@ fn apply_call_tool_argument_analysis(
     arguments: Option<&Value>,
 ) {
     let Some(arguments) = arguments else {
+        analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
+        analysis.schema_validation_result = SchemaValidationResult::Failed;
+        analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
         analysis.final_arguments_sent = None;
+        analysis.validation_errors.push(TraceValidationError {
+            code: "arguments_not_object".to_string(),
+            path: "/arguments".to_string(),
+            message: "call_tool.arguments must be a JSON object".to_string(),
+            retryable: true,
+        });
         return;
     };
 
@@ -365,52 +300,11 @@ fn apply_call_tool_argument_analysis(
         Value::Object(_) => {
             analysis.final_arguments_sent = Some(arguments.clone());
         }
-        Value::String(raw) => match serde_json::from_str::<Value>(raw) {
-            Ok(parsed) if parsed.is_object() => {
-                analysis.final_arguments_sent = Some(parsed);
-            }
-            Ok(parsed) => {
-                analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
-                analysis.schema_validation_result = SchemaValidationResult::Failed;
-                analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
-                analysis.final_arguments_sent = Some(json!({ "input": parsed }));
-                analysis.validation_errors.push(TraceValidationError {
-                    code: "arguments_not_object".to_string(),
-                    path: "/arguments".to_string(),
-                    message: "call_tool.arguments must decode to a JSON object".to_string(),
-                    retryable: true,
-                });
-            }
-            Err(error) => {
-                analysis.argument_parse_result = ArgumentParseResult::InvalidJson;
-                analysis.schema_validation_result = SchemaValidationResult::Failed;
-                analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
-                analysis.final_arguments_sent = Some(json!({ "input": raw }));
-                analysis.validation_errors.push(TraceValidationError {
-                    code: "invalid_json_arguments".to_string(),
-                    path: "/arguments".to_string(),
-                    message: error.to_string(),
-                    retryable: true,
-                });
-            }
-        },
-        Value::Null => {
-            analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
-            analysis.schema_validation_result = SchemaValidationResult::Failed;
-            analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
-            analysis.final_arguments_sent = None;
-            analysis.validation_errors.push(TraceValidationError {
-                code: "arguments_not_object".to_string(),
-                path: "/arguments".to_string(),
-                message: "call_tool.arguments must be a JSON object".to_string(),
-                retryable: true,
-            });
-        }
         other => {
             analysis.argument_parse_result = ArgumentParseResult::ArgumentsNotObject;
             analysis.schema_validation_result = SchemaValidationResult::Failed;
             analysis.tool_failure_class = Some(ToolFailureClass::ArgumentInvalid);
-            analysis.final_arguments_sent = Some(json!({ "input": other }));
+            analysis.final_arguments_sent = Some(other.clone());
             analysis.validation_errors.push(TraceValidationError {
                 code: "arguments_not_object".to_string(),
                 path: "/arguments".to_string(),
@@ -419,66 +313,6 @@ fn apply_call_tool_argument_analysis(
             });
         }
     }
-}
-
-fn structured_tool_error_from_result(result: &str) -> Option<TraceToolError> {
-    let trimmed = result.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let value = serde_json::from_str::<Value>(trimmed).ok()?;
-    let object = value.as_object()?;
-    if object.get("ok").and_then(Value::as_bool) != Some(false) {
-        return None;
-    }
-
-    let failure_class = object
-        .get("failure_class")
-        .and_then(Value::as_str)
-        .and_then(failure_class_from_str)?;
-    let retryable = object.get("retryable").and_then(Value::as_bool);
-    let requested_tool_name = object
-        .get("requested_tool_name")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let tool_name = object
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| requested_tool_name.clone());
-
-    Some(TraceToolError {
-        failure_class,
-        service_id: object
-            .get("service_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        tool_name,
-        requested_tool_name,
-        path: object
-            .get("path")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        message: object
-            .get("message")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        retryable,
-        available_tools: string_array_field(object, "available_tools"),
-        raw_error_text: trimmed.to_string(),
-    })
-}
-
-fn structured_tool_error_code_from_result(result: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(result.trim()).ok()?;
-    let object = value.as_object()?;
-    if object.get("ok").and_then(Value::as_bool) != Some(false) {
-        return None;
-    }
-
-    let raw = object.get("failure_class").and_then(Value::as_str)?;
-    (raw == "tool_not_allowed").then(|| raw.to_string())
 }
 
 fn native_tool_output_from_result(tool_name: &str, result: &str) -> Option<NativeToolOutputTrace> {
@@ -556,18 +390,6 @@ fn native_tool_output_object(
     Some(object)
 }
 
-fn native_tool_failure_class(output: &NativeToolOutputTrace) -> Option<ToolFailureClass> {
-    if output.timed_out == Some(true) || output.status.as_deref() == Some("timeout") {
-        return Some(ToolFailureClass::External);
-    }
-    if output.exit_code.is_some_and(|code| code != 0)
-        || output.status.as_deref() == Some("exit_nonzero")
-    {
-        return Some(ToolFailureClass::ToolReturnedError);
-    }
-    (!output.ok).then_some(ToolFailureClass::ToolReturnedError)
-}
-
 fn is_native_structured_output_tool(tool_name: &str) -> bool {
     is_native_filesystem_tool(tool_name) || is_native_command_tool(tool_name)
 }
@@ -602,69 +424,7 @@ fn string_array_field(object: &serde_json::Map<String, Value>, field: &str) -> O
 }
 
 fn failure_class_from_str(raw: &str) -> Option<ToolFailureClass> {
-    if let Some(failure_class) = ToolFailureClass::from_persisted(raw) {
-        return Some(failure_class);
-    }
-    match raw {
-        "service_unavailable"
-        | "tool_not_found"
-        | "tool_not_allowed"
-        | "resource_not_found"
-        | "service_schema_drift" => Some(ToolFailureClass::ServiceUnavailable),
-        "invalid_tool_arguments" | "invalid_json_arguments" | "arguments_not_object" => {
-            Some(ToolFailureClass::ArgumentInvalid)
-        }
-        "tool_runtime_error" | "nonzero_command_exit" | "unclassified" => {
-            Some(ToolFailureClass::ToolReturnedError)
-        }
-        "tool_timeout" | "deadline_or_inference_failure" => Some(ToolFailureClass::External),
-        _ => None,
-    }
-}
-
-fn failure_class_code(failure_class: ToolFailureClass) -> &'static str {
-    failure_class.as_str()
-}
-
-fn classify_result_text(result: &str) -> Option<ToolFailureClass> {
-    let trimmed = result.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    if has_nonzero_exit_code(trimmed) {
-        return Some(ToolFailureClass::ToolReturnedError);
-    }
-    if looks_like_service_unavailable(&lower) {
-        return Some(ToolFailureClass::ServiceUnavailable);
-    }
-    if looks_like_invalid_tool_arguments(&lower) {
-        return Some(ToolFailureClass::ArgumentInvalid);
-    }
-    if looks_like_service_schema_drift(&lower) {
-        return Some(ToolFailureClass::ServiceUnavailable);
-    }
-    if looks_like_resource_not_found(&lower) {
-        return Some(ToolFailureClass::ServiceUnavailable);
-    }
-    if looks_like_tool_not_found(&lower) {
-        return Some(ToolFailureClass::ServiceUnavailable);
-    }
-    if looks_like_deadline_or_inference_failure(&lower) {
-        return Some(ToolFailureClass::External);
-    }
-    if looks_like_tool_timeout(&lower) {
-        return Some(ToolFailureClass::External);
-    }
-    if looks_like_opaque_tool_error(&lower) {
-        return Some(ToolFailureClass::ToolReturnedError);
-    }
-    if looks_like_tool_runtime_error(&lower) {
-        return Some(ToolFailureClass::ToolReturnedError);
-    }
-
-    None
+    ToolFailureClass::from_persisted(raw)
 }
 
 fn classify_request_failure_text(text: Option<&str>) -> Option<ToolFailureClass> {
@@ -678,67 +438,6 @@ fn classify_request_failure_text(text: Option<&str>) -> Option<ToolFailureClass>
     None
 }
 
-fn has_nonzero_exit_code(result: &str) -> bool {
-    for line in result.lines() {
-        let trimmed = line.trim();
-        if let Some(raw_code) = trimmed.strip_prefix("exit_code:") {
-            return raw_code.trim().parse::<i64>().is_ok_and(|code| code != 0);
-        }
-    }
-
-    let lower = result.to_ascii_lowercase();
-    lower.contains("exit status: 1")
-        || lower.contains("exit status: 2")
-        || lower.contains("exit code 1")
-        || lower.contains("exit code 2")
-}
-
-fn looks_like_tool_not_found(lower: &str) -> bool {
-    (lower.contains("tool '") && lower.contains("' not found"))
-        || lower.contains("tool not found")
-        || lower.contains("unknown tool")
-}
-
-fn looks_like_resource_not_found(lower: &str) -> bool {
-    lower.contains("session not found")
-        || lower.contains("resource not found")
-        || lower.contains("document not found")
-        || lower.contains("record not found")
-        || lower.contains("entity not found")
-}
-
-fn looks_like_service_schema_drift(lower: &str) -> bool {
-    (lower.contains("parse error") && lower.contains("cannot query field"))
-        || lower.contains("cannot query field")
-        || lower.contains("field is not defined")
-        || ((lower.contains("unknown field") || lower.contains("unknown argument"))
-            && (lower.contains("graphql")
-                || lower.contains("query failed")
-                || lower.contains(" on type ")
-                || lower.contains("validation error")))
-}
-
-fn looks_like_invalid_tool_arguments(lower: &str) -> bool {
-    lower.contains("invalid_tool_arguments")
-        || lower.contains("invalid tool arguments")
-        || lower.contains("invalid arguments")
-        || lower.contains("invalid params")
-        || lower.contains("missing field")
-        || lower.contains("arguments must")
-        || (lower.contains("failed to deserialize") && lower.contains("parameter"))
-}
-
-fn looks_like_service_unavailable(lower: &str) -> bool {
-    lower.contains("currently unreachable")
-        || lower.contains("probe timed out")
-        || lower.contains("not found or offline")
-        || lower.contains("mcp handshake failed")
-        || lower.contains("connection refused")
-        || lower.contains("failed to connect")
-        || lower.contains("connection error")
-        || lower.contains("service unavailable")
-}
-
 fn looks_like_deadline_or_inference_failure(lower: &str) -> bool {
     lower.contains("request deadline exceeded")
         || lower.contains("deadline exceeded")
@@ -746,23 +445,6 @@ fn looks_like_deadline_or_inference_failure(lower: &str) -> bool {
         || lower.contains("stream liveness timeout")
         || lower.contains("completion failed")
         || lower.contains("model unreachable")
-}
-
-fn looks_like_tool_timeout(lower: &str) -> bool {
-    lower.contains("timed out after")
-        || lower.contains("timed out waiting")
-        || lower.contains("tool timeout")
-}
-
-fn looks_like_opaque_tool_error(lower: &str) -> bool {
-    lower.trim_end().ends_with("mcp call_tool")
-}
-
-fn looks_like_tool_runtime_error(lower: &str) -> bool {
-    lower.contains("returned an error")
-        || lower.contains("tool call failed")
-        || lower.contains("permission denied")
-        || lower.contains("no such file or directory")
 }
 
 fn retryable_for_failure_class(failure_class: ToolFailureClass) -> Option<bool> {

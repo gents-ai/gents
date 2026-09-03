@@ -869,7 +869,7 @@ mod tests {
                 deployment_id: "local-test", display_name: "Local test"
             }) { _docID } }"#,
             r#"mutation { create_InferenceBackend(input: {
-                backend_id: "test-backend", name: "Test", provider_kind: "openai_compatible",
+                backend_id: "test-backend", name: "Test", provider_kind: "OpenAiCompatible",
                 endpoint: "http://127.0.0.1:1/v1", max_concurrent: 4,
                 enabled: true, models: ["test-model"]
             }) { _docID } }"#,

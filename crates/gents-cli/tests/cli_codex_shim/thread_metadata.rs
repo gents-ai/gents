@@ -18,6 +18,7 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -28,7 +29,6 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -236,6 +236,7 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -246,7 +247,6 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

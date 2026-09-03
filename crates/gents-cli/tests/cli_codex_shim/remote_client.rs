@@ -24,6 +24,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -36,7 +37,6 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

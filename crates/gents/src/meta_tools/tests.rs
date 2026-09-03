@@ -29,9 +29,9 @@ fn lookup_service_query_escapes_service_id() {
 }
 
 #[test]
-fn empty_mcp_allowlist_allows_any_service() {
-    assert!(mcp_service_allowed(&[], "x-data"));
-    assert!(mcp_service_allowed(&[], "observability-mcp"));
+fn empty_mcp_allowlist_denies_every_service() {
+    assert!(!mcp_service_allowed(&[], "x-data"));
+    assert!(!mcp_service_allowed(&[], "observability-mcp"));
 }
 
 #[test]

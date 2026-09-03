@@ -63,9 +63,6 @@ pub enum OAuthAuthProblem {
     Other(String),
 }
 
-/// Back-compat alias used by ChatGPT call sites and refresh modules.
-pub type ChatGptAuthProblem = OAuthAuthProblem;
-
 pub fn classify_oauth_auth_error(
     product: &OAuthProduct,
     agent_did: &str,

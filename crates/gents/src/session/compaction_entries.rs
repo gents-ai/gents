@@ -96,14 +96,18 @@ fn validate_compaction_chain<T: CompactionProjection>(session_id: &str, rows: &[
             row.key(),
             row.sequence()
         );
-        if let Some(cursor) = row.cursor() {
-            anyhow::ensure!(
-                prior_cursor.is_none_or(|prior| cursor > prior),
-                "compaction cursor regression for session {session_id} at sequence {}",
+        let cursor = row.cursor().with_context(|| {
+            format!(
+                "compaction entry for session {session_id} at sequence {} has no canonical cursor",
                 row.sequence()
-            );
-            prior_cursor = Some(cursor);
-        }
+            )
+        })?;
+        anyhow::ensure!(
+            prior_cursor.is_none_or(|prior| cursor > prior),
+            "compaction cursor regression for session {session_id} at sequence {}",
+            row.sequence()
+        );
+        prior_cursor = Some(cursor);
     }
     Ok(())
 }
@@ -126,9 +130,8 @@ fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> 
 
 /// Load only the compaction projection consumed while assembling a prompt.
 ///
-/// The cursor is intentionally taken from the latest entry only. A null latest
-/// cursor means some cumulative boundary could not be proven, so the caller
-/// must use the legacy full-load-plus-drop path even if an older entry had one.
+/// Every persisted entry must carry a canonical cursor. Rows without one are
+/// rejected rather than projected into provider history.
 pub(crate) async fn load_prompt_compaction_state(
     node: &EmbeddedNode,
     session_id: &str,
@@ -138,8 +141,6 @@ pub(crate) async fn load_prompt_compaction_state(
     // A background request is claimed against an immutable transcript high
     // water mark. A compaction produced later may only shape that request when
     // its cumulative canonical cursor is itself inside the claimed snapshot.
-    // When no entry proves such a boundary (including a wholly legacy chain),
-    // background work stays on the full-history path.
     let query = format!(
         r#"{{
             CompactionEntry(
@@ -292,7 +293,7 @@ pub(crate) async fn save_exact_compaction_entry(
         input.files_read,
         input.files_modified,
         reduction.messages_compacted()?,
-        Some(input.compacted_through_sequence),
+        input.compacted_through_sequence,
         input.original_tokens,
         input.compacted_tokens,
         input.expected_generation,
@@ -312,6 +313,7 @@ pub(crate) async fn save_compaction_entry(
     files_read: &[String],
     files_modified: &[String],
     messages_compacted: u32,
+    compacted_through_sequence: u32,
     original_tokens: usize,
     compacted_tokens: usize,
 ) -> Result<CompactionEntry> {
@@ -327,7 +329,7 @@ pub(crate) async fn save_compaction_entry(
         files_read,
         files_modified,
         messages_compacted,
-        None,
+        compacted_through_sequence,
         original_tokens,
         compacted_tokens,
         &state.generation,
@@ -347,11 +349,12 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     files_read: &[String],
     files_modified: &[String],
     messages_compacted: u32,
-    compacted_through_sequence: Option<u32>,
+    compacted_through_sequence: u32,
     original_tokens: usize,
     compacted_tokens: usize,
     expected_generation: &str,
 ) -> Result<CompactionEntry> {
+    let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);

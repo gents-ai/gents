@@ -27,18 +27,15 @@ function deployment(
     source: "enrollment",
     graphql: null,
     dialSucceeded: true,
-    pairingReady: true,
     chatSafe: true,
     routes: [],
     pairing: [],
     lastError: null,
-    defaultBehaviorId: "default",
     runtime: null,
     behaviorReadiness: {
       source: readinessSource,
       activeGeneration: 1,
       routerGeneration: 1,
-      defaultBehaviorId: "default",
       updatedAt: "2026-09-02T00:00:00Z",
       behaviors: [readinessStatus],
     },
@@ -61,7 +58,10 @@ function deployment(
     eventTriggers: [],
     conversations: [],
     mailboxItems: [],
-    agentPrincipal: {} as DeploymentView["agentPrincipal"],
+    agentPrincipal: {
+      agentDid: "did:key:agent",
+      defaultBehaviorId: "default",
+    } as DeploymentView["agentPrincipal"],
     ...deploymentOverrides,
   };
 }
@@ -98,7 +98,7 @@ describe("deployment operational state", () => {
 
   it("keeps signed route preparation distinct from transport", () => {
     const state = projectDeploymentOperationalState(
-      deployment({ pairingReady: false, chatSafe: false }),
+      deployment({ chatSafe: false }),
     );
 
     expect(state.transport.kind).toBe("ready");
@@ -108,15 +108,6 @@ describe("deployment operational state", () => {
       kind: "waiting",
       shortLabel: "Preparing",
     });
-  });
-
-  it("fails closed while enrollment and chat route snapshots disagree", () => {
-    const state = projectDeploymentOperationalState(
-      deployment({ pairingReady: false, chatSafe: true }),
-    );
-
-    expect(state.route.shortLabel).toBe("Preparing");
-    expect(state.admissionBlocker).toBe(state.route);
   });
 
   it("keeps stale runtime readiness attributed to the runtime", () => {

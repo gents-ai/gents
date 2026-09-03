@@ -798,14 +798,10 @@ pub(crate) fn sanitize_import_document(
             }
         }
         "InferenceBackend" => {
-            desired_state::strip_deprecated_inference_backend_fields(&mut object);
             object.remove("last_probe");
             if for_update {
                 object.insert("last_probe".to_string(), Value::Null);
             }
-        }
-        "ToolSelection" => {
-            desired_state::strip_retired_tool_selection_fields(&mut object);
         }
         "ChainKeyBinding" if for_update => {
             // Revocation is a tombstone. An active desired-state document may
@@ -869,12 +865,7 @@ pub(crate) fn sanitize_import_document(
             if for_update {
                 object.insert("updated_at".to_string(), Value::Null);
             }
-            match object.get("status") {
-                Some(Value::String(s)) if !s.is_empty() => {}
-                _ => {
-                    object.insert("status".to_string(), Value::String("online".to_string()));
-                }
-            }
+            object.remove("status");
         }
         "ProjectionAcpBinding" => {
             for field in ["created_at", "updated_at"] {

@@ -5,9 +5,7 @@ import { ChatTranscriptPanel } from "@source-inc/gents-desktop-chat";
 import { MessageList } from "@source-inc/gents-desktop-chat";
 import { createDesktopShellChatActions } from "../src/hooks/desktopShellChatActions";
 import {
-  getDesktopApiAdapter,
   projectDeploymentOperationalState,
-  setDesktopApiAdapterForTests,
   type BehaviorReadinessDecision,
   type DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
@@ -35,7 +33,6 @@ function operationalStateFor(
   const behaviorId = decision.behaviorId ?? "default";
   return projectDeploymentOperationalState({
     ...deployment,
-    pairingReady: routeReady,
     chatSafe: routeReady,
     behaviors: [
       {
@@ -51,7 +48,6 @@ function operationalStateFor(
         decision.kind === "unknown"
           ? { state: "unknown", reason: decision.reason }
           : { state: "current" },
-      defaultBehaviorId: behaviorId,
       behaviors: [
         decision.kind === "unavailable"
           ? {
@@ -64,8 +60,6 @@ function operationalStateFor(
     },
   });
 }
-
-afterEach(() => setDesktopApiAdapterForTests(null));
 
 describe("copyText", () => {
   afterEach(() => {
@@ -319,10 +313,10 @@ describe("error card retry", () => {
       sessionId: "s1",
       requestId: "req_retry",
     });
-    setDesktopApiAdapterForTests({
+    const api = {
       sendChatMessage,
       retryRequest,
-    } as DesktopApiAdapter);
+    } as DesktopApiAdapter;
     const shellProjection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: deployment.agentDid,
@@ -341,7 +335,7 @@ describe("error card retry", () => {
     expect(shellProjection.nonEmptyContentSendStatus).toEqual({ kind: "ready" });
 
     const actions = createDesktopShellChatActions({
-      api: getDesktopApiAdapter(),
+      api,
       draft: "",
       behaviorReadiness: readyBehaviorReadiness,
       newConversationAgentRef: { current: null },

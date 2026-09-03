@@ -12,24 +12,20 @@ pub const TOOL_POLICY_V1: &str = "tool-policy/v1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolPolicyVersion {
-    LegacyDefaults,
     V1,
 }
 
 impl ToolPolicyVersion {
     pub fn parse(value: Option<&str>) -> anyhow::Result<Self> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("legacy") | Some("legacy-permissive") => Ok(Self::LegacyDefaults),
             Some(TOOL_POLICY_V1) => Ok(Self::V1),
+            None => anyhow::bail!("tool_policy_version is required"),
             Some(other) => anyhow::bail!("unknown tool policy version {other:?}"),
         }
     }
 
-    pub fn default_enabled(self, legacy_default: bool) -> bool {
-        match self {
-            Self::LegacyDefaults => legacy_default,
-            Self::V1 => false,
-        }
+    pub fn default_enabled(self) -> bool {
+        false
     }
 }
 
@@ -255,47 +251,16 @@ impl ToolPolicySurface {
         }
     }
 
-    pub fn legacy_non_host_wide(file: FileToolMode, bash: BashMode) -> Self {
-        Self {
-            file,
-            bash: ToolPolicyBash {
-                tool: bash,
-                execution_mode: match bash {
-                    BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
-                    BashMode::Unrestricted => CommandExecutionMode::Unrestricted,
-                },
-                network_mode: CommandNetworkMode::Enabled,
-                sandbox: true,
-                allowed_argv_prefixes: EndpointScope::<Vec<String>, ()>::all(),
-                forbidden_argv_prefixes: BTreeSet::new(),
-                read_only_allowlist: EndpointScope::all(),
-                deny_git_metadata_writes: false,
-            },
-            meta: true,
-            goal_tools: true,
-            goal_create: true,
-            defra_query: true,
-            self_config: true,
-            memory: true,
-            session_history: true,
-            context_budget: true,
-            spawn: true,
-            steering: true,
-            background: true,
-            cross_deployment: true,
-            skills: true,
-            lsp: true,
-            cli_tools: EndpointScope::Only(BTreeMap::new()),
-            mcp_services: EndpointScope::all(),
-            defra_collections: EndpointScope::all(),
-            self_config_categories: EndpointScope::all(),
-            subagent_targets: EndpointScope::all(),
-            background_tools: EndpointScope::all(),
-            write_tools: EndpointScope::all(),
-            query_tools: EndpointScope::all(),
-            eth_query_methods: EndpointScope::all(),
-            eth_call_tools: EndpointScope::all(),
-        }
+    pub fn ceiling_with_host_modes(file: FileToolMode, bash: BashMode) -> Self {
+        let mut policy = Self::runtime_all();
+        policy.file = file;
+        policy.bash.tool = bash;
+        policy.bash.execution_mode = match bash {
+            BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
+            BashMode::Unrestricted => CommandExecutionMode::Unrestricted,
+        };
+        policy.cli_tools = EndpointScope::Only(BTreeMap::new());
+        policy
     }
 
     pub fn runtime_all() -> Self {
@@ -352,7 +317,7 @@ impl ToolPolicySurface {
         let mcp_services = if !selection.enable_meta_tools {
             EndpointScope::none()
         } else if selection.allowed_mcp_service_ids.is_empty() {
-            EndpointScope::all()
+            EndpointScope::none()
         } else {
             EndpointScope::<String, ()>::only_units(
                 selection

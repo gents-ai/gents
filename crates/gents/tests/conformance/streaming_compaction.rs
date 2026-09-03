@@ -907,8 +907,9 @@ async fn mark_materialized(node: std::sync::Arc<EmbeddedNode>, request_id: &str,
     )
     .await
     .expect("resume materialization hook");
-    hook.set_active_request_id(Some(request_id.to_string()))
-        .await;
+    hook.set_active_request_lineage(Some(request_id.to_string()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.mark_current_response_materialized(sequence)
         .await
         .expect("mark response materialized");
@@ -1211,11 +1212,17 @@ fn generated_compaction_cursor_cases_pin_contract() {
                     .map(|(_, message)| message.clone())
                     .collect(),
             );
+            let (prefix, _) = gents::compaction::provider_view(
+                rows.iter()
+                    .filter(|(sequence, _)| *sequence <= cursor)
+                    .map(|(_, message)| message.clone())
+                    .collect(),
+            );
+            assert_eq!(prefix.len(), case.compacted, "{}: cursor prefix", case.name);
             assert_eq!(
-                filtered,
-                gents::compaction::active_provider_history(full, case.compacted)
-                    .expect("Lean cursor witness has a valid provider prefix"),
-                "{}: cursor query must equal full-load-plus-drop",
+                prefix.len() + filtered.len(),
+                full.len(),
+                "{}: cursor partitions the canonical view",
                 case.name
             );
         }

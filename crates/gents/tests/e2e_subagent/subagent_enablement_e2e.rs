@@ -43,6 +43,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 behavior_id.clone(),
                 &agent_did,
@@ -165,9 +166,12 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         crate::support::exact_request_doc_id(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
         "prompt": "child work",
-        "await_mode": "background"
+        "await_mode": "background",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -185,7 +189,8 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id))
+    .with_requester_did(Some(running.booted.agent_did.clone()));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -201,7 +206,6 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
     let resp = handle_list_subagents(
         db.node.as_ref(),
         parent_request_id,
-        &running.booted.agent_did,
         ListSubagentsArgs::default(),
     )
     .await
@@ -229,7 +233,8 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         "entry await_mode must be background"
     );
     assert_eq!(
-        entry.behavior_id, running.behavior_id,
+        entry.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str()),
         "entry behavior_id must match"
     );
 

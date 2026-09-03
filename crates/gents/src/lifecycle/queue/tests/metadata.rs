@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn parses_queue_hints_from_metadata_queue_field() {
+fn rejects_noncanonical_queue_source() {
     let metadata = r#"{
         "queue": {
             "source": "subagent_completion",
@@ -11,13 +11,7 @@ fn parses_queue_hints_from_metadata_queue_field() {
         }
     }"#;
 
-    assert_eq!(
-        parse_queue_hints(Some(metadata)),
-        Some(hints(
-            QueueSource::BackgroundCompletion,
-            QueuePolicy::Coalesce
-        ))
-    );
+    assert_eq!(parse_queue_hints(Some(metadata)), None);
 }
 
 #[test]
@@ -25,7 +19,6 @@ fn parses_all_supported_string_values() {
     let cases = [
         ("user", QueueSource::User),
         ("background_completion", QueueSource::BackgroundCompletion),
-        ("subagent_completion", QueueSource::BackgroundCompletion),
         ("steering", QueueSource::Steering),
         ("goal", QueueSource::Goal),
     ];

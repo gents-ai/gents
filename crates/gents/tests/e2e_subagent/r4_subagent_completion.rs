@@ -68,6 +68,7 @@ async fn setup_fixture(test_name: &str) -> (crate::support::TestDb, String, Stri
         &ToolSelectionDocument {
             selection_id: format!("{test_name}-tools"),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 &agent_did,
@@ -775,8 +776,9 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     )
     .await
     .unwrap();
-    hook.set_active_request_id(Some(parent_request_id.clone()))
-        .await;
+    hook.set_active_request_lineage(Some(parent_request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;
 

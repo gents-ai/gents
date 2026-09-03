@@ -423,9 +423,7 @@ pub(super) fn is_background_completion_metadata(metadata: Option<&str>) -> bool 
             queue
                 .get("source")
                 .and_then(Value::as_str)
-                .is_some_and(|source| {
-                    matches!(source, "background_completion" | "subagent_completion")
-                })
+                .is_some_and(|source| source == "background_completion")
                 && queue.get("policy").and_then(Value::as_str) == Some("coalesce")
                 && queue
                     .get("key")
@@ -458,11 +456,11 @@ mod tests {
     use gents_codex_protocol as codex;
 
     #[test]
-    fn recognizes_canonical_and_legacy_background_completion_sources() {
+    fn recognizes_only_the_canonical_background_completion_source() {
         assert!(is_background_completion_metadata(Some(
             r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}}"#
         )));
-        assert!(is_background_completion_metadata(Some(
+        assert!(!is_background_completion_metadata(Some(
             r#"{"queue":{"source":"subagent_completion","policy":"coalesce","key":"background_completion:thread-1"}}"#
         )));
         assert!(!is_background_completion_metadata(Some(

@@ -34,6 +34,7 @@ async fn behavior_create_clone_disable_round_trip_and_enriched_show() -> Result<
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

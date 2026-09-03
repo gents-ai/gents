@@ -1781,7 +1781,6 @@ async fn await_stages(
     correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
-    let correlated_trigger_ids = correlated_trigger_ids(graphql, trigger_ids).await?;
     let started = Instant::now();
     loop {
         let mut done: Vec<StageResult> = Vec::new();
@@ -1794,12 +1793,7 @@ async fn await_stages(
                 Some(trigger_request_counts.get(trigger_id).copied().unwrap_or(1))
             };
             resolved_counts.insert(trigger_id, expected_count);
-            let query = stage_requests_query(
-                trigger_id,
-                correlated_trigger_ids
-                    .contains(trigger_id)
-                    .then_some(correlation),
-            );
+            let query = stage_requests_query(trigger_id, correlation);
             let Ok(resp) = post_graphql(graphql, &query).await else {
                 continue;
             };
@@ -1882,51 +1876,14 @@ async fn await_stages(
     }
 }
 
-/// Load the applied trigger policy rather than assuming every pack stage uses
-/// correlation. The original pipeline demo predates correlated fan-in, so its
-/// request lineage deliberately leaves `caused_by_correlation` null.
-async fn correlated_trigger_ids(graphql: &str, trigger_ids: &[String]) -> Result<BTreeSet<String>> {
-    let mut correlated = BTreeSet::new();
-    for trigger_id in trigger_ids {
-        let query = format!(
-            r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                trigger_id
-                correlation_field
-            }} }}"#,
-            escape_graphql_string(trigger_id),
-        );
-        let rows = graphql_rows(graphql, "EventTrigger", &query).await?;
-        if rows.len() != 1 {
-            bail!(
-                "trigger {trigger_id} resolved to {} EventTrigger documents; expected exactly one",
-                rows.len()
-            );
-        }
-        if rows[0]
-            .get("correlation_field")
-            .and_then(Value::as_str)
-            .is_some_and(|value| !value.trim().is_empty())
-        {
-            correlated.insert(trigger_id.clone());
-        }
-    }
-    Ok(correlated)
-}
-
-fn stage_requests_query(trigger_id: &str, correlation: Option<&str>) -> String {
-    let correlation_filter = correlation.map_or_else(String::new, |correlation| {
-        format!(
-            r#",
-                    caused_by_correlation: {{ _eq: "{}" }}"#,
-            escape_graphql_string(correlation)
-        )
-    });
+fn stage_requests_query(trigger_id: &str, correlation: &str) -> String {
     format!(
         r#"{{ AgentRequest(filter: {{
-                    caused_by_trigger_id: {{ _eq: "{}" }}{}
+                    caused_by_trigger_id: {{ _eq: "{}" }},
+                    caused_by_correlation: {{ _eq: "{}" }}
                 }}) {{ request_id lifecycle_state failure_reason caused_by_source_doc_id }} }}"#,
         escape_graphql_string(trigger_id),
-        correlation_filter,
+        escape_graphql_string(correlation),
     )
 }
 
@@ -4439,16 +4396,9 @@ mod tests {
 
     #[test]
     fn stage_request_query_scopes_correlated_triggers_to_the_current_run() {
-        let query = stage_requests_query("review-\"scan", Some("run-\"42"));
+        let query = stage_requests_query("review-\"scan", "run-\"42");
         assert!(query.contains(r#"caused_by_trigger_id: { _eq: "review-\"scan" }"#));
         assert!(query.contains(r#"caused_by_correlation: { _eq: "run-\"42" }"#));
-    }
-
-    #[test]
-    fn stage_request_query_accepts_null_correlation_for_legacy_pipeline_triggers() {
-        let query = stage_requests_query("exp-stage1", None);
-        assert!(query.contains(r#"caused_by_trigger_id: { _eq: "exp-stage1" }"#));
-        assert!(!query.contains("caused_by_correlation"));
     }
 
     #[test]

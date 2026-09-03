@@ -9,8 +9,7 @@ use crate::state::{current_core, DesktopAppState};
 use crate::types::{MailboxItemRequest, MailboxItemView};
 
 fn running_core(state: &State<'_, DesktopAppState>) -> Result<Arc<ClientCore>, BridgeError> {
-    current_core(state)
-        .ok_or_else(|| BridgeError::from_legacy_message("desktop client is not running"))
+    current_core(state).ok_or_else(|| BridgeError::untyped("desktop client is not running"))
 }
 
 #[tauri::command]
@@ -26,7 +25,7 @@ pub fn desktop_mailbox_start_request(
     state: State<'_, DesktopAppState>,
 ) -> Result<MailboxItemView, BridgeError> {
     start_mailbox_request(running_core(&state)?.as_ref(), &request.item_id)
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -36,5 +35,5 @@ pub async fn desktop_mailbox_dismiss(
 ) -> Result<(), BridgeError> {
     dismiss_mailbox(running_core(&state)?.as_ref(), &request.item_id)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }

@@ -34,7 +34,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
     core.save_backend(&InferenceBackendRow {
         backend_id: "backend-amy".to_string(),
         name: Some("OpenRouter".to_string()),
-        provider_kind: Some("openrouter".to_string()),
+        provider_kind: Some("OpenRouter".to_string()),
         openai_wire_api: None,
         endpoint: Some("https://openrouter.ai/api/v1".to_string()),
         api_key: None,
@@ -107,7 +107,6 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_goal_creation: None,
         allowed_mcp_service_ids: Vec::new(),
         required_mcp_service_ids: Vec::new(),
-        delegate_to: Vec::new(),
         backgroundable_tool_names: vec!["read_file".to_string()],
         enable_memory: Some(false),
         enable_session_history_tool: Some(false),

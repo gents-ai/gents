@@ -114,7 +114,7 @@ pub(crate) fn loop_config_for_request(
         config.additional_params =
             merge_optional_params(config.additional_params.take(), Some(additional_params));
     }
-    let origin = completion_retry_origin(request.execution_origin.as_deref());
+    let origin = ExecutionOrigin::from_persisted(request.execution_origin.as_deref())?;
     config.retry_policy = CompletionRetryPolicy::resolve(&behavior.completion_retry, origin);
     config.deadline = parse_request_deadline(request.deadline.as_deref());
     Ok(config)
@@ -222,13 +222,6 @@ fn prior_usage_rows_from_response(
         Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
             anyhow::anyhow!("InferenceCall usage payload is not a row array: {error}")
         }),
-    }
-}
-
-fn completion_retry_origin(value: Option<&str>) -> ExecutionOrigin {
-    match value {
-        Some("interactive") => ExecutionOrigin::Interactive,
-        _ => ExecutionOrigin::Scheduled,
     }
 }
 

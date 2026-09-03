@@ -456,6 +456,7 @@ pub(super) async fn bind_default_behavior_backend_with_capacity_and_probe_status
                 add: {{
                     backend_id: "{escaped_backend_id}",
                     name: "{escaped_backend_id}",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "{escaped_endpoint}",
                     max_concurrent: {max_concurrent},
                     enabled: true,

@@ -10,7 +10,7 @@ use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use super::*;
-use crate::ensure_schemas;
+use crate::ensure_runtime_schemas;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
@@ -36,7 +36,7 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -53,6 +53,11 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let session_id = hook.session_id().await.expect("session id");
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
@@ -383,7 +388,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -400,6 +405,11 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: request_id.clone(),
@@ -471,16 +481,18 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         ))
         .await
         .unwrap();
-    assert!(matches!(
-        hook.on_tool_call(
+    let action = hook
+        .on_tool_call(
             "discover_tools",
             Some(model_result_id.to_string()),
             stored_call_id,
             tool_args,
         )
-        .await,
-        crate::llm::ToolCallHookAction::Continue
-    ));
+        .await;
+    assert!(
+        matches!(action, crate::llm::ToolCallHookAction::Continue),
+        "tool call persistence failed: {action:?}"
+    );
     assert!(processor
         .persist_partial_turn("persist streamed assistant tool call")
         .await
@@ -555,7 +567,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -572,7 +584,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     let request = AgentRequest {
@@ -756,7 +770,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -773,7 +787,9 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     let request = AgentRequest {
@@ -913,7 +929,7 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -932,7 +948,9 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
     // The AgentToolCall row records its request_id from the hook's active request,
     // which is what backfill scopes its query by.
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     let request = AgentRequest {
@@ -1086,7 +1104,7 @@ async fn post_tool_resumed_resets_response_tail() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     // Set up session hook + establish session by persisting user message.
     let hook = crate::hook::DefraSessionHook::with_identity(
@@ -1234,7 +1252,7 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = crate::hook::DefraSessionHook::with_identity(
         node.clone(),
@@ -1378,7 +1396,7 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1395,7 +1413,9 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
 
     let request_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
         .await;
     let request = AgentRequest {

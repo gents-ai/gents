@@ -186,7 +186,7 @@ impl ToolCallLifecycle {
             .lifecycle_state
             .as_deref()
             .and_then(ToolCallState::from_persisted)
-            .unwrap_or(ToolCallState::Running); // legacy rows pre-migration default to Running
+            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid lifecycle_state"))?;
 
         let started_at = row
             .started_at
@@ -199,7 +199,7 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|dt| dt.with_timezone(&chrono::Utc))
-            .unwrap_or_else(chrono::Utc::now);
+            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid deadline_at"))?;
 
         let failure_class = row
             .tool_failure_class
@@ -211,19 +211,17 @@ impl ToolCallLifecycle {
             .as_deref()
             .and_then(CancelCause::from_persisted);
 
-        // v3 subagent fields. v2 rows (where these columns are null) fall back
-        // to the same defaults that Self::new() uses, preserving backwards compat.
         let await_mode = row
             .await_mode
             .as_deref()
             .and_then(AwaitMode::from_persisted)
-            .unwrap_or(AwaitMode::Foreground);
+            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid await_mode"))?;
 
         let cancel_policy = row
             .cancel_policy
             .as_deref()
             .and_then(CancelPolicy::from_persisted)
-            .unwrap_or(CancelPolicy::Cascade);
+            .ok_or_else(|| anyhow!("AgentToolCall is missing a valid cancel_policy"))?;
 
         let child_request_id = row.child_request_id.filter(|s| !s.is_empty());
         let spawn_target_did = row.spawn_target_did.filter(|s| !s.is_empty());
@@ -235,12 +233,21 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
+        let request_id = row
+            .request_id
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("AgentToolCall is missing request_id"))?;
+        let agent_did = row
+            .agent_did
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("AgentToolCall is missing agent_did"))?;
+
         Ok(Some(Self {
             node,
-            request_id: row.request_id.unwrap_or_default(),
+            request_id,
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
             session_id: session_id.to_string(),
-            agent_did: row.agent_did.unwrap_or_default(),
+            agent_did,
             // Current recovery paths only update the existing immutable row,
             // but preserve its route key so a future create transition cannot
             // silently rehydrate the lifecycle as unrouted.
@@ -272,7 +279,7 @@ mod tests {
     #[test]
     fn selected_tool_identity_is_an_atomic_pair() {
         assert!(decode_selected_tool_identity(None, None)
-            .expect("legacy native tool call")
+            .expect("native tool call")
             .is_none());
 
         let selected = decode_selected_tool_identity(
@@ -302,7 +309,7 @@ mod tests {
                 .await
                 .expect("embedded node"),
         );
-        crate::ensure_schemas(node.as_ref())
+        crate::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
         let mut lifecycle = ToolCallLifecycle::new(

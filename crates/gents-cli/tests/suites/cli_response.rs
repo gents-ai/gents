@@ -32,6 +32,7 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

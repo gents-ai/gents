@@ -9,16 +9,16 @@ pub(crate) fn normalize_tool_service_string(value: Option<String>) -> String {
     value.unwrap_or_default().trim().to_string()
 }
 
-pub(crate) fn normalize_tool_service_mcp_path(value: Option<String>) -> String {
-    use super::super::DEFAULT_TOOL_SERVICE_MCP_PATH;
-    let trimmed = value.as_deref().unwrap_or_default().trim();
+pub(crate) fn normalize_tool_service_mcp_path(value: String) -> anyhow::Result<String> {
+    let trimmed = value.trim();
     if trimmed.is_empty() {
-        DEFAULT_TOOL_SERVICE_MCP_PATH.to_string()
-    } else if trimmed.starts_with('/') {
+        anyhow::bail!("ToolServiceRegistry field mcp_path must be non-empty");
+    }
+    Ok(if trimmed.starts_with('/') {
         trimmed.to_string()
     } else {
         format!("/{trimmed}")
-    }
+    })
 }
 
 pub(in crate::desired_state) fn optional_string_from_value(

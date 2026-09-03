@@ -22,14 +22,16 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
         "capture_scope": "inference.1",
         "admission": { "call_id": "call-1", "call_seq": 1 },
         "assembly_trace": {
-            "trace_version": 2,
+            "trace_version": 4,
             "build_path": "budgeted",
             "effective_message_count": 1,
             "effective_messages": [
                 { "role": "user", "content": [{ "type": "text", "text": BODY_SENTINEL }] }
             ],
             "assistant_message_ids": [],
-            "threaded_tool_results": []
+            "threaded_tool_results": [],
+            "reduction_keys": [],
+            "context_accounting": null
         }
     })
     .to_string();
@@ -56,6 +58,7 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
 
     build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
+            doc_id: Some("doc-req-1".to_string()),
             request_id: "req-1".to_string(),
             agent_did: Some("did:test:amy".to_string()),
             behavior_id: Some("amy".to_string()),
@@ -68,6 +71,7 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
         inference_calls: vec![TimelineInferenceCallRow {
             call_id: "call-1".to_string(),
             request_id: "req-1".to_string(),
+            request_doc_id: Some("doc-req-1".to_string()),
             call_seq: 1,
             attempt: 1,
             call_state: "completed".to_string(),
@@ -659,21 +663,14 @@ fn blank_response_falls_back_to_materialized_assistant_message_across_adapters()
 }
 
 #[test]
-fn provenance_without_source_version_status_deserializes_with_captured_only_default() {
-    // External adapter captures and previously exported envelopes predate
-    // source_version_status, and the published provenance schema does not
-    // require it; deserialization must not either.
-    let provenance = serde_json::from_value::<ProjectionProvenance>(json!({
+fn provenance_without_source_version_status_is_rejected() {
+    let error = serde_json::from_value::<ProjectionProvenance>(json!({
         "runtime": "gents",
         "source_projection_id": "run_timeline",
         "source_projection_version": "v1",
     }))
-    .expect("provenance JSON without source_version_status must deserialize");
-    assert_eq!(
-        provenance.source_version_status,
-        ProjectionSourceVersionStatus::CurrentStateCapturedOnly
-    );
-    assert!(provenance.rendered_request_refs.is_empty());
+    .expect_err("provenance without source_version_status must fail closed");
+    assert!(error.to_string().contains("source_version_status"));
 }
 
 #[test]

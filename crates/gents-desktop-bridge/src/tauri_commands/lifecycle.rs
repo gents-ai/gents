@@ -32,7 +32,7 @@ pub async fn desktop_bootstrap_summary(
 ) -> Result<DesktopBootstrapSummary, BridgeError> {
     build_bootstrap_summary_for_policy(&state.policy)
         .await
-        .map_err(BridgeError::from_legacy_message)
+        .map_err(BridgeError::untyped)
 }
 
 #[tauri::command]
@@ -74,10 +74,10 @@ pub async fn desktop_init_local_standard(
 
     if request.dangerously_overwrite {
         dangerously_overwrite_desktop_home(desktop_paths.root())
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
     } else if request.reset {
         let _ = reset_desktop_runtime_state(&desktop_paths)
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
     }
 
     init_standard_local_runtime(DesktopInitOptions {
@@ -89,7 +89,7 @@ pub async fn desktop_init_local_standard(
             .unwrap_or_else(|| "Local Agent".to_string()),
     })
     .await
-    .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+    .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeError> {
@@ -116,7 +116,7 @@ pub async fn desktop_client_start<R: Runtime>(
     if let Some(core) = current_core(&state) {
         return build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
             .await
-            .map_err(BridgeError::from_legacy_message);
+            .map_err(BridgeError::untyped);
     }
 
     let progress_rx = claim_or_join_client_start(&app, &state);
@@ -132,7 +132,7 @@ pub async fn desktop_client_start<R: Runtime>(
 
     build_client_snapshot_with_grants(Some(&core), Some(&state.policy), grants)
         .await
-        .map_err(BridgeError::from_legacy_message)
+        .map_err(BridgeError::untyped)
 }
 
 /// Register as the single-flight starter or subscribe to the in-flight one.
@@ -251,7 +251,7 @@ async fn wait_for_client_start_progress(
             }
             ClientStartProgress::Ready => return Ok(()),
             ClientStartProgress::Failed(message) => {
-                return Err(BridgeError::from_legacy_message(message));
+                return Err(BridgeError::untyped(message));
             }
         }
     }
@@ -321,7 +321,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     if let Some(core) = core {
         core.shutdown()
             .await
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
     }
 
     let _ = app.emit(
@@ -332,7 +332,7 @@ pub async fn desktop_client_shutdown<R: Runtime>(
     let grants = snapshot_grants(&state);
     build_client_snapshot_with_grants(None, Some(&state.policy), grants)
         .await
-        .map_err(BridgeError::from_legacy_message)
+        .map_err(BridgeError::untyped)
 }
 
 #[tauri::command]
@@ -343,7 +343,7 @@ pub async fn desktop_client_snapshot(
     let grants = snapshot_grants(&state);
     build_client_snapshot_with_grants(core.as_ref(), Some(&state.policy), grants)
         .await
-        .map_err(BridgeError::from_legacy_message)
+        .map_err(BridgeError::untyped)
 }
 
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
@@ -368,7 +368,7 @@ async fn start_client_core_async(
 
     match rx.await {
         Ok(Ok(core)) => Ok(core),
-        Ok(Err(error)) => Err(BridgeError::from_legacy_message(error.to_string())),
+        Ok(Err(error)) => Err(BridgeError::untyped(error.to_string())),
         Err(_) => Err(BridgeError::new(
             BridgeErrorCode::ClientStartFailed,
             "desktop client startup thread panicked or dropped its result",

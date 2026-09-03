@@ -160,12 +160,10 @@ impl SelfConfigTarget {
                 "enable_goal_creation",
                 "allowed_mcp_service_ids",
                 "required_mcp_service_ids",
-                "delegate_to",
                 "backgroundable_tool_names",
                 "approval_required_tools",
                 "subagent_targets",
                 "subagent_spawn_enabled",
-                "orchestration_enabled",
                 "subagent_steering_enabled",
                 "subagent_background_enabled",
                 "subagent_default_await_mode",
@@ -303,8 +301,8 @@ impl SelfConfigTarget {
     /// agent is), runtime-owned status (`probe_status`, `last_*`,
     /// `next_run_at`, `fire_count`), secrets (`InferenceBackend.api_key` —
     /// `api_key_env_var` is the writable non-secret reference), apply-managed
-    /// or deprecated fields (`write_tools`, `delegate_to`,
-    /// `tool_policy_version`), writer-stamped timestamps, and
+    /// or apply-managed fields (`write_tools`, `tool_policy_version`),
+    /// writer-stamped timestamps, and
     /// `Task.behavior_id` (the automation ownership link, pinned at create).
     ///
     /// The self-config gate fields themselves ARE writable (an agent may

@@ -297,7 +297,8 @@ async fn wait_subagent_explains_unmaterialized_child_bridge() {
         "agent_did": "did:key:z6MkRemoteUnclaimed",
         "behavior_id": "remote-coder-behavior",
         "prompt": "cross-deployment work",
-        "await_mode": "background"
+        "await_mode": "background",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -314,7 +315,10 @@ async fn wait_subagent_explains_unmaterialized_child_bridge() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:key:z6MkRemoteUnclaimed".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(
+        crate::support::exact_request_doc_id(db.node.as_ref(), &fixture.request_id).await,
+    ));
     lifecycle.start_running().await.unwrap();
 
     let action = hook
@@ -355,7 +359,10 @@ async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
     let child_request_id = "wait-corrupt-child";
     let child_session_id = "wait-corrupt-child-session";
     let bridge_tool_call_id = "wait-corrupt-bridge";
+    let parent_request_doc_id =
+        crate::support::exact_request_doc_id(db.node.as_ref(), &fixture.request_id).await;
     let parent_request_id = escape_graphql_string(&fixture.request_id);
+    let parent_request_doc_id = escape_graphql_string(&parent_request_doc_id);
     let session_id = escape_graphql_string(&fixture.session_id);
     let agent_did = escape_graphql_string(&fixture.agent_did);
     let mutation = format!(
@@ -386,6 +393,8 @@ async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
             create_AgentToolCall(input: {{
                 tool_call_key: "{session_id}:{bridge_tool_call_id}",
                 request_id: "{parent_request_id}",
+                request_doc_id: "{parent_request_doc_id}",
+                agent_did: "{agent_did}",
                 session_id: "{session_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
@@ -529,8 +538,9 @@ async fn wait_subagent_from_resumed_hook_cascades_parent_interrupt() {
     .await
     .unwrap();
     resumed_hook
-        .set_active_request_id(Some(request_id.clone()))
-        .await;
+        .set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     resumed_hook
         .set_request_deadline_at(Some(parent_deadline))
         .await;

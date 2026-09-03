@@ -35,8 +35,6 @@ struct RequestRow {
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     content: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    status: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
     lifecycle_state: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
     failure_reason: String,
@@ -120,7 +118,6 @@ pub(super) async fn load_thread_turns(
             ) {{
                 request_id
                 content
-                status
                 lifecycle_state
                 failure_reason
                 created_at
@@ -730,16 +727,16 @@ fn project_tool(
 }
 
 fn turn_status(request: &RequestRow, response: Option<&ResponseRow>) -> codex::TurnStatus {
-    let lifecycle_state = normalized_nonempty(&request.lifecycle_state)
-        .or_else(|| normalized_nonempty(&request.status))
-        .unwrap_or_else(|| "pending".to_string());
+    let Some(lifecycle_state) = normalized_nonempty(&request.lifecycle_state) else {
+        return codex::TurnStatus::Failed;
+    };
     let response_status = response
         .and_then(|response| normalized_nonempty(&response.status))
         .unwrap_or_default();
 
     derive_persisted_attempt(&lifecycle_state, false, Some(&response_status))
         .map(codex_turn_status)
-        .unwrap_or(codex::TurnStatus::InProgress)
+        .unwrap_or(codex::TurnStatus::Failed)
 }
 
 fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<codex::TurnError> {
@@ -947,7 +944,6 @@ mod tests {
         let request = RequestRow {
             request_id: "request-1".to_string(),
             content: "Inspect the repo".to_string(),
-            status: "completed".to_string(),
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
@@ -991,7 +987,6 @@ mod tests {
         let request = RequestRow {
             request_id: "wake-1".to_string(),
             content: gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
-            status: "completed".to_string(),
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
@@ -1024,7 +1019,6 @@ mod tests {
         let request = RequestRow {
             request_id: "request-1".to_string(),
             content: String::new(),
-            status: "completed".to_string(),
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: Some("2026-07-15T10:00:00Z".to_string()),
@@ -1078,7 +1072,6 @@ mod tests {
         let request = RequestRow {
             request_id: "request-1".to_string(),
             content: "Inspect the repo".to_string(),
-            status: "completed".to_string(),
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,
@@ -1104,7 +1097,6 @@ mod tests {
             progress: GentsToolCallProgress {
                 tool_call_key: "thread-1:call-1".to_string(),
                 tool_name: "list_files".to_string(),
-                status: "completed".to_string(),
                 lifecycle_state: Some("completed".to_string()),
                 await_mode: None,
                 child_request_id: None,
@@ -1121,7 +1113,6 @@ mod tests {
             progress: GentsToolCallProgress {
                 tool_call_key: "thread-1:call-2".to_string(),
                 tool_name: "read_file".to_string(),
-                status: "completed".to_string(),
                 lifecycle_state: Some("completed".to_string()),
                 await_mode: None,
                 child_request_id: None,
@@ -1220,7 +1211,6 @@ mod tests {
         let request = RequestRow {
             request_id: "request-1".to_string(),
             content: "Continue".to_string(),
-            status: "completed".to_string(),
             lifecycle_state: "completed".to_string(),
             failure_reason: String::new(),
             created_at: None,

@@ -185,6 +185,7 @@ fn write_portable_manifest_root(
             agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
