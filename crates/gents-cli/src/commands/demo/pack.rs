@@ -4816,6 +4816,12 @@ mod tests {
                 assert!(!pack.join("tasks/port-revise-task").exists());
                 assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));
                 assert_eq!(experiment["init"]["max_concurrent"], 16);
+                assert!(experiment["expect"]["stage_tool_sequences"][0]
+                    ["allowed_at_or_after_boundary"]
+                    .as_array()
+                    .is_some_and(|tools| ["get_goal", "update_goal"]
+                        .iter()
+                        .all(|expected| tools.iter().any(|tool| tool == expected))));
                 assert_eq!(
                     experiment["bundled_graph_bindings"]["code-review"]["backend_id"],
                     "grok-port-backend-ws1"
@@ -5364,7 +5370,11 @@ mod tests {
             max_calls_before_boundary: 2,
             max_calls_per_message_before_boundary: 2,
             exact_boundary_calls: 2,
-            allowed_at_or_after_boundary: vec!["write_row".into()],
+            allowed_at_or_after_boundary: vec![
+                "write_row".into(),
+                "get_goal".into(),
+                "update_goal".into(),
+            ],
         };
         let mut call_ordinal = 0usize;
         let mut row = |sequence, name| {
@@ -5381,9 +5391,11 @@ mod tests {
             row(2, "grep"),
             row(4, "write_row"),
             row(4, "write_row"),
+            row(6, "get_goal"),
+            row(6, "update_goal"),
         ];
         verify_stage_tool_sequence_rows(&stage, &expected, &valid)
-            .expect("bounded consecutive writes should pass");
+            .expect("bounded consecutive writes followed by goal completion should pass");
 
         let over_budget = vec![
             row(2, "read_file"),

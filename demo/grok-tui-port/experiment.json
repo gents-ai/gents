@@ -167,7 +167,7 @@
         "max_calls_before_boundary": 32,
         "max_calls_per_message_before_boundary": 20,
         "exact_boundary_calls": 13,
-        "allowed_at_or_after_boundary": ["write_port_surface"]
+        "allowed_at_or_after_boundary": ["write_port_surface", "get_goal", "update_goal"]
       }
     ],
     "source_edges": [],
