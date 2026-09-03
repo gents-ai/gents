@@ -513,6 +513,12 @@ pub(crate) struct ToolExecutionBounds {
     pub(crate) deadline_at: Option<DateTime<Utc>>,
     pub(crate) cancellation_token: CancellationToken,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
+    /// The owning request's own deadline, unminned with the command
+    /// timeout — callers that need to distinguish "the request's deadline
+    /// elapsed" (the envelope's concern) from "the tool's local timeout
+    /// elapsed" read it from here instead of querying the runtime context a
+    /// second time.
+    pub(crate) request_deadline_at: Option<DateTime<Utc>>,
 }
 
 pub(crate) fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
@@ -532,6 +538,7 @@ pub(crate) fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionB
         deadline_at,
         cancellation_token,
         live_output,
+        request_deadline_at: request_deadline,
     }
 }
 

@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::{current_tool_runtime_context, tool_execution_bounds};
+use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
@@ -563,8 +563,8 @@ pub(crate) async fn run_command(
     let root = context.root();
     let (program, command_args, sandbox) =
         sandboxed_command_for_policy(&root, command_name, args, &policy)?;
-    let request_deadline = current_tool_runtime_context().and_then(|runtime| runtime.deadline_at);
     let bounds = tool_execution_bounds(timeout);
+    let request_deadline = bounds.request_deadline_at;
     let started = Instant::now();
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: std::iter::once(program)

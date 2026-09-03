@@ -929,23 +929,20 @@ pub(crate) async fn run_linter_diagnostics(
             .ok()?;
     let mut full = vec![program.to_string_lossy().into_owned()];
     full.extend(rest);
-    let runtime = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
-    let command_deadline = chrono::Utc::now()
-        + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::days(36_500));
-    let deadline_at = Some(
-        runtime
-            .as_ref()
-            .and_then(|scope| scope.deadline_at)
-            .map_or(command_deadline, |deadline| deadline.min(command_deadline)),
-    );
-    let cancellation_token = runtime
-        .map(|scope| scope.cancellation_token)
-        .unwrap_or_default();
+    // Best-effort supplementary probe layered onto one file's diagnostics
+    // section (run_linter_diagnostics is called once per matched file, up to
+    // MAX_GLOB_TARGETS times, inside a single diagnostics tool call): its raw
+    // stdout is reformatted into a single `"{linter}: {trimmed}"` line, or
+    // dropped entirely when empty, rather than surfaced verbatim. Streaming
+    // it live would interleave per-file linter noise into the enclosing
+    // tool call's live output that doesn't match what the tool ultimately
+    // returns, so this deliberately does not thread live_output.
+    let bounds = crate::tool_call_lifecycle::runtime::tool_execution_bounds(timeout);
     let outcome = crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
         argv: full,
         cwd: workspace,
-        deadline_at,
-        cancellation_token,
+        deadline_at: bounds.deadline_at,
+        cancellation_token: bounds.cancellation_token,
         max_output_bytes: 64 * 1024,
         stdin: Vec::new(),
         environment: Some(env),
