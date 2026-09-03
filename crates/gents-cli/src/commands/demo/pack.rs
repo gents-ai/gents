@@ -1364,6 +1364,7 @@ async fn verify_stage_tool_sequences(
             r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
                 message_sequence
                 tool_name
+                args
                 lifecycle_state
             }} }}"#
         );
@@ -1378,7 +1379,7 @@ fn verify_stage_tool_sequence_rows(
     expected: &StageToolSequenceExpectation,
     rows: &[Value],
 ) -> Result<()> {
-    let sequence_and_name = rows
+    let sequence_name_and_args = rows
         .iter()
         .map(|row| {
             let sequence = row
@@ -1400,13 +1401,19 @@ fn verify_stage_tool_sequence_rows(
                         stage.trigger_id, stage.request_id
                     )
                 })?;
-            Ok((sequence, name))
+            let args = row.get("args").and_then(Value::as_str).with_context(|| {
+                format!(
+                    "trigger {} request {} has a tool call without args",
+                    stage.trigger_id, stage.request_id
+                )
+            })?;
+            Ok((sequence, name, args))
         })
         .collect::<Result<Vec<_>>>()?;
-    let boundary_sequence = sequence_and_name
+    let boundary_sequence = sequence_name_and_args
         .iter()
-        .filter(|(_, name)| *name == expected.boundary_tool_name)
-        .map(|(sequence, _)| *sequence)
+        .filter(|(_, name, _)| *name == expected.boundary_tool_name)
+        .map(|(sequence, _, _)| *sequence)
         .min()
         .with_context(|| {
             format!(
@@ -1414,9 +1421,9 @@ fn verify_stage_tool_sequence_rows(
                 stage.trigger_id, stage.request_id, expected.boundary_tool_name
             )
         })?;
-    let calls_before_boundary = sequence_and_name
+    let calls_before_boundary = sequence_name_and_args
         .iter()
-        .filter(|(sequence, _)| *sequence < boundary_sequence)
+        .filter(|(sequence, _, _)| *sequence < boundary_sequence)
         .count();
     if calls_before_boundary > expected.max_calls_before_boundary {
         bail!(
@@ -1429,9 +1436,9 @@ fn verify_stage_tool_sequence_rows(
         );
     }
     let mut calls_by_message = BTreeMap::new();
-    for (sequence, _) in sequence_and_name
+    for (sequence, _, _) in sequence_name_and_args
         .iter()
-        .filter(|(sequence, _)| *sequence < boundary_sequence)
+        .filter(|(sequence, _, _)| *sequence < boundary_sequence)
     {
         *calls_by_message.entry(sequence).or_insert(0usize) += 1;
     }
@@ -1448,30 +1455,42 @@ fn verify_stage_tool_sequence_rows(
             expected.max_calls_per_message_before_boundary
         );
     }
-    let boundary_calls = sequence_and_name
+    // A provider may repeat the exact same deterministic write while checking
+    // its own work.  The durable collection/fan-in gates below remain the
+    // authority for materialized output count, so count byte-identical write
+    // arguments once here.  A conflicting retry or an extra logical write has
+    // different arguments and still fails closed.
+    let boundary_attempts = sequence_name_and_args
         .iter()
-        .filter(|(_, name)| *name == expected.boundary_tool_name)
+        .filter(|(_, name, _)| *name == expected.boundary_tool_name)
         .count();
+    let boundary_calls = sequence_name_and_args
+        .iter()
+        .filter(|(_, name, _)| *name == expected.boundary_tool_name)
+        .map(|(_, _, args)| *args)
+        .collect::<BTreeSet<_>>()
+        .len();
     if boundary_calls != expected.exact_boundary_calls {
         bail!(
-            "trigger {} request {} called {} {} times; expected exactly {}",
+            "trigger {} request {} made {} distinct {} calls across {} attempts; expected exactly {} distinct calls",
             stage.trigger_id,
             stage.request_id,
-            expected.boundary_tool_name,
             boundary_calls,
+            expected.boundary_tool_name,
+            boundary_attempts,
             expected.exact_boundary_calls
         );
     }
-    let disallowed = sequence_and_name
+    let disallowed = sequence_name_and_args
         .iter()
-        .filter(|(sequence, name)| {
+        .filter(|(sequence, name, _)| {
             *sequence >= boundary_sequence
                 && !expected
                     .allowed_at_or_after_boundary
                     .iter()
                     .any(|allowed| allowed == *name)
         })
-        .map(|(_, name)| *name)
+        .map(|(_, name, _)| *name)
         .collect::<Vec<_>>();
     if !disallowed.is_empty() {
         bail!(
@@ -5323,10 +5342,13 @@ mod tests {
             exact_boundary_calls: 2,
             allowed_at_or_after_boundary: vec!["write_row".into()],
         };
-        let row = |sequence, name| {
+        let mut call_ordinal = 0usize;
+        let mut row = |sequence, name| {
+            call_ordinal += 1;
             json!({
                 "message_sequence": sequence,
                 "tool_name": name,
+                "args": format!(r#"{{"call":{call_ordinal}}}"#),
                 "lifecycle_state": "completed"
             })
         };
@@ -5371,6 +5393,45 @@ mod tests {
         batch_expected.max_calls_per_message_before_boundary = 3;
         verify_stage_tool_sequence_rows(&stage, &batch_expected, &oversized_batch)
             .expect("the configured per-message discovery ceiling should pass");
+
+        let first_write = json!({
+            "message_sequence": 4,
+            "tool_name": "write_row",
+            "args": r#"{"row_id":"one","value":"first"}"#,
+            "lifecycle_state": "completed"
+        });
+        let second_write = json!({
+            "message_sequence": 4,
+            "tool_name": "write_row",
+            "args": r#"{"row_id":"two","value":"second"}"#,
+            "lifecycle_state": "completed"
+        });
+        let exact_retry = json!({
+            "message_sequence": 6,
+            "tool_name": "write_row",
+            "args": r#"{"row_id":"two","value":"second"}"#,
+            "lifecycle_state": "failed"
+        });
+        verify_stage_tool_sequence_rows(
+            &stage,
+            &expected,
+            &[first_write.clone(), second_write.clone(), exact_retry],
+        )
+        .expect("a byte-identical deterministic retry is one logical write");
+
+        let conflicting_retry = json!({
+            "message_sequence": 6,
+            "tool_name": "write_row",
+            "args": r#"{"row_id":"two","value":"changed"}"#,
+            "lifecycle_state": "failed"
+        });
+        let error = verify_stage_tool_sequence_rows(
+            &stage,
+            &expected,
+            &[first_write, second_write, conflicting_retry],
+        )
+        .expect_err("a conflicting deterministic retry must remain an extra logical write");
+        assert!(error.to_string().contains("3 distinct write_row calls"));
 
         let interleaved = vec![
             row(2, "read_file"),
