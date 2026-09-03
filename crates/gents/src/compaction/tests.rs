@@ -3121,6 +3121,78 @@ fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
     );
 }
 
+/// Grok SSE drops can persist `Reasoning { id: None }` via `persist_partial_turn`.
+/// The durable transcript stays permissive; the provider boundary must strip
+/// those id-less blocks so the next Responses conversion cannot brick.
+#[test]
+fn sanitize_history_for_provider_strips_idless_reasoning() {
+    use crate::llm::message::Reasoning;
+
+    let history = vec![
+        text_msg("user", "proceed"),
+        Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("partial thought before RST")),
+                AssistantContent::Text(Text {
+                    text: "partial answer".to_string(),
+                }),
+            ],
+        },
+        text_msg("user", "try again"),
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(
+                Reasoning::new("poison only").with_id("rs_ok".to_string()),
+            )],
+        },
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(Reasoning::new(
+                "id-less only — must vanish entirely",
+            ))],
+        },
+    ];
+
+    let out = super::sanitize_history_for_provider(history);
+    assert_eq!(
+        out.len(),
+        4,
+        "id-less-only assistant row must be dropped: {out:?}"
+    );
+
+    let Message::Assistant { content, .. } = &out[1] else {
+        panic!("expected partial assistant at index 1, got {out:?}");
+    };
+    assert!(
+        content.iter().all(|item| match item {
+            AssistantContent::Reasoning(Reasoning { id, .. }) => {
+                id.as_ref().is_some_and(|value| !value.trim().is_empty())
+            }
+            _ => true,
+        }),
+        "no id-less reasoning may remain: {content:?}"
+    );
+    assert!(
+        matches!(
+            content.as_slice(),
+            [AssistantContent::Text(Text { text })] if text == "partial answer"
+        ),
+        "text must survive when id-less reasoning is stripped: {content:?}"
+    );
+
+    let Message::Assistant { content, .. } = &out[3] else {
+        panic!("expected kept reasoning assistant at index 3, got {out:?}");
+    };
+    assert!(
+        matches!(
+            content.as_slice(),
+            [AssistantContent::Reasoning(Reasoning { id: Some(id), .. })] if id == "rs_ok"
+        ),
+        "reasoning with a real id must survive: {content:?}"
+    );
+}
+
 /// A *non-empty* ordinary message does end the turn, so a result arriving after
 /// it is orphaned and both it and its now-unpaired call go.
 #[test]

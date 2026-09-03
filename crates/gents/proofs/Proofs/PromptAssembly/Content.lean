@@ -9,7 +9,9 @@ ordinary. That abstraction is deliberately blind to what sits *inside* an
 assistant message.
 
 Production is not. `sanitize_history_for_provider` (`src/compaction.rs`) is a
-composition of THREE transforms, and the outermost one — Rust
+composition of FOUR transforms: drop orphaned tool results, drop unpaired
+tool calls, normalize assistant content order, then strip id-less OpenAI
+Responses reasoning items. The outermost ordering transform — Rust
 `normalize_assistant_content_order` — reorders the items within an assistant
 message to the canonical provider order (text, then reasoning and other
 non-call content, then tool calls). Transcripts persisted before the ordering

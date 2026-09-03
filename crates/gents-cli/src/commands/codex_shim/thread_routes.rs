@@ -442,6 +442,7 @@ fn map_fork_error(err: ForkError) -> ThreadRouteError {
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
+        | ForkError::ForkNoHumanUserTurn
         | ForkError::ForkBehaviorNotFound(_)
         | ForkError::ForkBehaviorNotOwnedByPrincipal(_, _) => JSONRPC_INVALID_PARAMS,
     };

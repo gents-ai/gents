@@ -94,7 +94,13 @@ fn assistant_item(item: &LeanPromptAssemblyItem) -> AssistantContent {
         "text" => AssistantContent::Text(Text {
             text: text_body(item.value),
         }),
-        "other" => AssistantContent::Reasoning(Reasoning::new(&reasoning_body(item.value))),
+        "other" => AssistantContent::Reasoning(
+            // Lean's `other` bucket does not model provider reasoning ids.
+            // Production strips id-less reasoning at the provider boundary, so
+            // the fence must mint a synthetic id or the case would be dropped
+            // before the Lean expected output is compared.
+            Reasoning::new(&reasoning_body(item.value)).with_id(format!("rs-lean-{}", item.value)),
+        ),
         "call" => AssistantContent::ToolCall(tool_call(item.value)),
         other => panic!("generated content item has an unmodeled tag: {other}"),
     }

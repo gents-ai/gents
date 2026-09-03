@@ -831,6 +831,42 @@ fn demo_init_parses_pack_and_home() {
     }
 }
 
+fn parse_session_fork(extra: &[&str]) -> SessionForkArgs {
+    let mut argv = vec!["gents", "session", "fork"];
+    argv.extend_from_slice(extra);
+    let cli = Cli::try_parse_from(argv).expect("session fork should parse");
+    match cli.command {
+        Command::Session {
+            command: SessionCommand::Fork(args),
+        } => args,
+        _ => panic!("expected `session fork`"),
+    }
+}
+
+#[test]
+fn session_fork_parses_at_last_human_user_turn() {
+    let args = parse_session_fork(&["--from", "sess-1", "--at-last-human-user-turn"]);
+    assert_eq!(args.from, "sess-1");
+    assert_eq!(args.at_user_turn, None);
+    assert!(args.at_last_human_user_turn);
+}
+
+#[test]
+fn session_fork_parses_at_user_turn() {
+    let args = parse_session_fork(&["--from", "sess-1", "--at-user-turn", "2"]);
+    assert_eq!(args.from, "sess-1");
+    assert_eq!(args.at_user_turn, Some(2));
+    assert!(!args.at_last_human_user_turn);
+}
+
+#[test]
+fn session_fork_requires_from() {
+    assert!(
+        Cli::try_parse_from(["gents", "session", "fork", "--at-last-human-user-turn"]).is_err(),
+        "session fork should still require --from"
+    );
+}
+
 #[test]
 fn every_deprecated_path_warns() {
     use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
