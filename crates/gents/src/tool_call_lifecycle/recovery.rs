@@ -147,7 +147,6 @@ struct TerminalBackgroundToolRow {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ParentRequestRow {
-    agent_did: String,
     lifecycle_state: String,
     #[serde(default)]
     subagent_depth: Option<i64>,
@@ -676,7 +675,6 @@ mod tests {
     #[test]
     fn interrupted_parent_is_cancel_worthy_terminal_but_not_cleanly_completed() {
         let interrupted = ParentRequestRow {
-            agent_did: "did:test:x".to_string(),
             lifecycle_state: "interrupted".to_string(),
             ..Default::default()
         };
@@ -688,7 +686,6 @@ mod tests {
     #[test]
     fn clean_completion_is_not_cancel_worthy_terminal() {
         let clean = ParentRequestRow {
-            agent_did: "did:test:x".to_string(),
             lifecycle_state: "completed".to_string(),
             ..Default::default()
         };
@@ -1328,7 +1325,6 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
-                agent_did
                 lifecycle_state
                 subagent_depth
                 workspace_id
