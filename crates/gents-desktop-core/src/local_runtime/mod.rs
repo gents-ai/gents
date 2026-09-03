@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use ts_rs::TS;
 
 use crate::client::{initialize_local_standard_peer, DesktopPaths};
 
@@ -38,7 +39,8 @@ pub(crate) struct StandardRuntimeDiscovery {
     pub p2p_listen_address: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopInitSummary {
     pub status: &'static str,
     pub source: &'static str,

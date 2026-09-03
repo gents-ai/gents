@@ -3950,6 +3950,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+ "ts-rs",
  "uuid",
  "wiremock",
 ]

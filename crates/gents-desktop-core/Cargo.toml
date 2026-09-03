@@ -29,6 +29,13 @@ sha2.workspace = true
 tempfile = "3"
 tokio.workspace = true
 tracing.workspace = true
+# ts-rs is the source-of-truth generator for the desktop bridge wire contract
+# (see gents-desktop-bridge). DesktopInitSummary is exported from here.
+ts-rs = { version = "10.1", default-features = false, features = [
+    "serde-compat",
+    "chrono-impl",
+    "no-serde-warnings",
+] }
 uuid.workspace = true
 
 [dev-dependencies]
