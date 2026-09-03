@@ -1124,6 +1124,45 @@ async fn wait_for_event_source(log: &Path, collection: &str, deadline: Duration)
     )
 }
 
+/// `server --apply-root` opens HTTP before its applied configuration has
+/// crossed the authoritative readiness fence. Demo-run dependencies must not
+/// mutate configuration in that interval: doing so changes the fingerprint
+/// the server is waiting to publish and can make it shut itself down while a
+/// prematurely seeded request is already streaming.
+async fn wait_for_server_ready_marker(
+    log: &Path,
+    server: &mut tokio::process::Child,
+    deadline: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    while started.elapsed() < deadline {
+        if let Ok(text) = std::fs::read_to_string(log) {
+            if server_ready_marker(&text) {
+                return Ok(());
+            }
+        }
+        if let Ok(Some(status)) = server.try_wait() {
+            bail!(
+                "demo server exited before publishing post-apply readiness ({status}); check {}",
+                log.display()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    bail!(
+        "timed out after {}s waiting for the server's post-apply readiness marker; check {}",
+        deadline.as_secs(),
+        log.display()
+    )
+}
+
+fn server_ready_marker(log: &str) -> bool {
+    log.lines().any(|line| {
+        let line = strip_ansi(line);
+        line.contains("gents server is running ") && line.contains("Press Ctrl-C to stop.")
+    })
+}
+
 fn event_source_ready(log: &str, collection: &str) -> bool {
     let mut observes_target = false;
     let mut subscription_open = false;
@@ -3149,6 +3188,12 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     )?;
     let outcome = async {
         wait_http(&format!("http://127.0.0.1:{port}/healthz"), &mut server).await?;
+        wait_for_server_ready_marker(
+            &log,
+            &mut server,
+            Duration::from_secs(manifest.await_timeout_secs),
+        )
+        .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         install_bundled_graph_dependencies(
             &bin,
@@ -3516,6 +3561,19 @@ mod tests {
     #[test]
     fn observe_line_alone_is_not_ready_to_seed() {
         assert!(!event_source_ready(COLOURED, "ExperimentJob"));
+    }
+
+    #[test]
+    fn post_apply_server_marker_is_required_before_pack_mutations() {
+        assert!(!server_ready_marker(
+            "gents ready runnable_behaviors=1 unavailable_behaviors=0"
+        ));
+        assert!(server_ready_marker(
+            "gents server is running local-only. Press Ctrl-C to stop."
+        ));
+        assert!(server_ready_marker(
+            "\u{1b}[32mgents server is running with IROH P2P. Press Ctrl-C to stop.\u{1b}[0m"
+        ));
     }
 
     #[test]
@@ -4776,12 +4834,12 @@ mod tests {
                 )
                 .expect("code-review scan profile should load");
                 assert_eq!(scan_profile["max_turns"], 1_000_000);
-                assert_eq!(scan_profile["reasoning_effort"], "none");
+                assert_eq!(scan_profile["reasoning_effort"], "high");
                 let coordinator_profile = read_pack_json_defaults(
                     &pack.join("inference-profiles/grok-port-code-review-profile/object.json"),
                 )
                 .expect("code-review coordinator profile should load");
-                assert_eq!(coordinator_profile["reasoning_effort"], "none");
+                assert_eq!(coordinator_profile["reasoning_effort"], "high");
                 let backend_dirs = std::fs::read_dir(pack.join("inference-backends"))
                     .expect("grok backend directory should load")
                     .collect::<Result<Vec<_>, _>>()
@@ -4980,6 +5038,7 @@ mod tests {
                 )
                 .expect("recon profile should load");
                 assert_eq!(recon_profile["max_turns"], 1_000_000);
+                assert_eq!(recon_profile["reasoning_effort"], "high");
                 assert_eq!(
                     experiment["expect"]["stage_tool_sequences"][0]["boundary_tool_name"],
                     "write_port_surface"
@@ -5004,6 +5063,7 @@ mod tests {
                 assert_eq!(implement_profile["max_turns"], 1_000_000);
                 assert_eq!(implement_profile["max_output_tokens"], 65536);
                 assert_eq!(implement_profile["retry_max_resample"], 2);
+                assert_eq!(implement_profile["reasoning_effort"], "high");
                 for selection in ["port-implement-tools", "port-converge-tools"] {
                     let tools = read_pack_json_defaults(
                         &pack
@@ -5020,6 +5080,12 @@ mod tests {
                     assert_eq!(tools["file_tools_mode"], "ReadWrite");
                     assert_eq!(tools["command_execution_policy"], "workspace_write");
                     assert_eq!(tools["command_network_mode"], "disabled");
+                    assert!(
+                        tools["command_allowed_argv_prefixes"]
+                            .as_array()
+                            .is_none_or(Vec::is_empty),
+                        "{selection} must let the workspace sandbox admit compiler and shell commands without a second, brittle argv-prefix gate"
+                    );
                     assert_ne!(
                         (
                             tools["command_execution_policy"].as_str(),

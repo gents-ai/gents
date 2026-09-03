@@ -1,7 +1,7 @@
 {
   "manifest_version": 1,
   "name": "code-review",
-  "version": "1.4.2",
+  "version": "1.5.0",
   "description": "Host-evidenced four-stage review: deterministic dispatch, immutable paged evidence, bounded lens swarm, verification, and triage.",
   "compiler_version": "graph-intent-v3",
   "roles": [

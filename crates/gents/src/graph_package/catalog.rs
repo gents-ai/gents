@@ -788,4 +788,54 @@ mod tests {
             assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
     }
+
+    #[test]
+    fn code_review_stages_are_durable_goal_controlled() {
+        let package = load_bundled_graph_package("code-review").unwrap();
+        for capability in &package.capabilities {
+            let task: Value =
+                serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();
+            assert!(
+                task["goal_objective_template"]
+                    .as_str()
+                    .is_some_and(|objective| !objective.trim().is_empty()),
+                "{} must provision a controller-owned durable goal",
+                capability.task_asset
+            );
+            assert!(
+                task["goal_token_budget"].is_null(),
+                "{}",
+                capability.task_asset
+            );
+
+            let selection: Value = serde_json::from_str(
+                package
+                    .asset_text(&capability.tool_selection_asset)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                selection["enable_goal_tools"], true,
+                "{}",
+                capability.tool_selection_asset
+            );
+            assert_eq!(
+                selection["enable_goal_creation"], false,
+                "{}",
+                capability.tool_selection_asset
+            );
+
+            let prompt = package.asset_text(&capability.task_prompt_asset).unwrap();
+            assert!(
+                prompt.contains("`update_goal`"),
+                "{}",
+                capability.task_prompt_asset
+            );
+            assert!(
+                prompt.contains("`status=\"complete\"`"),
+                "{}",
+                capability.task_prompt_asset
+            );
+        }
+    }
 }

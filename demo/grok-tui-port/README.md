@@ -92,13 +92,19 @@ documents.
 Useful controls:
 
 ```bash
-export GENTS_GROK_PORT_MIN_SURFACES=13
-export GENTS_GROK_PORT_MAX_SURFACES=13
-export GENTS_GROK_PORT_BASE_SHA=$(git rev-parse HEAD)
-export GENTS_GROK_PORT_PR_BASE=main
-export GENTS_GROK_PORT_BRANCH=agent/grok-tui-port-pack9
-export GENTS_GROK_PORT_PROMPT='Prioritize subagents, interrupts, and model name.'
+export GROK_PORT_MIN_SURFACES=13
+export GROK_PORT_MAX_SURFACES=13
+export GROK_PORT_BASE_SHA=$(git rev-parse HEAD)
+export GROK_PORT_PR_BASE=main
+export GROK_PORT_BRANCH=agent/grok-tui-port-pack9
+export GROK_PORT_PROMPT='Prioritize subagents, interrupts, and model name.'
+export GROK_PORT_REASONING_EFFORT=high
 ```
+
+`high` is the pack default for GLM-5.3-Flash stages; override the environment
+variable only for an intentional experiment. The embedded code-review graph
+uses `GROK_PORT_CODE_REVIEW_REASONING_EFFORT`, which inherits the same value by
+default.
 
 Every run lands under `demo/grok-tui-port/runs/<job-id>/`.
 
@@ -107,6 +113,22 @@ goal is a completion controller, not a replacement for edge evidence: green,
 blocked, rejected, retry, and needs-attention outputs still follow each stage's
 existing schema and trigger rules, and the goal closes only after that terminal
 output is persisted.
+
+### Recovery invariants
+
+The resolved pack environment is part of the run. Do not repair a live run by
+applying this directory with its portable defaults: that can replace the run's
+repository root, endpoint, model, or concurrency settings. Restore the original
+environment first, wait until the affected behavior is runnable, and only then
+reactivate paused goals. Requests retain the tool-policy snapshot they were
+created with, so a policy correction takes effect on a continuation request,
+not an already-processing request.
+
+Do not manually seal or integrate an abandoned workspace. Those transitions
+belong to the host: a stage output without its writer receipt must remain
+incomplete until runtime recovery has terminalized the request and produced a
+host-owned seal. The exact eight integrator receipts remain the convergence
+barrier.
 
 ## Live edge probes
 

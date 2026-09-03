@@ -221,6 +221,16 @@ def initialize(
     model = session["models"]["availableModels"][0]
     require(model["modelId"] == client.model, "catalog model mismatch")
     require(model["meta"]["totalContextTokens"] == context_window, "context window mismatch")
+    require(model["meta"].get("acceptsImages") is False, "catalog must be text-only")
+    require(model["meta"].get("inputModalities") == ["text"], "catalog modality drift")
+    require(
+        model["meta"].get("supportsReasoningEffort") is False,
+        "catalog must not advertise unplumbed per-session reasoning effort",
+    )
+    require(
+        "reasoningEfforts" not in model["meta"],
+        "catalog must omit an unsupported reasoning-effort list",
+    )
     # The mode capabilities are connection-scoped, not request-scoped: the
     # request above carries none of the three keys, so every value must be
     # derived from the register capabilities (yolo_mode=true, auto_mode=false,

@@ -8,7 +8,7 @@
   "top_p": ${GENTS_GROK_PORT_TOP_P:-0.95},
   "top_k": null,
   "min_p": null,
-  "reasoning_effort": "${GENTS_GROK_PORT_CODE_REVIEW_REASONING_EFFORT:-none}",
+  "reasoning_effort": "${GENTS_GROK_PORT_CODE_REVIEW_REASONING_EFFORT:-high}",
   "frequency_penalty": null,
   "stream_batch_ms": ${GENTS_GROK_PORT_STREAM_BATCH_MS:-5000},
   "deadline_duration_secs": ${GENTS_GROK_PORT_DEADLINE_SECS:-86400},
