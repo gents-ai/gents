@@ -681,7 +681,6 @@ export function createDesktopUiHarness(
       const summary: InitSummary = {
         status: "ready",
         source: "bombadil-harness",
-        statusEndpoint: "http://127.0.0.1:9181/status",
         agentHome: "/tmp/gents-bombadil/agent",
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectory: "/tmp/gents-bombadil/peers.json",
