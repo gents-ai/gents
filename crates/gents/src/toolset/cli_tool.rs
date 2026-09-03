@@ -4,7 +4,7 @@ use crate::llm::tool::BoxFuture;
 use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{ToolDyn, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
+use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use anyhow::{bail, Context, Result};
 
 use super::args::CliToolArgs;
@@ -111,31 +111,20 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
     };
 
     let timeout_secs = config.timeout_secs.max(1);
-    let runtime = current_tool_runtime_context();
-    let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
-    let command_deadline = chrono::Utc::now()
-        + chrono::Duration::from_std(std::time::Duration::from_secs(timeout_secs))
-            .unwrap_or_else(|_| chrono::Duration::days(36_500));
-    let deadline_at =
-        Some(request_deadline.map_or(command_deadline, |deadline| deadline.min(command_deadline)));
-    let cancellation_token = runtime
-        .as_ref()
-        .map(|runtime| runtime.cancellation_token.clone())
-        .unwrap_or_default();
-    let live_output = runtime.and_then(|runtime| runtime.live_output);
+    let bounds = tool_execution_bounds(std::time::Duration::from_secs(timeout_secs));
 
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: std::iter::once(config.binary_path.display().to_string())
             .chain(argv.iter().cloned())
             .collect::<Vec<_>>(),
         cwd: cwd.clone(),
-        deadline_at,
-        cancellation_token,
+        deadline_at: bounds.deadline_at,
+        cancellation_token: bounds.cancellation_token,
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
-        live_output,
+        live_output: bounds.live_output,
     })
     .await;
 

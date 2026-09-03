@@ -503,6 +503,38 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
     })
 }
 
+/// The deadline/cancellation/live-output triple every managed subprocess
+/// spawn needs, derived once from the ambient runtime context so `bash` and
+/// `CliTool` (and any future managed-exec caller) share one computation
+/// instead of each re-deriving it: the request's deadline (if any) minned
+/// with `now + command_timeout`, the context's cancellation token (or a
+/// fresh, never-cancelled one), and the context's live-output sink.
+pub(crate) struct ToolExecutionBounds {
+    pub(crate) deadline_at: Option<DateTime<Utc>>,
+    pub(crate) cancellation_token: CancellationToken,
+    pub(crate) live_output: Option<LiveToolOutputWriter>,
+}
+
+pub(crate) fn tool_execution_bounds(command_timeout: Duration) -> ToolExecutionBounds {
+    let runtime = current_tool_runtime_context();
+    let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
+    let command_deadline = Utc::now()
+        + chrono::Duration::from_std(command_timeout)
+            .unwrap_or_else(|_| chrono::Duration::days(36_500));
+    let deadline_at =
+        Some(request_deadline.map_or(command_deadline, |deadline| deadline.min(command_deadline)));
+    let cancellation_token = runtime
+        .as_ref()
+        .map(|runtime| runtime.cancellation_token.clone())
+        .unwrap_or_default();
+    let live_output = runtime.and_then(|runtime| runtime.live_output);
+    ToolExecutionBounds {
+        deadline_at,
+        cancellation_token,
+        live_output,
+    }
+}
+
 /// Execute `tool` under the ambient runtime scope's deadline/cancellation
 /// envelope, returning the typed outcome. This (together with the foreground
 /// dispatcher's own envelope) is the only path a managed terminal can take:
@@ -887,5 +919,29 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(observed, "background-session");
+    }
+
+    #[tokio::test]
+    async fn tool_execution_bounds_without_context_uses_the_command_timeout() {
+        let before = Utc::now();
+        let bounds = tool_execution_bounds(Duration::from_secs(30));
+        let after = Utc::now();
+        let deadline = bounds.deadline_at.expect("deadline");
+        assert!(deadline >= before + chrono::Duration::seconds(30));
+        assert!(deadline <= after + chrono::Duration::seconds(30));
+        assert!(!bounds.cancellation_token.is_cancelled());
+        assert!(bounds.live_output.is_none());
+    }
+
+    #[tokio::test]
+    async fn tool_execution_bounds_prefers_the_earlier_request_deadline() {
+        let request_deadline = Utc::now() + chrono::Duration::seconds(5);
+        let token = CancellationToken::new();
+        let bounds = scope_request_tool_execution(Some(request_deadline), token, async {
+            tool_execution_bounds(Duration::from_secs(3600))
+        })
+        .await;
+        assert_eq!(bounds.deadline_at, Some(request_deadline));
+        assert!(!bounds.cancellation_token.is_cancelled());
     }
 }
