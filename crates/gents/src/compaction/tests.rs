@@ -12,6 +12,7 @@ use rig::streaming::{RawStreamingChoice, StreamingCompletionResponse};
 use super::*;
 use crate::ensure_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
+use crate::provider_input::budget::can_dispatch;
 use crate::session;
 use crate::test_support::first_content;
 
@@ -30,6 +31,23 @@ fn text_msg(role: &str, text: &str) -> Message {
         },
         _ => panic!("unknown role"),
     }
+}
+
+fn test_message_tokens(messages: &[Message]) -> usize {
+    gate_test_loop_config()
+        .provider_input_counter
+        .estimate_message_request(messages)
+        .expect("test messages project to the provider wire shape")
+}
+
+fn test_reduction_admission() -> ReductionAdmission {
+    ReductionAdmission::for_input(1, 1, 0.0).expect("a zero threshold admits the test reduction")
+}
+
+fn required_reduction(result: &ReductionResult) -> ExactReduction<'_> {
+    result
+        .exact_reduction()
+        .expect("the test requires an exact reduction")
 }
 
 fn tool_call_msg(name: &str, args: &str) -> Message {
@@ -60,12 +78,84 @@ fn tool_result_msg(call_id: &str, result_text: &str) -> Message {
     }
 }
 
+#[test]
+fn generated_rolling_cases_drive_the_production_commit_precondition() {
+    for case in crate::lean_vocab_test::lean_rolling_compaction_cases() {
+        let actual_valid = rolling_plan_is_valid(
+            case.target_messages,
+            &case.chunk_messages,
+            &case.chunk_pair_closed,
+            &case.chunk_can_dispatch,
+            case.checkpoint_covered,
+        );
+        assert_eq!(actual_valid, case.plan_valid, "{}", case.name);
+        let actual_step_input = rolling_step_input(case.prior_payload, case.next_chunk.clone());
+        assert_eq!(actual_step_input, case.step_input, "{}", case.name);
+    }
+}
+
+#[test]
+fn generated_reduction_engine_cases_drive_shared_decision_outcome() {
+    for case in crate::lean_vocab_test::lean_reduction_engine_cases() {
+        let threshold = threshold_decision(case.input_tokens, case.effective_input_budget);
+        let threshold_name = match threshold {
+            ThresholdDecision::NotNeeded => "not_needed",
+            ThresholdDecision::ReduceEligible => "reduce_eligible",
+        };
+        assert_eq!(threshold_name, case.threshold_decision, "{}", case.name);
+
+        let decision =
+            reduction_decision(threshold, case.can_fit, case.prefix_length, case.checkpoint);
+        let decision_name = match &decision {
+            ReductionDecision::NotNeeded => "not_needed",
+            ReductionDecision::CannotFit => "cannot_fit",
+            ReductionDecision::Reduce { .. } => "reduce",
+        };
+        assert_eq!(decision_name, case.decision, "{}", case.name);
+
+        let outcome = apply_reduction_decision(case.source.clone(), decision);
+        match outcome {
+            ReductionOutcome::NotNeeded { messages } => {
+                assert_eq!(case.outcome, "not_needed", "{}", case.name);
+                assert_eq!(messages, case.not_needed_messages, "{}", case.name);
+            }
+            ReductionOutcome::CannotFit => {
+                assert_eq!(case.outcome, "cannot_fit", "{}", case.name);
+            }
+            ReductionOutcome::Reduced {
+                compacted_prefix,
+                retained_suffix,
+                checkpoint,
+            } => {
+                assert_eq!(case.outcome, "reduced", "{}", case.name);
+                assert_eq!(compacted_prefix, case.compacted_prefix, "{}", case.name);
+                assert_eq!(retained_suffix, case.retained_suffix, "{}", case.name);
+                assert_eq!(Some(checkpoint), case.outcome_checkpoint, "{}", case.name);
+                let reconstructed = compacted_prefix
+                    .iter()
+                    .chain(retained_suffix.iter())
+                    .copied()
+                    .collect::<Vec<_>>();
+                assert_eq!(reconstructed, case.source, "{}", case.name);
+            }
+        }
+        assert!(case.exact, "{}", case.name);
+    }
+}
+
 /// Shared `LoopConfig` for tests that only care about compaction behavior, not
-/// loop configuration. `DefraCompactor::new` replaces this policy with its
+/// loop configuration. `ProviderReductionEngine::new` replaces this policy with its
 /// bounded immediate internal retry budget (#1016), so the fixture does not
 /// accidentally supply behavior that the constructor is meant to own.
 fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: None,
         context_message: None,
         temperature: None,
@@ -533,7 +623,7 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
     let mut config = scheduled_origin_config();
     config.temperature = Some(0.2);
     config.additional_params = Some(serde_json::json!({"top_p": 0.9, "seed": 7421}));
-    let compactor = DefraCompactor::new(Arc::new(model.clone()), config);
+    let compactor = ProviderReductionEngine::new(Arc::new(model.clone()), config);
 
     tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), async {
         // Cross the configured gate naturally with a realistic transcript. The
@@ -548,13 +638,16 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
             target_tokens,
         );
         let first = compactor
-            .compact(first_history, context_window, &live_compaction_options())
+            .reduce(
+                first_history,
+                context_window,
+                &live_compaction_options(),
+                test_reduction_admission(),
+            )
             .await
             .expect("first live schema-constrained compaction must succeed");
         assert_live_reduction(&first, context_window);
-        let first_summary = first
-            .summary
-            .expect("first compaction must return a summary");
+        let first_summary = required_reduction(&first).checkpoint.to_string();
         assert_checkpoint_markers(
             &first_summary,
             &[
@@ -577,13 +670,16 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
             target_tokens,
         ));
         let second = compactor
-            .compact(second_history, context_window, &live_compaction_options())
+            .reduce(
+                second_history,
+                context_window,
+                &live_compaction_options(),
+                test_reduction_admission(),
+            )
             .await
             .expect("second live schema-constrained compaction must succeed");
         assert_live_reduction(&second, context_window);
-        let second_summary = second
-            .summary
-            .expect("second compaction must return an updated summary");
+        let second_summary = required_reduction(&second).checkpoint.to_string();
         assert_checkpoint_markers(
             &second_summary,
             &[
@@ -637,13 +733,11 @@ struct LiveCompactionRecall {
     next_action: String,
 }
 
-fn live_compaction_options() -> CompactionOptions {
-    CompactionOptions {
-        threshold: 0.75,
+fn live_compaction_options() -> ReductionOptions {
+    ReductionOptions {
         keep_recent_tokens: 6_000,
-        strategy: CompactionStrategy::Summarize,
+        mode: ReductionMode::Summarize,
         summary_max_output_tokens: 4_096,
-        force_summarize: false,
         ..Default::default()
     }
 }
@@ -704,29 +798,29 @@ fn live_mobile_triage_history(
             ),
         ));
 
-        if estimate_message_tokens(&messages) >= target_tokens {
+        if test_message_tokens(&messages) >= target_tokens {
             break;
         }
     }
 
     assert!(
-        estimate_message_tokens(&messages) >= target_tokens,
+        test_message_tokens(&messages) >= target_tokens,
         "live fixture must reach its requested provider-input size"
     );
     messages
 }
 
-fn assert_live_reduction(result: &CompactionResult, context_window: usize) {
+fn assert_live_reduction(result: &ReductionResult, context_window: usize) {
     assert!(
         result.original_token_estimate > context_window.saturating_mul(75) / 100,
-        "the live fixture must trigger the production threshold instead of force_summarize"
+        "the live fixture must carry the production threshold admission"
     );
     assert!(
-        result.messages_compacted > 0,
+        !required_reduction(result).compacted_prefix.is_empty(),
         "a real prefix must be removed"
     );
     assert!(
-        !result.messages.is_empty(),
+        !result.provider_messages().unwrap().is_empty(),
         "a recent suffix must remain verbatim"
     );
     assert!(
@@ -748,6 +842,7 @@ fn assert_checkpoint_markers(summary: &str, markers: &[&str]) {
 struct MockSummaryModel {
     response: String,
     last_request: Arc<Mutex<Option<CompletionRequest>>>,
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
 }
 
 impl MockSummaryModel {
@@ -755,6 +850,7 @@ impl MockSummaryModel {
         Self {
             response: response.to_string(),
             last_request: Arc::new(Mutex::new(None)),
+            requests: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -773,7 +869,8 @@ impl CompletionModel for MockSummaryModel {
         &self,
         request: CompletionRequest,
     ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
-        *self.last_request.lock().unwrap() = Some(request);
+        *self.last_request.lock().unwrap() = Some(request.clone());
+        self.requests.lock().unwrap().push(request);
         Ok(CompletionResponse {
             choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
                 rig::completion::message::Text {
@@ -792,7 +889,8 @@ impl CompletionModel for MockSummaryModel {
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
         // Compaction now summarizes via the owned loop (#400), which uses
         // `stream`; replay the scripted summary as a single text chunk.
-        *self.last_request.lock().unwrap() = Some(request);
+        *self.last_request.lock().unwrap() = Some(request.clone());
+        self.requests.lock().unwrap().push(request);
         let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
             Ok(RawStreamingChoice::Message(self.response.clone())),
             Ok(RawStreamingChoice::FinalResponse(())),
@@ -801,6 +899,291 @@ impl CompletionModel for MockSummaryModel {
             futures::stream::iter(items),
         )))
     }
+}
+
+#[derive(Clone, Default)]
+struct SentinelCheckpointModel {
+    requests: Arc<Mutex<Vec<CompletionRequest>>>,
+}
+
+#[derive(Clone, Default)]
+struct AdvancingFirstCheckpointModel {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+    now: Arc<Mutex<chrono::DateTime<chrono::Utc>>>,
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for AdvancingFirstCheckpointModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::default()
+    }
+
+    async fn completion(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        unreachable!("rolling compaction uses streaming completions")
+    }
+
+    async fn stream(
+        &self,
+        _request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call == 0 {
+            let mut now = self.now.lock().unwrap();
+            *now += chrono::Duration::seconds(2);
+        }
+        let checkpoint = serde_json::json!({
+            "goal": "preserve the bounded rolling prefix",
+            "next_actions": ["continue rolling"]
+        })
+        .to_string();
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(vec![
+                Ok(RawStreamingChoice::Message(checkpoint)),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ]),
+        )))
+    }
+}
+
+impl SentinelCheckpointModel {
+    fn checkpoint_for(request: &CompletionRequest) -> String {
+        let rendered = serde_json::to_string(&request.chat_history).unwrap();
+        let mut markers = Vec::new();
+        if rendered.contains("FIRST_SENTINEL") {
+            markers.push("FIRST_SENTINEL");
+        }
+        if rendered.contains("LAST_SENTINEL") {
+            markers.push("LAST_SENTINEL");
+        }
+        serde_json::json!({
+            "goal": format!("Preserve {}", markers.join(" and ")),
+            "next_actions": ["Continue after rolling compaction."]
+        })
+        .to_string()
+    }
+}
+
+#[allow(refining_impl_trait)]
+impl CompletionModel for SentinelCheckpointModel {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self::default()
+    }
+
+    async fn completion(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+        let response = Self::checkpoint_for(&request);
+        self.requests.lock().unwrap().push(request);
+        Ok(CompletionResponse {
+            choice: rig::one_or_many::OneOrMany::one(rig::completion::AssistantContent::Text(
+                rig::completion::message::Text { text: response },
+            )),
+            usage: Usage::new(),
+            raw_response: (),
+            message_id: None,
+        })
+    }
+
+    async fn stream(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        let response = Self::checkpoint_for(&request);
+        self.requests.lock().unwrap().push(request);
+        let items: Vec<Result<RawStreamingChoice<()>, CompletionError>> = vec![
+            Ok(RawStreamingChoice::Message(response)),
+            Ok(RawStreamingChoice::FinalResponse(())),
+        ];
+        Ok(StreamingCompletionResponse::stream(Box::pin(
+            futures::stream::iter(items),
+        )))
+    }
+}
+
+#[tokio::test]
+async fn oversized_prefix_rolls_through_positive_pair_safe_summary_requests() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let config = gate_test_loop_config();
+    let counter = config.provider_input_counter.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), config);
+    let mut messages = (0..20)
+        .map(|index| {
+            let marker = if index == 0 {
+                "FIRST_SENTINEL"
+            } else if index == 19 {
+                "LAST_SENTINEL"
+            } else {
+                "middle"
+            };
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("{marker}-{index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+
+    let result = compactor
+        .reduce(
+            messages.clone(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect("the oversized prefix should roll through bounded chunks");
+
+    assert_eq!(required_reduction(&result).compacted_prefix.len(), 20);
+    assert_eq!(
+        result.provider_messages().unwrap(),
+        vec![messages.last().unwrap().clone()]
+    );
+    let summary = required_reduction(&result).checkpoint;
+    assert!(summary.contains("FIRST_SENTINEL"));
+    assert!(summary.contains("LAST_SENTINEL"));
+
+    let requests = observed.lock().unwrap();
+    assert!(requests.len() > 1);
+    let first = serde_json::to_string(&requests.first().unwrap().chat_history).unwrap();
+    let last = serde_json::to_string(&requests.last().unwrap().chat_history).unwrap();
+    assert!(first.contains("FIRST_SENTINEL"));
+    assert!(last.contains("FIRST_SENTINEL"));
+    assert!(last.contains("LAST_SENTINEL"));
+    for request in requests.iter() {
+        let output = usize::try_from(request.max_tokens.expect("positive dynamic output")).unwrap();
+        let input = counter
+            .project_request(request)
+            .unwrap()
+            .estimated_input_tokens;
+        assert_eq!(
+            output, 512,
+            "rolling chunk selection must preserve the configured summary ceiling when the exact threshold budget leaves room"
+        );
+        assert!(can_dispatch(input, 6_000, output));
+        assert!(input <= rolling_summary_input_budget(6_000, 512));
+    }
+}
+
+#[tokio::test]
+async fn rolling_compaction_rechecks_the_shared_deadline_before_each_chunk() {
+    let started = chrono::Utc::now();
+    let clock = Arc::new(Mutex::new(started));
+    let model = AdvancingFirstCheckpointModel {
+        calls: Arc::default(),
+        now: clock.clone(),
+    };
+    let calls = model.calls.clone();
+    let clock_for_compactor = clock.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config())
+        .with_now(Arc::new(move || *clock_for_compactor.lock().unwrap()));
+    let mut messages = (0..20)
+        .map(|index| {
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("chunk {index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained current prompt"));
+
+    let error = compactor
+        .reduce(
+            messages,
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                deadline: Some(started + chrono::Duration::seconds(1)),
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect_err("the shared deadline must stop the next rolling chunk");
+
+    assert!(error.chain().any(|cause| matches!(
+        cause.downcast_ref::<ReductionError>(),
+        Some(ReductionError::DeadlineElapsed)
+    )));
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the expired shared deadline must prevent a second provider dispatch"
+    );
+}
+
+#[tokio::test]
+async fn indivisible_oversized_tool_turn_fails_without_returning_a_partial_checkpoint() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
+    let messages = vec![
+        text_msg("user", "small prefix that fits as the first rolling chunk"),
+        tool_call_msg(
+            "write_file",
+            &serde_json::json!({
+                "file_path": "/tmp/oversized",
+                "content": "x".repeat(40_000)
+            })
+            .to_string(),
+        ),
+        tool_result_msg("call-1", "ok"),
+        text_msg("user", "retained current prompt"),
+    ];
+
+    let error = compactor
+        .reduce(
+            messages,
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect_err("an indivisible provider-visible tool turn cannot be discarded");
+
+    assert!(error
+        .chain()
+        .any(
+            |cause| cause.downcast_ref::<ReductionError>().is_some_and(|typed| {
+                matches!(
+                    typed,
+                    ReductionError::IndivisibleUnitCannotFit {
+                        start: 1,
+                        end: 3,
+                        ..
+                    }
+                )
+            })
+        ));
+    assert_eq!(
+        observed.lock().unwrap().len(),
+        1,
+        "the first in-memory checkpoint may succeed, but no partial result is returned"
+    );
 }
 
 #[tokio::test]
@@ -815,7 +1198,7 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
     );
     let config = gate_test_loop_config();
     let observed_model = model.clone();
-    let compactor = DefraCompactor::new(Arc::new(model), config);
+    let compactor = ProviderReductionEngine::new(Arc::new(model), config);
     let messages = (0..8)
         .flat_map(|turn| {
             [
@@ -829,29 +1212,28 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
         .collect::<Vec<_>>();
 
     assert!(
-        !needs_compaction(&messages, 100_000, 0.75),
+        ReductionAdmission::for_input(test_message_tokens(&messages), 100_000, 0.75).is_none(),
         "the history-only guard must be below threshold for this regression"
     );
     let result = compactor
-        .compact(
+        .reduce(
             messages,
             100_000,
-            &CompactionOptions {
-                threshold: 0.75,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
-                force_summarize: true,
+                mode: ReductionMode::Summarize,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .unwrap();
 
     assert!(
-        result.summary.is_some(),
+        result.exact_reduction().is_some(),
         "a complete-input budget trigger must not silently no-op in the compactor"
     );
-    assert!(result.messages_compacted > 0);
+    assert!(!required_reduction(&result).compacted_prefix.is_empty());
 
     let request = observed_model
         .last_request
@@ -875,6 +1257,80 @@ async fn forced_compaction_does_not_recheck_the_history_only_threshold() {
 }
 
 #[tokio::test]
+async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let config = gate_test_loop_config();
+    let messages = vec![
+        text_msg("user", "inspect the large result"),
+        tool_call_msg("read_file", r#"{"path":"/tmp/large"}"#),
+        tool_result_msg("call-1", &"x".repeat(80_000)),
+        text_msg("user", "continue"),
+    ];
+    let counter = config.provider_input_counter.as_ref();
+    let original_tokens = counter.estimate_message_request(&messages).unwrap();
+    let stripped_messages = provider_view(messages.clone()).0;
+    let stripped_tokens = counter
+        .estimate_message_request(&stripped_messages)
+        .unwrap();
+    assert!(original_tokens > stripped_tokens);
+    let context_window = stripped_tokens.saturating_add(100).saturating_mul(2);
+    let admission = ReductionAdmission::for_input(original_tokens, context_window, 0.5)
+        .expect("the unstripped complete input is over threshold");
+    let compactor = ProviderReductionEngine::new(Arc::new(model), config);
+
+    let result = compactor
+        .reduce(
+            messages,
+            context_window,
+            &ReductionOptions {
+                keep_recent_tokens: usize::MAX,
+                mode: ReductionMode::Summarize,
+                ..Default::default()
+            },
+            admission,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.provider_messages().unwrap(), stripped_messages);
+    assert!(observed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_indivisible_prompt_still_over_threshold_after_stripping_cannot_fit() {
+    let model = SentinelCheckpointModel::default();
+    let observed = model.requests.clone();
+    let config = gate_test_loop_config();
+    let messages = vec![text_msg("user", &"x".repeat(20_000))];
+    let input_tokens = config
+        .provider_input_counter
+        .estimate_message_request(&messages)
+        .unwrap();
+    let context_window = input_tokens.saturating_mul(2).saturating_sub(2);
+    let admission = ReductionAdmission::for_input(input_tokens, context_window, 0.5)
+        .expect("the sole prompt is over the threshold budget");
+    let compactor = ProviderReductionEngine::new(Arc::new(model), config);
+
+    let result = compactor
+        .reduce(
+            messages,
+            context_window,
+            &ReductionOptions {
+                keep_recent_tokens: usize::MAX,
+                mode: ReductionMode::Summarize,
+                ..Default::default()
+            },
+            admission,
+        )
+        .await
+        .unwrap();
+
+    assert!(result.cannot_fit());
+    assert!(observed.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn summary_completion_uses_independent_output_cap() {
     let model = MockSummaryModel::new(
         &serde_json::json!({
@@ -885,7 +1341,7 @@ async fn summary_completion_uses_independent_output_cap() {
     let mut config = gate_test_loop_config();
     config.max_tokens = Some(65_536); // the user turn's budget — must NOT be inherited
     let observed_model = model.clone();
-    let compactor = DefraCompactor::new(Arc::new(model), config);
+    let compactor = ProviderReductionEngine::new(Arc::new(model), config);
     let messages: Vec<Message> = (0..8)
         .flat_map(|turn| {
             [
@@ -898,15 +1354,15 @@ async fn summary_completion_uses_independent_output_cap() {
         })
         .collect();
     compactor
-        .compact(
+        .reduce(
             messages,
             100_000,
-            &CompactionOptions {
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
-                force_summarize: true,
+                mode: ReductionMode::Summarize,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .unwrap();
@@ -918,7 +1374,10 @@ async fn summary_completion_uses_independent_output_cap() {
         .expect("summary request");
     assert_eq!(
         request.max_tokens,
-        Some(crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64),
+        Some(summary_output_ceiling(
+            crate::config::DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
+            100_000,
+        ) as u64),
         "summary completion must use its own output budget, not the turn's"
     );
 }
@@ -932,7 +1391,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         .to_string(),
     );
     let observed_model = model.clone();
-    let compactor = DefraCompactor::new(Arc::new(model), gate_test_loop_config());
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
     let mut messages = Vec::new();
     for i in 0..=crate::config::MAX_COMPACTION_SUMMARY_FILE_LIST_MAX {
         messages.push(tool_call_msg(
@@ -944,17 +1403,17 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
     messages.push(text_msg("user", "done"));
 
     let result = compactor
-        .compact(
+        .reduce(
             messages,
             100_000,
-            &CompactionOptions {
+            &ReductionOptions {
                 keep_recent_tokens: 1,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
                 summary_max_output_tokens: usize::MAX,
                 summary_file_list_max: usize::MAX,
-                force_summarize: true,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .unwrap();
@@ -975,7 +1434,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         "the hard summary ceiling may be lowered to fit the assembled input, never bypassed: {effective_max}"
     );
 
-    let summary = result.summary.expect("summary");
+    let summary = required_reduction(&result).checkpoint;
     assert_eq!(
         summary
             .lines()
@@ -996,7 +1455,7 @@ async fn fifteen_thousand_paths_produce_a_bounded_summary() {
         })
         .to_string(),
     );
-    let compactor = DefraCompactor::new(Arc::new(model), gate_test_loop_config());
+    let compactor = ProviderReductionEngine::new(Arc::new(model), gate_test_loop_config());
     let mut messages = Vec::new();
     for i in 0..15_000 {
         messages.push(tool_call_msg(
@@ -1007,19 +1466,19 @@ async fn fifteen_thousand_paths_produce_a_bounded_summary() {
     }
     messages.push(text_msg("user", "done"));
     let result = compactor
-        .compact(
+        .reduce(
             messages,
             100_000,
-            &CompactionOptions {
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
-                force_summarize: true,
+                mode: ReductionMode::Summarize,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .unwrap();
-    let summary = result.summary.expect("summary");
+    let summary = required_reduction(&result).checkpoint;
     assert!(
         summary.len() <= 51 * 1024,
         "summary must be bounded; got {} bytes",
@@ -1088,26 +1547,28 @@ async fn transient_compaction_failures_follow_the_internal_immediate_policy() {
     // inherit the scheduled retry ladder (5s/30s/120s, deadline-less), which
     // would block inline compaction for minutes. #1016 replaces the resulting
     // zero-recovery rule with a small, fixed, immediate internal budget:
-    // `DefraCompactor::new` forces `internal_immediate` even when handed a
+    // `ProviderReductionEngine::new` forces `internal_immediate` even when handed a
     // `scheduled_default` config, so a persistently transient provider error
     // makes exactly 1 + 3 provider calls and fails deterministically within
     // seconds (virtual time here; the 10s timeout would require the scheduled
     // ladder to trip it).
     let model = CountingFailModel::new();
     let calls = model.calls();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        compactor.compact(
+        compactor.reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         ),
     )
     .await;
@@ -1141,6 +1602,13 @@ fn summary_worthy_messages() -> Vec<Message> {
 
 fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: None,
         context_message: None,
         temperature: None,
@@ -1287,24 +1755,26 @@ async fn empty_compaction_completion_is_retracted_and_immediately_resampled() {
     ]);
     let calls = model.calls.clone();
     let requests = model.requests.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect("an empty first attempt must be retracted and resampled, not fatal");
 
     assert!(
-        result.summary.is_some(),
+        result.exact_reduction().is_some(),
         "the resampled attempt's summary must be used"
     );
     assert_eq!(
@@ -1341,23 +1811,25 @@ async fn malformed_structured_summary_is_retracted_and_resampled() {
     ]);
     let calls = model.calls.clone();
     let requests = model.requests.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect("malformed structured output must be retracted and resampled");
 
-    assert!(result.summary.is_some());
+    assert!(result.exact_reduction().is_some());
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -1395,23 +1867,25 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
         ScriptedSummaryModel::summary_turn(),
     ]);
     let calls = model.calls.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect("complete but schema-invalid output must be retracted and resampled");
 
-    assert!(result.summary.is_some());
+    assert!(result.exact_reduction().is_some());
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
         2,
@@ -1444,7 +1918,7 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
         CaptureScopeKind::Compaction,
     ));
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
+    let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
     let scope = test_scope(
@@ -1463,15 +1937,16 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
 
     let labels = scope_request(scope, async move {
         compactor
-            .compact(
+            .reduce(
                 summary_worthy_messages(),
-                500,
-                &CompactionOptions {
-                    threshold: 0.50,
+                6_000,
+                &ReductionOptions {
                     keep_recent_tokens: 50,
-                    strategy: CompactionStrategy::Summarize,
+                    mode: ReductionMode::Summarize,
+                    summary_max_output_tokens: 512,
                     ..Default::default()
                 },
+                test_reduction_admission(),
             )
             .await
             .expect("the strict JSON fallback recovers");
@@ -1522,27 +1997,28 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
     });
     let mut config = scheduled_origin_config();
     config.additional_params = Some(inherited_reasoning.clone());
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
+    let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let result = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 sampling_seed: Some(1234),
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect("a strict non-guided JSON fallback should recover after guided decoding fails");
 
     assert!(
         result
-            .summary
-            .as_deref()
+            .exact_reduction()
+            .map(|reduction| reduction.checkpoint)
             .is_some_and(|summary| summary.contains("Run the pending verification command.")),
         "the fallback must preserve the pending next action"
     );
@@ -1568,27 +2044,29 @@ async fn repeated_malformed_structured_summaries_use_strict_non_guided_fallback(
 }
 
 #[tokio::test(start_paused = true)]
-async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_provider_call() {
+async fn expired_deadline_stops_before_the_first_summary_provider_call() {
     // #1016 review: the internal ladder is deadline-aware only if the request's
     // claimed deadline actually reaches the compactor — the daemon-lifetime
-    // config it stores has `deadline: None`. `CompactionOptions.deadline` is
+    // config it stores has `deadline: None`. `ReductionOptions.deadline` is
     // the request-scoped carrier: with it already expired, an empty first
-    // attempt must fail on the deadline check instead of consuming the ladder.
+    // attempt must be rejected before provider dispatch.
     let model = ScriptedSummaryModel::new(vec![ScriptedSummaryModel::malformed_summary_turn()]);
     let calls = model.calls.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let error = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 deadline: Some(chrono::Utc::now() - chrono::Duration::seconds(60)),
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect_err("an expired deadline must fail fast, not resample");
@@ -1599,8 +2077,8 @@ async fn expired_deadline_stops_malformed_structured_output_recovery_at_one_prov
     );
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "no retry may be taken once the deadline has passed"
+        0,
+        "no provider attempt may be taken once the deadline has passed"
     );
 }
 
@@ -1617,24 +2095,26 @@ async fn repeated_empty_compaction_completions_use_non_guided_fallback() {
         ScriptedSummaryModel::summary_turn(),
     ]);
     let calls = model.calls.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let result = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect("a visible strict JSON fallback should recover after empty guided turns");
 
     assert!(
-        result.summary.is_some(),
+        result.exact_reduction().is_some(),
         "the strict fallback checkpoint must be used"
     );
     assert_eq!(
@@ -1654,18 +2134,20 @@ async fn invalid_non_guided_fallback_is_a_distinct_bounded_provider_failure() {
         ScriptedSummaryModel::malformed_summary_turn(),
     ]);
     let calls = model.calls.clone();
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), scheduled_origin_config());
+    let compactor =
+        ProviderReductionEngine::new(std::sync::Arc::new(model), scheduled_origin_config());
 
     let error = compactor
-        .compact(
+        .reduce(
             summary_worthy_messages(),
-            500,
-            &CompactionOptions {
-                threshold: 0.50,
+            6_000,
+            &ReductionOptions {
                 keep_recent_tokens: 50,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
+                summary_max_output_tokens: 512,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .expect_err("invalid guided and fallback output must never become a checkpoint");
@@ -2011,6 +2493,22 @@ fn pair_safe_boundary_retreats_to_the_turn_start() {
 }
 
 #[test]
+fn linear_pair_safe_boundaries_match_the_production_boundary_predicate() {
+    let messages = vec![
+        text_msg("user", "before"),
+        tool_call_msg("read", r#"{"file_path":"/tmp/a"}"#),
+        tool_result_msg("call-1", "result"),
+        text_msg("assistant", "after"),
+        tool_call_msg("read", r#"{"file_path":"/tmp/b"}"#),
+    ];
+    let actual = super::history::pair_safe_boundaries(&messages);
+    let expected = (1..=messages.len())
+        .filter(|limit| super::history::pair_safe_boundary(&messages, *limit) == *limit)
+        .collect::<Vec<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn provider_view_is_idempotent() {
     let history = vec![
         tool_result_msg("orphan-1", "result with no call"),
@@ -2258,25 +2756,6 @@ fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
     assert!(!safe_to_reduce(&messages, &StreamingIndex));
 }
 
-#[test]
-fn needs_compaction_under_threshold() {
-    let messages = vec![text_msg("user", "hi")];
-    assert!(!needs_compaction(&messages, 100000, 0.75));
-}
-
-#[test]
-fn needs_compaction_over_threshold() {
-    let big = "x".repeat(10000);
-    let messages = vec![text_msg("user", &big)];
-    assert!(needs_compaction(&messages, 1000, 0.75));
-}
-
-#[test]
-fn estimate_tokens_rough() {
-    assert_eq!(estimate_tokens("hello world!"), 3);
-    assert_eq!(estimate_tokens(""), 0);
-}
-
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
@@ -2300,6 +2779,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .to_string(),
     );
     let config = crate::agent::loop_stream::LoopConfig {
+        provider_input_counter: std::sync::Arc::new(
+            crate::provider_input::ProviderInputCounter::new(
+                crate::BackendProviderKind::OpenAiCompatible,
+                crate::OpenAiWireApi::ChatCompletions,
+                "test-model",
+            ),
+        ),
         preamble: Some("You are a helpful coding agent.".to_string()),
         context_message: None,
         temperature: None,
@@ -2320,7 +2806,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         max_turns: 0,
         output_obligation_gate: None,
     };
-    let compactor = DefraCompactor::new(std::sync::Arc::new(model), config);
+    let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
     let mut sequence = 1;
     for turn in 0..55 {
@@ -2393,20 +2879,21 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let durable_before = history.clone();
     let (provider_history, _) = provider_view(history);
     let result = compactor
-        .compact(
+        .reduce(
             provider_history,
             2000,
-            &CompactionOptions {
-                threshold: 0.50,
+            &ReductionOptions {
                 keep_recent_tokens: 200,
-                strategy: CompactionStrategy::Summarize,
+                mode: ReductionMode::Summarize,
                 ..Default::default()
             },
+            test_reduction_admission(),
         )
         .await
         .unwrap();
 
-    let summary = result.summary.clone().unwrap();
+    let reduction = required_reduction(&result);
+    let summary = reduction.checkpoint;
     session::save_compaction_entry(
         &node,
         "session-1",
@@ -2416,7 +2903,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         &summary,
         &result.files_read,
         &result.files_modified,
-        result.messages_compacted,
+        reduction.messages_compacted().unwrap(),
         result.original_token_estimate,
         result.compacted_token_estimate,
     )
@@ -2451,15 +2938,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .into_iter()
         .skip(compacted_count)
         .collect::<Vec<_>>();
-    assert_eq!(resumed_history, result.messages);
+    assert_eq!(resumed_history, result.provider_messages().unwrap());
 
     let prompt_builder = LayeredPromptBuilder::for_behavior(
         "Be helpful.",
         "general",
         &["list_files", "read_file", "bash"],
         true,
-        crate::config::DEFAULT_CONTEXT_WINDOW,
-        crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         &[],
     );
     let summaries = entries
@@ -2757,12 +3242,15 @@ fn active_provider_history_applies_the_shared_compacted_prefix_projection() {
         text_msg("user", "active two"),
     ];
 
-    assert_eq!(active_provider_history(history.clone(), 0), history);
     assert_eq!(
-        active_provider_history(history.clone(), 1),
+        active_provider_history(history.clone(), 0).unwrap(),
+        history
+    );
+    assert_eq!(
+        active_provider_history(history.clone(), 1).unwrap(),
         history[1..].to_vec()
     );
-    assert!(active_provider_history(history, usize::MAX).is_empty());
+    assert!(active_provider_history(history, usize::MAX).is_err());
 }
 
 #[test]
@@ -2784,7 +3272,10 @@ fn canonical_cursor_projects_the_same_sparse_active_suffix() {
             .map(|(_, message)| message.clone())
             .collect(),
     );
-    assert_eq!(filtered_view, active_provider_history(full_view, 1));
+    assert_eq!(
+        filtered_view,
+        active_provider_history(full_view, 1).unwrap()
+    );
 }
 
 #[test]

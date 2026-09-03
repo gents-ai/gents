@@ -67,7 +67,6 @@ Workflow: discover_tools -> describe_tool -> call_tool
 pub struct BuiltPrompt {
     pub preamble: String,
     pub messages: Vec<Message>,
-    pub estimated_tokens: usize,
 }
 
 pub trait PromptBuilder: Send + Sync {
@@ -80,7 +79,6 @@ pub trait PromptBuilder: Send + Sync {
 
 pub struct LayeredPromptBuilder {
     preamble: String,
-    context_window: usize,
     skills: Vec<crate::skills::Skill>,
     skill_ceiling: crate::skills::SkillToolCeiling,
 }
@@ -98,8 +96,6 @@ impl LayeredPromptBuilder {
             &behavior.behavior_id,
             &tool_refs,
             tool_surface.includes_meta_tools(),
-            behavior.context_window,
-            behavior.max_output_tokens,
             allowed_targets,
         );
         if let Some(catalog) = crate::skills::render_skill_catalog(&behavior.skills) {
@@ -136,8 +132,6 @@ impl LayeredPromptBuilder {
         behavior_name: &str,
         tool_names: &[&str],
         include_meta_tool_guidance: bool,
-        context_window: usize,
-        _max_output_tokens: usize,
         allowed_targets: &[(String, String)],
     ) -> Self {
         let preamble = build_preamble_with_targets(
@@ -149,7 +143,6 @@ impl LayeredPromptBuilder {
         );
         Self {
             preamble,
-            context_window,
             skills: Vec::new(),
             skill_ceiling: crate::skills::SkillToolCeiling::default(),
         }
@@ -157,16 +150,6 @@ impl LayeredPromptBuilder {
 
     pub fn preamble(&self) -> &str {
         &self.preamble
-    }
-
-    pub fn message_budget(&self) -> usize {
-        let preamble_tokens = estimate_tokens(&self.preamble);
-        self.context_window.saturating_sub(preamble_tokens)
-    }
-
-    pub fn would_exceed_budget(&self, messages: &[Message]) -> bool {
-        let msg_tokens = estimate_message_tokens(messages);
-        msg_tokens > self.message_budget()
     }
 
     pub fn system_reminder(text: &str) -> Message {
@@ -192,13 +175,9 @@ impl PromptBuilder for LayeredPromptBuilder {
 
         assembled.extend_from_slice(messages);
 
-        let preamble_tokens = estimate_tokens(&self.preamble);
-        let message_tokens = estimate_message_tokens(&assembled);
-
         Ok(BuiltPrompt {
             preamble: self.preamble.clone(),
             messages: assembled,
-            estimated_tokens: preamble_tokens + message_tokens,
         })
     }
 }
@@ -216,15 +195,6 @@ pub fn compaction_summary_message(compaction_summaries: &[String]) -> Option<Mes
     Some(LayeredPromptBuilder::system_reminder(
         &continuation_checkpoint_reminder(&summary_text),
     ))
-}
-
-/// Estimate the provider-visible summary prefix using its actual message wrapper.
-pub fn estimate_compaction_summary_tokens(compaction_summaries: &[String]) -> usize {
-    compaction_summary_message(compaction_summaries)
-        .as_ref()
-        .map(std::slice::from_ref)
-        .map(estimate_message_tokens)
-        .unwrap_or_default()
 }
 
 pub(crate) fn build_preamble_with_targets(
@@ -300,15 +270,6 @@ fn direct_tool_guidance(tool_names: &[&str]) -> String {
     } else {
         format!("You have access to these tools: {}.", tool_names.join(", "))
     }
-}
-
-fn estimate_tokens(text: &str) -> usize {
-    text.len() / 4
-}
-
-pub(crate) fn estimate_message_tokens(messages: &[Message]) -> usize {
-    let serialized = serde_json::to_string(messages).unwrap_or_default();
-    estimate_tokens(&serialized)
 }
 
 #[cfg(test)]

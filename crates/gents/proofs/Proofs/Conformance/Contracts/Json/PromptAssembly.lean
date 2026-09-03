@@ -80,7 +80,8 @@ def promptAssemblyBudgetCaseJson (witness : PromptAssemblyBudgetCase) : String :
     ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
     ++ "\"effective_output_tokens\":" ++ toString witness.effectiveOutputTokens ++ ","
     ++ "\"should_compact\":" ++ boolString witness.shouldCompact ++ ","
-    ++ "\"provider_safe\":" ++ boolString witness.providerSafe
+    ++ "\"provider_safe\":" ++ boolString witness.providerSafe ++ ","
+    ++ "\"can_dispatch\":" ++ boolString witness.canDispatch
     ++ "}"
 
 def promptAssemblyBudgetCasesJson : String :=
@@ -101,10 +102,31 @@ def promptAssemblyTurnBudgetCaseJson
     ++ "\"turn_output_tokens\":"
       ++ jsonArray (witness.turnOutputTokens.map toString) ++ ","
     ++ "\"turn_should_compact\":"
-      ++ jsonArray (witness.turnShouldCompact.map boolString)
+      ++ jsonArray (witness.turnShouldCompact.map boolString) ++ ","
+    ++ "\"turn_can_dispatch\":"
+      ++ jsonArray (witness.turnCanDispatch.map boolString)
     ++ "}"
 
 def promptAssemblyTurnBudgetCasesJson : String :=
   jsonArray (promptAssemblyTurnBudgetCases.map promptAssemblyTurnBudgetCaseJson)
+
+def promptAssemblyRetentionCaseJson
+    (witness : PromptAssemblyRetentionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"configured_keep_recent\":" ++ toString witness.configuredKeepRecent ++ ","
+    ++ "\"effective_input_budget\":" ++ toString witness.effectiveInputBudget ++ ","
+    ++ "\"fixed_input\":" ++ toString witness.fixedInput ++ ","
+    ++ "\"available_input\":" ++ toString witness.availableInput ++ ","
+    ++ "\"retention_target\":" ++ toString witness.retentionTarget ++ ","
+    ++ "\"summary_max_output\":" ++ toString witness.summaryMaxOutput ++ ","
+    ++ "\"effective_summary_output\":"
+      ++ toString witness.effectiveSummaryOutput ++ ","
+    ++ "\"rolling_summary_input_budget\":"
+      ++ toString witness.rollingSummaryInputBudget
+    ++ "}"
+
+def promptAssemblyRetentionCasesJson : String :=
+  jsonArray (promptAssemblyRetentionCases.map promptAssemblyRetentionCaseJson)
 
 end Conformance.Contracts

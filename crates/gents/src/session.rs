@@ -19,9 +19,13 @@ mod sessions;
 mod tests;
 
 pub use crate::tool_call_lifecycle::query::load_tool_call_result;
+pub use compaction_entries::load_compaction_entries;
 pub(crate) use compaction_entries::load_prompt_compaction_state;
-pub(crate) use compaction_entries::save_compaction_entry_with_requester_did;
-pub use compaction_entries::{load_compaction_entries, save_compaction_entry};
+#[cfg(test)]
+pub(crate) use compaction_entries::{
+    save_compaction_entry, save_compaction_entry_with_requester_did,
+};
+pub(crate) use compaction_entries::{save_exact_compaction_entry, NewExactSessionCompaction};
 pub(crate) use conversation::{
     conversation_needs_generated_title, derive_conversation_preview, load_recent_titles_for_agent,
     request_conversation_status_projection_mutation, update_conversation_title_with_source,
@@ -105,6 +109,37 @@ pub(crate) struct PromptCompactionState {
     /// compaction generation. Such a request may read that generation but must
     /// not append a new compaction to the live session chain.
     pub is_latest_generation: bool,
+}
+
+/// Session-specific projection of the canonical provider view. Old rows that
+/// predate raw transcript cursors are handled only at this persistence edge;
+/// the reduction engine receives an exact active view and never sees legacy
+/// offsets.
+pub(crate) struct ActiveSessionProviderHistory {
+    pub(crate) messages: Vec<Message>,
+    pub(crate) prior_provider_prefix: usize,
+}
+
+impl PromptCompactionState {
+    pub(crate) fn apply_to_provider_history(
+        &self,
+        provider_history: Vec<Message>,
+    ) -> Result<ActiveSessionProviderHistory> {
+        if self.compacted_through_sequence.is_some() {
+            return Ok(ActiveSessionProviderHistory {
+                messages: provider_history,
+                prior_provider_prefix: 0,
+            });
+        }
+        let messages = crate::compaction::active_provider_history(
+            provider_history,
+            self.total_messages_compacted,
+        )?;
+        Ok(ActiveSessionProviderHistory {
+            messages,
+            prior_provider_prefix: self.total_messages_compacted,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

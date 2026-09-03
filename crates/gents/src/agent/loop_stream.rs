@@ -23,7 +23,7 @@ use crate::llm::rig_compat;
 use crate::llm::{HookAction, ToolCallHookAction};
 use crate::rendered_request::{
     AssemblyBuildPath, AssemblyTrace, ContextAccounting, ContextCompactionReason,
-    ContextInputComponents, CONTEXT_ACCOUNTING_VERSION,
+    CONTEXT_ACCOUNTING_VERSION,
 };
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
@@ -48,25 +48,26 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 mod aggregate_budget;
 mod contract;
 mod one_shot;
-mod provider_input;
+mod request_assembly;
 mod tool_dispatch;
 mod turn_threading;
 
-#[allow(unused_imports)]
-pub(crate) use contract::TurnCompactor;
 pub(crate) use contract::{
     LoopConfig, LoopStreamItem, RenderedRequestSink, StructuredOutputConfig, TurnCompactionOutcome,
     TurnCompactionRequest,
 };
 pub(crate) use one_shot::{run_loop_to_text, run_loop_to_typed};
-pub(crate) use provider_input::{
-    assemble_new_messages, is_request_context_message, repair_provider_input,
+pub(crate) use request_assembly::{assemble_new_messages, is_request_context_message};
+#[cfg(test)]
+pub(crate) use request_assembly::{
+    clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
+    repair_provider_input,
 };
 pub(crate) use tool_dispatch::dispatch_tool;
 
-use provider_input::{
-    build_budgeted_request, clamp_request_output_budget, completion_request_input_components,
-    context_accounting_for_request,
+use request_assembly::{
+    build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
+    repair_and_rebuild_request,
 };
 use tool_dispatch::value_to_json_string;
 use turn_threading::{add_usage_saturating, close_streaming_turn};
@@ -76,8 +77,7 @@ mod tests;
 #[cfg(test)]
 use aggregate_budget::AggregateTokenLedger;
 use aggregate_budget::{
-    aggregate_post_charge_action, clamp_request_aggregate_token_budget, AggregatePostChargeAction,
-    AggregateTokenCharge,
+    aggregate_post_charge_action, AggregatePostChargeAction, AggregateTokenCharge,
 };
 pub(crate) use aggregate_budget::{
     aggregate_token_budget_exhaustion_message, AggregateTokenBudget,
@@ -170,10 +170,10 @@ where
             let compaction_reason = turn_context_decision.reason;
             let pre_compaction_input_tokens =
                 turn_context_decision.pre_compaction_input_tokens;
-            let mut context_input_components = turn_context_decision.components;
             retain_effective_messages_oracle |= matches!(
                 compaction_reason,
                 ContextCompactionReason::Compacted
+                    | ContextCompactionReason::ProviderViewRepaired
             );
 
             let current_prompt = new_messages
@@ -211,19 +211,12 @@ where
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
                 let mut stream = loop {
-                    // Repair and retry paths can rebuild or reuse the request.
-                    // Re-apply both clamps at the one provider-dispatch
-                    // chokepoint so no attempt escapes either budget.
-                    clamp_request_output_budget(
-                        &mut request,
+                    let prepared_dispatch = prepare_dispatch_attempt(
+                        &request,
                         &config,
-                        context_input_components.estimated_input_tokens(),
-                    );
-                    clamp_request_aggregate_token_budget(
-                        &mut request,
                         aggregate_token_budget.as_ref(),
-                        context_input_components.estimated_input_tokens(),
                     )?;
+                    let dispatch_request = prepared_dispatch.request().clone();
                     if let Some(on_rendered_request) = config.on_rendered_request.as_ref() {
                         // `history ++ new_messages` is the effective provider
                         // message list: post sanitization, post request-context
@@ -241,15 +234,19 @@ where
                         }
                         .with_reduction_keys(active_reduction_keys.clone())
                         .with_context_accounting(context_accounting_for_request(
-                            &request,
+                            &prepared_dispatch,
                             &config,
-                            &context_input_components,
                             turn_index,
                             attempt,
                             compaction_reason,
                             pre_compaction_input_tokens,
                         ));
-                        on_rendered_request(turn_index, attempt, request.clone(), assembly_trace)
+                        on_rendered_request(
+                            turn_index,
+                            attempt,
+                            dispatch_request.clone(),
+                            assembly_trace,
+                        )
                             .await
                             .map_err(|error| {
                                 StreamingError::Completion(CompletionError::ProviderError(format!(
@@ -258,7 +255,7 @@ where
                             })?;
                     }
 
-                    match model.stream(request.clone()).await {
+                    match model.stream(dispatch_request).await {
                         Ok(stream) => break stream,
                         Err(completion_error) => {
                             let streaming_error = StreamingError::Completion(completion_error);
@@ -298,25 +295,14 @@ where
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    repair_provider_input(&mut history, &mut new_messages);
-                                    let repaired_prompt = new_messages
-                                        .last()
-                                        .cloned()
-                                        .expect("new_messages remains non-empty after repair");
-                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
-                                    // Repair bypasses compaction; dispatch
-                                    // reapplies both budget clamps.
-                                    request = build_request(
+                                    request = repair_and_rebuild_request(
                                         &model,
-                                        repaired_prompt,
-                                        &history,
-                                        repaired_prior,
+                                        &mut history,
+                                        &mut new_messages,
                                         tools.as_slice(),
                                         &config,
                                     )
                                     .await?;
-                                    context_input_components =
-                                        completion_request_input_components(&request);
                                     build_path = AssemblyBuildPath::Repair;
                                     // Repair rewrites `history` and `new_messages` in place, and
                                     // both are declared outside `'turns`. The durable transcript is
@@ -419,24 +405,14 @@ where
                                         will_retry: true,
                                         backoff: std::time::Duration::ZERO,
                                     };
-                                    repair_provider_input(&mut history, &mut new_messages);
-                                    let repaired_prompt = new_messages.last().cloned().expect(
-                                        "new_messages remains non-empty after repair",
-                                    );
-                                    let repaired_prior = &new_messages[..new_messages.len() - 1];
-                                    // Repair bypasses compaction; dispatch
-                                    // reapplies both budget clamps.
-                                    request = build_request(
+                                    request = repair_and_rebuild_request(
                                         &model,
-                                        repaired_prompt,
-                                        &history,
-                                        repaired_prior,
+                                        &mut history,
+                                        &mut new_messages,
                                         tools.as_slice(),
                                         &config,
                                     )
                                     .await?;
-                                    context_input_components =
-                                        completion_request_input_components(&request);
                                     build_path = AssemblyBuildPath::Repair;
                                     // Repair mutates the request-scoped vectors,
                                     // so retain the effective list for later turns.
@@ -961,7 +937,7 @@ fn ensure_rendered_request_was_captured(
     Ok(())
 }
 
-async fn build_request<M: CompletionModel>(
+pub(crate) async fn build_request<M: CompletionModel>(
     model: &M,
     prompt: Message,
     history: &[Message],

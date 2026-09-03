@@ -3,7 +3,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, AdmissionCallContext, CallKind};
-use crate::compaction::{self, Compactor};
+use crate::compaction::{self, ReductionEngine};
 use crate::prompt::PromptBuilder;
 use crate::runtime_trace::RequestTraceAttrs;
 use crate::session;
@@ -11,6 +11,49 @@ use crate::session;
 const CANCELLATION_GRACE_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
+    /// Estimate the exact first-turn provider request for session-compaction
+    /// admission. The owned loop rebuilds it and remains the sole final
+    /// legality/dispatch authority.
+    async fn estimate_initial_provider_input(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        preamble: String,
+        history: &[crate::llm::message::Message],
+        skill_reminders: &[crate::llm::message::Message],
+        request_context_message: Option<&crate::llm::message::Message>,
+        aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
+    ) -> Result<usize> {
+        let config = crate::completion_factory::loop_config_for_request(
+            &self.behavior,
+            preamble,
+            request,
+            aggregate_token_budget,
+            self.loop_tools.len(),
+        )?;
+        let provider_history = skill_reminders
+            .iter()
+            .cloned()
+            .chain(history.iter().cloned())
+            .collect::<Vec<_>>();
+        let context = request_context_message
+            .cloned()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let provider_request = crate::agent::loop_stream::build_request(
+            self.model.as_ref(),
+            crate::llm::message::Message::user(request.content.clone()),
+            &provider_history,
+            &context,
+            self.loop_tools.as_ref(),
+            &config,
+        )
+        .await
+        .map_err(anyhow::Error::new)?;
+        Ok(config
+            .provider_input_counter
+            .estimate_request(&provider_request)?)
+    }
+
     pub(super) async fn handle_request(
         &mut self,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
@@ -83,8 +126,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             let skill_reminders = self
                 .prompt_builder
                 .selected_skill_reminders(&selected_skill_ids);
-            let skill_reminder_tokens = crate::prompt::estimate_message_tokens(&skill_reminders);
-
+            let overlay = crate::workspace::resolve_request_workspace_overlay(
+                self.node.as_ref(),
+                &request,
+                self.operator_tool_root.as_deref(),
+            )
+            .await?;
+            // Some even when empty: bound requests must not fall through to a live walk.
+            let frozen_instruction_manifest =
+                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
+                    .map(str::to_owned);
+            let request_context_message = super::inference::render_request_context_message(
+                self.node.as_ref(),
+                &self.behavior,
+                &request,
+                frozen_instruction_manifest.as_deref(),
+            )?;
+            let workspace = match overlay {
+                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                    workspace_cwd: Some(overlay.cwd),
+                    workspace_root: Some(overlay.root),
+                    workspace_authority: Some(overlay.authority),
+                },
+                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
+                    crate::workspace::request_workspace_cwd(&request),
+                ),
+            };
             let mut built = async {
                 for assembly_attempt in 0..=1 {
                     let background_cutoff =
@@ -145,31 +212,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                     }
 
-                    // Drop in the space the count was measured in.
-                    //
-                    // Re-narrowing afterwards is provably free for counts this
-                    // runtime wrote — their boundary is always `pair_safe_boundary`,
-                    // so the drop lands on a turn boundary and the tail is already
-                    // provider-valid (`Compaction.sanitize_drop_noop`). It is not
-                    // free for counts written *before* the pair-safe splitter
-                    // existed: those used an arbitrary budget index and carry no
-                    // version marker, so an upgraded session can drop into the
-                    // middle of a turn. Without this the orphan would reach
-                    // `compact()`, which re-normalizes its input and would then
-                    // record its count in a shifted space — reopening the very
-                    // accounting defect this change closes, for exactly the sessions
-                    // that predate it.
-                    // A proven cursor already excluded the raw compacted prefix at
-                    // query time. Legacy/null cursors retain the old full-load and
-                    // provider-space drop exactly.
-                    let mut history = if prior_cursor.is_some() {
-                        provider_history
-                    } else {
-                        compaction::active_provider_history(
-                            provider_history,
-                            total_compacted_messages,
-                        )
-                    };
+                    let active_history =
+                        compaction_state.apply_to_provider_history(provider_history)?;
+                    let prior_provider_prefix = active_history.prior_provider_prefix;
+                    let mut history = active_history.messages;
                     let mut summaries = compaction_state
                         .summaries
                         .into_iter()
@@ -188,14 +234,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             summary_count = summaries.len(),
                         ))
                         .await?;
-                    built.estimated_tokens =
-                        built.estimated_tokens.saturating_add(skill_reminder_tokens);
-                    let over_threshold = prompt_exceeds_compaction_threshold(
-                        built.estimated_tokens,
-                        &request.content,
+                    let complete_input_tokens = self
+                        .estimate_initial_provider_input(
+                            &request,
+                            built.preamble.clone(),
+                            &built.messages,
+                            &skill_reminders,
+                            request_context_message.as_ref(),
+                            aggregate_token_budget.clone(),
+                        )
+                        .await?;
+                    let reduction_admission = compaction::ReductionAdmission::for_input(
+                        complete_input_tokens,
                         self.behavior.context_window,
                         self.behavior.compaction_threshold,
                     );
+                    let over_threshold = reduction_admission.is_some();
                     // Runtime counterpart of Lean `PromptView.safeToReduce`,
                     // resolved at session scope: while any response in this session
                     // is still streaming, a turn is still being written into the
@@ -242,69 +296,64 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         false
                     };
                     if may_reduce {
+                        let admission = reduction_admission
+                            .expect("may_reduce is true only for an admitted reduction");
+                        let mut options = self.compaction_options_for_request(
+                            lifecycle.claimed_deadline_at(),
+                            aggregate_token_budget.clone(),
+                            effective_seed,
+                        );
+                        options.keep_recent_tokens = self.compactor.retention_target(
+                            options.keep_recent_tokens,
+                            &history,
+                            admission,
+                        )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
                             1,
-                            self.compactor.compact(
+                            self.compactor.reduce(
                                 history,
                                 self.behavior.context_window,
-                                &self.compaction_options_for_request(
-                                    lifecycle.claimed_deadline_at(),
-                                    aggregate_token_budget.clone(),
-                                    effective_seed,
-                                ),
+                                &options,
+                                admission,
                             ),
                         )
                         .await?;
 
-                        history = result.messages;
-                        if let Some(summary) = result.summary {
-                            let cumulative_provider_prefix = if prior_cursor.is_some() {
-                                result.messages_compacted as usize
-                            } else {
-                                total_compacted_messages
-                                    .saturating_add(result.messages_compacted as usize)
-                            };
-                            let candidate_cursor =
-                                compaction::compacted_through_sequence(
-                                    &sequenced_history
-                                        .iter()
-                                        .map(|row| (row.sequence, row.message.clone()))
-                                        .collect::<Vec<_>>(),
-                                    cumulative_provider_prefix,
-                                );
-                            let compacted_through_sequence = candidate_cursor.filter(|cursor| {
-                                let suffix = sequenced_history
-                                    .iter()
-                                    .filter(|row| row.sequence > *cursor)
-                                    .map(|row| row.message.clone())
-                                    .collect::<Vec<_>>();
-                                compaction::provider_view(suffix).0 == history
-                            });
-                            if compacted_through_sequence.is_none() {
-                                tracing::warn!(
-                                    request_id = %request.request_id,
-                                    session_id = %request.session_id,
-                                    provider_prefix = cumulative_provider_prefix,
-                                    "compaction succeeded without a provable canonical cursor; future requests will use the legacy full-history projection"
-                                );
-                            }
-                            if compaction_generation_is_latest {
-                                match session::save_compaction_entry_with_requester_did(
+                        history = result.provider_messages()?.to_vec();
+                        if let Some(exact) = result.exact_reduction() {
+                            let summary = exact.checkpoint;
+                            let sequence_rows = sequenced_history
+                                .iter()
+                                .map(|row| (row.sequence, row.message.clone()))
+                                .collect::<Vec<_>>();
+                            let compacted_through_sequence =
+                                compaction::session_cursor_for_reduction(
+                                    &sequence_rows,
+                                    prior_provider_prefix,
+                                    exact,
+                                )?;
+                            if compaction_generation_is_latest
+                                && compacted_through_sequence.is_some()
+                            {
+                                let compacted_through_sequence = compacted_through_sequence
+                                    .expect("the persistence branch requires a proven cursor");
+                                match session::save_exact_compaction_entry(
                                     &self.node,
-                                    &request.session_id,
-                                    &request.agent_did,
-                                    request.requester_did.as_deref(),
-                                    &request.request_id,
-                                    &request.doc_id,
-                                    &summary,
-                                    &result.files_read,
-                                    &result.files_modified,
-                                    result.messages_compacted,
-                                    compacted_through_sequence,
-                                    result.original_token_estimate,
-                                    result.compacted_token_estimate,
-                                    &compaction_generation,
+                                    session::NewExactSessionCompaction {
+                                        session_id: &request.session_id,
+                                        agent_did: &request.agent_did,
+                                        requester_did: request.requester_did.as_deref(),
+                                        request_id: &request.request_id,
+                                        request_doc_id: &request.doc_id,
+                                        files_read: &result.files_read,
+                                        files_modified: &result.files_modified,
+                                        compacted_through_sequence,
+                                        original_tokens: result.original_token_estimate,
+                                        compacted_tokens: result.compacted_token_estimate,
+                                        expected_generation: &compaction_generation,
+                                    },
+                                    exact,
                                 )
                                 .await
                                 {
@@ -328,10 +377,25 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             session_id = %request.session_id,
                                             "compaction generation advanced twice; using the verified request-local compaction without appending it"
                                         );
-                                        summaries.push(compaction::bounded_summary(summary));
+                                        summaries.push(compaction::bounded_summary(summary.to_string()));
                                     }
                                     Err(error) => return Err(error),
                                 }
+                            } else if compacted_through_sequence.is_none() {
+                                // A session checkpoint and its raw transcript
+                                // cursor are one atomic durable fact. If the
+                                // exact provider prefix cannot be denoted in
+                                // raw sequence space, use the reduction only
+                                // for this request and leave the generation
+                                // untouched so a later request can retry.
+                                tracing::warn!(
+                                    request_id = %request.request_id,
+                                    session_id = %request.session_id,
+                                    provider_prefix = prior_provider_prefix
+                                        .saturating_add(exact.compacted_prefix.len()),
+                                    "using non-durable request-local compaction because no canonical session cursor could be proven"
+                                );
+                                summaries.push(compaction::bounded_summary(summary.to_string()));
                             } else {
                                 // A background request may be bound to an older
                                 // compatible transcript/compaction generation. Its
@@ -342,7 +406,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     session_id = %request.session_id,
                                     "using request-local compaction for an older background snapshot"
                                 );
-                                summaries.push(compaction::bounded_summary(summary));
+                                summaries.push(compaction::bounded_summary(summary.to_string()));
                             }
                         }
 
@@ -359,8 +423,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 compacted = true,
                             ))
                             .await?;
-                        built.estimated_tokens =
-                            built.estimated_tokens.saturating_add(skill_reminder_tokens);
                     }
 
                     return Ok::<_, anyhow::Error>(built);
@@ -415,26 +477,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
-            let overlay = crate::workspace::resolve_request_workspace_overlay(
-                self.node.as_ref(),
-                &request,
-                self.operator_tool_root.as_deref(),
-            )
-            .await?;
-            // Some even when empty: bound requests must not fall through to a live walk.
-            let frozen_instruction_manifest =
-                crate::workspace::frozen_instruction_manifest_from_overlay(overlay.as_ref())
-                    .map(str::to_owned);
-            let workspace = match overlay {
-                Some(overlay) => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
-                    workspace_cwd: Some(overlay.cwd),
-                    workspace_root: Some(overlay.root),
-                    workspace_authority: Some(overlay.authority),
-                },
-                None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
-                    crate::workspace::request_workspace_cwd(&request),
-                ),
-            };
             let result = self
                 .run_inference(
                     &request,
@@ -447,7 +489,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     aggregate_token_budget,
                     effective_seed,
                     workspace,
-                    frozen_instruction_manifest,
+                    request_context_message,
                 )
                 .instrument(tracing::info_span!(
                     "request.run_inference",
@@ -609,27 +651,12 @@ fn selected_skill_ids(metadata: Option<&str>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-fn prompt_exceeds_compaction_threshold(
-    prompt_tokens: usize,
-    request_text: &str,
-    context_window: usize,
-    threshold: f64,
-) -> bool {
-    compaction::input_exceeds_budget(
-        prompt_tokens.saturating_add(compaction::estimate_tokens(request_text)),
-        context_window,
-        0,
-        threshold,
-    )
-}
-
 fn is_stale_compaction_generation(error: &anyhow::Error) -> bool {
     format!("{error:#}").contains("stale compaction generation")
 }
 
 #[cfg(test)]
 mod budget_contract_tests {
-    use super::prompt_exceeds_compaction_threshold;
     use crate::lean_vocab_test::lean_prompt_assembly_budget_cases;
 
     /// Drives the production compaction trigger and per-turn output clamp from
@@ -647,12 +674,15 @@ mod budget_contract_tests {
             // carries, so the basis-point conversion is exercised rather than
             // bypassed.
             let threshold = case.threshold_basis_points as f64 / 10_000.0;
-            let request_text = "x".repeat(case.request_tokens.saturating_mul(4));
             // Drive the production helper, not a formula duplicated here.
-            let configured = crate::compaction::threshold_budget(case.context_window, threshold);
-            let effective = configured.min(case.context_window);
+            let configured =
+                crate::provider_input::budget::threshold_budget(case.context_window, threshold);
+            let effective = crate::provider_input::budget::effective_input_budget(
+                case.context_window,
+                threshold,
+            );
             let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
-            let effective_output = crate::compaction::effective_output_budget(
+            let effective_output = crate::provider_input::budget::effective_output_budget(
                 input_tokens,
                 case.context_window,
                 case.max_output_tokens,
@@ -680,12 +710,22 @@ mod budget_contract_tests {
                 case.name
             );
             assert_eq!(
-                prompt_exceeds_compaction_threshold(
-                    case.prompt_tokens,
-                    &request_text,
+                crate::provider_input::budget::can_dispatch(
+                    input_tokens,
+                    case.context_window,
+                    case.max_output_tokens,
+                ),
+                case.can_dispatch,
+                "{}: provider dispatch legality drifted from Lean",
+                case.name
+            );
+            assert_eq!(
+                crate::compaction::ReductionAdmission::for_input(
+                    input_tokens,
                     case.context_window,
                     threshold,
-                ),
+                )
+                .is_some(),
                 case.should_compact,
                 "{}: production compaction trigger drifted from Lean",
                 case.name

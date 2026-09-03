@@ -682,8 +682,6 @@ mod tests {
             &behavior.behavior_id,
             &[],
             false,
-            behavior.context_window,
-            behavior.max_output_tokens,
             &[],
         );
         let runtime_status = crate::runtime_status::RuntimeStatusHandle::new(

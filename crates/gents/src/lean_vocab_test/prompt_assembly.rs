@@ -70,6 +70,7 @@ pub(crate) struct LeanPromptAssemblyBudgetCase {
     pub(crate) effective_output_tokens: usize,
     pub(crate) should_compact: bool,
     pub(crate) provider_safe: bool,
+    pub(crate) can_dispatch: bool,
 }
 
 /// A multi-turn provider-input budget trace computed by
@@ -85,6 +86,22 @@ pub(crate) struct LeanPromptAssemblyTurnBudgetCase {
     pub(crate) turn_input_tokens: Vec<usize>,
     pub(crate) turn_output_tokens: Vec<usize>,
     pub(crate) turn_should_compact: Vec<bool>,
+    pub(crate) turn_can_dispatch: Vec<bool>,
+}
+
+/// A static-overhead-aware compaction retention target computed by
+/// `PromptAssembly.Budget.compactionRetentionTarget`.
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct LeanPromptAssemblyRetentionCase {
+    pub(crate) name: String,
+    pub(crate) configured_keep_recent: usize,
+    pub(crate) effective_input_budget: usize,
+    pub(crate) fixed_input: usize,
+    pub(crate) available_input: usize,
+    pub(crate) retention_target: usize,
+    pub(crate) summary_max_output: usize,
+    pub(crate) effective_summary_output: usize,
+    pub(crate) rolling_summary_input_budget: usize,
 }
 
 /// A request-wide token-ledger witness computed by

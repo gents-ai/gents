@@ -91,7 +91,7 @@ impl ProviderContextReduction {
 }
 
 #[derive(Debug)]
-pub struct NewProviderContextReduction<'a> {
+pub(crate) struct NewProviderContextReduction<'a> {
     pub agent_did: &'a str,
     pub requester_did: Option<&'a str>,
     pub session_id: &'a str,
@@ -109,6 +109,25 @@ pub struct NewProviderContextReduction<'a> {
     pub summary: &'a str,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
+}
+
+/// Scope-specific metadata for committing the shared exact reduction as a
+/// request-local durable fact. Prefix, suffix, checkpoint, and count come only
+/// from `ExactReduction` and cannot be supplied independently by the caller.
+pub(crate) struct NewExactProviderContextReduction<'a> {
+    pub(crate) agent_did: &'a str,
+    pub(crate) requester_did: Option<&'a str>,
+    pub(crate) session_id: &'a str,
+    pub(crate) request_id: &'a str,
+    pub(crate) request_doc_id: &'a str,
+    pub(crate) request_commit_cid: &'a str,
+    pub(crate) reduction_index: usize,
+    pub(crate) turn_index: usize,
+    pub(crate) parent_reduction_key: Option<&'a str>,
+    pub(crate) producer_call: Option<&'a ProducerCallRef>,
+    pub(crate) source_boundary: &'a SourceBoundary,
+    pub(crate) original_tokens: usize,
+    pub(crate) compacted_tokens: usize,
 }
 
 pub fn reduction_key(
@@ -195,7 +214,7 @@ pub async fn capture_source_boundary(
     })
 }
 
-pub async fn persist(
+pub(crate) async fn persist(
     node: &EmbeddedNode,
     input: NewProviderContextReduction<'_>,
 ) -> Result<ProviderContextReduction> {
@@ -326,6 +345,42 @@ pub async fn persist(
     }
     intended.ensure_matches(&rows[0])?;
     Ok(rows.into_iter().next().expect("length checked"))
+}
+
+#[cfg(test)]
+#[path = "../tests/conformance/durable_reduction.rs"]
+mod durable_reduction_conformance;
+
+pub(crate) async fn persist_exact(
+    node: &EmbeddedNode,
+    input: NewExactProviderContextReduction<'_>,
+    reduction: crate::compaction::ExactReduction<'_>,
+) -> Result<(ProviderContextReduction, Vec<Message>)> {
+    let checkpoint_messages = reduction.checkpoint_messages();
+    let row = persist(
+        node,
+        NewProviderContextReduction {
+            agent_did: input.agent_did,
+            requester_did: input.requester_did,
+            session_id: input.session_id,
+            request_id: input.request_id,
+            request_doc_id: input.request_doc_id,
+            request_commit_cid: input.request_commit_cid,
+            reduction_index: input.reduction_index,
+            turn_index: input.turn_index,
+            parent_reduction_key: input.parent_reduction_key,
+            producer_call: input.producer_call,
+            source_boundary: input.source_boundary,
+            compacted_prefix: reduction.compacted_prefix,
+            retained_suffix: reduction.retained_suffix,
+            checkpoint_messages: &checkpoint_messages,
+            summary: reduction.checkpoint,
+            original_tokens: input.original_tokens,
+            compacted_tokens: input.compacted_tokens,
+        },
+    )
+    .await?;
+    Ok((row, checkpoint_messages))
 }
 
 pub async fn load_for_request(

@@ -23,11 +23,25 @@ def effectiveOutputBudget
     (inputTokens contextWindow configuredMaxOutputTokens : Nat) : Nat :=
   min configuredMaxOutputTokens (contextWindow - inputTokens)
 
+/-- A provider attempt is legal only when the assembled request both fits the
+context and retains strictly positive output capacity. Merely proving the
+non-strict context inequality is insufficient: when `inputTokens ≥
+contextWindow`, natural subtraction saturates to zero and the old safety
+predicate admitted a wire request with `max_tokens = 0` (#719). -/
+def CanDispatch
+    (inputTokens contextWindow configuredMaxOutputTokens : Nat) : Prop :=
+  0 < effectiveOutputBudget inputTokens contextWindow configuredMaxOutputTokens
+
+instance (inputTokens contextWindow configuredMaxOutputTokens : Nat) :
+    Decidable (CanDispatch inputTokens contextWindow configuredMaxOutputTokens) := by
+  unfold CanDispatch
+  infer_instance
+
 /-- The operator's configured share of the context window, in exact integer
 arithmetic over basis points.
 
 The configuration surface carries the threshold as a float, but the budget is
-*computed* from basis points on both sides (`compaction::threshold_budget`), so
+*computed* from basis points on both sides (`provider_input::budget::threshold_budget`), so
 this model is exact for every threshold rather than only for those exactly
 representable in binary. Computing it as `contextWindow × threshold` in floating
 point and truncating disagrees with this for e.g. 57% of 10,000 — 5,699 rather
@@ -42,18 +56,112 @@ def effectiveInputBudget
     (configuredThresholdBudget contextWindow : Nat) : Nat :=
   min configuredThresholdBudget contextWindow
 
+/-- Pair-safe history retention is capped by the operator's configured recent
+history ceiling. After fixed provider-input layers consume part of the effective
+input budget, three quarters of the remaining capacity may be retained; the
+last quarter stays available for the rolling checkpoint and serialization
+framing. Natural subtraction matches Rust's saturating subtraction. -/
+def compactionRetentionTarget
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) : Nat :=
+  min configuredKeepRecent (3 * (effectiveInputBudget - fixedInput) / 4)
+
+/-- Internal summaries cap their configured output ceiling at one rounded-up
+quarter of the context. The one-token floor keeps the configured ceiling
+positive for tiny contexts; dispatch legality still rejects requests with no
+actual input/output capacity. -/
+def summaryOutputCeiling
+    (configuredMaxOutputTokens contextWindow : Nat) : Nat :=
+  min configuredMaxOutputTokens (max 1 ((contextWindow + 3) / 4))
+
+/-- Rolling summary requests reserve their already-bounded output ceiling
+whenever it is smaller than the context. A ceiling equal to the entire tiny
+context cannot coexist with nonempty summary input, so that degenerate case
+falls back to the ordinary dynamic dispatch rule. This is a chunk-sizing policy
+only: final provider dispatch still uses `effectiveOutputBudget`. -/
+def rollingSummaryInputBudget
+    (contextWindow effectiveMaxOutputTokens : Nat) : Nat :=
+  if effectiveMaxOutputTokens < contextWindow
+  then contextWindow - effectiveMaxOutputTokens
+  else contextWindow
+
+/-- Dynamic retention never exceeds the configured recent-history ceiling. -/
+theorem compaction_retention_le_configured
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
+      configuredKeepRecent := by
+  exact Nat.min_le_left _ _
+
+/-- Dynamic retention never exceeds the input capacity left after fixed layers. -/
+theorem compaction_retention_le_available
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput ≤
+      effectiveInputBudget - fixedInput := by
+  unfold compactionRetentionTarget
+  have htarget : min configuredKeepRecent
+      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
+      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+  omega
+
+/-- Retention leaves at least the rounded-up final quarter of the available
+input capacity for the checkpoint and provider framing. -/
+theorem compaction_retention_reserves_quarter
+    (configuredKeepRecent effectiveInputBudget fixedInput : Nat) :
+    compactionRetentionTarget configuredKeepRecent effectiveInputBudget fixedInput +
+      ((effectiveInputBudget - fixedInput + 3) / 4) ≤
+      effectiveInputBudget - fixedInput := by
+  unfold compactionRetentionTarget
+  have htarget : min configuredKeepRecent
+      (3 * (effectiveInputBudget - fixedInput) / 4) ≤
+      3 * (effectiveInputBudget - fixedInput) / 4 := Nat.min_le_right _ _
+  omega
+
+/-- Whenever the configured summary ceiling can coexist with input, every
+rolling chunk admitted by its input budget retains that complete ceiling under
+the dynamic output clamp. -/
+theorem rolling_summary_preserves_configured_output
+    {inputTokens contextWindow effectiveMaxOutputTokens : Nat}
+    (hceiling : effectiveMaxOutputTokens < contextWindow)
+    (hinput : inputTokens ≤
+      rollingSummaryInputBudget contextWindow effectiveMaxOutputTokens) :
+    effectiveOutputBudget inputTokens contextWindow effectiveMaxOutputTokens =
+      effectiveMaxOutputTokens := by
+  unfold rollingSummaryInputBudget at hinput
+  rw [if_pos hceiling] at hinput
+  unfold effectiveOutputBudget
+  apply Nat.min_eq_left
+  omega
+
+/-- The sole threshold decision used by prompt assembly and reduction.
+Equality is admitted; only input strictly above the effective budget is
+eligible for reduction. -/
+inductive ThresholdDecision where
+  | notNeeded
+  | reduceEligible
+  deriving DecidableEq, Repr
+
+def decideThreshold (inputTokens effectiveInputBudget : Nat) : ThresholdDecision :=
+  if inputTokens ≤ effectiveInputBudget then .notNeeded else .reduceEligible
+
 /-- The assembled prompt and the incoming request no longer fit beneath the
-effective input budget. Equality is admitted; one token beyond it compacts. -/
+effective input budget. This proposition is a view of the canonical decision,
+not a second threshold formula. -/
 def ExceedsInputBudget
     (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) : Prop :=
-  effectiveInputBudget configuredThresholdBudget contextWindow <
-    promptTokens + requestTokens
+  decideThreshold (promptTokens + requestTokens)
+    (effectiveInputBudget configuredThresholdBudget contextWindow) = .reduceEligible
 
 instance (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) :
     Decidable (ExceedsInputBudget promptTokens requestTokens configuredThresholdBudget
       contextWindow) := by
   unfold ExceedsInputBudget
   infer_instance
+
+theorem exceeds_input_budget_iff
+    (promptTokens requestTokens configuredThresholdBudget contextWindow : Nat) :
+    ExceedsInputBudget promptTokens requestTokens configuredThresholdBudget contextWindow ↔
+      effectiveInputBudget configuredThresholdBudget contextWindow <
+        promptTokens + requestTokens := by
+  simp [ExceedsInputBudget, decideThreshold, Nat.not_le]
 
 theorem effective_input_le_configured
     (configuredThresholdBudget contextWindow : Nat) :
@@ -79,6 +187,38 @@ theorem dynamic_output_is_provider_safe
       Nat.add_le_add_left (Nat.min_le_right _ _) inputTokens
     _ = contextWindow := Nat.add_sub_of_le hinput
 
+/-- Positive configured output and at least one token of remaining context are
+exactly the missing premises needed to construct a legal provider dispatch. -/
+theorem positive_capacity_can_dispatch
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hinput : inputTokens < contextWindow)
+    (houtput : 0 < configuredMaxOutputTokens) :
+    CanDispatch inputTokens contextWindow configuredMaxOutputTokens := by
+  simp [CanDispatch, effectiveOutputBudget, houtput,
+    Nat.sub_pos_iff_lt.mpr hinput]
+
+/-- Conversely, a legal dispatch witnesses both a positive configured ceiling
+and strict room beyond the assembled input. -/
+theorem can_dispatch_has_positive_capacity
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hdispatch : CanDispatch inputTokens contextWindow configuredMaxOutputTokens) :
+    0 < configuredMaxOutputTokens ∧ inputTokens < contextWindow := by
+  constructor
+  · exact lt_of_lt_of_le hdispatch (Nat.min_le_left _ _)
+  · exact Nat.sub_pos_iff_lt.mp
+      (lt_of_lt_of_le hdispatch (Nat.min_le_right _ _))
+
+/-- Dispatch legality strengthens the old non-strict context inequality: every
+legal request is provider-safe, but a zero-output request is not legal merely
+because that inequality happens to hold. -/
+theorem can_dispatch_is_provider_safe
+    {inputTokens contextWindow configuredMaxOutputTokens : Nat}
+    (hdispatch : CanDispatch inputTokens contextWindow configuredMaxOutputTokens) :
+    inputTokens + effectiveOutputBudget inputTokens contextWindow
+      configuredMaxOutputTokens ≤ contextWindow := by
+  exact dynamic_output_is_provider_safe
+    (Nat.le_of_lt (can_dispatch_has_positive_capacity hdispatch).2)
+
 /-- Staying beneath the effective input budget makes the turn's input fit the
 context, after which the dynamic output clamp makes the complete provider
 request safe. -/
@@ -102,7 +242,9 @@ theorem not_exceeds_is_provider_safe
     promptTokens + requestTokens +
       effectiveOutputBudget (promptTokens + requestTokens) contextWindow
         configuredMaxOutputTokens ≤ contextWindow := by
-  exact within_effective_is_provider_safe (Nat.le_of_not_gt hnot)
+  apply within_effective_is_provider_safe
+  rw [exceeds_input_budget_iff] at hnot
+  exact Nat.le_of_not_gt hnot
 
 /-! ## Owned-loop turn safety
 
@@ -124,6 +266,7 @@ def EveryDispatchedTurnSafe
       configuredMaxOutputTokens : Nat) : Prop :=
   ∀ inputTokens ∈ inputs,
     ¬ ExceedsInputBudget inputTokens 0 configuredThresholdBudget contextWindow →
+    CanDispatch inputTokens contextWindow configuredMaxOutputTokens →
     inputTokens + effectiveOutputBudget inputTokens contextWindow
       configuredMaxOutputTokens ≤ contextWindow
 
@@ -135,14 +278,7 @@ theorem every_dispatched_turn_is_provider_safe
       configuredMaxOutputTokens : Nat} :
     EveryDispatchedTurnSafe inputs configuredThresholdBudget contextWindow
       configuredMaxOutputTokens := by
-  intro inputTokens _ hnot
-  simpa using
-    (not_exceeds_is_provider_safe
-      (promptTokens := inputTokens)
-      (requestTokens := 0)
-      (configuredThresholdBudget := configuredThresholdBudget)
-      (contextWindow := contextWindow)
-      (configuredMaxOutputTokens := configuredMaxOutputTokens)
-      hnot)
+  intro inputTokens _ _ hdispatch
+  exact can_dispatch_is_provider_safe hdispatch
 
 end PromptAssembly.Budget

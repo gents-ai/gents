@@ -5,7 +5,7 @@ use crate::llm::message::{
 };
 
 use super::summary::dedupe_paths;
-use super::{estimate_message_tokens, FileActivity};
+use super::FileActivity;
 
 #[derive(Debug)]
 pub(super) struct SourcedMessage {
@@ -337,26 +337,33 @@ pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize)
         .collect()
 }
 
-pub(super) fn split_messages_for_summary(
+pub(super) fn split_messages_for_summary_with_counter(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
-) -> (Vec<Message>, Vec<Message>) {
+    counter: &crate::provider_input::ProviderInputCounter,
+) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     if messages.len() <= 1 {
-        return (Vec::new(), messages);
+        return Ok((Vec::new(), messages));
     }
 
-    let mut split_index = messages.len();
-    let mut recent_tokens = 0usize;
-
-    for index in (0..messages.len()).rev() {
-        let token_cost = estimate_message_tokens(std::slice::from_ref(&messages[index]));
-        if split_index == messages.len() || recent_tokens + token_cost <= keep_recent_tokens {
-            recent_tokens += token_cost;
+    // Find the longest provider-visible suffix under the retention target.
+    // Counting whole candidates is intentional: provider conversions are not
+    // additive (Chat Completions can erase a reasoning-only assistant row).
+    let mut low = 0usize;
+    let mut high = messages.len() - 1;
+    let mut split_index = messages.len() - 1;
+    while low <= high {
+        let index = low + (high - low) / 2;
+        let fits = counter.estimate_message_request(&messages[index..])? <= keep_recent_tokens;
+        if fits {
             split_index = index;
-            continue;
+            if index == 0 {
+                break;
+            }
+            high = index - 1;
+        } else {
+            low = index + 1;
         }
-
-        break;
     }
 
     // The token budget can land the boundary between an assistant message
@@ -395,7 +402,7 @@ pub(super) fn split_messages_for_summary(
     // initial user prompt with a summary would change the request rather than
     // compact its history. The full-list check then refuses to end on a tool
     // call still awaiting its result.
-    let retained_tokens = estimate_message_tokens(&messages[split_index..]);
+    let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
     if split_index < raw_split_index
         && retained_tokens > keep_recent_tokens
         && pair_safe_boundary(&messages, messages.len()) == messages.len()
@@ -404,12 +411,26 @@ pub(super) fn split_messages_for_summary(
     }
 
     if split_index == 0 {
-        return (Vec::new(), messages);
+        return Ok((Vec::new(), messages));
     }
 
     let old_messages = messages[..split_index].to_vec();
     let recent_messages = messages[split_index..].to_vec();
-    (old_messages, recent_messages)
+    Ok((old_messages, recent_messages))
+}
+
+#[cfg(test)]
+pub(super) fn split_messages_for_summary(
+    messages: Vec<Message>,
+    keep_recent_tokens: usize,
+) -> (Vec<Message>, Vec<Message>) {
+    let counter = crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    );
+    split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
+        .expect("test provider projection should succeed")
 }
 
 /// Greatest `j <= limit` at which no tool call is awaiting its result.
@@ -419,13 +440,21 @@ pub(super) fn split_messages_for_summary(
 /// with its own call ids, a tool result erases one, and anything else clears it.
 pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     let limit = limit.min(messages.len());
-    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut boundary = 0usize;
+    pair_safe_boundaries(&messages[..limit])
+        .last()
+        .copied()
+        .unwrap_or(0)
+}
 
-    for (index, message) in messages.iter().take(limit).enumerate() {
-        if pending.is_empty() {
-            boundary = index;
-        }
+/// Every positive prefix length at which no tool call is awaiting its result.
+///
+/// This is the linear-time form used by rolling compaction. Calling
+/// `pair_safe_boundary` once per candidate makes a long prefix quadratic.
+pub(super) fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
+    let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut boundaries = Vec::new();
+
+    for (index, message) in messages.iter().enumerate() {
         match message {
             Message::Assistant { content, .. } => {
                 pending = content
@@ -440,7 +469,7 @@ pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
                 let has_plain_content = content
                     .iter()
                     .any(|item| !matches!(item, UserContent::ToolResult(_)));
-                for item in content.iter() {
+                for item in content {
                     if let UserContent::ToolResult(tool_result) = item {
                         pending.remove(&tool_result_key(tool_result));
                     }
@@ -451,13 +480,12 @@ pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
             }
             Message::System { .. } => pending.clear(),
         }
+        if pending.is_empty() {
+            boundaries.push(index + 1);
+        }
     }
 
-    if pending.is_empty() {
-        limit
-    } else {
-        boundary
-    }
+    boundaries
 }
 
 /// File activity credited only to tool calls that actually produced a result.

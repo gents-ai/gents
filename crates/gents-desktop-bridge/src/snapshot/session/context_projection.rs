@@ -4,6 +4,15 @@ pub(super) fn usize_to_i64(value: usize) -> i64 {
     i64::try_from(value).unwrap_or(i64::MAX)
 }
 
+/// Coarse native-JSON estimate for the desktop context meter only. Provider
+/// admission never consumes this value; the runtime's selected wire projector
+/// is the sole budget authority.
+fn display_json_token_estimate<T: serde::Serialize>(value: &T) -> usize {
+    serde_json::to_vec(value)
+        .map(|encoded| encoded.len() / 4)
+        .unwrap_or_default()
+}
+
 pub(super) fn build_session_context_view(
     store: &gents_desktop_core::client::ClientStore,
     context_store: &gents_desktop_core::client::ClientStore,
@@ -72,9 +81,7 @@ pub(super) fn build_session_context_view(
         .iter()
         .map(|(_, message)| message)
         .collect::<Vec<_>>();
-    let estimated_durable_tokens = gents::compaction::estimate_tokens(
-        &serde_json::to_string(&durable_message_refs).unwrap_or_default(),
-    );
+    let estimated_durable_tokens = display_json_token_estimate(&durable_message_refs);
     let total_compacted_messages = compaction_rows.iter().fold(0_usize, |total, row| {
         total.saturating_add(
             row.messages_compacted
@@ -106,17 +113,32 @@ pub(super) fn build_session_context_view(
     let active_provider_messages = if usable_cursor.is_some() {
         provider_messages
     } else {
-        gents::compaction::active_provider_history(provider_messages, total_compacted_messages)
+        match gents::compaction::active_provider_history(
+            provider_messages.clone(),
+            total_compacted_messages,
+        ) {
+            Ok(messages) => messages,
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    total_compacted_messages,
+                    error = %error,
+                    "session context projection retained full provider history because its legacy compaction prefix was invalid"
+                );
+                provider_messages
+            }
+        }
     };
     let summaries = compaction_rows
         .iter()
         .filter_map(|row| row.summary.clone())
         .map(gents::compaction::bounded_summary)
         .collect::<Vec<_>>();
-    let estimated_conversation_tokens =
-        gents::compaction::estimate_message_tokens(&active_provider_messages).saturating_add(
-            gents::prompt::estimate_compaction_summary_tokens(&summaries),
-        );
+    let displayed_provider_messages = gents::prompt::compaction_summary_message(&summaries)
+        .into_iter()
+        .chain(active_provider_messages.iter().cloned())
+        .collect::<Vec<_>>();
+    let estimated_conversation_tokens = display_json_token_estimate(&displayed_provider_messages);
     let compactions = compaction_rows
         .into_iter()
         .map(|row| SessionCompactionView {
@@ -135,7 +157,7 @@ pub(super) fn build_session_context_view(
         estimated_conversation_tokens: usize_to_i64(estimated_conversation_tokens),
         context_window: usize_to_i64(context_window),
         compaction_threshold,
-        compaction_threshold_tokens: usize_to_i64(gents::compaction::threshold_budget(
+        compaction_threshold_tokens: usize_to_i64(gents::provider_budget::threshold_budget(
             context_window,
             compaction_threshold,
         )),

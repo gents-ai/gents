@@ -193,10 +193,8 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
 /// * `attempt` is part of the capture key, so retries must arrive as distinct
 ///   attempts within one turn.
 /// * `AssemblyBuildPath` must flip to `Repair` exactly on the attempt that the
-///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. That
-///   attempt skips `clamp_request_output_budget`, so a reconstructor that
-///   assumes the budgeted path would produce a different `max_tokens` and a
-///   false mismatch.
+///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. The
+///   final dispatch boundary still recounts and clamps that repaired request.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -220,11 +218,15 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath, AssemblyTrace)>>> =
         Arc::new(Mutex::new(Vec::new()));
     let captures_for_sink = captures.clone();
+    let captured_requests: Arc<Mutex<Vec<CompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));
+    let captured_requests_for_sink = captured_requests.clone();
     let mut loop_config = config(4);
     loop_config.on_rendered_request =
-        Some(Arc::new(move |turn_index, attempt, _request, trace| {
+        Some(Arc::new(move |turn_index, attempt, request, trace| {
             let captures = captures_for_sink.clone();
+            let captured_requests = captured_requests_for_sink.clone();
             Box::pin(async move {
+                captured_requests.lock().await.push(request);
                 captures
                     .lock()
                     .await
@@ -265,6 +267,16 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
         model.seen_histories().await.len(),
         "every provider request must have exactly one capture"
     );
+    let captured_requests = captured_requests.lock().await.clone();
+    let dispatched_requests = model.seen_requests().await;
+    assert_eq!(captured_requests.len(), dispatched_requests.len());
+    for (captured, dispatched) in captured_requests.iter().zip(dispatched_requests.iter()) {
+        assert_eq!(
+            format!("{captured:?}"),
+            format!("{dispatched:?}"),
+            "capture and transport must consume the same prepared request snapshot"
+        );
+    }
 
     // Leak 2: the exact tool-result content threaded to the model. Persistence
     // re-derives this text from `AgentToolCall.result` through a different

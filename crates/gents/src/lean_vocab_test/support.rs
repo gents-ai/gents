@@ -191,9 +191,15 @@ pub(crate) struct LeanContractSnapshot {
     #[serde(default)]
     pub(crate) prompt_assembly_turn_budget_cases: Vec<LeanPromptAssemblyTurnBudgetCase>,
     #[serde(default)]
+    pub(crate) prompt_assembly_retention_cases: Vec<LeanPromptAssemblyRetentionCase>,
+    #[serde(default)]
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     #[serde(default)]
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
+    #[serde(default)]
+    pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
+    #[serde(default)]
+    pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
     #[serde(default)]
     pub(crate) rendered_capture_key_cases: Vec<LeanRenderedCaptureKeyCase>,
     #[serde(default)]
@@ -776,8 +782,12 @@ mod durable_reduction;
 mod event_delivery;
 #[path = "prompt_assembly.rs"]
 mod prompt_assembly;
+#[path = "reduction_engine.rs"]
+mod reduction_engine;
 #[path = "rendered_capture.rs"]
 mod rendered_capture;
+#[path = "rolling_compaction.rs"]
+mod rolling_compaction;
 #[path = "self_config.rs"]
 mod self_config;
 #[path = "slot_persistence_health.rs"]
@@ -796,7 +806,9 @@ pub(crate) use descendant_graph::*;
 pub(crate) use durable_reduction::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
+pub(crate) use reduction_engine::*;
 pub(crate) use rendered_capture::*;
+pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
 pub(crate) use tool_policy::*;
@@ -1305,12 +1317,24 @@ pub(crate) fn lean_prompt_assembly_turn_budget_cases() -> &'static [LeanPromptAs
     &lean_contract_snapshot().prompt_assembly_turn_budget_cases
 }
 
+pub(crate) fn lean_prompt_assembly_retention_cases() -> &'static [LeanPromptAssemblyRetentionCase] {
+    &lean_contract_snapshot().prompt_assembly_retention_cases
+}
+
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
 }
 
 pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {
     &lean_contract_snapshot().durable_reduction_cases
+}
+
+pub(crate) fn lean_rolling_compaction_cases() -> &'static [LeanRollingCompactionCase] {
+    &lean_contract_snapshot().rolling_compaction_cases
+}
+
+pub(crate) fn lean_reduction_engine_cases() -> &'static [LeanReductionEngineCase] {
+    &lean_contract_snapshot().reduction_engine_cases
 }
 
 pub(crate) fn lean_rendered_capture_key_cases() -> &'static [LeanRenderedCaptureKeyCase] {

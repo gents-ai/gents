@@ -355,7 +355,7 @@ where
         .map_err(http_client::Error::Protocol)
 }
 
-fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
+pub(crate) fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
     let mut changed = false;
 

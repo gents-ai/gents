@@ -20,6 +20,8 @@ import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
 import Proofs.Conformance.Contracts.Json.AggregateBudget
+import Proofs.Conformance.Contracts.Json.RollingCompaction
+import Proofs.Conformance.Contracts.Json.ReductionEngine
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.Triggers.Groups
@@ -267,10 +269,16 @@ def snapshotJson : String :=
       ++ promptAssemblyBudgetCasesJson ++ ","
     ++ "\"prompt_assembly_turn_budget_cases\":"
       ++ promptAssemblyTurnBudgetCasesJson ++ ","
+    ++ "\"prompt_assembly_retention_cases\":"
+      ++ promptAssemblyRetentionCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
+    ++ "\"rolling_compaction_cases\":"
+      ++ rollingCompactionCasesJson ++ ","
+    ++ "\"reduction_engine_cases\":"
+      ++ reductionEngineCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"capture_scope_cases\":"

@@ -1213,7 +1213,8 @@ fn generated_compaction_cursor_cases_pin_contract() {
             );
             assert_eq!(
                 filtered,
-                gents::compaction::active_provider_history(full, case.compacted),
+                gents::compaction::active_provider_history(full, case.compacted)
+                    .expect("Lean cursor witness has a valid provider prefix"),
                 "{}: cursor query must equal full-load-plus-drop",
                 case.name
             );
@@ -1373,19 +1374,35 @@ fn drive_summarize(
     // pair-closed — the property `summarize_preserves_pairs` states, fenced
     // against the real code path rather than a helper.
     if pair_closed(&input) {
-        let total_tokens = gents::compaction::estimate_message_tokens(&input);
-        for budget in 0..=total_tokens + 1 {
-            let (_, recent) = gents::compaction::split_for_summary(input.clone(), budget);
+        for budget in 0usize.. {
+            let (old, recent) = gents::compaction::split_for_summary(
+                input.clone(),
+                budget,
+                gents::BackendProviderKind::OpenAiCompatible,
+                gents::OpenAiWireApi::ChatCompletions,
+                "conformance-model",
+            )
+            .expect("provider-shaped split");
             assert!(
                 pair_closed(&recent),
                 "{}: split_for_summary orphaned a tool result at budget {budget}",
                 case.name
             );
+            if old.is_empty() {
+                break;
+            }
         }
     }
 
     if case.name == "summarize_oversized_complete_turn" {
-        let (_, recent) = gents::compaction::split_for_summary(input.clone(), 0);
+        let (_, recent) = gents::compaction::split_for_summary(
+            input.clone(),
+            0,
+            gents::BackendProviderKind::OpenAiCompatible,
+            gents::OpenAiWireApi::ChatCompletions,
+            "conformance-model",
+        )
+        .expect("provider-shaped split");
         assert!(
             recent.is_empty(),
             "an oversized complete tail must be summarized rather than over-retained"

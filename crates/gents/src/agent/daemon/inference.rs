@@ -8,7 +8,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
-use crate::compaction::{CompactionOptions, Compactor};
+use crate::compaction::{ReductionEngine, ReductionOptions};
 use crate::config::AgentBehavior;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
@@ -48,7 +48,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
     Ok(())
 }
 
-fn render_request_context_message(
+pub(super) fn render_request_context_message(
     node: &defra_node::EmbeddedNode,
     behavior: &AgentBehavior,
     request: &AgentRequest,
@@ -157,7 +157,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         aggregate_token_budget: Option<crate::agent::loop_stream::AggregateTokenBudget>,
         effective_seed: Option<i64>,
         workspace: crate::tool_call_lifecycle::runtime::ToolWorkspaceScope,
-        frozen_instruction_manifest: Option<String>,
+        request_context_message: Option<crate::llm::message::Message>,
     ) -> Result<HandleRequestOutcome> {
         let request_deadline = lifecycle.claimed_deadline_at();
         let trigger_context = crate::lifecycle::TriggerExecutionContext::parse(
@@ -173,13 +173,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             .to_string();
         let has_deadline = !deadline_at.is_empty();
         let workspace_cwd_set = workspace.workspace_cwd.is_some();
-
-        let request_context_message = render_request_context_message(
-            self.node.as_ref(),
-            &self.behavior,
-            request,
-            frozen_instruction_manifest.as_deref(),
-        )?;
 
         ensure_request_deadline_open(request_deadline, "starting inference")?;
         if *shutdown.borrow() {
@@ -276,13 +269,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     >,
                 > {
                     let compactor = turn_compactor.clone();
-                    let mut options: CompactionOptions = turn_compaction_options.clone();
-                    options.keep_recent_tokens =
-                        options.keep_recent_tokens.min(compaction_request.keep_recent_target);
+                    let mut options: ReductionOptions = turn_compaction_options.clone();
                     let node = turn_node.clone();
                     let request = turn_request.clone();
                     let request_commit_cid = turn_request_commit_cid.clone();
                     Box::pin(async move {
+                        options.keep_recent_tokens = compactor.retention_target(
+                            options.keep_recent_tokens,
+                            &compaction_request.messages,
+                            compaction_request.admission,
+                        )?;
                         if crate::session::session_has_other_live_response(
                             node.as_ref(),
                             &request.session_id,
@@ -308,14 +304,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 &request_commit_cid,
                             )
                             .await?;
-                        let source_messages = compaction_request.messages;
                         let (result, producer_join) = admission::scope_call_with_join(
                             CallKind::Compaction,
                             1,
-                            compactor.compact(
-                                source_messages.clone(),
+                            compactor.reduce(
+                                compaction_request.messages,
                                 turn_context_window,
                                 &options,
+                                compaction_request.admission,
                             ),
                         )
                         .await;
@@ -326,32 +322,23 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 call_id: join.call_id,
                                 call_seq: join.call_seq,
                             });
-                        let (normalized_source, _) =
-                            crate::compaction::provider_view(source_messages);
-                        let split = usize::try_from(result.messages_compacted)
-                            .unwrap_or(usize::MAX)
-                            .min(normalized_source.len());
-                        let (compacted_prefix, retained_suffix) = normalized_source.split_at(split);
-                        if retained_suffix != result.messages.as_slice() {
-                            anyhow::bail!(
-                                "per-turn compaction retained suffix does not match its exact source split"
+                        let Some(exact) = result.exact_reduction() else {
+                            if result.cannot_fit() {
+                                return Ok(
+                                    crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
+                                );
+                            }
+                            return Ok(
+                                crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
+                                    messages: result.provider_messages()?.to_vec(),
+                                },
                             );
-                        }
-
-                        let summary = durable_reduction_summary(result.summary, split)?;
-                        let mut provider_messages = result.messages;
-                        if !summary.is_empty() {
-                            provider_messages.insert(
-                                0,
-                                crate::prompt::LayeredPromptBuilder::system_reminder(
-                                    &crate::prompt::continuation_checkpoint_reminder(&summary),
-                                ),
-                            );
-                        }
+                        };
                         let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-                        let row = crate::provider_context_reduction::persist(
+                        let (row, provider_messages) =
+                            crate::provider_context_reduction::persist_exact(
                             node.as_ref(),
-                            crate::provider_context_reduction::NewProviderContextReduction {
+                            crate::provider_context_reduction::NewExactProviderContextReduction {
                                 agent_did: &request.agent_did,
                                 requester_did: request.requester_did.as_deref(),
                                 session_id: &request.session_id,
@@ -366,16 +353,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     .map(String::as_str),
                                 producer_call: producer_call.as_ref(),
                                 source_boundary: &source_boundary,
-                                compacted_prefix,
-                                retained_suffix,
-                                checkpoint_messages: &provider_messages,
-                                summary: &summary,
                                 original_tokens: result.original_token_estimate,
                                 compacted_tokens: result.compacted_token_estimate,
                             },
+                            exact,
                         )
                         .await?;
-                        Ok(crate::agent::loop_stream::TurnCompactionOutcome {
+                        Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
                             messages: provider_messages,
                             reduction_key: row.reduction_key,
                         })
@@ -770,21 +754,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     }
 }
 
-fn durable_reduction_summary(
-    summary: Option<String>,
-    compacted_prefix_len: usize,
-) -> Result<String> {
-    let summary = summary.map(|summary| summary.trim().to_string());
-    if compacted_prefix_len > 0 && summary.as_deref().is_none_or(str::is_empty) {
-        anyhow::bail!("per-turn compaction removed a provider prefix without a non-empty summary");
-    }
-    Ok(summary.unwrap_or_default())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        assemble_request_context_message, await_with_request_deadline, durable_reduction_summary,
+        assemble_request_context_message, await_with_request_deadline,
         ensure_request_deadline_open, request_deadline_remaining,
         terminal_response_has_visible_output, BehaviorDaemon,
     };
@@ -809,17 +782,6 @@ mod tests {
         Arc,
     };
     use std::time::Duration;
-
-    #[test]
-    fn durable_reduction_requires_a_nonempty_summary_for_a_removed_prefix() {
-        assert!(durable_reduction_summary(Some("   \n".to_string()), 1).is_err());
-        assert!(durable_reduction_summary(None, 1).is_err());
-        assert_eq!(
-            durable_reduction_summary(Some("  checkpoint  ".to_string()), 1).unwrap(),
-            "checkpoint"
-        );
-        assert_eq!(durable_reduction_summary(None, 0).unwrap(), "");
-    }
 
     #[derive(Clone)]
     struct RoutedReplyModel;
@@ -1223,8 +1185,6 @@ mod tests {
             &behavior.behavior_id,
             &[],
             false,
-            behavior.context_window,
-            behavior.max_output_tokens,
             &[],
         );
         let preamble = prompt_builder.preamble().to_string();
@@ -1351,8 +1311,6 @@ mod tests {
             &behavior.behavior_id,
             &[],
             false,
-            behavior.context_window,
-            behavior.max_output_tokens,
             &[],
         );
         let calls = Arc::new(AtomicUsize::new(0));

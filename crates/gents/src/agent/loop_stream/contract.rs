@@ -22,15 +22,21 @@ pub(crate) type RenderedRequestSink = Arc<
 #[derive(Clone, Debug)]
 pub(crate) struct TurnCompactionRequest {
     pub(crate) messages: Vec<Message>,
-    pub(crate) keep_recent_target: usize,
+    pub(crate) admission: crate::compaction::ReductionAdmission,
     pub(crate) turn_index: usize,
     pub(crate) prior_reduction_keys: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct TurnCompactionOutcome {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) reduction_key: String,
+pub(crate) enum TurnCompactionOutcome {
+    ProviderViewRepaired {
+        messages: Vec<Message>,
+    },
+    Reduced {
+        messages: Vec<Message>,
+        reduction_key: String,
+    },
+    CannotFit,
 }
 
 pub(crate) type TurnCompactor = Arc<
@@ -54,7 +60,7 @@ pub(crate) struct StructuredOutputConfig {
 }
 
 impl StructuredOutputConfig {
-    pub(super) fn for_type<T>() -> Self
+    pub(crate) fn for_type<T>() -> Self
     where
         T: DeserializeOwned + schemars::JsonSchema + 'static,
     {
@@ -112,6 +118,9 @@ pub(crate) enum LoopStreamItem<R> {
 
 #[derive(Clone)]
 pub(crate) struct LoopConfig {
+    /// One backend/wire-selected provider projection shared by every budget
+    /// decision in this completion loop and its nested compactor.
+    pub(crate) provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
     pub(crate) preamble: Option<String>,
     pub(crate) context_message: Option<Message>,
     pub(crate) temperature: Option<f64>,

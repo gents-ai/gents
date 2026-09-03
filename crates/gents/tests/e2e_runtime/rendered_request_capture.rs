@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::llm::message::Message;
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::RenderedCompletionRequest;
 use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
@@ -815,9 +816,13 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     const BIG_OUTPUT_CHARS: usize = 40_000;
     const CONTEXT_WINDOW: usize = 40_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
-    // `estimate_tokens` is `len / 4`, so the same budget in characters is 4x the
-    // token budget: 10 000 tokens, 40 000 characters.
-    let budget_chars = ((CONTEXT_WINDOW as f64 * COMPACTION_THRESHOLD) as usize) * 4;
+    // Size the fixture through the production exact threshold helper. The
+    // provider counter uses serialized-byte estimates; four plain characters
+    // per token keeps this payload near that boundary without copying the
+    // threshold formula or reintroducing floating-point budget arithmetic.
+    let budget_chars =
+        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
+            .saturating_mul(4);
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
     let marker = "capture-compaction";
@@ -1064,6 +1069,82 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         "the seeding request must be a single uncompacted completion"
     );
 
+    // Reproduce the incident's durable shape: the previous physical request
+    // has a successful request-local reduction but the session has no
+    // CompactionEntry. A continuation must ignore this checkpoint as session
+    // state and create a real session-prefix compaction entry instead.
+    let seed_commit = gents::graphql::newest_document_composite_commit(
+        db.node.as_ref(),
+        &seed_doc,
+        "seed request reduction boundary",
+    )
+    .await
+    .unwrap()
+    .expect("seed request commit");
+    let boundary = gents::provider_context_reduction::capture_source_boundary(
+        db.node.as_ref(),
+        session_id,
+        &seed_doc,
+        &seed_commit.cid,
+    )
+    .await
+    .unwrap();
+    let request_local_checkpoint = vec![Message::user("REQUEST_LOCAL_ONLY_SENTINEL")];
+    // Seed the historical incident shape as a raw fixture. Production has no
+    // public scalar writer: all new request-local reductions must consume the
+    // shared exact reduction artifact.
+    let reduction_key = gents::provider_context_reduction::reduction_key(
+        &agent.agent_did,
+        session_id,
+        &seed_doc,
+        0,
+        1,
+    )
+    .unwrap();
+    let boundary_json = serde_json::to_string(&boundary).unwrap();
+    let empty_prefix_json = serde_json::to_string(&Vec::<Message>::new()).unwrap();
+    let checkpoint_json = serde_json::to_string(&request_local_checkpoint).unwrap();
+    let fixture = format!(
+        r#"mutation {{ create_ProviderContextReduction(input: {{
+            reduction_key: "{reduction_key}"
+            agent_did: "{agent_did}"
+            requester_did: null
+            session_id: "{session_id}"
+            request_id: "req-capture-seed"
+            request_doc_id: "{request_doc_id}"
+            request_commit_cid: "{request_commit_cid}"
+            reduction_index: 1
+            turn_index: 0
+            parent_reduction_key: null
+            producer_call_id: null
+            producer_call_seq: null
+            source_boundary_json: "{boundary_json}"
+            compacted_prefix_json: "{empty_prefix_json}"
+            retained_suffix_json: "{checkpoint_json}"
+            pair_closed: true
+            checkpoint_messages_json: "{checkpoint_json}"
+            summary: ""
+            messages_compacted: 0
+            original_tokens: 10
+            compacted_tokens: 10
+            created_at: "2026-09-02T00:00:00Z"
+        }}) {{ _docID }} }}"#,
+        reduction_key = gents::graphql::escape_graphql_string(&reduction_key),
+        agent_did = gents::graphql::escape_graphql_string(&agent.agent_did),
+        session_id = gents::graphql::escape_graphql_string(session_id),
+        request_doc_id = gents::graphql::escape_graphql_string(&seed_doc),
+        request_commit_cid = gents::graphql::escape_graphql_string(&seed_commit.cid),
+        boundary_json = gents::graphql::escape_graphql_string(&boundary_json),
+        empty_prefix_json = gents::graphql::escape_graphql_string(&empty_prefix_json),
+        checkpoint_json = gents::graphql::escape_graphql_string(&checkpoint_json),
+    );
+    let response = db.node.execute(&fixture).await;
+    assert!(
+        !response.has_errors(),
+        "seed incident-shaped request-local reduction: {:?}",
+        response.errors
+    );
+
     let follow_up_doc = create_runtime_request(
         db.node.as_ref(),
         &agent.agent_did,
@@ -1149,6 +1230,166 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     assert_eq!(
         entries, 1,
         "the pre-request summarizer must have written its compaction entry"
+    );
+
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once() {
+    const CONTEXT_WINDOW: usize = 30_000;
+    const SUMMARIZER_MARKER: &str = "Produce the required structured continuation checkpoint now.";
+    const FAILURE_MARKER: &str = "ROLLING_FAILURE_REQUEST";
+    const RETRY_MARKER: &str = "ROLLING_RETRY_REQUEST";
+
+    let checkpoint = serde_json::json!({
+        "goal": "preserve the complete rolling prefix",
+        "constraints_and_preferences": [],
+        "completed_work": [],
+        "in_progress": [],
+        "blockers": [],
+        "current_work": [],
+        "key_decisions": [],
+        "errors_and_fixes": [],
+        "verification": [],
+        "uncertainties": [],
+        "next_actions": ["continue after the checkpoint"],
+        "critical_context": [],
+    })
+    .to_string();
+    let successful_checkpoint = || {
+        StreamResponse::streams(
+            SUMMARIZER_MARKER,
+            vec![StreamChunk::text(checkpoint.clone())],
+        )
+    };
+    let backend = MockStreamingBackend::start_with_plans(
+        CAPTURE_MODEL,
+        vec![
+            StreamPlan::new(
+                SUMMARIZER_MARKER,
+                vec![
+                    successful_checkpoint(),
+                    StreamResponse::service_unavailable("chunk two attempt one"),
+                    StreamResponse::service_unavailable("chunk two attempt two"),
+                    StreamResponse::service_unavailable("chunk two attempt three"),
+                    StreamResponse::service_unavailable("chunk two attempt four"),
+                    successful_checkpoint(),
+                ],
+            ),
+            StreamPlan::new(
+                "ROLLING_SEED_REQUEST",
+                vec![StreamResponse::completes(
+                    "ROLLING_SEED_REQUEST",
+                    ["seeded"],
+                )],
+            ),
+            StreamPlan::new(
+                FAILURE_MARKER,
+                vec![StreamResponse::completes(
+                    FAILURE_MARKER,
+                    ["must not complete"],
+                )],
+            ),
+            StreamPlan::new(
+                RETRY_MARKER,
+                vec![StreamResponse::completes(RETRY_MARKER, ["retry completed"])],
+            ),
+        ],
+    )
+    .expect("mock backend");
+    let db = test_db("rolling-compaction-atomic-retry").await;
+    let agent = boot_capture_agent_with(
+        &db,
+        "rolling-compaction-atomic-retry",
+        backend.endpoint(),
+        None,
+        |behavior| {
+            behavior
+                .enable_meta_tools(false)
+                .enable_context_budget(false)
+                .context_window(CONTEXT_WINDOW)
+                .compaction_threshold(0.25)
+                .compaction_strategy(CompactionStrategy::StripThenSummarize)
+        },
+    )
+    .await;
+
+    let session_id = "session-rolling-atomic-retry";
+    let seed_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-rolling-seed",
+        session_id,
+        "ROLLING_SEED_REQUEST",
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &seed_doc, "completed").await;
+
+    for index in 0..24_u32 {
+        crate::support::create_agent_message(
+            db.node.as_ref(),
+            session_id,
+            100 + index,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("rolling history {index}: {}", "x".repeat(10_000)),
+            &format!("2026-01-01T00:00:{:02}Z", index),
+        )
+        .await;
+    }
+
+    let failed_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-rolling-failure",
+        session_id,
+        FAILURE_MARKER,
+    )
+    .await;
+    assert_eq!(
+        wait_for_request_terminal_state(db.node.as_ref(), &failed_doc).await,
+        "failed"
+    );
+    assert!(
+        compaction_entries(db.node.as_ref(), session_id)
+            .await
+            .is_empty(),
+        "a later rolling-chunk failure must not publish an intermediate checkpoint"
+    );
+    assert_eq!(
+        backend.observed_requests(SUMMARIZER_MARKER),
+        5,
+        "one successful first chunk plus four bounded attempts of chunk two"
+    );
+
+    let retry_doc = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        CAPTURE_BEHAVIOR_ID,
+        "req-rolling-retry",
+        session_id,
+        RETRY_MARKER,
+    )
+    .await;
+    wait_for_request_lifecycle_state(db.node.as_ref(), &retry_doc, "completed").await;
+    let entries = compaction_entries(db.node.as_ref(), session_id).await;
+    assert_eq!(
+        entries.len(),
+        1,
+        "retry publishes exactly one final checkpoint"
+    );
+    assert!(
+        entries[0]["messages_compacted"]
+            .as_u64()
+            .unwrap_or_default()
+            > 0
+    );
+    assert!(entries[0]["compacted_through_sequence"].as_u64().is_some());
+    assert!(
+        backend.observed_requests(SUMMARIZER_MARKER) > 6,
+        "the retry must successfully execute multiple bounded summary chunks"
     );
 
     agent.shutdown().await;
@@ -1341,10 +1582,16 @@ fn rendered_fixture(request_json: Value) -> RenderedCompletionRequest {
 /// pre-request summarizer actually summarized rather than being skipped by the
 /// gate.
 async fn compaction_entry_count(node: &EmbeddedNode, session_id: &str) -> usize {
+    compaction_entries(node, session_id).await.len()
+}
+
+async fn compaction_entries(node: &EmbeddedNode, session_id: &str) -> Vec<Value> {
     let query = format!(
         r#"query {{
             CompactionEntry(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
                 compaction_key
+                messages_compacted
+                compacted_through_sequence
             }}
         }}"#,
         session_id = escape_graphql_string(session_id),
@@ -1360,7 +1607,6 @@ async fn compaction_entry_count(node: &EmbeddedNode, session_id: &str) -> usize 
         .and_then(|data| data.get("CompactionEntry").cloned())
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default()
-        .len()
 }
 
 async fn rendered_requests(node: &EmbeddedNode, request_id: &str) -> Vec<Value> {

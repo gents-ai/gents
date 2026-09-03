@@ -8,8 +8,6 @@ fn test_builder(system_prompt: &str, behavior_name: &str) -> LayeredPromptBuilde
         behavior_name,
         &["list_files", "read_file", "bash"],
         true,
-        100_000,
-        8_192,
         &[],
     )
 }
@@ -93,7 +91,6 @@ async fn build_without_summaries() {
     let prompt = builder.build(&messages, &[]).await.unwrap();
 
     assert_eq!(prompt.messages.len(), 2);
-    assert!(prompt.estimated_tokens > 0);
     assert!(prompt.preamble.contains("Be helpful."));
 }
 
@@ -126,25 +123,6 @@ async fn build_with_summaries_prepends() {
 }
 
 #[test]
-fn compaction_summary_estimate_includes_the_provider_message_wrapper() {
-    let summaries = vec![
-        "First checkpoint.".to_string(),
-        "Second checkpoint.".to_string(),
-    ];
-    let message = compaction_summary_message(&summaries).expect("summary message");
-
-    assert_eq!(
-        estimate_compaction_summary_tokens(&summaries),
-        estimate_message_tokens(std::slice::from_ref(&message))
-    );
-    assert!(
-        estimate_compaction_summary_tokens(&summaries)
-            > estimate_tokens(&join_compaction_summaries(&summaries))
-    );
-    assert_eq!(estimate_compaction_summary_tokens(&[]), 0);
-}
-
-#[test]
 fn system_reminder_format() {
     let msg = LayeredPromptBuilder::system_reminder("The time is 3pm.");
     if let Message::User { content } = &msg {
@@ -158,47 +136,6 @@ fn system_reminder_format() {
     } else {
         panic!("expected user message");
     }
-}
-
-#[test]
-fn message_budget_accounts_for_preamble_without_reserving_output_ceiling() {
-    let builder = LayeredPromptBuilder::for_behavior(
-        &"x".repeat(4000),
-        "general",
-        &["list_files", "read_file", "bash"],
-        true,
-        10_000,
-        2_000,
-        &[],
-    );
-
-    let budget = builder.message_budget();
-    assert!(budget < 10000);
-    assert!(budget > 7000);
-}
-
-#[test]
-fn would_exceed_budget_short_messages() {
-    let builder = test_builder("Be helpful.", "general");
-
-    let messages = vec![user_msg("hi")];
-    assert!(!builder.would_exceed_budget(&messages));
-}
-
-#[test]
-fn would_exceed_budget_long_messages() {
-    let builder = LayeredPromptBuilder::for_behavior(
-        "Be helpful.",
-        "general",
-        &["list_files", "read_file", "bash"],
-        true,
-        100,
-        50,
-        &[],
-    );
-
-    let big = user_msg(&"x".repeat(10000));
-    assert!(builder.would_exceed_budget(&[big]));
 }
 
 #[test]

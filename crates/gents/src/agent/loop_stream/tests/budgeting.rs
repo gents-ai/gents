@@ -9,17 +9,13 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
     for case in cases {
         let threshold = case.threshold_basis_points as f64 / 10_000.0;
         assert_eq!(
-            crate::compaction::threshold_budget(case.context_window, threshold),
+            crate::provider_input::budget::threshold_budget(case.context_window, threshold),
             case.configured_threshold_budget,
             "{}: configured threshold drifted from Lean",
             case.name
         );
         assert_eq!(
-            crate::compaction::effective_input_budget(
-                case.context_window,
-                case.max_output_tokens,
-                threshold,
-            ),
+            crate::provider_input::budget::effective_input_budget(case.context_window, threshold),
             case.effective_input_budget,
             "{}: effective input budget drifted from Lean",
             case.name
@@ -28,7 +24,7 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             .turn_input_tokens
             .iter()
             .map(|tokens| {
-                crate::compaction::effective_output_budget(
+                crate::provider_input::budget::effective_output_budget(
                     *tokens,
                     case.context_window,
                     case.max_output_tokens,
@@ -44,12 +40,12 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             .turn_input_tokens
             .iter()
             .map(|tokens| {
-                crate::compaction::input_exceeds_budget(
+                crate::compaction::ReductionAdmission::for_input(
                     *tokens,
                     case.context_window,
-                    case.max_output_tokens,
                     threshold,
                 )
+                .is_some()
             })
             .collect::<Vec<_>>();
         assert_eq!(
@@ -57,7 +53,142 @@ fn generated_turn_budget_cases_drive_every_completion_dispatch() {
             "{}: a later completion turn bypassed the Lean dispatch gate",
             case.name
         );
+        let actual_can_dispatch = case
+            .turn_input_tokens
+            .iter()
+            .map(|tokens| {
+                let mut request = CompletionRequest {
+                    model: None,
+                    preamble: None,
+                    chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user(
+                        "generated Lean budget witness",
+                    )),
+                    documents: Vec::new(),
+                    tools: Vec::new(),
+                    temperature: None,
+                    max_tokens: u64::try_from(case.max_output_tokens).ok(),
+                    tool_choice: None,
+                    additional_params: None,
+                    output_schema: None,
+                };
+                let mut witness_config = config(0);
+                witness_config.context_window = case.context_window;
+                witness_config.max_tokens = u64::try_from(case.max_output_tokens).ok();
+                clamp_request_output_budget(&mut request, &witness_config, *tokens);
+                let clamped = request
+                    .max_tokens
+                    .and_then(|output| usize::try_from(output).ok())
+                    .unwrap_or_default();
+                assert_eq!(
+                    clamped,
+                    crate::provider_input::budget::effective_output_budget(
+                        *tokens,
+                        case.context_window,
+                        case.max_output_tokens,
+                    ),
+                    "{}: production request clamp drifted from Lean",
+                    case.name
+                );
+                ensure_context_can_dispatch(&request, &witness_config, *tokens).is_ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual_can_dispatch, case.turn_can_dispatch,
+            "{}: a zero-capacity completion passed the Lean dispatch gate",
+            case.name
+        );
     }
+}
+
+#[test]
+fn generated_retention_cases_drive_production_compaction_target() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_retention_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no PromptAssembly retention cases"
+    );
+
+    for case in cases {
+        assert_eq!(
+            case.effective_input_budget.saturating_sub(case.fixed_input),
+            case.available_input,
+            "{}: available input drifted from Lean natural subtraction",
+            case.name
+        );
+        let actual = crate::provider_input::budget::compaction_retention_target(
+            case.configured_keep_recent,
+            case.effective_input_budget,
+            case.fixed_input,
+        );
+        assert_eq!(
+            actual, case.retention_target,
+            "{}: production retention target drifted from Lean",
+            case.name
+        );
+        assert!(actual <= case.configured_keep_recent, "{}", case.name);
+        assert!(actual <= case.available_input, "{}", case.name);
+        assert!(
+            actual
+                .checked_add(case.available_input.div_ceil(4))
+                .is_some_and(|used| used <= case.available_input),
+            "{}: retention did not preserve the checkpoint quarter",
+            case.name
+        );
+        assert_eq!(
+            crate::provider_input::budget::summary_output_ceiling(
+                case.summary_max_output,
+                case.effective_input_budget,
+            ),
+            case.effective_summary_output,
+            "{}: bounded summary output ceiling drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::provider_input::budget::rolling_summary_input_budget(
+                case.effective_input_budget,
+                case.effective_summary_output,
+            ),
+            case.rolling_summary_input_budget,
+            "{}: rolling summary input budget drifted from Lean",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
+    let third = usize::MAX / 3;
+    for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
+        let retained = crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0);
+        assert_eq!(retained.checked_add(value.div_ceil(4)), Some(value));
+    }
+
+    let threshold_29 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.29);
+    let threshold_57 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.57);
+    let threshold_69 = crate::provider_input::budget::threshold_budget(usize::MAX, 0.69);
+    assert!(threshold_29 < threshold_57 && threshold_57 < threshold_69);
+    assert!(threshold_29 < usize::MAX / 2);
+    assert!(threshold_57 > usize::MAX / 2);
+    assert_eq!(
+        crate::provider_input::budget::threshold_budget(usize::MAX, 1.0),
+        usize::MAX
+    );
+
+    assert!(crate::provider_input::budget::can_dispatch(
+        usize::MAX - 1,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        usize::MAX,
+    ));
+    assert!(!crate::provider_input::budget::can_dispatch(usize::MAX, usize::MAX, 0));
+    assert_eq!(
+        crate::provider_input::budget::configured_output_ceiling(Some(u64::MAX)),
+        usize::try_from(u64::MAX).unwrap_or(usize::MAX)
+    );
 }
 
 #[test]
@@ -197,7 +328,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
                 config,
             )
             .await?;
-            Ok(TurnCompactionOutcome {
+            Ok(TurnCompactionOutcome::Reduced {
                 messages: vec![Message::user("compacted prompt")],
                 reduction_key: "reduction-1".to_string(),
             })
@@ -220,6 +351,53 @@ async fn nested_compaction_charges_the_same_request_budget() {
     let dispatches = outer_model.seen_dispatches().await;
     assert_eq!(dispatches.len(), 1);
     assert_eq!(dispatches[0].1, Some(5_000 - dispatches[0].0));
+}
+
+#[tokio::test]
+async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("done".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let mut loop_config = config(0);
+    loop_config.max_tokens = Some(1_000);
+    loop_config.context_window = 6_500;
+    loop_config.compaction_threshold = 0.25;
+    loop_config.turn_compactor = Some(Arc::new(|_| {
+        Box::pin(async {
+            Ok(TurnCompactionOutcome::ProviderViewRepaired {
+                messages: vec![Message::user("repaired prompt")],
+            })
+        })
+    }));
+    let captured_reason = Arc::new(Mutex::new(None));
+    let captured_reason_for_sink = captured_reason.clone();
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, trace| {
+        let captured_reason = captured_reason_for_sink.clone();
+        Box::pin(async move {
+            *captured_reason.lock().await = trace
+                .context_accounting
+                .map(|accounting| accounting.compaction_reason);
+            Ok(())
+        })
+    }));
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model,
+        None,
+        Message::user("x".repeat(8_000)),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
+    assert_eq!(
+        *captured_reason.lock().await,
+        Some(ContextCompactionReason::ProviderViewRepaired)
+    );
 }
 
 #[tokio::test]
@@ -430,7 +608,10 @@ async fn completion_output_ceiling_is_clamped_to_remaining_context() {
     let request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
         .await
         .expect("request should build");
-    let input_tokens = completion_request_input_components(&request).estimated_input_tokens();
+    let input_tokens =
+        completion_request_input_components(&request, loop_config.provider_input_counter.as_ref())
+            .expect("provider projection")
+            .estimated_input_tokens;
     loop_config.context_window = input_tokens + 250;
 
     let stream = run_loop_stream(
@@ -445,6 +626,200 @@ async fn completion_output_ceiling_is_clamped_to_remaining_context() {
 
     assert_eq!(collected.error, None);
     assert_eq!(model.seen_max_tokens().await, vec![Some(250)]);
+}
+
+#[tokio::test]
+async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("must not dispatch".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let prompt = Message::user("input exactly fills context");
+    let mut loop_config = config(0);
+    loop_config.max_tokens = Some(1_000);
+    loop_config.compaction_threshold = 1.0;
+
+    let request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
+        .await
+        .expect("request should build");
+    let input_tokens =
+        completion_request_input_components(&request, loop_config.provider_input_counter.as_ref())
+            .expect("provider projection")
+            .estimated_input_tokens;
+    loop_config.context_window = input_tokens;
+
+    let capture_calls = Arc::new(AtomicUsize::new(0));
+    let capture_calls_for_sink = capture_calls.clone();
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, _| {
+        capture_calls_for_sink.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }));
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None,
+        prompt,
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    assert!(
+        collected
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("provider_input_has_no_output_capacity")),
+        "unexpected terminal state: {collected:?}"
+    );
+    assert_eq!(capture_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        model.seen_max_tokens().await.is_empty(),
+        "zero-capacity request reached the provider model"
+    );
+}
+
+#[test]
+fn zero_remaining_capacity_uses_the_typed_provider_input_error() {
+    let mut loop_config = config(0);
+    loop_config.context_window = 100;
+    let mut request = CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: rig::one_or_many::OneOrMany::one(rig::completion::Message::user("x")),
+        documents: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_tokens: Some(100),
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    };
+    clamp_request_output_budget(&mut request, &loop_config, 100);
+    let error = ensure_context_can_dispatch(&request, &loop_config, 100).unwrap_err();
+
+    let StreamingError::Completion(CompletionError::RequestError(source)) = error else {
+        panic!("expected typed request error, got {error}");
+    };
+    assert!(matches!(
+        source.downcast_ref::<crate::provider_input::budget::ContextBudgetError>(),
+        Some(
+            crate::provider_input::budget::ContextBudgetError::NoOutputCapacity {
+                estimated_input_tokens: 100,
+                context_window: 100,
+                effective_max_output_tokens: 0,
+            }
+        )
+    ));
+}
+
+#[tokio::test]
+async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("must not dispatch".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let mut loop_config = config(0);
+    loop_config.compaction_threshold = 0.0;
+    loop_config.turn_compactor = Some(Arc::new(|_| {
+        Box::pin(async { Ok(TurnCompactionOutcome::CannotFit) })
+    }));
+    let capture_calls = Arc::new(AtomicUsize::new(0));
+    let capture_calls_for_sink = capture_calls.clone();
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, _| {
+        capture_calls_for_sink.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }));
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("an indivisible current prompt"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        loop_config,
+    );
+    futures::pin_mut!(stream);
+    let error = stream
+        .next()
+        .await
+        .expect("cannot-fit produces one terminal error")
+        .expect_err("cannot-fit cannot reach provider dispatch");
+
+    let StreamingError::Completion(CompletionError::RequestError(source)) = error else {
+        panic!("expected typed request error, got {error}");
+    };
+    assert!(matches!(
+        source.downcast_ref::<crate::compaction::ReductionError>(),
+        Some(crate::compaction::ReductionError::CannotFit)
+    ));
+    assert_eq!(capture_calls.load(Ordering::SeqCst), 0);
+    assert!(model.seen_max_tokens().await.is_empty());
+}
+
+#[tokio::test]
+async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
+    let model = ScriptedModel::new(vec![
+        RawStreamingChoice::Message("must not dispatch".to_string()),
+        RawStreamingChoice::FinalResponse(()),
+    ]);
+    let prompt = Message::user("current prompt survives compaction");
+    let mut loop_config = config(0);
+    loop_config.max_tokens = Some(1_000);
+    // Keep this below 100% so the post-compaction threshold diagnostic is
+    // also eligible. The stricter typed context-fit result must win when the
+    // rebuilt request has no positive output capacity.
+    loop_config.compaction_threshold = 0.5;
+
+    let compacted_request = build_request(&model, prompt.clone(), &[], &[], &[], &loop_config)
+        .await
+        .unwrap();
+    loop_config.context_window = completion_request_input_components(
+        &compacted_request,
+        loop_config.provider_input_counter.as_ref(),
+    )
+    .unwrap()
+    .estimated_input_tokens;
+
+    let compactions = Arc::new(AtomicUsize::new(0));
+    let compactions_for_callback = compactions.clone();
+    loop_config.turn_compactor = Some(Arc::new(move |request| {
+        let compactions = compactions_for_callback.clone();
+        Box::pin(async move {
+            compactions.fetch_add(1, Ordering::SeqCst);
+            Ok(TurnCompactionOutcome::Reduced {
+                messages: vec![request.messages.last().unwrap().clone()],
+                reduction_key: "final-fit-reduction".to_string(),
+            })
+        })
+    }));
+    let capture_calls = Arc::new(AtomicUsize::new(0));
+    let capture_calls_for_sink = capture_calls.clone();
+    loop_config.on_rendered_request = Some(Arc::new(move |_, _, _, _| {
+        capture_calls_for_sink.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async { Ok(()) })
+    }));
+
+    let collected = collect_scripted_stream(run_loop_stream(
+        model.clone(),
+        None,
+        prompt,
+        vec![Message::assistant("x".repeat(20_000))],
+        Arc::new(Vec::new()),
+        loop_config,
+    ))
+    .await;
+
+    assert!(
+        collected
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("provider_input_has_no_output_capacity")),
+        "unexpected terminal state: {collected:?}"
+    );
+    assert_eq!(compactions.load(Ordering::SeqCst), 1);
+    assert_eq!(capture_calls.load(Ordering::SeqCst), 0);
+    assert!(model.seen_max_tokens().await.is_empty());
 }
 
 #[tokio::test]
@@ -495,25 +870,26 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
     )
     .await
     .expect("first request should build");
-    let first_tokens = completion_request_input_components(&first_request).estimated_input_tokens();
+    let first_tokens = completion_request_input_components(
+        &first_request,
+        loop_config.provider_input_counter.as_ref(),
+    )
+    .expect("provider projection")
+    .estimated_input_tokens;
     loop_config.context_window = first_tokens + 100 + 100;
 
     let compactions = Arc::new(AtomicUsize::new(0));
     let compactions_for_callback = compactions.clone();
-    let keep_recent_target = Arc::new(AtomicUsize::new(usize::MAX));
-    let keep_recent_target_for_callback = keep_recent_target.clone();
     loop_config.turn_compactor = Some(Arc::new(move |request| {
         let compactions = compactions_for_callback.clone();
-        let keep_recent_target = keep_recent_target_for_callback.clone();
         Box::pin(async move {
             compactions.fetch_add(1, Ordering::SeqCst);
-            keep_recent_target.store(request.keep_recent_target, Ordering::SeqCst);
             let keep_from = request.messages.len().saturating_sub(2);
             let mut compacted = vec![Message::user(
                 "<system-reminder>compacted earlier turn</system-reminder>",
             )];
             compacted.extend(request.messages.into_iter().skip(keep_from));
-            Ok(TurnCompactionOutcome {
+            Ok(TurnCompactionOutcome::Reduced {
                 messages: compacted,
                 reduction_key: "reduction-1".to_string(),
             })
@@ -529,10 +905,6 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
         compactions.load(Ordering::SeqCst),
         1,
         "the safe entry turn must dispatch directly and the grown second turn must compact"
-    );
-    assert!(
-        keep_recent_target.load(Ordering::SeqCst) < 20_000,
-        "the per-turn target must reserve room for static request layers and the summary"
     );
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
