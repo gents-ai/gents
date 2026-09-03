@@ -143,6 +143,7 @@ async fn setup_spawn_fixture_with_parent_fields(
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(
                 targets
                     .into_iter()
@@ -243,7 +244,9 @@ async fn setup_spawn_fixture_with_parent_fields(
     )
     .await
     .unwrap();
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(parent_deadline)).await;
 
     SpawnFixture {

@@ -1,4 +1,3 @@
 pub(crate) mod args;
-pub(crate) mod deprecations;
 pub(crate) mod output_format;
 pub(crate) use args::*;

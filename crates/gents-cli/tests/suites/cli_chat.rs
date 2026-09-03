@@ -30,6 +30,7 @@ async fn chat_uses_runtime_state_for_interactive_turns() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -124,6 +125,7 @@ async fn chat_continues_existing_session_when_session_id_is_provided() -> Result
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -200,6 +202,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -217,7 +220,7 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
             message_path
                 .to_str()
                 .ok_or_else(|| anyhow!("message path is not utf-8"))?,
-            "--output-format",
+            "--output",
             "json",
             "--output-file",
             output_path
@@ -281,6 +284,7 @@ async fn chat_buffers_final_response_and_shows_tool_progress() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

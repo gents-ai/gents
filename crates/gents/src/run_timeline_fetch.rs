@@ -478,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn activity_rows_reuse_prompt_free_timeline_vocabulary() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let response = node
             .execute(
                 r#"mutation {
@@ -553,7 +553,7 @@ mod tests {
     #[tokio::test]
     async fn fetches_approvals_and_complete_inference_provenance() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let response = node
             .execute(
@@ -688,7 +688,7 @@ mod tests {
     #[tokio::test]
     async fn fetches_native_goal_history_without_projecting_usage_only_commits() {
         let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_schemas(node.as_ref()).await.unwrap();
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let response = node
             .execute(

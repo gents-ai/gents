@@ -508,19 +508,6 @@ fn rust_toolchain_file_channel(tool_root: &Path) -> Option<String> {
                 .as_str()
                 .map(ToOwned::to_owned);
         }
-        let legacy = directory.join("rust-toolchain");
-        if legacy.is_file() {
-            let raw = std::fs::read_to_string(&legacy).ok()?;
-            if let Ok(parsed) = raw.parse::<toml::Value>() {
-                return parsed
-                    .get("toolchain")?
-                    .get("channel")?
-                    .as_str()
-                    .map(ToOwned::to_owned);
-            }
-            let channel = raw.lines().next()?.trim();
-            return (!channel.is_empty()).then(|| channel.to_string());
-        }
     }
     None
 }

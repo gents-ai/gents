@@ -50,6 +50,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -143,7 +144,6 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let fire = run_cli_json(
         &home_dir,
         &[
-            "config",
             "task",
             "run",
             "--task-id",
@@ -263,6 +263,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -311,15 +312,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
 
     let stderr = run_cli_failure_stderr(
         &home_dir,
-        &[
-            "config",
-            "task",
-            "run",
-            "--task-id",
-            &task_id,
-            "--graphql",
-            &graphql,
-        ],
+        &["task", "run", "--task-id", &task_id, "--graphql", &graphql],
     )?;
     assert!(
         stderr.contains("disabled"),

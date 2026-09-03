@@ -1323,7 +1323,6 @@ mod tests {
         let mut tool = GentsToolCallProgress {
             tool_call_key: "parent:spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
-            status: "running".to_string(),
             lifecycle_state: Some("running".to_string()),
             await_mode: Some("background".to_string()),
             child_request_id: Some("child-request".to_string()),

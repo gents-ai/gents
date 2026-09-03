@@ -21,58 +21,24 @@ impl ModelDiscoveryHttpError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendProviderKind {
     #[default]
-    #[serde(
-        rename = "OpenAiCompatible",
-        alias = "openai-compatible",
-        alias = "openai_compatible",
-        alias = "openai",
-        alias = "OpenAICompatible"
-    )]
+    #[serde(rename = "OpenAiCompatible")]
     OpenAiCompatible,
-    #[serde(rename = "OpenRouter", alias = "openrouter")]
+    #[serde(rename = "OpenRouter")]
     OpenRouter,
-    #[serde(
-        rename = "ChatGptCodex",
-        alias = "ChatGPTCodex",
-        alias = "chatgpt-codex",
-        alias = "chatgpt_codex",
-        alias = "codex-chatgpt",
-        alias = "codex"
-    )]
+    #[serde(rename = "ChatGptCodex")]
     ChatGptCodex,
-    #[serde(
-        rename = "XaiGrokOAuth",
-        alias = "xai-oauth",
-        alias = "grok-oauth",
-        alias = "xai-grok-oauth",
-        alias = "xai_oauth",
-        alias = "grok_oauth"
-    )]
+    #[serde(rename = "XaiGrokOAuth")]
     XaiGrokOAuth,
 }
 
 impl BackendProviderKind {
     pub fn parse_optional(value: Option<&str>) -> Result<Self> {
         match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None => Ok(Self::default()),
-            Some("OpenAiCompatible")
-            | Some("OpenAICompatible")
-            | Some("openai-compatible")
-            | Some("openai_compatible")
-            | Some("openai") => Ok(Self::OpenAiCompatible),
-            Some("OpenRouter") | Some("openrouter") => Ok(Self::OpenRouter),
-            Some("ChatGptCodex")
-            | Some("ChatGPTCodex")
-            | Some("chatgpt-codex")
-            | Some("chatgpt_codex")
-            | Some("codex-chatgpt")
-            | Some("codex") => Ok(Self::ChatGptCodex),
-            Some("XaiGrokOAuth")
-            | Some("xai-oauth")
-            | Some("grok-oauth")
-            | Some("xai-grok-oauth")
-            | Some("xai_oauth")
-            | Some("grok_oauth") => Ok(Self::XaiGrokOAuth),
+            None => anyhow::bail!("backend provider kind is required"),
+            Some("OpenAiCompatible") => Ok(Self::OpenAiCompatible),
+            Some("OpenRouter") => Ok(Self::OpenRouter),
+            Some("ChatGptCodex") => Ok(Self::ChatGptCodex),
+            Some("XaiGrokOAuth") => Ok(Self::XaiGrokOAuth),
             Some(other) => anyhow::bail!("unknown backend provider kind {other}"),
         }
     }
@@ -463,7 +429,7 @@ mod tests {
     async fn discover_models_sends_chatgpt_codex_version_header_and_query_param() {
         let (endpoint, requests) =
             spawn_model_discovery_server(r#"{"models":[{"slug":"gpt-5.5"}]}"#).await;
-        let credential = crate::chatgpt_codex::OAuthCredential {
+        let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,
             credential_id: "chatgpt-codex:did:key:zAgent".to_string(),
             agent_did: "did:key:zAgent".to_string(),

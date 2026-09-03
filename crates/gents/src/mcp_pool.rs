@@ -890,7 +890,7 @@ fn ip_in_cidr(ip: &str, cidr: &str) -> bool {
 fn normalize_mcp_path(path: &str) -> String {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        "/mcp".to_string()
+        String::new()
     } else if trimmed.starts_with('/') {
         trimmed.to_string()
     } else {

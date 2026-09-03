@@ -44,7 +44,7 @@ describe("subagent transcript tool", () => {
     expect(card?.getAttribute("data-child-request-id")).toBe("child-request-123456789");
     expect(getByText("researcher")).toBeTruthy();
     expect(getByText("background")).toBeTruthy();
-    expect(getByText("running")).toBeTruthy();
+    expect(getByText("working")).toBeTruthy();
     expect(getAllByText("Trace the completion control flow")).toHaveLength(2);
     expect(getByText("Reading watcher.rs")).toBeTruthy();
   });

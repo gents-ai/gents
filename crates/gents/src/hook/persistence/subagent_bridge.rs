@@ -876,7 +876,6 @@ impl DefraSessionHook {
             anyhow::bail!("background tool call {tool_call_id} was not found");
         };
         if !caller.authorizes(
-            lifecycle.request_id(),
             lifecycle.session_id(),
             lifecycle.agent_did(),
             lifecycle.requester_did(),

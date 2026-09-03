@@ -50,10 +50,10 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
         }
 
         let server_address = std::env::var("GENTS_E2E_SERVER_ADDRESS").map_err(|_| {
-            BridgeError::from_legacy_message("GENTS_E2E_SERVER_ADDRESS is required for native E2E")
+            BridgeError::untyped("GENTS_E2E_SERVER_ADDRESS is required for native E2E")
         })?;
         if server_address.trim().is_empty() {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "GENTS_E2E_SERVER_ADDRESS must not be empty",
             ));
         }
@@ -86,7 +86,7 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
     #[cfg(not(debug_assertions))]
     {
         let _ = status;
-        return Err(BridgeError::from_legacy_message(
+        return Err(BridgeError::untyped(
             "native E2E status is disabled in release builds",
         ));
     }
@@ -94,12 +94,10 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
     #[cfg(debug_assertions)]
     {
         if std::env::var("GENTS_NATIVE_E2E").ok().as_deref() != Some("1") {
-            return Err(BridgeError::from_legacy_message(
-                "native E2E status is not enabled",
-            ));
+            return Err(BridgeError::untyped("native E2E status is not enabled"));
         }
         if status.stage.is_empty() || status.stage.len() > 64 {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "native E2E stage must contain 1-64 bytes",
             ));
         }
@@ -108,7 +106,7 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             .as_ref()
             .is_some_and(|detail| detail.len() > 2048)
         {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "native E2E detail must not exceed 2048 bytes",
             ));
         }
@@ -117,7 +115,7 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             .as_ref()
             .is_some_and(|value| value.is_empty() || value.len() > 128)
         {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "native E2E correlation id must contain 1-128 bytes",
             ));
         }
@@ -125,7 +123,7 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             .monotonic_ms
             .is_some_and(|value| !value.is_finite() || value < 0.0)
         {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "native E2E monotonic time must be finite and nonnegative",
             ));
         }
@@ -134,16 +132,14 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
         tokio::fs::create_dir_all(&directory)
             .await
             .map_err(|error| {
-                BridgeError::from_legacy_message(format!(
-                    "creating native E2E status directory: {error}"
-                ))
+                BridgeError::untyped(format!("creating native E2E status directory: {error}"))
             })?;
 
         let bytes = serde_json::to_vec(&status).map_err(|error| {
-            BridgeError::from_legacy_message(format!("serializing native E2E status: {error}"))
+            BridgeError::untyped(format!("serializing native E2E status: {error}"))
         })?;
         if bytes.len() > 32 * 1024 {
-            return Err(BridgeError::from_legacy_message(
+            return Err(BridgeError::untyped(
                 "native E2E status must not exceed 32 KiB",
             ));
         }
@@ -151,13 +147,11 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
         let temporary_path = directory.join(format!("{E2E_STATUS_FILENAME}.tmp"));
         tokio::fs::write(&temporary_path, &bytes)
             .await
-            .map_err(|error| {
-                BridgeError::from_legacy_message(format!("writing native E2E status: {error}"))
-            })?;
+            .map_err(|error| BridgeError::untyped(format!("writing native E2E status: {error}")))?;
         tokio::fs::rename(&temporary_path, &status_path)
             .await
             .map_err(|error| {
-                BridgeError::from_legacy_message(format!("publishing native E2E status: {error}"))
+                BridgeError::untyped(format!("publishing native E2E status: {error}"))
             })?;
         use tokio::io::AsyncWriteExt;
         let events_path = directory.join(E2E_EVENTS_FILENAME);
@@ -167,17 +161,13 @@ pub async fn desktop_native_e2e_status(status: NativeE2eStatus) -> Result<(), Br
             .open(&events_path)
             .await
             .map_err(|error| {
-                BridgeError::from_legacy_message(format!(
-                    "opening native E2E event artifact: {error}"
-                ))
+                BridgeError::untyped(format!("opening native E2E event artifact: {error}"))
             })?;
         events.write_all(&bytes).await.map_err(|error| {
-            BridgeError::from_legacy_message(format!("writing native E2E event artifact: {error}"))
+            BridgeError::untyped(format!("writing native E2E event artifact: {error}"))
         })?;
         events.write_all(b"\n").await.map_err(|error| {
-            BridgeError::from_legacy_message(format!(
-                "terminating native E2E event artifact: {error}"
-            ))
+            BridgeError::untyped(format!("terminating native E2E event artifact: {error}"))
         })?;
         tracing::info!(
             target: "gents_desktop_bridge::mobile_performance",
@@ -199,7 +189,7 @@ pub fn desktop_native_e2e_config() -> Result<Option<NativeE2eConfig>, BridgeErro
 #[tauri::command]
 #[cfg(not(feature = "native-e2e"))]
 pub async fn desktop_native_e2e_status(_status: NativeE2eStatus) -> Result<(), BridgeError> {
-    Err(BridgeError::from_legacy_message(
+    Err(BridgeError::untyped(
         "native E2E commands are not compiled into this build",
     ))
 }

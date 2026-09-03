@@ -11,7 +11,7 @@ import type {
 export const backend: InferenceBackendView = {
   backendId: "default-backend",
   name: "Default Backend",
-  providerKind: "openai",
+  providerKind: "OpenAiCompatible",
   endpoint: "http://127.0.0.1:8000/v1",
   apiKeyConfigured: false,
   maxConcurrent: 2,
@@ -42,7 +42,6 @@ export const toolSelection: ToolSelectionView = {
   enableGoalTools: null,
   enableGoalCreation: null,
   allowedMcpServiceIds: ["mcp-local"],
-  delegateTo: [],
   enableDefraQuery: true,
   defraQueryCollections: ["AgentRequest"],
   writeTools: [

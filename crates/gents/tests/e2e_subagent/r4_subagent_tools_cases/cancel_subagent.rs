@@ -250,7 +250,8 @@ async fn cancel_subagent_explains_unmaterialized_child_bridge() {
         "agent_did": "did:key:z6MkRemoteUnclaimed",
         "behavior_id": "remote-coder-behavior",
         "prompt": "cross-deployment work",
-        "await_mode": "background"
+        "await_mode": "background",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -267,7 +268,10 @@ async fn cancel_subagent_explains_unmaterialized_child_bridge() {
         CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:key:z6MkRemoteUnclaimed".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(
+        crate::support::exact_request_doc_id(db.node.as_ref(), &fixture.request_id).await,
+    ));
     lifecycle.start_running().await.unwrap();
 
     let action = hook

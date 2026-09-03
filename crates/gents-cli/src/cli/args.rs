@@ -8,11 +8,11 @@ use serde::{Deserialize, Serialize};
 use crate::cli::output_format::OutputFormat;
 use crate::{
     BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
-    CONFIG_EXPORT_AFTER_HELP, CONFIG_IMPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP,
-    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
-    RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP,
-    SESSION_AFTER_HELP, SHOW_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP,
-    SUBAGENT_LIST_AFTER_HELP, TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
+    CONFIG_EXPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP, INIT_AFTER_HELP,
+    MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
+    RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP,
+    STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TASK_AFTER_HELP,
+    TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -56,7 +56,6 @@ pub(crate) enum Command {
     Reset(ResetArgs),
     #[command(
         name = "server",
-        alias = "serve",
         about = "Run the local gents runtime from an initialized home",
         after_help = SERVER_AFTER_HELP
     )]
@@ -74,13 +73,11 @@ pub(crate) enum Command {
     CodexAuthProbe(CodexAuthProbeArgs),
     #[command(
         name = "grok-login",
-        alias = "xai-login",
         about = "Sign in with Grok / xAI subscription OAuth and store credentials in DefraDB"
     )]
     GrokLogin(GrokLoginArgs),
     #[command(
         name = "grok-auth-probe",
-        alias = "xai-auth-probe",
         about = "Probe a DefraDB-backed Grok / xAI OAuth credential (read-only)"
     )]
     GrokAuthProbe(GrokAuthProbeArgs),
@@ -95,15 +92,6 @@ pub(crate) enum Command {
     Schema {
         #[command(subcommand)]
         command: SchemaCommand,
-    },
-    #[command(
-        about = "Show stored runtime, request, or response state",
-        after_help = SHOW_AFTER_HELP,
-        hide = true
-    )]
-    Show {
-        #[command(subcommand)]
-        command: ShowCommand,
     },
     #[command(
         about = "Export persisted tool-call traces for measurement",
@@ -619,13 +607,10 @@ pub(crate) struct InitArgs {
     pub(crate) secure_enclave_label: Option<String>,
     #[arg(
         long = "inference-url",
-        alias = "inference-endpoint",
         value_name = "INFERENCE_URL",
         help = "Inference backend base URL, usually including /v1. Falls back to INFERENCE_ENDPOINT, then the local llama-server default."
     )]
     pub(crate) inference_endpoint: Option<String>,
-    #[arg(value_name = "INFERENCE_URL", hide = true)]
-    pub(crate) inference_endpoint_legacy: Option<String>,
     #[arg(
         long,
         help = "Optional backend document id. Defaults to <agent-name>-backend"
@@ -668,7 +653,6 @@ pub(crate) struct InitArgs {
     pub(crate) max_queue_depth: i64,
     #[arg(
         long = "write",
-        alias = "write-tools",
         default_value_t = false,
         help = "Bootstrap write-capable tools, sandboxed and scoped to the tool root, instead of the safe read-only default"
     )]
@@ -719,9 +703,7 @@ pub(crate) struct InitArgs {
 
 impl InitArgs {
     pub(crate) fn resolved_inference_endpoint(&self) -> Option<&str> {
-        self.inference_endpoint
-            .as_deref()
-            .or(self.inference_endpoint_legacy.as_deref())
+        self.inference_endpoint.as_deref()
     }
 
     pub(crate) fn preset_default_model_name(&self) -> Option<&'static str> {
@@ -785,14 +767,6 @@ pub(crate) struct ServeArgs {
         help = "Root directory for readonly/readwrite tool ceilings. Readonly defaults to the current working directory when unset"
     )]
     pub(crate) tool_root: Option<PathBuf>,
-    #[arg(
-        long,
-        hide = true,
-        default_value_t = false,
-        conflicts_with = "no_codex_shim",
-        help = "Deprecated no-op: the Codex endpoint now runs by default"
-    )]
-    pub(crate) codex_shim: bool,
     #[arg(
         long,
         default_value_t = false,
@@ -953,7 +927,7 @@ pub(crate) struct ChatArgs {
     pub(crate) goal_token_budget: Option<i64>,
     #[arg(long = "message-file", help = "Read the user message from a file")]
     pub(crate) message_file: Option<PathBuf>,
-    #[arg(long = "output", alias = "output-format", value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(long = "output", value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output_format: OutputFormat,
     #[arg(long = "output-file", help = "Write the final response to a file")]
     pub(crate) output_file: Option<PathBuf>,
@@ -963,16 +937,6 @@ pub(crate) struct ChatArgs {
     pub(crate) poll_secs: u64,
     #[arg(value_name = "MESSAGE")]
     pub(crate) message: Vec<String>,
-}
-
-#[derive(Subcommand)]
-pub(crate) enum ShowCommand {
-    #[command(about = "Show a stored AgentRequest document")]
-    Request(RequestShowArgs),
-    #[command(about = "Show the latest AgentResponse for a request")]
-    Response(ResponseShowArgs),
-    #[command(about = "Show the persisted AgentRuntime document")]
-    Runtime(RuntimeShowArgs),
 }
 
 #[derive(Subcommand)]
@@ -1154,7 +1118,7 @@ pub(crate) enum P2pDiscoveryArg {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub(crate) enum OpenAiWireApiArg {
     Responses,
-    #[value(name = "chat-completions", alias = "chat_completions")]
+    #[value(name = "chat-completions")]
     ChatCompletions,
 }
 
@@ -1177,7 +1141,7 @@ pub(crate) enum BackendPresetArg {
     OpenRouter,
     #[value(name = "chatgpt-codex")]
     ChatGptCodex,
-    #[value(name = "xai-oauth", alias = "grok-oauth")]
+    #[value(name = "xai-oauth")]
     XaiGrokOAuth,
     #[value(name = "ollama")]
     Ollama,
@@ -1278,16 +1242,6 @@ pub(crate) struct DiagnoseArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long = "bind-agent-did", value_enum)]
     pub(crate) bind_agent_did: Option<ManifestAgentDidBindingArg>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct RuntimeShowArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(long)]
-    pub(crate) agent_did: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -1515,11 +1469,6 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
-    #[command(about = "Inspect and fire configured Task documents", hide = true)]
-    Task {
-        #[command(subcommand)]
-        command: TaskCommand,
-    },
     #[command(about = "Inspect EventTrigger documents")]
     Trigger {
         #[command(subcommand)]
@@ -1547,8 +1496,6 @@ pub(crate) enum ConfigCommand {
     },
     #[command(about = "Export desired configuration documents", after_help = CONFIG_EXPORT_AFTER_HELP)]
     Export(ConfigExportArgs),
-    #[command(about = "Import desired configuration documents", after_help = CONFIG_IMPORT_AFTER_HELP)]
-    Import(ConfigImportArgs),
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum, PartialEq, Eq)]
@@ -1577,11 +1524,7 @@ pub(crate) enum BackendCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceBackend document")]
     Show(ConfigShowArgs),
-    #[command(
-        name = "rm",
-        about = "Delete an InferenceBackend document",
-        alias = "remove"
-    )]
+    #[command(name = "rm", about = "Delete an InferenceBackend document")]
     Rm(ConfigShowArgs),
 }
 
@@ -1608,11 +1551,7 @@ pub(crate) enum BehaviorCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an AgentBehavior document")]
     Show(ConfigShowArgs),
-    #[command(
-        name = "rm",
-        about = "Delete an AgentBehavior document",
-        alias = "remove"
-    )]
+    #[command(name = "rm", about = "Delete an AgentBehavior document")]
     Rm(ConfigShowArgs),
 }
 
@@ -1624,11 +1563,7 @@ pub(crate) enum WorkspaceRootCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a WorkspaceRoot document")]
     Show(ConfigShowArgs),
-    #[command(
-        name = "rm",
-        about = "Delete a WorkspaceRoot document",
-        alias = "remove"
-    )]
+    #[command(name = "rm", about = "Delete a WorkspaceRoot document")]
     Rm(ConfigShowArgs),
 }
 
@@ -1640,11 +1575,7 @@ pub(crate) enum ToolSelectionCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show a ToolSelection document")]
     Show(ConfigShowArgs),
-    #[command(
-        name = "rm",
-        about = "Delete a ToolSelection document",
-        alias = "remove"
-    )]
+    #[command(name = "rm", about = "Delete a ToolSelection document")]
     Rm(ConfigShowArgs),
     #[command(
         name = "subagent-target-entry",
@@ -2089,7 +2020,7 @@ pub(crate) struct ToolSelectionUpsertArgs {
         num_args = 0..=1,
         default_missing_value = "true",
         value_name = "BOOL",
-        help = "Enable or disable goal get/update tools independently of generic meta tools. Omit to preserve legacy inheritance"
+        help = "Enable or disable goal get/update tools independently of generic meta tools. Omit to preserve the disabled default"
     )]
     pub(crate) enable_goal_tools: Option<bool>,
     #[arg(
@@ -2190,11 +2121,7 @@ pub(crate) enum InferenceProfileCommand {
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceProfile document")]
     Show(ConfigShowArgs),
-    #[command(
-        name = "rm",
-        about = "Delete an InferenceProfile document",
-        alias = "remove"
-    )]
+    #[command(name = "rm", about = "Delete an InferenceProfile document")]
     Rm(ConfigShowArgs),
 }
 
@@ -2228,11 +2155,7 @@ pub(crate) enum TaskCommand {
     List(TaskListArgs),
     #[command(name = "show", about = "Show a configured Task document")]
     Show(TaskShowArgs),
-    #[command(
-        name = "run",
-        about = "Run a configured Task once, now",
-        visible_alias = "trigger"
-    )]
+    #[command(name = "run", about = "Run a configured Task once, now")]
     Run(ConfigTaskRunArgs),
 }
 
@@ -2478,25 +2401,6 @@ pub(crate) struct ConfigExportArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct ConfigImportArgs {
-    #[arg(long)]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) graphql: Option<String>,
-    #[arg(
-        long = "override",
-        default_value_t = false,
-        help = "Upsert documents instead of failing when they already exist"
-    )]
-    pub(crate) override_existing: bool,
-    #[arg(
-        value_name = "PATH",
-        help = "Legacy JSON bundle file to import (separate from `config export --root` manifest-dir output; use `config apply --root <dir>` to apply manifest roots). Reads stdin when omitted"
-    )]
-    pub(crate) path: Option<PathBuf>,
-}
-
-#[derive(clap::Args)]
 pub(crate) struct ConfigValidateArgs {
     #[arg(long, value_name = "ROOT")]
     pub(crate) root: PathBuf,
@@ -2653,8 +2557,7 @@ pub(crate) enum P2pNetworkCommand {
     List(P2pNetworkListArgs),
     #[command(
         name = "rm",
-        about = "Deregister this node from the peer discovery registry",
-        aliases = ["deregister", "remove"]
+        about = "Deregister this node from the peer discovery registry"
     )]
     Rm(P2pAccessArgs),
 }

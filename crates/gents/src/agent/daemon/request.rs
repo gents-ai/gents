@@ -212,10 +212,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         );
                     }
 
-                    let active_history =
-                        compaction_state.apply_to_provider_history(provider_history)?;
-                    let prior_provider_prefix = active_history.prior_provider_prefix;
-                    let mut history = active_history.messages;
+                    // The database query already excludes the exact raw prefix
+                    // named by the required compaction cursor.
+                    let prior_provider_prefix = 0;
+                    let mut history = provider_history;
                     let mut summaries = compaction_state
                         .summaries
                         .into_iter()

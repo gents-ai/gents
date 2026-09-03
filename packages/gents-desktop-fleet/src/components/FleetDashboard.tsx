@@ -18,6 +18,7 @@ export type FleetDashboardProps = {
   addingPeer: boolean;
   bootstrap: BootstrapSummary | null;
   deployments: DeploymentView[];
+  enrollmentRequests: EnrollmentRequestView[] | null;
   loading: boolean;
   p2pHealth: P2PHealth | null;
   syncHealth?: SyncHealthView | null;
@@ -30,7 +31,7 @@ export type FleetDashboardProps = {
   onRenamePeer?: (peerId: string, label: string) => Promise<unknown> | void;
   onRepairP2P: () => Promise<unknown>;
   brand?: ReactNode;
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   copy?: FleetCopy;
   headerLeadingActions?: ReactNode;
   localRuntimeSetup?: ReactNode;
@@ -44,6 +45,7 @@ export function FleetDashboard({
   addingPeer,
   bootstrap,
   deployments,
+  enrollmentRequests,
   p2pHealth,
   syncHealth = null,
   repairingP2P,
@@ -62,14 +64,9 @@ export function FleetDashboard({
   renderInferenceSetup,
 }: FleetDashboardProps) {
   const [showAddPeer, setShowAddPeer] = useState(false);
-  const [pendingEnrollment, setPendingEnrollment] = useState<{
-    request: EnrollmentRequestView;
-    serverAddress: string;
-  } | null>(null);
   const [wizardDeployment, setWizardDeployment] =
     useState<DeploymentView | null>(null);
   const autoPromptedInference = useRef(new Set<string>());
-  const enrollmentRenameInFlight = useRef<string | null>(null);
   const hasDeployments = deployments.length > 0;
   const deploymentNeedingInference =
     deployments.find(needsInferenceSetup) ?? null;
@@ -99,72 +96,49 @@ export function FleetDashboard({
     setWizardDeployment(deploymentNeedingInference);
   }, [deploymentNeedingInference, renderInferenceSetup]);
 
-  useEffect(() => {
-    if (!pendingEnrollment) return;
-    const enrolled = deployments.find(
-      (deployment) =>
-        deployment.peerId === pendingEnrollment.request.serverPeer &&
-        deployment.pairingReady,
-    );
-    if (!enrolled) return;
-
-    const serverLabel = pendingEnrollment.request.serverLabel?.trim();
-    if (
-      onRenamePeer &&
-      serverLabel &&
-      enrolled.label === "Enrolled Agent" &&
-      enrollmentRenameInFlight.current !== enrolled.peerId
-    ) {
-      enrollmentRenameInFlight.current = enrolled.peerId;
-      void Promise.resolve(onRenamePeer(enrolled.peerId, serverLabel))
-        .catch(() => {})
-        .finally(() => {
-          enrollmentRenameInFlight.current = null;
-          setPendingEnrollment((current) =>
-            current?.request.serverPeer === enrolled.peerId ? null : current,
-          );
-        });
-      return;
-    }
-    setPendingEnrollment(null);
-  }, [deployments, onRenamePeer, pendingEnrollment]);
-
   async function requestStatusEnrollment(serverAddress: string) {
     const request = await onRequestStatusEnrollment(serverAddress);
-    setPendingEnrollment({ request, serverAddress });
     setShowAddPeer(false);
     return request;
   }
 
-  const pendingNotice = pendingEnrollment ? (
+  const enrollmentNotice = enrollmentRequests === null ? (
     <section
       aria-live="polite"
       className="fleet-enrollment-pending"
       data-testid="fleet-enrollment-pending"
     >
       <div>
-        <p className="eyebrow">Enrollment requested</p>
-        <strong>
-          Waiting for {pendingEnrollment.request.serverLabel || "server"}{" "}
-          approval
-        </strong>
-        <p className="muted">
-          {pendingEnrollment.serverAddress} · request{" "}
-          <span className="mono">{pendingEnrollment.request.requestId}</span>
-        </p>
+        <p className="eyebrow">Enrollment state unavailable</p>
+        <strong>Waiting for the signed enrollment state</strong>
+        <p className="muted">New enrollment is disabled until the database can be read.</p>
       </div>
-      <button
-        className="ghost-button"
-        onClick={() => {
-          setPendingEnrollment(null);
-          setShowAddPeer(true);
-        }}
-        type="button"
-      >
-        Use a different server
-      </button>
     </section>
+  ) : enrollmentRequests.length > 0 ? (
+    <div data-testid="fleet-enrollment-pending">
+      {enrollmentRequests.map((request) => (
+        <section
+          aria-live="polite"
+          className="fleet-enrollment-pending"
+          key={request.requestId}
+        >
+          <div>
+            <p className="eyebrow">Enrollment requested</p>
+            <strong>
+              {request.state === "approved"
+                ? "Approval received · finishing secure route"
+                : `Waiting for ${request.serverLabel ?? request.ownerAgent} approval`}
+            </strong>
+            <p className="muted">
+              Request <span className="mono">{request.requestId}</span> · expires{" "}
+              {request.expiresAt}
+            </p>
+          </div>
+        </section>
+      ))}
+    </div>
   ) : null;
+  const enrollmentBlocked = enrollmentRequests === null || enrollmentRequests.length > 0;
 
   if (!hasDeployments) {
     return (
@@ -180,7 +154,7 @@ export function FleetDashboard({
             </p>
           </div>
           {localRuntimeSetup}
-          {pendingNotice ?? (
+          {enrollmentNotice ?? (
             <details
               className="fleet-remote-disclosure"
               data-testid="fleet-remote-disclosure"
@@ -223,20 +197,20 @@ export function FleetDashboard({
           ) : null}
           <button
             className="primary-button"
-            disabled={pendingEnrollment !== null}
+            disabled={enrollmentBlocked}
             onClick={() => {
               setShowAddPeer((value) => !value);
             }}
             type="button"
           >
-            {pendingEnrollment ? "Enrollment requested" : "Add Agent"}
+            {enrollmentRequests?.length ? "Enrollment requested" : "Add Agent"}
           </button>
         </div>
       </header>
 
-      {pendingNotice}
+      {enrollmentNotice}
 
-      {showAddPeer ? (
+      {showAddPeer && !enrollmentBlocked ? (
         <section className="panel fleet-add-panel">
           {localRuntimeSetup}
           <AddPeerForm

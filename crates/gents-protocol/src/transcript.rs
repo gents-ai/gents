@@ -58,22 +58,6 @@ pub fn decode_persisted_message(role: &str, content: &str) -> Message {
         }
     }
 
-    if role == "assistant" {
-        if let Ok(content) = serde_json::from_str::<Vec<AssistantContent>>(content) {
-            if !content.is_empty() {
-                return Message::Assistant { id: None, content };
-            }
-        }
-    }
-
-    if role == "user" {
-        if let Ok(content) = serde_json::from_str::<Vec<UserContent>>(content) {
-            if !content.is_empty() {
-                return Message::User { content };
-            }
-        }
-    }
-
     match role {
         "assistant" => Message::Assistant {
             id: None,

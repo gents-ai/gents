@@ -14,6 +14,7 @@ async fn websocket_handshake_requires_configured_bearer_token() -> Result<()> {
             "authenticated-shim",
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -109,6 +110,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -120,7 +122,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
     let (mut serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
@@ -169,6 +171,7 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -180,7 +183,6 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-behavior-id",
@@ -257,6 +259,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -272,7 +275,6 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-behavior-id",

@@ -85,6 +85,7 @@ async fn bind_default_behavior_backend(
                 add: {{
                     backend_id: "{escaped_backend_id}",
                     name: "{escaped_backend_id}",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "{escaped_endpoint}",
                     max_concurrent: 1,
                     enabled: true,

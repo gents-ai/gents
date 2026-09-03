@@ -1073,7 +1073,12 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     let agent_did = core.principal().did();
     let session_id = Uuid::new_v4().to_string();
     let submitted = core
-        .submit_request(&session_id, agent_did, "requester route regression", None)
+        .submit_request(
+            &session_id,
+            agent_did,
+            "requester route regression",
+            Some(RECOVERY_BEHAVIOR_ID),
+        )
         .await?;
 
     let session_id = escape_graphql_string(&session_id);
@@ -1170,7 +1175,12 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
 
     let session_id = Uuid::new_v4().to_string();
     let original = core
-        .submit_request(&session_id, core.principal().did(), "first attempt", None)
+        .submit_request(
+            &session_id,
+            core.principal().did(),
+            "first attempt",
+            Some(RECOVERY_BEHAVIOR_ID),
+        )
         .await?;
     let mut parent = core
         .store()
@@ -1249,7 +1259,7 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
             &session_id,
             core.principal().did(),
             "retry should preserve overrides",
-            None,
+            Some(RECOVERY_BEHAVIOR_ID),
             SubmitRequestOptions {
                 temperature: Some(0.35),
                 top_p: Some(0.92),
@@ -1314,7 +1324,7 @@ async fn concurrent_retry_claims_return_one_durable_successor() -> Result<()> {
             &session_id,
             core.principal().did(),
             "retry exactly once",
-            None,
+            Some(RECOVERY_BEHAVIOR_ID),
         )
         .await?;
     let deadline = Utc::now() + chrono::Duration::minutes(5);

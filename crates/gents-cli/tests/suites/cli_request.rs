@@ -28,6 +28,7 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -110,6 +111,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -187,6 +189,7 @@ async fn request_interrupt_waits_until_running_request_is_terminal() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -316,6 +319,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -437,6 +441,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -450,7 +455,7 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
     let child_request_id = format!("show-child-{}", Uuid::new_v4().simple());
     let tool_call_id = format!("show-tool-{}", Uuid::new_v4().simple());
     let tool_call_key = format!("{session_id}:{tool_call_id}");
-    graphql_query(
+    let parent_create = graphql_query(
         &graphql,
         &format!(
             r#"mutation {{
@@ -474,6 +479,37 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
         ),
     )
     .await?;
+    let parent_doc_id = doc_id_from_create(&parent_create, "add_AgentRequest")?;
+    let tool_create = graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    agent_did: "{agent_did}",
+                    request_id: "{parent_request_id}",
+                    request_doc_id: "{parent_doc_id}",
+                    session_id: "{session_id}",
+                    message_sequence: 1,
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "{tool_call_id}",
+                    args: "{{\"behavior_id\":\"child-behavior\"}}",
+                    result: "",
+                    status: "called",
+                    lifecycle_state: "running",
+                    started_at: "2026-05-20T10:00:02Z",
+                    deadline_at: "2026-05-20T10:05:00Z",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "{child_request_id}",
+                    spawn_target_did: "{agent_did}"
+                }}) {{ _docID }}
+            }}"#,
+            parent_doc_id = escape_graphql_string(&parent_doc_id),
+        ),
+    )
+    .await?;
+    let tool_call_doc_id = doc_id_from_create(&tool_create, "add_AgentToolCall")?;
     graphql_query(
         &graphql,
         &format!(
@@ -491,36 +527,14 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     retry_count: 0,
                     subagent_depth: 1,
                     caused_by_parent_request_id: "{parent_request_id}",
+                    caused_by_parent_request_doc_id: "{parent_doc_id}",
                     caused_by_parent_tool_call_id: "{tool_call_id}",
+                    caused_by_parent_tool_call_doc_id: "{tool_call_doc_id}",
                     caused_by_trigger_kind: "subagent"
                 }}) {{ _docID }}
-            }}"#
-        ),
-    )
-    .await?;
-    graphql_query(
-        &graphql,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{tool_call_key}",
-                    agent_did: "{agent_did}",
-                    request_id: "{parent_request_id}",
-                    session_id: "{session_id}",
-                    message_sequence: 1,
-                    tool_name: "spawn_subagent",
-                    tool_call_id: "{tool_call_id}",
-                    args: "{{\"behavior_id\":\"child-behavior\"}}",
-                    result: "",
-                    status: "called",
-                    lifecycle_state: "running",
-                    started_at: "2026-05-20T10:00:02Z",
-                    deadline_at: "2026-05-20T10:05:00Z",
-                    await_mode: "background",
-                    cancel_policy: "cascade",
-                    child_request_id: "{child_request_id}"
-                }}) {{ _docID }}
-            }}"#
+            }}"#,
+            parent_doc_id = escape_graphql_string(&parent_doc_id),
+            tool_call_doc_id = escape_graphql_string(&tool_call_doc_id),
         ),
     )
     .await?;

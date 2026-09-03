@@ -18,6 +18,7 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -30,7 +31,7 @@ async fn codex_shim_does_not_clobber_session_behavior_id() -> Result<()> {
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
@@ -151,6 +152,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -163,7 +165,7 @@ async fn codex_shim_does_not_adopt_a_session_from_another_behavior() -> Result<(
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;

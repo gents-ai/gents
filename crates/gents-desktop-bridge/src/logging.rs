@@ -2,23 +2,10 @@ use std::fs::OpenOptions;
 use std::path::Path;
 
 use gents::log_rate::{RateLimitConfig, RateLimitFilter};
-use gents_desktop_core::client::DesktopPaths;
 use tracing_subscriber::{prelude::*, EnvFilter};
 
 fn log_rate_ceiling() -> RateLimitFilter {
     RateLimitFilter::new(RateLimitConfig::default())
-}
-
-#[deprecated(note = "pass TracingConfig with an explicit log_path via init_tracing_with_config")]
-pub fn init_tracing() {
-    let log_path = DesktopPaths::discover()
-        .map(|paths| paths.log_file_path())
-        .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
-    init_tracing_with_config(crate::config::TracingConfig {
-        log_path,
-        filter: None,
-        console: desktop_console_log_enabled(),
-    });
 }
 
 pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
@@ -73,17 +60,6 @@ fn default_env_filter() -> EnvFilter {
              gents=info,\
              defra_node=info",
     ))
-}
-
-fn desktop_console_log_enabled() -> bool {
-    std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
 }
 
 fn open_log_writer(path: &Path) -> std::fs::File {

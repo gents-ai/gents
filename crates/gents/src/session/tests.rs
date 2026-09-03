@@ -1,26 +1,8 @@
 use super::*;
-use crate::ensure_schemas;
-use crate::llm::message::{AssistantContent, Text, ToolResult, ToolResultContent, UserContent};
+use crate::ensure_runtime_schemas;
+use crate::llm::message::{Text, ToolResult, ToolResultContent, UserContent};
 use crate::test_support::first_content;
 use gents_protocol::transcript::decode_persisted_message;
-
-#[test]
-fn prompt_compaction_state_rejects_an_impossible_provider_prefix() {
-    let state = PromptCompactionState {
-        summaries: Vec::new(),
-        total_messages_compacted: 2,
-        compacted_through_sequence: None,
-        generation: String::new(),
-        is_latest_generation: true,
-    };
-    let error = state
-        .apply_to_provider_history(vec![Message::user("only active row")])
-        .err()
-        .expect("an overlong durable prefix must fail closed");
-    assert!(error
-        .to_string()
-        .contains("session compaction prefix exceeds the canonical provider history"));
-}
 
 #[test]
 fn test_load_history_deserializes_plain_text() {
@@ -34,31 +16,6 @@ fn test_load_history_deserializes_plain_text() {
     assert_eq!(user_msg, restored);
 }
 
-#[test]
-fn test_load_history_deserializes_legacy_assistant_content() {
-    let legacy_content = vec![
-        AssistantContent::Reasoning(
-            crate::llm::message::Reasoning::new("Need to inspect first")
-                .with_id("rs_1".to_string()),
-        ),
-        AssistantContent::Text(Text {
-            text: "Done".to_string(),
-        }),
-    ];
-
-    let restored = decode_persisted_message(
-        "assistant",
-        &serde_json::to_string(&legacy_content).unwrap(),
-    );
-    assert!(matches!(
-        restored,
-        Message::Assistant { content, .. }
-            if content.len() == 2
-                && matches!(first_content(&content), AssistantContent::Reasoning(reasoning) if reasoning.id.as_deref() == Some("rs_1"))
-                && matches!(content.get(1), Some(AssistantContent::Text(Text { text })) if text == "Done")
-    ));
-}
-
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
     let tempdir = tempfile::tempdir().unwrap();
@@ -67,7 +24,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-steering-provider-history";
     append_message_once_with_key_and_requester_did(
         &node,
@@ -151,7 +108,7 @@ async fn compaction_entries_track_files_cumulatively() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     save_compaction_entry(
         &node,
@@ -163,6 +120,7 @@ async fn compaction_entries_track_files_cumulatively() {
         &["/tmp/a.rs".to_string()],
         &["/tmp/b.rs".to_string()],
         5,
+        10,
         1000,
         200,
     )
@@ -178,6 +136,7 @@ async fn compaction_entries_track_files_cumulatively() {
         &["/tmp/c.rs".to_string(), "/tmp/a.rs".to_string()],
         &["/tmp/d.rs".to_string()],
         7,
+        30,
         1200,
         250,
     )
@@ -198,7 +157,7 @@ async fn compaction_entries_track_files_cumulatively() {
         &[],
         &[],
         3,
-        Some(40),
+        40,
         500,
         100,
         &generation,
@@ -221,9 +180,9 @@ async fn compaction_entries_track_files_cumulatively() {
     let before_cursor = load_prompt_compaction_state(&node, "session-1", Some(20))
         .await
         .unwrap();
-    assert!(before_cursor.summaries.is_empty());
-    assert_eq!(before_cursor.total_messages_compacted, 0);
-    assert_eq!(before_cursor.compacted_through_sequence, None);
+    assert_eq!(before_cursor.summaries, vec!["First summary"]);
+    assert_eq!(before_cursor.total_messages_compacted, 5);
+    assert_eq!(before_cursor.compacted_through_sequence, Some(10));
     let at_cursor = load_prompt_compaction_state(&node, "session-1", Some(40))
         .await
         .unwrap();
@@ -237,7 +196,7 @@ async fn compaction_entries_track_files_cumulatively() {
 #[tokio::test]
 async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
     let generation = load_prompt_compaction_state(&node, "session-race", None)
         .await
         .unwrap()
@@ -256,7 +215,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
         &left_files,
         &[],
         2,
-        Some(20),
+        20,
         100,
         20,
         &generation,
@@ -272,7 +231,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
         &[],
         &right_files,
         3,
-        Some(30),
+        30,
         200,
         40,
         &generation,
@@ -318,7 +277,7 @@ async fn concurrent_compactions_from_one_generation_persist_exactly_one_fact() {
 #[tokio::test]
 async fn exact_compaction_redelivery_is_idempotent() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
     let generation = load_prompt_compaction_state(&node, "session-redelivery", None)
         .await
         .unwrap()
@@ -336,7 +295,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
             &files,
             &[],
             2,
-            Some(20),
+            20,
             100,
             20,
             &generation,
@@ -360,7 +319,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
         &[],
         &[],
         1,
-        Some(30),
+        30,
         80,
         10,
         &next_generation,
@@ -381,7 +340,7 @@ async fn exact_compaction_redelivery_is_idempotent() {
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
     for (sequence, content) in [(10, "old-a"), (20, "old-b"), (40, "active")] {
         save_message(
             &node,
@@ -414,7 +373,7 @@ async fn compaction_entry_stores_exact_request_document_edge() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let request_id = "request-exact-edge";
     let created_at = chrono::Utc::now().to_rfc3339();
@@ -474,6 +433,7 @@ async fn compaction_entry_stores_exact_request_document_edge() {
         &[],
         &[],
         3,
+        3,
         600,
         120,
     )
@@ -519,7 +479,7 @@ async fn close_session_preserves_started_datetime() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
         .await
@@ -585,7 +545,7 @@ async fn create_session_with_id_is_idempotent() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
@@ -643,7 +603,7 @@ async fn update_conversation_title_with_source_persists_generated_title() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     let create = node
         .execute(
@@ -719,7 +679,7 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
         .build()
         .await
         .unwrap();
-    ensure_schemas(&node).await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
 
     create_session_with_behavior_id(&node, "session-1", "general", "did:test:test", "general")
         .await

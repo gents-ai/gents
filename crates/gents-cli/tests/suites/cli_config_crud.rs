@@ -26,6 +26,7 @@ async fn config_core_documents_list_show_and_rm() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

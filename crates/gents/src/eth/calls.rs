@@ -51,7 +51,6 @@ pub enum CallDecl {
         tool_name: String,
         domain: Value,
         types: Value,
-        #[serde(alias = "primaryType")]
         primary_type: String,
         #[serde(default)]
         params: BTreeMap<String, ParamDecl>,

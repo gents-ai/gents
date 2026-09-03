@@ -103,7 +103,6 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
 async fn exceeding_max_turns_terminates_with_error() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("loop");
-    ready_hook_for(&hook).await;
 
     // max_turns = 0 permits one tool round-trip (2 completions, matching rig);
     // a model that keeps calling tools is blocked on the completion past the cap
@@ -158,7 +157,6 @@ async fn exceeding_max_turns_terminates_with_error() {
 async fn managed_terminal_tool_result_terminates_loop() {
     let (_node, hook) = test_hook().await;
     let prompt = Message::user("run the slow tool");
-    ready_hook_for(&hook).await;
 
     // With the typed outcome channel a tool CANNOT fabricate a managed
     // terminal: run the loop with an already-expired request deadline so the
@@ -211,7 +209,6 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
     // plus a tool call; the tool result drives turn 2, whose request history must
     // contain the assistant tool-call message tagged with that id.
     let (_node, hook) = test_hook().await;
-    ready_hook_for(&hook).await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![

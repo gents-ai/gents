@@ -51,6 +51,7 @@ async fn bind_default_behavior_backend(
                 add: {{
                     backend_id: "{escaped_backend_id}",
                     name: "{escaped_backend_id}",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "{escaped_endpoint}",
                     max_concurrent: 1,
                     enabled: true,
@@ -106,7 +107,7 @@ async fn load_document_runtime_view_includes_referenced_documents() {
             selection_id: selection_id.clone(),
             agent_did: identity.did().to_string(),
             display_name: Some("Read tools".to_string()),
-            tool_policy_version: None,
+            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
             file_tool_root: None,
@@ -174,7 +175,7 @@ async fn apply_control_update_reconciles_tool_selection_via_doc_id() {
             selection_id: selection_id.clone(),
             agent_did: identity.did().to_string(),
             display_name: Some("Read tools".to_string()),
-            tool_policy_version: None,
+            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
             file_tool_root: None,
@@ -277,7 +278,7 @@ async fn resolve_composes_principal_scoped_skill_into_prompt() {
             selection_id: selection_id.clone(),
             agent_did: identity.did().to_string(),
             display_name: Some("Read tools".to_string()),
-            tool_policy_version: None,
+            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadOnly".to_string()),
             enable_bash: Some(false),
@@ -1410,9 +1411,9 @@ async fn bind_default_behavior_chatgpt_backend(
 }
 
 async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_did: &str) {
-    let credential = crate::chatgpt_codex::OAuthCredential {
+    let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::chatgpt_codex::oauth_credential_id(
+        credential_id: crate::oauth_credential::oauth_credential_id(
             agent_did,
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
@@ -1428,7 +1429,7 @@ async fn insert_enabled_oauth_credential(node: &defra_node::EmbeddedNode, agent_
         last_refresh: None,
         enabled: true,
     };
-    let mutation = crate::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
+    let mutation = crate::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
@@ -1532,9 +1533,9 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
     );
 
     // Runtime codex-login: create the credential, then drive the incremental control update.
-    let credential = crate::chatgpt_codex::OAuthCredential {
+    let credential = crate::oauth_credential::OAuthCredential {
         doc_id: None,
-        credential_id: crate::chatgpt_codex::oauth_credential_id(
+        credential_id: crate::oauth_credential::oauth_credential_id(
             identity.did(),
             crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
         ),
@@ -1550,7 +1551,7 @@ async fn apply_control_update_admits_chatgpt_behavior_when_credential_added() {
         last_refresh: None,
         enabled: true,
     };
-    let doc_id = crate::chatgpt_codex::upsert_oauth_credential(node.as_ref(), &credential)
+    let doc_id = crate::oauth_credential::upsert_oauth_credential(node.as_ref(), &credential)
         .await
         .expect("upsert credential");
 

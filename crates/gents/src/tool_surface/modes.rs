@@ -90,7 +90,7 @@ impl ToolCeiling {
             ),
             command_timeout_max: None,
             root: None,
-            policy: ToolPolicySurface::legacy_non_host_wide(FileToolMode::Off, BashMode::Off),
+            policy: ToolPolicySurface::ceiling_with_host_modes(FileToolMode::Off, BashMode::Off),
         }
     }
 
@@ -104,7 +104,7 @@ impl ToolCeiling {
             ),
             command_timeout_max: None,
             root: None,
-            policy: ToolPolicySurface::legacy_non_host_wide(
+            policy: ToolPolicySurface::ceiling_with_host_modes(
                 FileToolMode::ReadOnly,
                 BashMode::ReadOnly,
             ),
@@ -121,7 +121,7 @@ impl ToolCeiling {
             ),
             command_timeout_max: None,
             root: Some(root.into()),
-            policy: ToolPolicySurface::legacy_non_host_wide(
+            policy: ToolPolicySurface::ceiling_with_host_modes(
                 FileToolMode::ReadOnly,
                 BashMode::ReadOnly,
             ),
@@ -138,7 +138,7 @@ impl ToolCeiling {
             ),
             command_timeout_max: None,
             root: Some(root.into()),
-            policy: ToolPolicySurface::legacy_non_host_wide(
+            policy: ToolPolicySurface::ceiling_with_host_modes(
                 FileToolMode::ReadWrite,
                 BashMode::Unrestricted,
             ),

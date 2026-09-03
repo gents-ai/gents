@@ -27,6 +27,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -158,6 +159,7 @@ async fn config_diff_bind_live_force_rebinds_concrete_manifest_to_running_runtim
             "mini-1-steward",
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

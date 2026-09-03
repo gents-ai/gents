@@ -43,7 +43,8 @@ const enrollmentRequest: EnrollmentRequestView = {
   serverPeer: "server-peer-amy",
   serverLabel: "Amy",
   ownerAgent: "did:key:z6MkAmy",
-  state: "pending",
+  state: "pending_approval",
+  expiresAt: "2099-01-01T00:00:00Z",
 };
 
 const originalUserAgent = navigator.userAgent;
@@ -62,6 +63,7 @@ describe("FleetHostDashboard add connection flow", () => {
       addingPeer: false,
       bootstrap,
       deployments: [deployment],
+      enrollmentRequests: [],
       p2pHealth: null,
       repairingP2P: false,
       starting: false,
@@ -95,6 +97,7 @@ describe("FleetHostDashboard add connection flow", () => {
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[]}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -129,11 +132,12 @@ describe("FleetHostDashboard add connection flow", () => {
   it("requests authenticated enrollment from a server /status address", async () => {
     const onRequestStatusEnrollment = vi.fn(async () => enrollmentRequest);
 
-    render(
+    const { rerender } = render(
       <FleetHostDashboard
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -154,6 +158,26 @@ describe("FleetHostDashboard add connection flow", () => {
 
     await waitFor(() => {
       expect(onRequestStatusEnrollment).toHaveBeenCalledWith("http://127.0.0.1:9181");
+    });
+    rerender(
+      <FleetHostDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        enrollmentRequests={[enrollmentRequest]}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onRequestStatusEnrollment={onRequestStatusEnrollment}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+        {...inferenceProps}
+      />,
+    );
+    await waitFor(() => {
       expect(screen.getByTestId("fleet-enrollment-pending")).toHaveTextContent(
         "Waiting for Amy approval",
       );
@@ -161,7 +185,7 @@ describe("FleetHostDashboard add connection flow", () => {
     expect(screen.queryByTestId("fleet-add-server-address")).not.toBeInTheDocument();
   });
 
-  it("renames a completed enrollment from its authenticated server label", async () => {
+  it("never turns the status endpoint label into rename authority", async () => {
     const onRenamePeer = vi.fn(async () => undefined);
     const request = {
       ...enrollmentRequest,
@@ -171,6 +195,7 @@ describe("FleetHostDashboard add connection flow", () => {
     const shared = {
       addingPeer: false,
       bootstrap,
+      enrollmentRequests: [],
       loading: false,
       p2pHealth: null,
       repairingP2P: false,
@@ -192,26 +217,35 @@ describe("FleetHostDashboard add connection flow", () => {
       target: { value: "http://mandrake:9511" },
     });
     fireEvent.click(screen.getByTestId("fleet-fetch-status"));
+    await waitFor(() =>
+      expect(shared.onRequestStatusEnrollment).toHaveBeenCalledOnce(),
+    );
+    rerender(
+      <FleetHostDashboard
+        {...shared}
+        enrollmentRequests={[request]}
+        deployments={[deployment]}
+      />,
+    );
     await screen.findByTestId("fleet-enrollment-pending");
 
     rerender(
       <FleetHostDashboard
         {...shared}
+        enrollmentRequests={[]}
         deployments={[
           {
             ...deployment,
             peerId: "peer-mandrake",
             label: "Enrolled Agent",
-            pairingReady: true,
+            chatSafe: true,
           },
         ]}
       />,
     );
 
-    await waitFor(() => {
-      expect(onRenamePeer).toHaveBeenCalledWith("peer-mandrake", "mandrake");
-      expect(screen.queryByTestId("fleet-enrollment-pending")).not.toBeInTheDocument();
-    });
+    expect(onRenamePeer).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("fleet-enrollment-pending")).not.toBeInTheDocument();
   });
 
   it("offers only authenticated enrollment in the mobile Tauri shell", () => {
@@ -226,6 +260,7 @@ describe("FleetHostDashboard add connection flow", () => {
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={[]}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -244,6 +279,32 @@ describe("FleetHostDashboard add connection flow", () => {
     expect(screen.getByText("Connect agent")).toBeVisible();
   });
 
+  it("fails closed while signed enrollment state is unavailable", () => {
+    render(
+      <FleetHostDashboard
+        addingPeer={false}
+        bootstrap={null}
+        deployments={[]}
+        enrollmentRequests={null}
+        loading={false}
+        p2pHealth={null}
+        repairingP2P={false}
+        starting={false}
+        onRequestStatusEnrollment={vi.fn()}
+        onInitLocalRuntime={vi.fn()}
+        onOpenChat={vi.fn()}
+        onOpenConfig={vi.fn()}
+        onRepairP2P={vi.fn()}
+        {...inferenceProps}
+      />,
+    );
+
+    expect(screen.getByTestId("fleet-enrollment-pending")).toHaveTextContent(
+      "Waiting for the signed enrollment state",
+    );
+    expect(screen.queryByTestId("fleet-add-server-address")).not.toBeInTheDocument();
+  });
+
   it("contains and renders a rejected enrollment request", async () => {
     const onRequestStatusEnrollment = vi.fn(async () => {
       throw new Error("enrollment rejected");
@@ -254,6 +315,7 @@ describe("FleetHostDashboard add connection flow", () => {
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -289,6 +351,7 @@ describe("FleetHostDashboard add connection flow", () => {
         addingPeer={false}
         bootstrap={null}
         deployments={[]}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -325,6 +388,7 @@ describe("FleetHostDashboard fleet-level P2P repair", () => {
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}
@@ -360,6 +424,7 @@ describe("FleetHostDashboard per-deployment inference status", () => {
         addingPeer={false}
         bootstrap={bootstrap}
         deployments={deployments}
+        enrollmentRequests={[]}
         loading={false}
         p2pHealth={null}
         repairingP2P={false}

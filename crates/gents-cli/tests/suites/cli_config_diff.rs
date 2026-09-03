@@ -24,6 +24,7 @@ async fn config_diff_reports_no_changes_for_matching_live_state() -> Result<()> 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -106,6 +107,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

@@ -61,6 +61,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -105,6 +106,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -207,6 +209,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -295,6 +298,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             &format!("metadata-apply-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -360,6 +364,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             &format!("task-apply-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -453,6 +458,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
             raw_api_key,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -649,6 +655,7 @@ async fn init_rejects_setting_both_api_key_and_api_key_env_var() -> Result<()> {
         .arg("raw-key")
         .arg("--api-key-env-var")
         .arg("TEST_BACKEND_KEY")
+        .arg("--inference-url")
         .arg("http://127.0.0.1:65535/v1")
         .output()
         .context("running gents init with conflicting backend auth flags")?;
@@ -680,6 +687,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -697,6 +705,7 @@ async fn init_dangerously_overwrite_replaces_existing_home() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -736,6 +745,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
             &model_name,
             "--backend-id",
             &backend_id,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -785,6 +795,7 @@ fn init_accepts_tool_root_for_readonly_defaults() -> Result<()> {
             &model_name,
             "--tool-root",
             readonly_root.to_str().expect("utf-8 readonly root"),
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -821,7 +832,8 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
-            "--write-tools",
+            "--write",
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

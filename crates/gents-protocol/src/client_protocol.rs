@@ -145,8 +145,8 @@ impl TryFrom<&str> for ResponseStatus {
     fn try_from(value: &str) -> Result<Self, InvalidResponseStatus> {
         match value {
             "streaming" => Ok(Self::Streaming),
-            "complete" | "completed" => Ok(Self::Complete),
-            "error" | "failed" | "failure" => Ok(Self::Error),
+            "complete" => Ok(Self::Complete),
+            "error" => Ok(Self::Error),
             _ => Err(InvalidResponseStatus {
                 status: value.to_string(),
             }),
@@ -275,18 +275,11 @@ fn resolve_tip(attempts: &[AttemptView]) -> Option<&AttemptView> {
         .filter(|request_id| !request_id.is_empty())
         .collect();
 
-    attempts
+    let mut tips = attempts
         .iter()
-        .filter(|attempt| !referenced_request_ids.contains(attempt.request.request_id.as_str()))
-        .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))
-        .or_else(|| {
-            // Malformed observations can contain cycles or multiple disconnected
-            // attempts. Fall back to a deterministic request_id ordering rather
-            // than reintroducing slice-order dependence.
-            attempts
-                .iter()
-                .max_by(|left, right| left.request.request_id.cmp(&right.request.request_id))
-        })
+        .filter(|attempt| !referenced_request_ids.contains(attempt.request.request_id.as_str()));
+    let tip = tips.next()?;
+    tips.next().is_none().then_some(tip)
 }
 
 pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {

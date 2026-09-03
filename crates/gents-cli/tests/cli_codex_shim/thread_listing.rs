@@ -18,6 +18,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -29,7 +30,6 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -112,6 +112,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
                     behavior_id: "{behavior_id}", session_id: "{session}",
                     content: "pending projection", status: "pending",
                     lifecycle_state: "pending", execution_origin: "interactive",
+                    metadata: "{{\"codex_shim\":{{}}}}",
                     created_at: "2026-01-01T00:00:01Z"
                 }}) {{ _docID }} }}"#,
                 request = escape_graphql_string(&Uuid::new_v4().to_string()),
@@ -184,11 +185,11 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
          after restart: {listed:?}"
     );
     assert!(
-        listed
+        !listed
             .data
             .iter()
             .any(|thread| thread.id == pending_session_id),
-        "a durable request must remain visible while claim has not projected its conversation: {listed:?}"
+        "a request alone must not invent a thread before the authoritative conversation projection exists: {listed:?}"
     );
 
     let turned = listed
@@ -225,6 +226,7 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -236,7 +238,6 @@ async fn codex_shim_thread_list_projects_canonical_gents_sessions() -> Result<()
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

@@ -184,6 +184,7 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -228,6 +229,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -644,6 +646,7 @@ async fn server_exposes_fleet_slot_snapshot_endpoint() -> Result<()> {
             "1",
             "--max-queue-depth",
             "2",
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -984,6 +987,7 @@ async fn server_startup_with_iroh_p2p_reports_runtime_connectivity() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1103,6 +1107,7 @@ async fn server_startup_defaults_to_iroh_p2p_for_desktop_pairing() -> Result<()>
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1160,6 +1165,7 @@ async fn server_starts_in_degraded_mode_when_backend_is_unavailable() -> Result<
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             "http://127.0.0.1:9/v1",
         ],
     )?;
@@ -1304,6 +1310,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
             &model_name,
             "--api-key-env-var",
             "GENTS_TEST_CLI_BACKEND_KEY",
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1378,6 +1385,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -1599,6 +1607,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

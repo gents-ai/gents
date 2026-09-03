@@ -1,8 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { HoldsPanel } from "@source-inc/gents-desktop-operations";
-import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { HeldToolCallView } from "@source-inc/gents-desktop-client";
 
@@ -22,18 +21,16 @@ function heldCall(overrides: Partial<HeldToolCallView> = {}): HeldToolCallView {
 }
 
 function withAdapter(overrides: Partial<DesktopApiAdapter>) {
-  setDesktopApiAdapterForTests(overrides as unknown as DesktopApiAdapter);
+  return overrides as unknown as DesktopApiAdapter;
 }
 
 describe("holds panel", () => {
-  afterEach(() => setDesktopApiAdapterForTests(null));
-
   it("lists held calls with tool name, args preview, and request id", async () => {
-    withAdapter({
+    const api = withAdapter({
       listToolCallHolds: vi.fn().mockResolvedValue([heldCall()]),
       resolveToolCallHold: vi.fn(),
     });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("hold-row-call-1")).toBeInTheDocument(),
@@ -51,11 +48,11 @@ describe("holds panel", () => {
       command: `${"echo safe && ".repeat(12)}${significantTail}`,
     });
     expect(longArgs.length).toBeGreaterThan(120);
-    withAdapter({
+    const api = withAdapter({
       listToolCallHolds: vi.fn().mockResolvedValue([heldCall({ args: longArgs })]),
       resolveToolCallHold: vi.fn(),
     });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("hold-row-call-1")).toBeInTheDocument(),
@@ -75,21 +72,21 @@ describe("holds panel", () => {
   });
 
   it("shows the empty state when nothing is held", async () => {
-    withAdapter({
+    const api = withAdapter({
       listToolCallHolds: vi.fn().mockResolvedValue([]),
       resolveToolCallHold: vi.fn(),
     });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() => expect(screen.getByTestId("holds-empty")).toBeInTheDocument());
   });
 
   it("can stay out of the chat surface when no approval is pending", async () => {
-    withAdapter({
+    const api = withAdapter({
       listToolCallHolds: vi.fn().mockResolvedValue([]),
       resolveToolCallHold: vi.fn(),
     });
-    render(<HoldsPanel agentDid={AGENT_DID} hideWhenIdle />);
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} hideWhenIdle />);
 
     expect(screen.queryByTestId("holds-panel")).not.toBeInTheDocument();
     await waitFor(() =>
@@ -107,8 +104,8 @@ describe("holds panel", () => {
       .fn()
       .mockResolvedValueOnce([heldCall()])
       .mockResolvedValue([]);
-    withAdapter({ listToolCallHolds, resolveToolCallHold });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    const api = withAdapter({ listToolCallHolds, resolveToolCallHold });
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("hold-approve-call-1")).toBeInTheDocument(),
@@ -136,8 +133,8 @@ describe("holds panel", () => {
       .fn()
       .mockResolvedValueOnce([heldCall()])
       .mockResolvedValue([]);
-    withAdapter({ listToolCallHolds, resolveToolCallHold });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    const api = withAdapter({ listToolCallHolds, resolveToolCallHold });
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("hold-deny-call-1")).toBeInTheDocument(),
@@ -159,11 +156,11 @@ describe("holds panel", () => {
   });
 
   it("surfaces list errors and resolve errors separately", async () => {
-    withAdapter({
+    const api = withAdapter({
       listToolCallHolds: vi.fn().mockRejectedValue(new Error("bridge offline")),
       resolveToolCallHold: vi.fn(),
     });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("holds-error")).toHaveTextContent("bridge offline"),
@@ -175,8 +172,8 @@ describe("holds panel", () => {
     const resolveToolCallHold = vi
       .fn()
       .mockRejectedValue(new Error("hold already resolved"));
-    withAdapter({ listToolCallHolds, resolveToolCallHold });
-    render(<HoldsPanel agentDid={AGENT_DID} />);
+    const api = withAdapter({ listToolCallHolds, resolveToolCallHold });
+    render(<HoldsPanel agentDid={AGENT_DID} api={api} />);
 
     await waitFor(() =>
       expect(screen.getByTestId("hold-approve-call-1")).toBeInTheDocument(),

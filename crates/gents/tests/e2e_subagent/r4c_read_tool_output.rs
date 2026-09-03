@@ -90,7 +90,9 @@ async fn setup_hook(
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
         .await;
     (db, hook, session_id, request_id)
@@ -127,8 +129,9 @@ async fn setup_hook_on_db(
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_id(Some(request_id.to_string()))
-        .await;
+    hook.set_active_request_lineage(Some(request_id.to_string()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
         .await;
     (hook, session_id.to_string(), request_id.to_string())

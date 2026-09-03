@@ -88,6 +88,38 @@ fn desktop_has_no_source_less_or_server_status_compatibility_authority() {
 }
 
 #[test]
+fn client_sync_cannot_regrow_a_synthetic_owner_or_runtime_readiness_join() {
+    let owner = include_str!("../../../gents-desktop-core/src/client/core/sync_state.rs");
+    let projection = include_str!("../../../gents-desktop-core/src/client/sync_projection.rs");
+    let bridge = include_str!("../../../gents-desktop-bridge/src/snapshot.rs");
+    let wire = include_str!("../../../gents-desktop-bridge/src/types/views/deployment.rs");
+
+    assert!(owner.contains("struct ClientSyncStateOwner"));
+    assert_eq!(owner.matches("struct ClientSyncStateOwner").count(), 1);
+    assert!(projection.contains("pub fn project_sync_health("));
+    assert_eq!(projection.matches("pub fn project_sync_health(").count(), 1);
+    assert!(bridge.contains("project_sync_health(sync)"));
+    assert!(wire.contains("pub sync_health: Option<SyncHealthView>"));
+
+    let bridge_sync_projection = bridge
+        .split("pub(crate) fn to_sync_health_view")
+        .nth(1)
+        .and_then(|tail| {
+            tail.split("pub(crate) fn to_pairing_collection_view")
+                .next()
+        })
+        .expect("bridge sync projection source boundary");
+
+    for source in [owner, projection, bridge] {
+        assert!(!source.contains("AgentBehaviorReadiness"));
+        assert!(!source.contains("SyncHealthState::Stalled"));
+    }
+    assert!(!projection.contains("stuck_since"));
+    assert!(!bridge_sync_projection.contains("stuck_since"));
+    assert!(!wire.contains("#[serde(default)]\n    pub sync_health"));
+}
+
+#[test]
 fn operator_nonce_is_local_only_and_never_broad_synced() {
     const NAME: &str = "EnrollmentOperatorNonce";
     assert!(gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&NAME));

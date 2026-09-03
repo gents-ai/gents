@@ -441,9 +441,6 @@ fn project_descendant_edge(
     bridge: &BridgeRow,
     candidate_rows: &[RequestRow],
 ) -> Result<Option<ProjectedEdge>> {
-    // Older durable bridge rows predate the physical request binding. The
-    // unique parent request_id remains safe, so omitted legacy metadata is
-    // accepted while every contradictory value fails closed.
     if !bridge_corroborates_parent(parent, bridge) {
         return Ok(None);
     }
@@ -755,17 +752,10 @@ fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &RequestRo
 }
 
 fn bridge_corroborates_parent(parent: &ParentNode, bridge: &BridgeRow) -> bool {
-    !contradicts(
-        bridge.request_doc_id.as_deref(),
-        Some(parent.row.doc_id.as_str()),
-    ) && !contradicts(
-        bridge.session_id.as_deref(),
-        Some(parent.row.session_id.as_str()),
-    ) && !contradicts(bridge.agent_did.as_deref(), parent.row.agent_did.as_deref())
-        && !contradicts(
-            bridge.requester_did.as_deref(),
-            parent.row.requester_did.as_deref(),
-        )
+    clean(bridge.request_doc_id.as_deref()).as_deref() == Some(parent.row.doc_id.as_str())
+        && clean(bridge.session_id.as_deref()).as_deref() == Some(parent.row.session_id.as_str())
+        && clean(bridge.agent_did.as_deref()) == clean(parent.row.agent_did.as_deref())
+        && clean(bridge.requester_did.as_deref()) == clean(parent.row.requester_did.as_deref())
 }
 
 async fn load_unique_request(
@@ -988,13 +978,6 @@ fn nonempty(value: Option<&str>) -> Option<&str> {
 
 fn clean(value: Option<&str>) -> Option<String> {
     nonempty(value).map(ToOwned::to_owned)
-}
-
-fn contradicts(observed: Option<&str>, expected: Option<&str>) -> bool {
-    match nonempty(observed) {
-        None => false,
-        Some(observed) => nonempty(expected) != Some(observed),
-    }
 }
 
 #[cfg(test)]

@@ -61,7 +61,7 @@ pub struct MailboxItemRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationRenameRequest {
-    pub agent_did: Option<String>,
+    pub agent_did: String,
     pub session_id: String,
     pub title: String,
 }
@@ -221,7 +221,6 @@ pub struct ToolSelectionSaveRequest {
     pub allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
     pub required_mcp_service_ids: Vec<String>,
-    pub delegate_to: Vec<String>,
     #[serde(default)]
     pub backgroundable_tool_names: Vec<String>,
     #[serde(default)]

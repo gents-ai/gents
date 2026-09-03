@@ -24,6 +24,7 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

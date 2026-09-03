@@ -1,5 +1,6 @@
 {
   "selection_id": "maintenance-verify-tools",
+  "tool_policy_version": "tool-policy/v1",
   "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
   "display_name": "Verify: inspect repository, query candidates, and write verdicts",
   "enable_file_tools": true,

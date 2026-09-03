@@ -7,8 +7,7 @@ Authorization and bounded-wait semantics for ordinary background tool calls.
 A process handle remains manageable across request turns in the same session,
 but never crosses the session, agent-principal, or requester-principal boundary.
 When requester identity is unavailable on both requests, absence is the shared
-principal scope; the originating request remains authorized when only the owner
-row lacks requester lineage.
+principal scope. A missing requester on only one side fails closed.
 -/
 
 namespace Subagent.ProcessControl
@@ -23,8 +22,7 @@ structure Scope where
 def authorized (caller owner : Scope) : Bool :=
   caller.sessionId == owner.sessionId &&
   caller.agentDid == owner.agentDid &&
-  (caller.requestId == owner.requestId ||
-    caller.requesterDid == owner.requesterDid)
+  caller.requesterDid == owner.requesterDid
 
 theorem owner_authorized (owner : Scope) : authorized owner owner = true := by
   simp [authorized]
@@ -41,12 +39,11 @@ theorem absent_requester_next_request_authorized
   simp [authorized, hRequester]
 
 theorem empty_requester_does_not_alias_absent
-    (requestId nextRequestId sessionId agentDid : String)
-    (hRequest : nextRequestId ≠ requestId) :
+    (requestId nextRequestId sessionId agentDid : String) :
     authorized
       { requestId := nextRequestId, sessionId, agentDid, requesterDid := some "" }
       { requestId, sessionId, agentDid, requesterDid := none } = false := by
-  simp [authorized, hRequest]
+  simp [authorized]
 
 theorem different_session_denied
     (caller owner : Scope) (h : caller.sessionId ≠ owner.sessionId) :
@@ -64,10 +61,9 @@ theorem different_requester_denied
     (caller owner : Scope)
     (hSession : caller.sessionId = owner.sessionId)
     (hAgent : caller.agentDid = owner.agentDid)
-    (hRequest : caller.requestId ≠ owner.requestId)
     (hRequester : caller.requesterDid ≠ owner.requesterDid) :
     authorized caller owner = false := by
-  simp [authorized, hSession, hAgent, hRequest, hRequester]
+  simp [authorized, hSession, hAgent, hRequester]
 
 inductive WaitBoundary where
   | waitTimeout

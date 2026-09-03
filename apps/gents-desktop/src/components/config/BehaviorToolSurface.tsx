@@ -4,7 +4,6 @@ import type {
   DesktopApiAdapter,
   ToolSurfaceExplanationView,
 } from "@source-inc/gents-desktop-client";
-import { getDesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 export function BehaviorToolSurface({
   agentDid,
@@ -12,10 +11,9 @@ export function BehaviorToolSurface({
   behaviorId,
 }: {
   agentDid: string;
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   behaviorId: string | null;
 }) {
-  const resolvedApi = getDesktopApiAdapter(api);
   const [open, setOpen] = useState(false);
   const [explanation, setExplanation] = useState<ToolSurfaceExplanationView | null>(
     null,
@@ -32,7 +30,7 @@ export function BehaviorToolSurface({
     setLoading(true);
     setError(null);
     try {
-      const next = await resolvedApi.explainToolSurface(agentDid, behaviorId);
+      const next = await api.explainToolSurface(agentDid, behaviorId);
       if (generationRef.current === generation) {
         setExplanation(next);
       }
@@ -45,7 +43,7 @@ export function BehaviorToolSurface({
         setLoading(false);
       }
     }
-  }, [agentDid, behaviorId, resolvedApi]);
+  }, [agentDid, api, behaviorId]);
 
   if (!behaviorId) {
     return null;

@@ -284,7 +284,6 @@ pub struct EnrollmentState {
 }
 
 pub enum EnrollmentAction {
-    ObserveLegacyPairingDesired(String),
     ObserveOffer(EnrollmentOffer),
     ConfirmAdminPin(EnrollmentOffer),
     AcceptRequest(EnrollmentOffer, EnrollmentRequest),
@@ -303,7 +302,6 @@ pub enum EnrollmentAction {
 impl EnrollmentState {
     pub fn apply(&mut self, action: EnrollmentAction) {
         match action {
-            EnrollmentAction::ObserveLegacyPairingDesired(_) => {}
             EnrollmentAction::ObserveOffer(offer) => {
                 self.observed_offers.insert(offer);
             }

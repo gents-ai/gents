@@ -21,7 +21,8 @@ fn tool_status_kind(status: Option<&str>) -> String {
         "completed" | "complete" | "success" => "success".to_string(),
         "failed" | "error" | "cancelled" | "timedout" => "error".to_string(),
         "awaitingapproval" => "awaitingApproval".to_string(),
-        _ => "running".to_string(),
+        "pending" | "claimed" | "processing" | "running" => "running".to_string(),
+        _ => "unknown".to_string(),
     }
 }
 
@@ -30,8 +31,7 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
     RenderedToolCallView {
         item_key: tool.tool_call_key.clone(),
         tool_name: tool.tool_name.clone().unwrap_or_else(|| "tool".to_string()),
-        status_kind: tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())),
-        status: tool.status.clone(),
+        status_kind: tool_status_kind(tool.lifecycle_state.as_deref()),
         child_request_id: tool.child_request_id.clone(),
         await_mode: tool.await_mode.clone(),
         cancel_policy: tool.cancel_policy.clone(),
@@ -104,8 +104,7 @@ fn overlay_has_durable_owner(
         })
     };
     messages.iter().any(|message| {
-        (message.request_id.as_deref() == Some(request_id)
-            || normalize_optional(message.request_id.as_deref()).is_none())
+        message.request_id.as_deref() == Some(request_id)
             && message
                 .display_role
                 .as_deref()
@@ -120,7 +119,7 @@ fn overlay_has_durable_owner(
 
 fn tool_is_nonterminal(tool: &ToolCallView) -> bool {
     matches!(
-        tool_status_kind(tool.lifecycle_state.as_deref().or(tool.status.as_deref())).as_str(),
+        tool_status_kind(tool.lifecycle_state.as_deref()).as_str(),
         "running" | "awaitingApproval"
     )
 }
@@ -422,7 +421,7 @@ mod tests {
         assert_eq!(tool_status_kind(Some("cancelled")), "error");
         assert_eq!(tool_status_kind(Some("timedOut")), "error");
         assert_eq!(tool_status_kind(Some("running")), "running");
-        assert_eq!(tool_status_kind(None), "running");
+        assert_eq!(tool_status_kind(None), "unknown");
     }
 
     #[test]
@@ -514,8 +513,8 @@ mod tests {
     }
 
     #[test]
-    fn unbound_legacy_assistant_message_owns_matching_live_overlay() {
-        let mut message = assistant_message("legacy", "", 4, "already durable");
+    fn unbound_assistant_message_does_not_own_live_overlay() {
+        let mut message = assistant_message("unbound", "", 4, "already durable");
         message.request_id = None;
         let response = streaming_response("already durable");
 
@@ -529,7 +528,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(!timeline
+        assert!(timeline
             .iter()
             .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
     }

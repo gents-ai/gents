@@ -19,6 +19,7 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -36,7 +37,6 @@ async fn codex_shim_projects_authorized_subagent_and_enforces_read_only_child_th
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

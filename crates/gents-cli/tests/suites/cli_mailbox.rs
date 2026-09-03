@@ -23,6 +23,7 @@ async fn mailbox_list_scopes_to_caller_and_dismisses_owned_item() -> Result<()> 
             "cli-mailbox",
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

@@ -606,7 +606,7 @@ mod tests {
             model_name: model_name.to_string(),
             enabled,
             backend_id: format!("{id}-backend"),
-            provider_kind: "openai-compatible".to_string(),
+            provider_kind: "OpenAiCompatible".to_string(),
             endpoint: "https://api.example.test/v1".to_string(),
             inference_profile_id: format!("{id}-profile"),
             context_window: Some(128_000),
@@ -747,7 +747,7 @@ mod tests {
             payload
                 .pointer("/behavior/backend_provider")
                 .and_then(Value::as_str),
-            Some("openai-compatible")
+            Some("OpenAiCompatible")
         );
         assert_eq!(
             payload

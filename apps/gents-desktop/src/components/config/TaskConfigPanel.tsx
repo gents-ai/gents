@@ -405,7 +405,7 @@ export function TaskConfigEditor({
             <div className="run-history-row">
               <span className="mono">{runStatus.requestId}</span>
               <span>manual</span>
-              <span>{runStatus.lifecycleState ?? runStatus.status ?? "submitted"}</span>
+              <span>{runStatus.lifecycleState ?? "unknown"}</span>
             </div>
           ) : null}
           {(task?.runHistory ?? []).map((run) => (
@@ -415,7 +415,7 @@ export function TaskConfigEditor({
                 {run.causedByTriggerKind ?? "trigger"}:
                 {run.causedByTriggerId ?? "unknown"}
               </span>
-              <span>{run.lifecycleState ?? run.status ?? "pending"}</span>
+              <span>{run.lifecycleState ?? "unknown"}</span>
             </div>
           ))}
           {!runStatus && !(task?.runHistory ?? []).length ? (

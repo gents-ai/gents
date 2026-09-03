@@ -12,7 +12,6 @@ const SUBAGENT_TOOLS: &[&str] = &[
     "read_subagent",
     "steer_subagent",
     "cancel_subagent",
-    "fan_out_and_synthesize",
 ];
 const PROCESS_TOOLS: &[&str] = &[
     "spawn_process",
@@ -367,7 +366,6 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
 fn action_label(name: &str, suffix: &str) -> String {
     match name {
         "list_subagents" | "list_processes" => "list".to_string(),
-        "fan_out_and_synthesize" => "fan out".to_string(),
         _ => name.strip_suffix(suffix).unwrap_or(name).replace('_', " "),
     }
 }
@@ -468,7 +466,6 @@ fn tool_status_is_error(tool: &ToolCallView) -> bool {
     matches!(
         tool.lifecycle_state
             .as_deref()
-            .or(tool.status.as_deref())
             .unwrap_or_default()
             .to_ascii_lowercase()
             .as_str(),

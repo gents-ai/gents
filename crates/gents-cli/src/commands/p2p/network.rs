@@ -71,7 +71,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     let agent_did = crate::resolve_agent_did(args.home.as_deref(), None)
         .context("resolving local agent DID")?;
 
-    let templates = validate_offered_templates(args.templates.iter().map(String::as_str));
+    let templates = validate_offered_templates(args.templates.iter().map(String::as_str))?;
     let network_id = args.network_id.as_deref().unwrap_or("default").to_string();
     let display_name = args
         .display_name

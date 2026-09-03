@@ -50,10 +50,10 @@ impl BehaviorToolConfig {
         // defra_query is opt-in (#592): the meta-only baseline behavior policy
         // disables it, while the ceiling stays permissive so an explicit
         // selection can still enable it.
-        let mut behavior_policy =
-            ToolPolicySurface::legacy_non_host_wide(super::FileToolMode::Off, super::BashMode::Off);
-        // Preserve get/update compatibility while keeping the newly introduced
-        // model create authority opt-in even for programmatic defaults.
+        let mut behavior_policy = ToolPolicySurface::ceiling_with_host_modes(
+            super::FileToolMode::Off,
+            super::BashMode::Off,
+        );
         behavior_policy.goal_create = false;
         behavior_policy.defra_query = false;
         behavior_policy.defra_collections = EndpointScope::none();
@@ -81,7 +81,7 @@ impl BehaviorToolConfig {
             eth_calls: Vec::new(),
             self_config: super::SelfConfigToolConfig::default(),
             behavior_policy: behavior_policy.clone(),
-            ceiling_policy: ToolPolicySurface::legacy_non_host_wide(
+            ceiling_policy: ToolPolicySurface::ceiling_with_host_modes(
                 super::FileToolMode::Off,
                 super::BashMode::Off,
             ),
@@ -232,9 +232,7 @@ impl BehaviorToolConfig {
                     "behavior {behavior_name} requires MCP service {service_id:?}, but the effective tool policy denies it"
                 );
             }
-            if !effective_allowed_mcp_service_ids.is_empty()
-                && !effective_allowed_mcp_service_ids.contains(service_id)
-            {
+            if !effective_allowed_mcp_service_ids.contains(service_id) {
                 anyhow::bail!(
                     "behavior {behavior_name} requires MCP service {service_id:?}, but its MCP allowlist does not permit it"
                 );
@@ -619,9 +617,6 @@ fn effective_string_allowlist(
         EndpointScope::All => dedupe_strings(requested),
         EndpointScope::Only(keys) => {
             let requested = dedupe_strings(requested);
-            if requested.is_empty() {
-                return keys.keys().cloned().collect();
-            }
             requested
                 .into_iter()
                 .filter(|value| keys.contains_key(value))

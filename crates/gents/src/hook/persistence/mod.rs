@@ -22,7 +22,6 @@ use crate::background_tools::{
     ProcessControlScope, ReadToolOutputOutcome, SpawnSubagentArgs, SteerSubagentTarget,
     WaitSubagentArgs, WaitToolArgs,
 };
-use crate::config::DEFAULT_DEADLINE_DURATION_SECS;
 use crate::descendant_graph::{
     resolve_descendant_edge, resolve_descendant_root_request_id, DescendantGraphAccess,
 };

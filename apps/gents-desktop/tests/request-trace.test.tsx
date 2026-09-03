@@ -1,9 +1,8 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RequestTracePanel } from "@source-inc/gents-desktop-operations";
 import { eventSummary, eventTimestamp } from "@source-inc/gents-desktop-operations";
-import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function adapterWith(timeline: unknown, fail = false) {
@@ -15,43 +14,39 @@ function adapterWith(timeline: unknown, fail = false) {
 }
 
 describe("request trace panel", () => {
-  afterEach(() => setDesktopApiAdapterForTests(null));
-
   it("renders the reconstructed event stream", async () => {
-    setDesktopApiAdapterForTests(
-      adapterWith({
-        request_id: "req-1",
-        events: [
-          {
-            kind: "message",
-            role: "user",
-            content: "hi",
-            timestamp: "2026-06-03T14:05:00Z",
-          },
-          {
-            kind: "provider_context_reduction",
-            reduction_index: 1,
-            original_tokens: 234436,
-            compacted_tokens: 27849,
-            producer_call_id: "call-124",
-            timestamp: "2026-06-03T14:05:00.500Z",
-          },
-          {
-            kind: "rendered_request",
-            capture_key: "rendered:v1:abc",
-            capture_scope: "inference.1",
-            turn_index: 0,
-            attempt: 1,
-            model_name: "gpt-5",
-            provenance_status: "captured_only",
-            created_at: "2026-06-03T14:05:01Z",
-          },
-          { kind: "tool_call", tool_name: "gents_exec", lifecycle_state: "Completed" },
-          { kind: "response", status: "materialized" },
-        ],
-      }),
-    );
-    render(<RequestTracePanel agentDid="did:a" rootRequestId="req-1" />);
+    const api = adapterWith({
+      request_id: "req-1",
+      events: [
+        {
+          kind: "message",
+          role: "user",
+          content: "hi",
+          timestamp: "2026-06-03T14:05:00Z",
+        },
+        {
+          kind: "provider_context_reduction",
+          reduction_index: 1,
+          original_tokens: 234436,
+          compacted_tokens: 27849,
+          producer_call_id: "call-124",
+          timestamp: "2026-06-03T14:05:00.500Z",
+        },
+        {
+          kind: "rendered_request",
+          capture_key: "rendered:v1:abc",
+          capture_scope: "inference.1",
+          turn_index: 0,
+          attempt: 1,
+          model_name: "gpt-5",
+          provenance_status: "captured_only",
+          created_at: "2026-06-03T14:05:01Z",
+        },
+        { kind: "tool_call", tool_name: "gents_exec", lifecycle_state: "Completed" },
+        { kind: "response", status: "materialized" },
+      ],
+    });
+    render(<RequestTracePanel agentDid="did:a" api={api} rootRequestId="req-1" />);
 
     await waitFor(() => expect(screen.getByText("user: hi")).toBeInTheDocument());
     expect(
@@ -68,8 +63,8 @@ describe("request trace panel", () => {
   });
 
   it("surfaces fetch failures with a retry affordance", async () => {
-    setDesktopApiAdapterForTests(adapterWith(null, true));
-    render(<RequestTracePanel agentDid="did:a" rootRequestId="req-1" />);
+    const api = adapterWith(null, true);
+    render(<RequestTracePanel agentDid="did:a" api={api} rootRequestId="req-1" />);
 
     await waitFor(() =>
       expect(screen.getByTestId("trace-error")).toHaveTextContent("peer unreachable"),
@@ -78,7 +73,13 @@ describe("request trace panel", () => {
   });
 
   it("asks for a request when none is selected", () => {
-    render(<RequestTracePanel agentDid="did:a" rootRequestId={null} />);
+    render(
+      <RequestTracePanel
+        agentDid="did:a"
+        api={adapterWith(null)}
+        rootRequestId={null}
+      />,
+    );
     expect(screen.getByText(/No request selected/)).toBeInTheDocument();
   });
 

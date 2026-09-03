@@ -111,9 +111,7 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     assert_eq!(provenance["status"], "captured_only");
     assert_eq!(provenance["capture_scope"], "inference.1");
     assert!(
-        provenance["assembly_trace"]
-            .get("effective_messages")
-            .is_none(),
+        provenance["assembly_trace"]["effective_messages"].is_null(),
         "a reconstructible turn must not duplicate its full transcript: {provenance}"
     );
     assert_eq!(

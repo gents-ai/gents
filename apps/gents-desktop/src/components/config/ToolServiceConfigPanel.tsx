@@ -136,8 +136,8 @@ export function ToolServiceConfigEditor({
   const [tailscaleIp, setTailscaleIp] = useState("");
   const [lanIp, setLanIp] = useState("");
   const [mcpPort, setMcpPort] = useState("");
-  const [mcpPath, setMcpPath] = useState("/mcp");
-  const [status, setStatus] = useState("online");
+  const [mcpPath, setMcpPath] = useState("");
+  const [status, setStatus] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ToolServiceTestResult | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
@@ -172,7 +172,7 @@ export function ToolServiceConfigEditor({
       tailscaleIp: optionalString(tailscaleIp),
       lanIp: optionalString(lanIp),
       mcpPort: parseOptionalInt(mcpPort),
-      mcpPath: optionalString(mcpPath) || "/mcp",
+      mcpPath: optionalString(mcpPath),
     };
   }
 
@@ -188,8 +188,8 @@ export function ToolServiceConfigEditor({
         tailscaleIp: optionalString(tailscaleIp),
         lanIp: optionalString(lanIp),
         mcpPort: parseOptionalInt(mcpPort),
-        mcpPath: optionalString(mcpPath) || "/mcp",
-        status: optionalString(status) || "online",
+        mcpPath: optionalString(mcpPath),
+        status: optionalString(status),
       });
       onSaved(nextId);
       setSaveError(null);
@@ -323,6 +323,7 @@ export function ToolServiceConfigEditor({
             onChange={(event) => setStatus(event.currentTarget.value)}
             value={status}
           >
+            <option value="">Select status</option>
             <option value="online">Online</option>
             <option value="offline">Offline</option>
             <option value="disabled">Disabled</option>
@@ -375,7 +376,9 @@ export function ToolServiceConfigEditor({
             saving ||
             !serviceId.trim() ||
             !displayName.trim() ||
+            !mcpPort.trim() ||
             !mcpPath.trim() ||
+            !status ||
             !mcpPortValid
           }
           type="submit"
@@ -428,7 +431,7 @@ function toolServiceFormValues(toolService: ToolServiceRegistryView | null) {
     tailscaleIp: toolService?.tailscaleIp ?? "",
     lanIp: toolService?.lanIp ?? "",
     mcpPort: toolService?.mcpPort != null ? String(toolService.mcpPort) : "",
-    mcpPath: toolService?.mcpPath ?? "/mcp",
-    status: toolService?.status ?? "online",
+    mcpPath: toolService?.mcpPath ?? "",
+    status: toolService?.status ?? "",
   };
 }

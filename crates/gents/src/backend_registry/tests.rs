@@ -45,7 +45,7 @@ fn inference_backend_from_value_parses() {
 }
 
 #[test]
-fn inference_backend_from_value_missing_fields_defaults() {
+fn inference_backend_from_value_requires_provider_kind() {
     let json = serde_json::json!({
         "backend_id": "test",
         "name": "Test",
@@ -54,14 +54,8 @@ fn inference_backend_from_value_missing_fields_defaults() {
         "enabled": true,
     });
 
-    let backend = InferenceBackend::from_value(&json).expect("should parse");
-    assert_eq!(backend.provider_kind, BackendProviderKind::OpenAiCompatible);
-    assert_eq!(backend.openai_wire_api, None);
-    assert_eq!(backend.api_key, None);
-    assert_eq!(backend.api_key_env_var, None);
-    assert_eq!(backend.max_queue_depth, DEFAULT_MAX_QUEUE_DEPTH);
-    assert!(backend.models.is_empty());
-    assert_eq!(backend.probe_status, "unknown");
+    let error = InferenceBackend::from_value(&json).expect_err("provider kind is required");
+    assert!(error.to_string().contains("provider kind is required"));
 }
 
 #[test]

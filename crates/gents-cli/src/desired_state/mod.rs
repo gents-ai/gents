@@ -18,13 +18,10 @@ pub(crate) use convert::{
 };
 pub(crate) use diff::diff_manifests;
 pub(crate) use load::load_manifest_root;
-pub(crate) use normalize::{
-    strip_deprecated_inference_backend_fields, strip_retired_tool_selection_fields,
-};
 pub(crate) use provision::apply_workspace_provisioning;
 pub(crate) use write::write_manifest_root;
 
-use serde::de::Error as _;
+use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
 
 use gents::{BackendProviderKind, Collection};
@@ -37,7 +34,6 @@ where
     Option::<T>::deserialize(deserializer).map(Some)
 }
 
-pub(crate) const DEFAULT_TOOL_SERVICE_MCP_PATH: &str = "/mcp";
 pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -196,8 +192,7 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) selection_id: String,
     pub(crate) agent_did: String,
     pub(crate) display_name: Option<String>,
-    #[serde(default)]
-    pub(crate) tool_policy_version: Option<String>,
+    pub(crate) tool_policy_version: String,
     pub(crate) enable_file_tools: bool,
     pub(crate) file_tools_mode: String,
     pub(crate) file_tool_root: Option<String>,
@@ -220,7 +215,7 @@ pub(crate) struct DesiredToolSelection {
     #[serde(default)]
     pub(crate) cli_tool_names: Vec<String>,
     pub(crate) enable_meta_tools: bool,
-    /// Outer `None` preserves live state; inner `None` restores meta-tool inheritance.
+    /// Outer `None` preserves live state; inner `None` restores the disabled default.
     #[serde(
         default,
         deserialize_with = "deserialize_present_option",
@@ -238,8 +233,6 @@ pub(crate) struct DesiredToolSelection {
     pub(crate) allowed_mcp_service_ids: Vec<String>,
     #[serde(default)]
     pub(crate) required_mcp_service_ids: Vec<String>,
-    #[serde(default)]
-    pub(crate) delegate_to: Vec<String>,
     #[serde(default)]
     pub(crate) backgroundable_tool_names: Vec<String>,
     #[serde(default)]
@@ -290,32 +283,36 @@ fn deserialize_write_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String
 where
     D: Deserializer<'de>,
 {
-    use gents::{deserialize_dual_shape, WriteToolDecl};
-    use serde_json::Value;
-
-    let decls = deserialize_dual_shape::<WriteToolDecl>(
-        Option::<Value>::deserialize(deserializer)?,
-        "write_tools must be a list of WriteToolDecl objects or JSON strings",
+    deserialize_manifest_decl_storage::<D, gents::WriteToolDecl>(
+        deserializer,
+        "write_tools must be a list of WriteToolDecl objects",
     )
-    .map_err(D::Error::custom)?;
-    decls
-        .iter()
-        .map(|decl| serde_json::to_string(decl).map_err(D::Error::custom))
-        .collect()
 }
 
 fn deserialize_surface_tools_storage<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    use gents::{deserialize_dual_shape, SurfaceToolDecl};
-    use serde_json::Value;
-
-    let decls = deserialize_dual_shape::<SurfaceToolDecl>(
-        Option::<Value>::deserialize(deserializer)?,
-        "DatastoreToolSurface.entries must be a list of create/query tool objects or JSON strings",
+    deserialize_manifest_decl_storage::<D, gents::SurfaceToolDecl>(
+        deserializer,
+        "DatastoreToolSurface.entries must be a list of create/query tool objects",
     )
-    .map_err(D::Error::custom)?;
+}
+
+fn deserialize_manifest_decl_storage<'de, D, T>(
+    deserializer: D,
+    expected: &str,
+) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned + Serialize,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let items = value.as_array().ok_or_else(|| D::Error::custom(expected))?;
+    if items.iter().any(|item| !item.is_object()) {
+        return Err(D::Error::custom(expected));
+    }
+    let decls: Vec<T> = serde_json::from_value(value).map_err(D::Error::custom)?;
     decls
         .iter()
         .map(|decl| serde_json::to_string(decl).map_err(D::Error::custom))
@@ -392,7 +389,6 @@ pub(crate) struct DesiredDatastoreToolSurface {
 pub(crate) struct DesiredInferenceBackend {
     pub(crate) backend_id: String,
     pub(crate) name: String,
-    #[serde(default)]
     pub(crate) provider_kind: BackendProviderKind,
     #[serde(default)]
     pub(crate) openai_wire_api: Option<gents::OpenAiWireApi>,
@@ -417,7 +413,6 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
         struct Wire {
             backend_id: String,
             name: String,
-            #[serde(default)]
             provider_kind: BackendProviderKind,
             #[serde(default)]
             openai_wire_api: Option<gents::OpenAiWireApi>,
@@ -432,11 +427,7 @@ impl<'de> Deserialize<'de> for DesiredInferenceBackend {
             models: Vec<String>,
         }
 
-        let mut value = serde_json::Value::deserialize(deserializer)?;
-        if let serde_json::Value::Object(object) = &mut value {
-            normalize::strip_deprecated_inference_backend_fields(object);
-        }
-        let wire = Wire::deserialize(value).map_err(D::Error::custom)?;
+        let wire = Wire::deserialize(deserializer)?;
 
         Ok(Self {
             backend_id: wire.backend_id,
@@ -490,7 +481,7 @@ pub(crate) struct DesiredToolServiceRegistry {
     pub(crate) tailscale_ip: Option<String>,
     pub(crate) lan_ip: Option<String>,
     pub(crate) mcp_port: Option<i64>,
-    pub(crate) mcp_path: Option<String>,
+    pub(crate) mcp_path: String,
     pub(crate) send_agent_did: bool,
 }
 
@@ -509,7 +500,7 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
             tailscale_ip: Option<String>,
             lan_ip: Option<String>,
             mcp_port: Option<i64>,
-            mcp_path: Option<String>,
+            mcp_path: String,
             #[serde(default)]
             send_agent_did: bool,
         }
@@ -523,7 +514,8 @@ impl<'de> Deserialize<'de> for DesiredToolServiceRegistry {
             tailscale_ip: Some(validate::normalize_tool_service_string(wire.tailscale_ip)),
             lan_ip: Some(validate::normalize_tool_service_string(wire.lan_ip)),
             mcp_port: wire.mcp_port,
-            mcp_path: Some(validate::normalize_tool_service_mcp_path(wire.mcp_path)),
+            mcp_path: validate::normalize_tool_service_mcp_path(wire.mcp_path)
+                .map_err(serde::de::Error::custom)?,
             send_agent_did: wire.send_agent_did,
         })
     }

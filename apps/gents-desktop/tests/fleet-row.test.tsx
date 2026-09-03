@@ -60,7 +60,7 @@ describe("FleetRow", () => {
       {
         ...deployment,
         source: "enrollment",
-        pairingReady: false,
+        chatSafe: false,
       },
     );
 

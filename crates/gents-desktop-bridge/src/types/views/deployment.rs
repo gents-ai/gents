@@ -146,7 +146,6 @@ pub struct BehaviorReadinessView {
     pub source: BehaviorReadinessSourceView,
     pub active_generation: Option<u64>,
     pub router_generation: Option<u64>,
-    pub default_behavior_id: Option<String>,
     pub updated_at: Option<String>,
     pub behaviors: Vec<BehaviorReadinessStatusView>,
 }
@@ -159,7 +158,6 @@ impl Default for BehaviorReadinessView {
             },
             active_generation: None,
             router_generation: None,
-            default_behavior_id: None,
             updated_at: None,
             behaviors: Vec::new(),
         }
@@ -272,7 +270,6 @@ pub struct ToolSelectionView {
     pub enable_goal_creation: Option<bool>,
     pub allowed_mcp_service_ids: Vec<String>,
     pub required_mcp_service_ids: Vec<String>,
-    pub delegate_to: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
     pub subagent_targets: Vec<String>,
     pub subagent_spawn_enabled: Option<bool>,
@@ -504,13 +501,11 @@ pub struct DeploymentView {
     pub source: Option<String>,
     pub graphql: Option<String>,
     pub dial_succeeded: bool,
-    pub pairing_ready: bool,
     pub chat_safe: bool,
     pub routes: Vec<ClientRouteStatusView>,
     #[serde(default)]
     pub pairing: Vec<PairingCollectionStatusView>,
     pub last_error: Option<String>,
-    pub default_behavior_id: Option<String>,
     pub agent_principal: AgentPrincipalView,
     pub runtime: Option<RuntimeView>,
     pub behavior_readiness: BehaviorReadinessView,
@@ -535,6 +530,7 @@ pub struct DesktopRuntimeSnapshot {
     pub listen_addresses: Vec<String>,
     pub p2p_health: P2PHealthView,
     pub sync_health: Option<SyncHealthView>,
+    pub enrollment_requests: Option<Vec<EnrollmentRequestView>>,
     pub bootstrap_errors: Vec<String>,
     pub last_mutation_error: Option<String>,
     pub focused_request_id: Option<String>,
@@ -595,6 +591,7 @@ pub struct EnrollmentRequestView {
     pub server_label: Option<String>,
     pub owner_agent: String,
     pub state: String,
+    pub expires_at: String,
 }
 
 impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentRequestView {
@@ -607,6 +604,7 @@ impl From<gents_desktop_core::client::EnrollmentRequestResult> for EnrollmentReq
             server_label: None,
             owner_agent: result.owner_agent,
             state: result.state,
+            expires_at: result.expires_at,
         }
     }
 }

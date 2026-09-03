@@ -220,7 +220,7 @@ describe("config panel action buttons", () => {
     expect(screen.getByTestId("event-trigger-id")).toHaveAttribute("readonly");
   });
 
-  it("migrates legacy service delegates into the MCP allowlist on save", async () => {
+  it("does not infer MCP authority from unrelated configuration", async () => {
     const onSaveToolSelectionConfig = vi.fn<
       [(request: ToolSelectionSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve());
@@ -235,7 +235,6 @@ describe("config panel action buttons", () => {
         toolSelection={{
           ...toolSelection,
           allowedMcpServiceIds: [],
-          delegateTo: ["mcp-local", "did:key:zDelegate"],
         }}
         toolServiceRegistries={[toolService]}
         onSaveToolSelectionConfig={onSaveToolSelectionConfig}
@@ -243,14 +242,13 @@ describe("config panel action buttons", () => {
       />,
     );
 
-    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).toBeChecked();
+    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).not.toBeChecked();
     fireEvent.click(screen.getByTestId("tool-selection-save"));
 
     await waitFor(() =>
       expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          allowedMcpServiceIds: ["mcp-local"],
-          delegateTo: ["did:key:zDelegate"],
+          allowedMcpServiceIds: [],
         }),
       ),
     );
@@ -355,7 +353,7 @@ describe("config panel action buttons", () => {
     expect(request).not.toHaveProperty("toolPolicyVersion");
   });
 
-  it("shows a legacy fallback for an unversioned tool policy", () => {
+  it("reports an unversioned tool policy as runtime-rejected", () => {
     render(
       <ToolSelectionConfigEditor
         agentDid="did:key:z6MkAgent"
@@ -370,7 +368,7 @@ describe("config panel action buttons", () => {
       />,
     );
     expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
-      "legacy (unversioned)",
+      "missing (runtime rejects)",
     );
   });
 

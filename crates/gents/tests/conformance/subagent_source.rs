@@ -13,7 +13,7 @@ use gents::tool_call_lifecycle::{
 use gents::{
     default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
-    ToolCeiling, ToolSelectionDocument,
+    ToolCeiling, ToolSelectionDocument, TOOL_POLICY_V1,
 };
 use serde::Deserialize;
 
@@ -77,6 +77,11 @@ async fn boot_agent_with_policy(
     )
     .await
     .unwrap();
+    assert!(
+        agent.unavailable_behaviors().is_empty(),
+        "subagent fixture produced unavailable behaviors: {:?}",
+        agent.unavailable_behaviors()
+    );
     let agent_did = agent.agent_did().to_string();
     let behavior_id = agent.default_behavior_id().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -114,6 +119,7 @@ async fn ensure_parent_subagent_authorization(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
+            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(target_entries),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
@@ -203,16 +209,23 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
         if let Some(row) = first_optional_row::<ChildRequestRow>(&response, "AgentRequest") {
             return row;
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for child AgentRequest {child_request_id}"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let evidence = node
+                .execute(
+                    r#"{ AgentToolCall { _docID tool_call_key request_id request_doc_id agent_did tool_call_id tool_name args lifecycle_state result tool_failure_class child_request_id spawn_target_did await_mode cancel_policy } }"#,
+                )
+                .await;
+            panic!(
+                "timed out waiting for child AgentRequest {child_request_id}; tool calls={:?}; errors={:?}",
+                evidence.data, evidence.errors
+            );
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
 #[tokio::test]
-async fn trusted_path_uses_targeted_bridge_without_parent_request() {
+async fn trusted_cross_deployment_path_uses_targeted_bridge_without_parent_replication() {
     let db = test_db("r3-subagent-source-xdep-targeted-bridge").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-targeted-bridge"));
     let local_did = identity.did().to_string();
@@ -419,15 +432,18 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt from source"
+        "prompt": "child prompt from source",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-spawn".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -484,16 +500,18 @@ async fn subagent_source_rejects_mismatched_spawn_target_did_and_args() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
         "agent_did": mismatched_args_did,
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt from mismatched target"
+        "prompt": "child prompt from mismatched target",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -538,15 +556,18 @@ async fn subagent_source_rejects_unauthorized_target_without_child_request() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "unauthorized child prompt from source"
+        "prompt": "unauthorized child prompt from source",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -593,15 +614,18 @@ async fn subagent_source_fails_unauthorized_target_even_when_target_is_not_activ
     .await;
 
     let args = serde_json::json!({
+        "name": target_behavior_id,
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": target_behavior_id,
-        "prompt": "unauthorized inactive child prompt from source"
+        "prompt": "unauthorized inactive child prompt from source",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -655,15 +679,18 @@ async fn subagent_source_rejects_when_spawn_disabled_even_with_authorized_target
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "spawn disabled child prompt from source"
+        "prompt": "spawn disabled child prompt from source",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -717,8 +744,11 @@ async fn subagent_source_rejects_background_when_background_disabled() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
         "prompt": "background disabled child prompt from source",
+        "parent_subagent_depth": 0,
         "await_mode": "background"
     })
     .to_string();
@@ -726,7 +756,7 @@ async fn subagent_source_rejects_background_when_background_disabled() {
         db.node.clone(),
         parent_request_id.to_string(),
         parent_session_id.to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -772,7 +802,7 @@ async fn subagent_source_ignores_native_tool_call_without_child_request_id() {
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-native".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "read_file".to_string(),
@@ -1003,8 +1033,11 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt for cascade"
+        "prompt": "child prompt for cascade",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
@@ -1064,6 +1097,7 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
+            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
             selection_id: selection_id.clone(),
             agent_did: agent_did.clone(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
@@ -1144,14 +1178,15 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
         "name": "remote-target",
         "agent_did": remote_did,
         "behavior_id": "remote-behavior",
-        "prompt": "child prompt that should not run here"
+        "prompt": "child prompt that should not run here",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-did-anchor".to_string(),
-        "did:test:test".to_string(),
+        agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1197,15 +1232,18 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
         .unwrap();
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt racing a parent cancel"
+        "prompt": "child prompt racing a parent cancel",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-orphan-cancel".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1271,6 +1309,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
+        remote_parent_did,
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
@@ -1330,6 +1369,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
+        remote_parent_did,
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
@@ -1388,6 +1428,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
 
     write_cross_deployment_bridge(
         db.node.as_ref(),
+        remote_parent_did,
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
@@ -1447,6 +1488,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
 
     write_cross_deployment_bridge_with_spawn_target(
         db.node.as_ref(),
+        remote_parent_did,
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
@@ -1479,6 +1521,7 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     upsert_tool_selection(
         db.node.as_ref(),
         &ToolSelectionDocument {
+            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
             selection_id: selection_id.clone(),
             agent_did: crate::support::AGENT_DID.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
@@ -1629,15 +1672,18 @@ async fn subagent_source_interrupts_child_on_concurrent_parent_cancel() {
     .await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt racing a concurrent parent cancel"
+        "prompt": "child prompt racing a concurrent parent cancel",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-orphan-cancel-race".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1691,15 +1737,18 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     mark_request_dead(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "child prompt racing a parent death"
+        "prompt": "child prompt racing a parent death",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-orphan-dead".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1744,15 +1793,18 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
     mark_request_completed(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "background child whose parent finished cleanly"
+        "prompt": "background child whose parent finished cleanly",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-cascade-completed".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -1800,15 +1852,18 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
     mark_request_interrupted(db.node.as_ref(), parent_request_id).await;
 
     let args = serde_json::json!({
+        "name": running.behavior_id.clone(),
+        "agent_did": running.booted.agent_did.clone(),
         "behavior_id": running.behavior_id.clone(),
-        "prompt": "detached child that must outlive an interrupted parent"
+        "prompt": "detached child that must outlive an interrupted parent",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let mut lifecycle = ToolCallLifecycle::new_subagent(
         db.node.clone(),
         parent_request_id.to_string(),
         "r3-session-detached-interrupted".to_string(),
-        "did:test:test".to_string(),
+        running.booted.agent_did.clone(),
         parent_tool_call_id.to_string(),
         1,
         "spawn_subagent".to_string(),
@@ -2125,6 +2180,7 @@ async fn upsert_target_behavior_with_cross_deployment(
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
+            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
             selection_id: selection_id.clone(),
             agent_did: agent_did.to_string(),
             subagent_targets: Some(vec![gents::subagent_target_entry(
@@ -2315,6 +2371,7 @@ async fn create_remote_parent_request(
 #[allow(clippy::too_many_arguments)]
 async fn write_cross_deployment_bridge(
     node: &EmbeddedNode,
+    bridge_author_did: &str,
     parent_request_id: &str,
     parent_request_doc_id: &str,
     parent_session_id: &str,
@@ -2325,6 +2382,7 @@ async fn write_cross_deployment_bridge(
 ) {
     write_cross_deployment_bridge_with_spawn_target(
         node,
+        bridge_author_did,
         parent_request_id,
         parent_request_doc_id,
         parent_session_id,
@@ -2340,6 +2398,7 @@ async fn write_cross_deployment_bridge(
 #[allow(clippy::too_many_arguments)]
 async fn write_cross_deployment_bridge_with_spawn_target(
     node: &EmbeddedNode,
+    bridge_author_did: &str,
     parent_request_id: &str,
     parent_request_doc_id: &str,
     parent_session_id: &str,
@@ -2349,6 +2408,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
     target_agent_did: &str,
     spawn_target_did: Option<&str>,
 ) {
+    let escaped_bridge_author_did = escape_graphql_string(bridge_author_did);
     let escaped_parent_request_id = escape_graphql_string(parent_request_id);
     let escaped_parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
     let escaped_parent_session_id = escape_graphql_string(parent_session_id);
@@ -2362,7 +2422,8 @@ async fn write_cross_deployment_bridge_with_spawn_target(
         "name": target_behavior_id,
         "agent_did": target_agent_did,
         "behavior_id": target_behavior_id,
-        "prompt": "cross-deployment child prompt"
+        "prompt": "cross-deployment child prompt",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let escaped_args = escape_graphql_string(&args);
@@ -2375,6 +2436,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
                 request_id: "{escaped_parent_request_id}",
                 request_doc_id: "{escaped_parent_request_doc_id}",
                 session_id: "{escaped_parent_session_id}",
+                agent_did: "{escaped_bridge_author_did}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
                 tool_call_id: "{escaped_parent_tool_call_id}",
@@ -2426,7 +2488,8 @@ async fn create_orphan_cross_deployment_tool_call(
         "name": target_name,
         "agent_did": target_agent_did,
         "behavior_id": target_behavior_id,
-        "prompt": "orphan cross-deployment child prompt"
+        "prompt": "orphan cross-deployment child prompt",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let escaped_args = escape_graphql_string(&args);
@@ -2536,8 +2599,11 @@ async fn create_orphan_subagent_tool_call_with_await_mode(
     let agent_did = escape_graphql_string(agent_did);
     let tool_call_key = format!("{escaped_parent_session_id}:{escaped_parent_tool_call_id}");
     let args = serde_json::json!({
+        "name": crate::support::AGENT_NAME,
+        "agent_did": agent_did.clone(),
         "behavior_id": crate::support::AGENT_NAME,
-        "prompt": "orphan child prompt"
+        "prompt": "orphan child prompt",
+        "parent_subagent_depth": 0
     })
     .to_string();
     let escaped_args = escape_graphql_string(&args);

@@ -10,7 +10,7 @@ export const CODEX_DEFAULT_MODEL = "gpt-5.5";
 export const GROK_ENDPOINT = "https://cli-chat-proxy.grok.com/v1";
 export const GROK_DEFAULT_MODEL = "grok-4.5";
 
-export const PROVIDER_OPENAI = "openai";
+export const PROVIDER_OPENAI = "OpenAiCompatible";
 export const PROVIDER_CODEX = "ChatGptCodex";
 export const PROVIDER_GROK = "XaiGrokOAuth";
 

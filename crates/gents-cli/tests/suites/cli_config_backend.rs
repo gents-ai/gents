@@ -75,6 +75,7 @@ async fn config_backend_set_preset_and_discover_models_from_backend_id() -> Resu
             &agent_name,
             "--model-name",
             &bootstrap_model,
+            "--inference-url",
             bootstrap_endpoint.endpoint(),
         ],
     )?;
@@ -196,6 +197,7 @@ async fn imperative_config_writers_recreate_after_remove() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

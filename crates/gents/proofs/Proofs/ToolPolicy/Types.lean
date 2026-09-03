@@ -3,14 +3,12 @@ import Mathlib.Data.Finset.Lattice.Basic
 
 namespace ToolPolicy
 
-/-- Compatibility decoding happens before the authority meet. An absent goal
-    tool field retains the historic coupling to generic meta tools; an explicit
-    value is authoritative. -/
-def resolveGoalTools (meta : Bool) : Option Bool → Bool
-  | none => meta
+/-- Goal-tool authority must be explicit. Missing state fails closed. -/
+def resolveGoalTools : Option Bool → Bool
+  | none => false
   | some enabled => enabled
 
-/-- Creation is new authority and is never acquired through compatibility. -/
+/-- Goal-creation authority must be explicit. Missing state fails closed. -/
 def resolveGoalCreate : Option Bool → Bool
   | none => false
   | some enabled => enabled

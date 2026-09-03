@@ -142,10 +142,7 @@ impl Default for ToolSelection {
             command_policy: None,
             cli_tool_names: Vec::new(),
             enable_meta_tools: true,
-            // Preserve the legacy surface: goal get/update historically rode
-            // with the generic meta-tool switch.
             enable_goal_tools: true,
-            // Goal creation is new authority and must always be explicit.
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
@@ -182,12 +179,9 @@ impl ToolSelection {
         };
         let enable_meta_tools = selection
             .enable_meta_tools
-            .unwrap_or(policy_version.default_enabled(true));
-        let (enable_goal_tools, enable_goal_creation) = resolve_goal_capabilities(
-            enable_meta_tools,
-            selection.enable_goal_tools,
-            selection.enable_goal_creation,
-        );
+            .unwrap_or(policy_version.default_enabled());
+        let (enable_goal_tools, enable_goal_creation) =
+            resolve_goal_capabilities(selection.enable_goal_tools, selection.enable_goal_creation);
         Ok(Self {
             file_tools: if selection.enable_file_tools.unwrap_or(false) {
                 FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
@@ -203,11 +197,7 @@ impl ToolSelection {
             command_policy: command_policy_from_document(selection, bash)?,
             cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
             enable_meta_tools,
-            // An unset field preserves the historical coupling for existing
-            // documents. Once set, this capability is independent from meta.
             enable_goal_tools,
-            // Model-facing creation never appears through compatibility
-            // decoding; it requires a new explicit grant.
             enable_goal_creation,
             allowed_mcp_service_ids: selection
                 .allowed_mcp_service_ids
@@ -229,7 +219,7 @@ impl ToolSelection {
             enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
             enable_context_budget: selection
                 .enable_context_budget
-                .unwrap_or(policy_version.default_enabled(true)),
+                .unwrap_or(policy_version.default_enabled()),
             enable_defra_query: selection.enable_defra_query.unwrap_or(false),
             defra_query_collections: selection
                 .defra_query_collections
@@ -254,14 +244,12 @@ impl ToolSelection {
     }
 }
 
-/// Decode the nullable compatibility fields before the authority meet.
 pub fn resolve_goal_capabilities(
-    enable_meta_tools: bool,
     explicit_goal_tools: Option<bool>,
     explicit_goal_creation: Option<bool>,
 ) -> (bool, bool) {
     (
-        explicit_goal_tools.unwrap_or(enable_meta_tools),
+        explicit_goal_tools.unwrap_or(false),
         explicit_goal_creation.unwrap_or(false),
     )
 }

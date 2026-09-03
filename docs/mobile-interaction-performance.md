@@ -1,5 +1,12 @@
 # Mobile interaction performance baseline
 
+> Historical measurement record, not an implementation specification. Several
+> scenario names and follow-up notes below describe the pre-cutover synthetic
+> sync model. The current ownership and vocabulary contract is
+> `docs/superpowers/specs/2026-08-17-mobile-session-sync-design.md`; new work
+> must use DefraDB's strict status through the single client sync owner and must
+> not restore a `stalled` state or UI-local sync inference.
+
 This track establishes measurement infrastructure and initial structural
 budgets for the Gents iOS surface. It does not change runtime/provider
 semantics, add a client cache, or treat a fast but stale state as success.
@@ -51,7 +58,7 @@ deterministic. Changing the shape requires a new fixture ID and a fresh baseline
 | Large local tip        | click to visible last item of 600; record the bounded bridge page and mounted rows                     | bridge projection CPU still starts from the observed in-memory store; native durable seed is future work |
 | Page older             | query-level DefraDB cursor page plus bridge merge; assert the prior expensive DOM node remains mounted | deterministic browser UI merging is paired with real-node Rust integration coverage                      |
 | Sustained stream       | 50 sequential update events, each observed in the transcript                                           | deterministic adapter models event/refresh pressure, not provider token cadence                          |
-| Foreground recovery    | native correlated status stream plus observer counters; browser projects stalled then healthy          | real iOS suspend/network repair awaits #1143/#893                                                        |
+| Foreground recovery    | native correlated status stream plus observer counters; historical browser transport-recovery scenario | real iOS suspend/network repair was not measured in this baseline                                       |
 | Remote hydration       | reserved fixture contract below                                                                        | intentionally not implemented on this branch                                                             |
 
 The future `mobile-hydration-v1` fixture should seed 600 transcript documents on
@@ -107,7 +114,7 @@ CPU time every 250 ms. These owners make the artifact actionable:
 | materialized/rendered rows    | fixture snapshot plus DOM counts; projection/chat owner                                                                               |
 | memory high-water/growth      | simulator RSS and browser JS heap; native/UI owner respectively                                                                       |
 | CPU/energy proxy              | simulator process CPU and Chromium task duration/long tasks; no energy claim                                                          |
-| reconnect/repair              | observer drop-recovery counters and time to visible state; full pairing retry counters remain blocked on #1144; supervisor/sync owner |
+| reconnect/repair              | observer drop-recovery counters, strict DefraDB status, configured-peer connectivity, and time to visible state from the sync owner    |
 
 Artifacts contain exact environment metadata, fixture metadata, every raw
 sample, median/p95 distributions, and deterministic assertion results. Generate
@@ -207,7 +214,7 @@ first browser-process sample. Values are wall-clock evidence only.
 | Page one older chunk                           |     127.1 |   152.7 |                    0 B |                  60.5 ms |
 | 50 sustained updates                           |   1,889.8 | 1,895.5 |              10.51 MiB |                 794.9 ms |
 | 25-event coalescing burst                      |      40.0 |    44.9 |              425.6 KiB |                  13.5 ms |
-| Stalled-to-connected projection                |      61.5 |    78.7 |               1.09 MiB |                  33.3 ms |
+| Transport-recovery projection                  |      61.5 |    78.7 |               1.09 MiB |                  33.3 ms |
 | Ten repeated navigation cycles                 |   2,315.3 | 2,566.8 |               1.56 MiB |                 791.4 ms |
 
 The initial cold browser-process shell proxy sample was 1,562.7 ms and is retained
@@ -469,7 +476,7 @@ Elapsed time, commit work, heap/RSS growth, CPU, and long-task values are
 reported only. A wall-clock limit requires at least 30 samples across multiple
 days on the actual runner class with an agreed false-failure rate. Cold, warm,
 simulator, device, debug, and release classes get independent budgets. A run
-with a schema mismatch, offline state, stalled hydration, or terminal repair
+with a schema mismatch, offline state, non-progressing hydration, or terminal repair
 failure is a correctness failure/state outcome, never a faster successful run.
 
 ## Evidence-backed bottlenecks and follow-ups
@@ -496,13 +503,13 @@ failure is a correctness failure/state outcome, never a faster successful run.
    pagination plus list virtualization, after preserving the eager mobile index
    contract from #1141.
 5. **Foreground projection is the largest remaining browser bridge payload.**
-   The deterministic truthful-connected projection transfers 260.1 KiB. Split
-   repair/health evidence from unrelated control-plane projection only after
-   the sync owner defines the authoritative healthy/stalled/terminal boundary;
-   do not substitute UI-local status.
-6. **Suspend/resume performance is unknown, not fast.** Add real foreground and
-   network-change boundaries with #1143, report truthful stalled/terminal state
-   with #1144, and validate the product decision in #893 on a device.
+   The deterministic truthful-connected projection transfers 260.1 KiB. Any
+   payload split must preserve the single owner revision and the strict
+   `healthy | syncing | offline | failed` projection; do not substitute
+   UI-local status.
+6. **Suspend/resume performance is unknown, not fast.** Measure real foreground
+   and network-change boundaries on a device without adding another lifecycle
+   or elapsed-clock heuristic.
 
 The harness itself found one independently bounded rendering defect before the
 final baseline: one page request recursively triggered the scroll threshold and
@@ -528,8 +535,8 @@ Proposed follow-up issue slices, in dependency order:
 5. Stabilize signed route publication across authenticated enrollment before the
    receipt is accepted; acceptance: the corrected native lane reaches paired
    index repeatedly without relaxing transport-DID, generation, or route checks.
-6. Extend `mobile-hydration-v1` after #1142/#1143 and expose truthful progress
-   after #1144.
+6. Extend hydration measurements using the existing document lifecycle and
+   selected-session progress projection; do not add global sync state.
 7. Put the native build/smoke artifact on the macOS runner under #890, then
    establish simulator wall-clock distributions.
 8. Fail measurement classification loudly on pair-time schema skew and surface

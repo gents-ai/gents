@@ -23,12 +23,13 @@ fn resolve_tool_service_endpoint(request: &ToolServiceTestRequest) -> Result<Str
     if hostname.is_empty() && tailscale_ip.is_empty() && lan_ip.is_empty() {
         bail!("hostname, tailscale_ip, or lan_ip is required");
     }
+    let mcp_path = require_trimmed("mcp_path", request.mcp_path.clone().unwrap_or_default())?;
     Ok(resolve_mcp_url(
         &hostname,
         &tailscale_ip,
         &lan_ip,
         mcp_port as u16,
-        request.mcp_path.as_deref().unwrap_or("/mcp"),
+        &mcp_path,
         "",
         None,
     ))
@@ -55,10 +56,10 @@ pub async fn save_tool_service_config(
             tailscale_ip: None,
             lan_ip: None,
             mcp_port: None,
-            mcp_path: Some("/mcp".to_string()),
+            mcp_path: None,
             send_agent_did: false,
             tools: Vec::new(),
-            status: Some("online".to_string()),
+            status: None,
             version: None,
             updated_at: None,
         });
@@ -67,11 +68,26 @@ pub async fn save_tool_service_config(
     row.hostname = trim_optional(request.hostname);
     row.tailscale_ip = trim_optional(request.tailscale_ip);
     row.lan_ip = trim_optional(request.lan_ip);
-    row.mcp_port = request.mcp_port;
-    row.mcp_path = trim_optional(request.mcp_path).or_else(|| Some("/mcp".to_string()));
-    row.status = trim_optional(request.status)
-        .or_else(|| row.status.clone())
-        .or_else(|| Some("online".to_string()));
+    anyhow::ensure!(
+        row.hostname.is_some() || row.tailscale_ip.is_some() || row.lan_ip.is_some(),
+        "hostname, tailscale_ip, or lan_ip is required"
+    );
+    let mcp_port = request.mcp_port.context("mcp_port is required")?;
+    anyhow::ensure!(
+        (1..=u16::MAX as i64).contains(&mcp_port),
+        "mcp_port must be between 1 and 65535"
+    );
+    row.mcp_port = Some(mcp_port);
+    row.mcp_path = Some(require_trimmed(
+        "mcp_path",
+        request.mcp_path.unwrap_or_default(),
+    )?);
+    let status = require_trimmed("status", request.status.unwrap_or_default())?;
+    anyhow::ensure!(
+        matches!(status.as_str(), "online" | "offline" | "disabled"),
+        "status must be online, offline, or disabled"
+    );
+    row.status = Some(status);
     core.save_tool_service_registry(&row).await?;
     Ok(())
 }

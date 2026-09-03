@@ -23,6 +23,8 @@ function desktopSnapshot(selectedDeployment = deployment): DesktopClientSnapshot
         replicatorCount: 1,
         consecutiveFailures: 0,
       },
+      syncHealth: null,
+      enrollmentRequests: [],
       bootstrapErrors: [],
       configuredPeerCount: 1,
       dialedPeerCount: 1,
@@ -102,7 +104,7 @@ describe("App shell command sad paths", () => {
       await waitFor(() => {
         expect(sendChatMessage).toHaveBeenCalledWith({
           agentDid: remoteDeployment.agentDid,
-          behaviorId: remoteDeployment.defaultBehaviorId,
+          behaviorId: remoteDeployment.agentPrincipal.defaultBehaviorId,
           sessionId: null,
           content: "check the fleet",
           causedBySourceDocId: null,

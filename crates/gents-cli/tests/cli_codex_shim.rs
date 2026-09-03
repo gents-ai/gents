@@ -95,12 +95,12 @@ async fn thread_goal_round_trip_survives_shim_restart() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
     let server_args = [
-        "--codex-shim",
         "--codex-shim-port",
         shim_port_string.as_str(),
         "--codex-shim-poll-ms",

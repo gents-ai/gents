@@ -39,8 +39,10 @@ export function useConfigWorkspaceSelection(
       selectedDeployment.behaviors.find(
         (behavior) => behavior.behaviorId === selectedBehaviorId,
       ) ??
-      selectedDeployment.behaviors.find((behavior) => behavior.isDefault) ??
-      selectedDeployment.behaviors[0] ??
+      selectedDeployment.behaviors.find(
+        (behavior) =>
+          behavior.behaviorId === selectedDeployment.agentPrincipal.defaultBehaviorId,
+      ) ??
       null
     );
   }, [selectedBehaviorId, selectedConfigBehaviorId, selectedDeployment]);
@@ -61,21 +63,14 @@ export function useConfigWorkspaceSelection(
 
     ensureSelection(
       selectedConfigBehaviorId,
-      selectedBehaviorId ??
-        selectedDeployment.defaultBehaviorId ??
-        selectedDeployment.behaviors.find((behavior) => behavior.isDefault)
-          ?.behaviorId ??
-        selectedDeployment.behaviors[0]?.behaviorId ??
-        null,
+      selectedBehaviorId ?? selectedDeployment.agentPrincipal.defaultBehaviorId ?? null,
       (id) =>
         selectedDeployment.behaviors.some((behavior) => behavior.behaviorId === id),
       setSelectedConfigBehaviorId,
     );
     ensureSelection(
       selectedBackendId,
-      selectedBehavior?.backendId ??
-        selectedDeployment.inferenceBackends[0]?.backendId ??
-        null,
+      selectedBehavior?.backendId ?? null,
       (id) =>
         selectedDeployment.inferenceBackends.some(
           (backend) => backend.backendId === id,
@@ -84,9 +79,7 @@ export function useConfigWorkspaceSelection(
     );
     ensureSelection(
       selectedProfileId,
-      selectedBehavior?.inferenceProfileId ??
-        selectedDeployment.inferenceProfiles[0]?.profileId ??
-        null,
+      selectedBehavior?.inferenceProfileId ?? null,
       (id) =>
         selectedDeployment.inferenceProfiles.some(
           (profile) => profile.profileId === id,
@@ -95,9 +88,7 @@ export function useConfigWorkspaceSelection(
     );
     ensureSelection(
       selectedToolSelectionId,
-      selectedBehavior?.toolSelectionId ??
-        selectedDeployment.toolSelections[0]?.selectionId ??
-        null,
+      selectedBehavior?.toolSelectionId ?? null,
       (id) =>
         selectedDeployment.toolSelections.some(
           (selection) => selection.selectionId === id,

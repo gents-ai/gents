@@ -110,12 +110,6 @@ struct RunningToolCallRow {
     #[serde(default)]
     cancel_cause: Option<String>,
     #[serde(default)]
-    result: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    completion_notification_delivered_at: Option<String>,
-    #[serde(default)]
     child_request_id: Option<String>,
     #[serde(default)]
     spawn_target_did: Option<String>,
@@ -151,10 +145,7 @@ struct TerminalBackgroundToolRow {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ParentRequestRow {
-    agent_did: String,
-    status: String,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: String,
     #[serde(default)]
     subagent_depth: Option<i64>,
     #[serde(default)]
@@ -174,10 +165,7 @@ struct ChildRequestLivenessRow {
     #[serde(default)]
     request_id: String,
     agent_did: String,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: String,
     #[serde(default)]
     deadline: Option<String>,
 }
@@ -192,15 +180,9 @@ struct StreamingChildResponseRow {
 
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
-    #[serde(default)]
-    name: Option<String>,
-    /// Resolved owning DID of the target behavior (#377). Absent on legacy
-    /// fixtures, which fall back to the parent's DID.
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(alias = "target", alias = "target_behavior_id")]
+    name: String,
+    agent_did: String,
     behavior_id: String,
-    #[serde(alias = "message", alias = "content")]
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
@@ -218,10 +200,7 @@ struct SpawnArgs {
 
 impl SpawnArgs {
     fn target_name(&self) -> &str {
-        self.name
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&self.behavior_id)
+        &self.name
     }
 }
 
@@ -248,16 +227,14 @@ impl super::ToolCallLifecycle {
         }
 
         let tool_calls_recovered = recover_stuck_running_tool_calls(node, agent_did).await?;
-        let pending_side_effects =
+        let notifications_repaired =
             Self::reconcile_background_completion_side_effects(node, agent_did)
                 .await?
                 .side_effects_converged;
-        let legacy_notifications =
-            repair_missing_background_tool_notifications(node, agent_did).await?;
 
         Ok(ToolCallRecoveryReport {
             tool_calls_recovered,
-            notifications_repaired: pending_side_effects + legacy_notifications,
+            notifications_repaired,
         })
     }
 
@@ -487,9 +464,6 @@ impl super::ToolCallLifecycle {
             );
         }
 
-        report.notifications_repaired =
-            repair_missing_background_tool_notifications(node, agent_did).await?;
-
         if !report.is_noop() {
             tracing::info!(
                 tool_calls_terminalized = report.tool_calls_terminalized,
@@ -573,7 +547,7 @@ impl super::ToolCallLifecycle {
 
     /// Redrive the idempotent notification + session wake after the lifecycle
     /// row is already terminal. Persisted `status=completionPending:<reason>`
-    /// (or the legacy unsuffixed cursor) advances to `completed` only after
+    /// advances to `completed` only after
     /// both side effects converge, so transient failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
         node: &EmbeddedNode,
@@ -697,31 +671,22 @@ mod tests {
     }
 
     #[test]
-    fn cancel_worthy_field_takes_precedence_over_divergent_completed_status() {
-        let divergent = ParentRequestRow {
-            agent_did: "did:test:x".to_string(),
-            status: "completed".to_string(),
-            lifecycle_state: Some("interrupted".to_string()),
+    fn interrupted_lifecycle_is_cancel_worthy() {
+        let interrupted = ParentRequestRow {
+            lifecycle_state: "interrupted".to_string(),
             ..Default::default()
         };
-        assert!(request_has_cancel_worthy_field(&divergent));
-        assert!(request_is_cancel_worthy_terminal(&divergent));
-        assert!(request_is_interrupted(&divergent));
-        assert!(
-            !request_is_cleanly_completed(&divergent),
-            "status=completed must not suppress lifecycle_state=interrupted"
-        );
+        assert!(request_is_cancel_worthy_terminal(&interrupted));
+        assert!(request_is_interrupted(&interrupted));
+        assert!(!request_is_cleanly_completed(&interrupted));
     }
 
     #[test]
-    fn clean_completion_requires_no_cancel_worthy_fields() {
+    fn completed_lifecycle_is_not_cancel_worthy() {
         let clean = ParentRequestRow {
-            agent_did: "did:test:x".to_string(),
-            status: "completed".to_string(),
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: "completed".to_string(),
             ..Default::default()
         };
-        assert!(!request_has_cancel_worthy_field(&clean));
         assert!(request_is_cleanly_completed(&clean));
         assert!(!request_is_cancel_worthy_terminal(&clean));
     }
@@ -794,35 +759,53 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
                 continue;
             }
         };
-        let row_spawn_target_did =
-            non_empty(row.spawn_target_did.as_deref()).map(ToOwned::to_owned);
-        let args_target_did = non_empty(spawn_args.agent_did.as_deref()).map(ToOwned::to_owned);
-        if let (Some(row_did), Some(args_did)) = (&row_spawn_target_did, &args_target_did) {
-            if row_did != args_did {
-                let failed = fail_unauthorized_orphan_subagent_tool_call(
-                    node,
-                    &row,
-                    "/agent_did",
-                    args_did,
-                    "subagent target DID args do not match immutable spawn_target_did",
-                    &[],
-                )
-                .await?;
-                tracing::warn!(
-                    doc_id = %row.doc_id,
-                    request_id = %parent_request_id,
-                    session_id = %row.session_id,
-                    tool_call_id = %row.tool_call_id,
-                    child_request_id = %child_request_id,
-                    spawn_target_did = %row_did,
-                    args_agent_did = %args_did,
-                    failed_tool_call = failed,
-                    "cannot materialize orphan subagent child because target DID fields differ"
-                );
-                continue;
-            }
+        let Some(row_spawn_target_did) = non_empty(row.spawn_target_did.as_deref()) else {
+            fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                "/spawn_target_did",
+                "",
+                "subagent tool call is missing immutable spawn_target_did",
+                &[],
+            )
+            .await?;
+            continue;
+        };
+        let Some(args_target_did) = non_empty(Some(&spawn_args.agent_did)) else {
+            fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                "/agent_did",
+                "",
+                "subagent arguments are missing agent_did",
+                &[],
+            )
+            .await?;
+            continue;
+        };
+        if row_spawn_target_did != args_target_did {
+            let failed = fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                "/agent_did",
+                args_target_did,
+                "subagent target DID args do not match immutable spawn_target_did",
+                &[],
+            )
+            .await?;
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = %child_request_id,
+                spawn_target_did = %row_spawn_target_did,
+                args_agent_did = %args_target_did,
+                failed_tool_call = failed,
+                "cannot materialize orphan subagent child because target DID fields differ"
+            );
+            continue;
         }
-        let resolved_target_did = row_spawn_target_did.or(args_target_did);
 
         let parent_depth = parent
             .subagent_depth
@@ -891,7 +874,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
-        let child_agent_did = resolved_target_did.unwrap_or_else(|| parent.agent_did.clone());
+        let child_agent_did = row_spawn_target_did.to_string();
         let Some(parent_request_doc_id) = row
             .request_doc_id
             .as_deref()
@@ -1203,9 +1186,6 @@ async fn load_running_tool_call_rows_with_filter(
             await_mode
             cancel_policy
             cancel_cause
-            result
-            lifecycle_state
-            completion_notification_delivered_at
             child_request_id
             spawn_target_did
             unclaimed_deadline_at
@@ -1327,125 +1307,6 @@ fn background_completion_projection(
     }
 }
 
-/// Repair terminal background rows written before the retryable
-/// `completionPending:<reason>` cursor was introduced. New rows are handled by
-/// `reconcile_background_completion_side_effects`, which preserves the exact
-/// durable reason and advances its cursor only after notification and wake.
-async fn repair_missing_background_tool_notifications(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<usize> {
-    let agent_did_escaped = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    agent_did: {{ _eq: "{agent_did_escaped}" }},
-                    await_mode: {{ _eq: "background" }},
-                    lifecycle_state: {{ _in: ["completed", "failed", "timedOut", "cancelled"] }},
-                    status: {{ _eq: "completed" }},
-                    completion_notification_delivered_at: {{ _eq: null }}
-                }}
-            ) {{
-                _docID
-                request_id
-                agent_did
-                session_id
-                tool_call_id
-                tool_name
-                result
-                lifecycle_state
-                cancel_cause
-                await_mode
-                child_request_id
-                completion_notification_delivered_at
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying missing background tool notifications: {:?}",
-            response.errors
-        );
-    }
-    let values = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut repaired = 0;
-    for value in values {
-        let row = match serde_json::from_value::<RunningToolCallRow>(value.clone()) {
-            Ok(row) => row,
-            Err(error) => {
-                tracing::warn!(
-                    doc_id = value
-                        .get("_docID")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(""),
-                    error = %error,
-                    "skipping malformed legacy background row during notification repair"
-                );
-                continue;
-            }
-        };
-        if row.agent_did.as_deref() != Some(agent_did)
-            || child_request_id(&row).is_some()
-            || row.completion_notification_delivered_at.is_some()
-        {
-            continue;
-        }
-        let Some(parent_request_id) = row.request_id.as_deref().filter(|id| !id.is_empty()) else {
-            continue;
-        };
-        let lifecycle_state = row.lifecycle_state.as_deref().unwrap_or_default();
-        let (status, result, reason) = match lifecycle_state {
-            "completed" => ("completed", row.result.as_deref().unwrap_or_default(), None),
-            "cancelled" => (
-                "cancelled",
-                "",
-                Some(row.cancel_cause.as_deref().unwrap_or("cancelled")),
-            ),
-            "timedOut" => ("failed", "", Some("deadline_exceeded")),
-            "failed" => (
-                "failed",
-                row.result.as_deref().unwrap_or_default(),
-                Some(row.cancel_cause.as_deref().unwrap_or("tool_failed")),
-            ),
-            _ => continue,
-        };
-        match crate::background_completion::append_background_tool_completion(
-            node,
-            &row.session_id,
-            parent_request_id,
-            &row.tool_call_id,
-            &row.tool_name,
-            status,
-            result,
-            reason,
-        )
-        .await
-        {
-            Ok(()) => repaired += 1,
-            Err(error) => {
-                tracing::warn!(
-                    doc_id = %row.doc_id,
-                    request_id = parent_request_id,
-                    session_id = %row.session_id,
-                    tool_call_id = %row.tool_call_id,
-                    error = %error,
-                    "failed to repair missing background tool notification"
-                );
-            }
-        }
-    }
-    Ok(repaired)
-}
-
 async fn lookup_parent_request(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -1462,8 +1323,6 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
-                agent_did
-                status
                 lifecycle_state
                 subagent_depth
                 workspace_id
@@ -1594,10 +1453,7 @@ async fn interrupt_queued_descendants_of_terminal_parents(
                 let terminal = load_request_liveness_row(node, parent_request_id)
                     .await?
                     .is_some_and(|parent| {
-                        request_status_or_lifecycle_is_terminal(
-                            parent.status.as_deref(),
-                            parent.lifecycle_state.as_deref(),
-                        )
+                        request_lifecycle_is_terminal(Some(&parent.lifecycle_state))
                     });
                 parent_terminal_cache.insert(parent_request_id.to_string(), terminal);
                 terminal
@@ -1821,10 +1677,7 @@ async fn terminalize_expired_child_with_row(
     if child.agent_did != agent_did {
         return Ok(false);
     }
-    if request_status_or_lifecycle_is_terminal(
-        child.status.as_deref(),
-        child.lifecycle_state.as_deref(),
-    ) {
+    if request_lifecycle_is_terminal(Some(&child.lifecycle_state)) {
         return Ok(false);
     }
     let Some(deadline_at) = parse_datetime(child.deadline.as_deref()) else {
@@ -1868,7 +1721,6 @@ async fn load_request_liveness_row(
                 _docID
                 request_id
                 agent_did
-                status
                 lifecycle_state
                 deadline
             }}
@@ -1913,7 +1765,6 @@ async fn load_child_liveness_rows(
                 _docID
                 request_id
                 agent_did
-                status
                 lifecycle_state
                 deadline
             }}
@@ -2321,63 +2172,28 @@ fn effective_deadline(
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
-    parent.status == "interrupted" || parent.lifecycle_state.as_deref() == Some("interrupted")
+    parent.lifecycle_state == "interrupted"
 }
 
-/// Cancel-worthy evidence on either field takes precedence over a divergent
-/// `completed` sibling field. Mirrors
-/// `subagent_source::parent_reached_cancel_worthy_terminal` (plus `failed` on
-/// status for rows that stamp that vocabulary).
-fn request_has_cancel_worthy_field(parent: &ParentRequestRow) -> bool {
+fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
     matches!(
-        parent.status.as_str(),
-        "error" | "failed" | "superseded" | "dead" | "interrupted"
-    ) || matches!(
-        parent.lifecycle_state.as_deref(),
-        Some("failed" | "error" | "superseded" | "dead" | "interrupted")
+        parent.lifecycle_state.as_str(),
+        "failed" | "superseded" | "dead" | "interrupted"
     )
 }
 
-/// Parent reached a successful terminal **without** any cancel-worthy field
-/// evidence — not a cancel signal for linked background/cascade children.
-///
-/// Divergent replications such as `status=completed` + `lifecycle_state=interrupted`
-/// are **not** clean: cancel-worthy evidence wins.
 fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
-    if request_has_cancel_worthy_field(parent) {
-        return false;
-    }
-    matches!(parent.status.as_str(), "completed" | "complete")
-        || matches!(
-            parent.lifecycle_state.as_deref(),
-            Some("completed" | "complete")
-        )
-}
-
-/// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
-/// supersede, …). Cancel-worthy field evidence is checked first so a stale
-/// `completed` on the other column cannot suppress cascade.
-fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
-    request_has_cancel_worthy_field(parent)
+    parent.lifecycle_state == "completed"
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    request_status_or_lifecycle_is_terminal(
-        Some(parent.status.as_str()),
-        parent.lifecycle_state.as_deref(),
-    )
+    request_lifecycle_is_terminal(Some(&parent.lifecycle_state))
 }
 
-fn request_status_or_lifecycle_is_terminal(
-    status: Option<&str>,
-    lifecycle_state: Option<&str>,
-) -> bool {
+fn request_lifecycle_is_terminal(lifecycle_state: Option<&str>) -> bool {
     matches!(
-        status,
-        Some("completed" | "complete" | "error" | "failed" | "superseded" | "dead" | "interrupted")
-    ) || matches!(
         lifecycle_state,
-        Some("completed" | "complete" | "failed" | "error" | "superseded" | "dead" | "interrupted")
+        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
     )
 }
 
@@ -2400,12 +2216,7 @@ fn await_mode(row: &RunningToolCallRow) -> AwaitMode {
 }
 
 fn subagent_tool_name(row: &RunningToolCallRow) -> &str {
-    row.tool_name
-        .as_str()
-        .trim()
-        .is_empty()
-        .then_some("spawn_subagent")
-        .unwrap_or(row.tool_name.as_str())
+    &row.tool_name
 }
 
 fn is_background_subagent_tool(row: &RunningToolCallRow) -> bool {

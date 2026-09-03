@@ -88,7 +88,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
         "You are precise.",
         "backend-balanced",
         "gpt-local",
-        "Summarize",
+        "StripThenSummarize",
         0.6,
     )
     .await;
@@ -116,7 +116,7 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     assert_eq!(behavior.backend_id.as_deref(), Some("backend-balanced"));
     assert!(matches!(
         behavior.compaction_strategy,
-        crate::compaction::CompactionStrategy::Summarize
+        crate::compaction::CompactionStrategy::StripThenSummarize
     ));
     assert_eq!(behavior.compaction_threshold, 0.6);
     assert_eq!(behavior.stream_batch_ms, 500);
@@ -168,7 +168,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
             selection_id: selection_id.clone(),
             agent_did: did.clone(),
             display_name: Some("Ops".to_string()),
-            tool_policy_version: None,
+            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
             enable_file_tools: Some(true),
             file_tools_mode: Some("ReadWrite".to_string()),
             file_tool_root: None,
@@ -300,7 +300,7 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
 }
 
 #[tokio::test]
-async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_surface() {
+async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("subagent-target-disabled"));
@@ -395,15 +395,15 @@ async fn from_default_behavior_documents_filters_inactive_subagent_targets_from_
     )
     .await
     .unwrap();
-    let tool_names = snapshot
-        .tool_surfaces
+    assert!(!snapshot.behaviors.contains_key(&default_behavior_id));
+    let unavailable = snapshot
+        .unavailable_behaviors
         .get(&default_behavior_id)
-        .expect("tool surface for default behavior")
-        .tool_names();
-
-    assert!(!tool_names.contains(&"spawn_subagent".to_string()));
-    assert!(!tool_names.contains(&"wait_subagent".to_string()));
-    assert!(!tool_names.contains(&"cancel_subagent".to_string()));
+        .expect("behavior with an inactive configured target must be unavailable");
+    assert_eq!(
+        unavailable.public_reason,
+        gents_protocol::row::BehaviorReadinessUnavailableReason::ToolConfigurationInvalid
+    );
 }
 
 #[tokio::test]

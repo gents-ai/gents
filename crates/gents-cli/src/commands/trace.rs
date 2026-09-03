@@ -13,6 +13,7 @@ use gents::adapter_projection::{
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline::build_run_timeline;
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
+use gents::tool_call_lifecycle::ToolCallState;
 use gents::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
@@ -387,7 +388,7 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
         &conversations,
         &behaviors,
         &args,
-    );
+    )?;
     let records = match args.request_id.as_deref() {
         Some(request_id) => records
             .into_iter()
@@ -408,7 +409,7 @@ fn build_records(
     conversations: &HashMap<String, ConversationRow>,
     behaviors: &HashMap<String, BehaviorRow>,
     args: &TraceExportArgs,
-) -> Vec<AmyToolCallTraceRecord> {
+) -> Result<Vec<AmyToolCallTraceRecord>> {
     let requests_by_session = rows_by_session(requests);
     let responses_by_session = rows_by_session(responses);
     let responses_by_request = responses
@@ -418,7 +419,7 @@ fn build_records(
 
     tool_calls
         .iter()
-        .map(|tool_call| {
+        .map(|tool_call| -> Result<AmyToolCallTraceRecord> {
             let session_requests = requests_by_session
                 .get(tool_call.session_id.as_str())
                 .map(Vec::as_slice)
@@ -436,16 +437,27 @@ fn build_records(
             });
             let request_failure = combined_request_failure_text(request, response);
             let request_failure_class = analyze_request_failure(request_failure.as_deref());
-            let lifecycle_state = tool_call
+            let lifecycle_state_text = tool_call
                 .lifecycle_state
                 .as_deref()
-                .filter(|state| !state.trim().is_empty());
-            let observed_tool_status = lifecycle_state.unwrap_or(&tool_call.status);
+                .filter(|state| !state.trim().is_empty())
+                .with_context(|| {
+                    format!(
+                        "tool call {} is missing lifecycle_state",
+                        tool_call.tool_call_id
+                    )
+                })?;
+            let lifecycle_state = ToolCallState::from_persisted(lifecycle_state_text)
+                .with_context(|| {
+                    format!(
+                        "tool call {} has invalid lifecycle_state {lifecycle_state_text:?}",
+                        tool_call.tool_call_id
+                    )
+                })?;
             let analysis = analyze_tool_call_with_persisted_outcome(
                 &tool_call.tool_name,
                 &tool_call.args,
                 &tool_call.result,
-                &tool_call.status,
                 lifecycle_state,
                 tool_call.tool_failure_class.as_deref(),
             );
@@ -490,7 +502,7 @@ fn build_records(
                 behavior.and_then(|behavior| behavior.agent_did.as_deref()),
             ]);
 
-            AmyToolCallTraceRecord {
+            Ok(AmyToolCallTraceRecord {
                 run_id,
                 case_id,
                 prompt: request.and_then(|request| request.content.clone()),
@@ -525,8 +537,8 @@ fn build_records(
                 tool_result: tool_call.result.clone(),
                 native_tool_output: analysis.native_tool_output,
                 tool_result_ok: analysis.tool_result_ok,
-                tool_call_completed: observed_tool_status.eq_ignore_ascii_case("completed"),
-                tool_status: observed_tool_status.to_string(),
+                tool_call_completed: lifecycle_state == ToolCallState::Completed,
+                tool_status: lifecycle_state_text.to_string(),
                 task_outcome: None,
                 tool_failure_class: analysis.tool_failure_class,
                 tool_error: analysis.tool_error,
@@ -538,7 +550,7 @@ fn build_records(
                     tool_call.completed_at.as_deref(),
                 ),
                 retry_count: request.and_then(|request| request.retry_count),
-            }
+            })
         })
         .collect()
 }
@@ -570,7 +582,6 @@ async fn load_tool_calls(
                 tool_call_id
                 args
                 result
-                status
                 lifecycle_state
                 tool_failure_class
                 started_at
@@ -1035,8 +1046,6 @@ struct ToolCallRow {
     #[serde(default)]
     result: String,
     #[serde(default)]
-    status: String,
-    #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
     tool_failure_class: Option<String>,
@@ -1218,7 +1227,6 @@ mod tests {
             tool_call_id: String::new(),
             args: String::new(),
             result: String::new(),
-            status: String::new(),
             lifecycle_state: None,
             tool_failure_class: None,
             started_at: None,

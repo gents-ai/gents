@@ -106,7 +106,7 @@ impl Tool for DiscoverToolsTool {
 
         if services.is_empty() {
             if self.ctx.allowed_mcp_service_ids.is_empty() {
-                return Ok("No data services are currently online.".to_string());
+                return Ok("No MCP services are allowed for this behavior.".to_string());
             }
             return Ok(format!(
                 "No allowed data services are currently online. Allowed services: {}.",
@@ -139,15 +139,12 @@ impl Tool for DiscoverToolsTool {
                 .unwrap_or("");
             let svc_lanip = svc.get("lan_ip").and_then(|v| v.as_str()).unwrap_or("");
             let svc_port = svc.get("mcp_port").and_then(|v| v.as_u64()).unwrap_or(0) as u16;
-            let svc_path = svc
-                .get("mcp_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("/mcp");
+            let svc_path = svc.get("mcp_path").and_then(|v| v.as_str()).unwrap_or("");
             let send_agent_did = svc
                 .get("send_agent_did")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
-            let endpoint = if svc_port > 0 {
+            let endpoint = if svc_port > 0 && !svc_path.trim().is_empty() {
                 Ok(resolve_mcp_url(
                     svc_hostname,
                     svc_tsip,
@@ -158,7 +155,7 @@ impl Tool for DiscoverToolsTool {
                     self.ctx.local_subnet.as_deref(),
                 ))
             } else {
-                Err(anyhow!("no mcp_port"))
+                Err(anyhow!("incomplete MCP route"))
             };
             let tool_names: Vec<(String, String)> = if unreachable {
                 Vec::new()
@@ -394,7 +391,11 @@ mod tests {
             local_hostname: "studio-1".to_string(),
             local_subnet: None,
             agent_did: "did:key:z-test-agent".to_string(),
-            allowed_mcp_service_ids: Vec::new(),
+            allowed_mcp_service_ids: vec![
+                "x-data".to_string(),
+                "hf-data".to_string(),
+                "web-research-mcp".to_string(),
+            ],
         }
     }
 

@@ -11,6 +11,7 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
         &ToolSelectionDocument {
             selection_id: "r4-parent-tools".to_string(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 GHOST_BEHAVIOR_ID,
                 &agent_did,
@@ -85,7 +86,9 @@ async fn setup_ghost_behavior_fixture(test_name: &str) -> SpawnFixture {
     )
     .await
     .unwrap();
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(parent_deadline)).await;
 
     SpawnFixture {

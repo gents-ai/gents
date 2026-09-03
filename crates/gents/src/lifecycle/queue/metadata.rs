@@ -22,7 +22,6 @@ pub(crate) struct QueueHints {
 #[serde(rename_all = "snake_case")]
 pub enum QueueSource {
     User,
-    #[serde(alias = "subagent_completion")]
     BackgroundCompletion,
     Steering,
     Goal,
@@ -43,11 +42,6 @@ fn parse_queue_metadata(metadata: Option<&str>) -> Option<RequestQueueMetadata> 
     let metadata = metadata?.trim();
     if metadata.is_empty() {
         return None;
-    }
-    if metadata.contains("\"subagent_completion\"") {
-        tracing::warn!(
-            "parsed deprecated queue source alias subagent_completion as background_completion"
-        );
     }
     serde_json::from_str::<RequestQueueMetadata>(metadata).ok()
 }

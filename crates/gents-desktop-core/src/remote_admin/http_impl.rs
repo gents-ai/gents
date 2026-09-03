@@ -202,22 +202,14 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
     async fn list_replicators(&self) -> RemoteP2pAdminResult<Vec<RemoteReplicator>> {
         #[derive(Deserialize)]
         struct WireReplicator {
-            #[serde(default, rename = "ID", alias = "id")]
+            #[serde(default, rename = "ID")]
             id: Option<String>,
-            #[serde(default, rename = "CollectionIDs")]
-            collection_ids: Option<Vec<String>>,
-            #[serde(default, rename = "collections")]
-            legacy_collections: Option<Vec<String>>,
-            #[serde(default, rename = "Addresses")]
-            addresses: Option<Vec<String>>,
-            #[serde(default, rename = "addresses")]
-            legacy_addresses: Option<Vec<String>>,
-            #[serde(default, rename = "address")]
-            address: Option<String>,
+            #[serde(rename = "CollectionIDs")]
+            collection_ids: Vec<String>,
+            #[serde(rename = "Addresses")]
+            addresses: Vec<String>,
             #[serde(default, rename = "Filters")]
-            filters: Option<BTreeMap<String, ReplicationFilter>>,
-            #[serde(default, rename = "filters")]
-            legacy_filters: Option<BTreeMap<String, ReplicationFilter>>,
+            filters: BTreeMap<String, ReplicationFilter>,
         }
 
         let resp = self
@@ -231,28 +223,11 @@ impl RemoteP2pAdmin for HttpRemoteP2pAdmin {
         })?;
         Ok(wire
             .into_iter()
-            .map(|w| {
-                // The pinned DefraDB wire uses `CollectionIDs`/`Addresses` and
-                // omits `Filters` when the effective map is empty. Lowercase
-                // legacy projections predate observable filters, so omission
-                // there remains unknown rather than being guessed empty.
-                let current_defra_wire = w.collection_ids.is_some() || w.addresses.is_some();
-                RemoteReplicator {
-                    id: w.id,
-                    collections: w
-                        .collection_ids
-                        .or(w.legacy_collections)
-                        .unwrap_or_default(),
-                    address: w.address.or_else(|| {
-                        w.addresses
-                            .or(w.legacy_addresses)
-                            .and_then(|addresses| addresses.into_iter().next())
-                    }),
-                    filters: w
-                        .filters
-                        .or(w.legacy_filters)
-                        .or_else(|| current_defra_wire.then(BTreeMap::new)),
-                }
+            .map(|w| RemoteReplicator {
+                id: w.id,
+                collections: w.collection_ids,
+                address: w.addresses.into_iter().next(),
+                filters: Some(w.filters),
             })
             .collect())
     }
@@ -920,7 +895,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_replicators_preserves_legacy_wire_omission_as_unknown() {
+    async fn list_replicators_rejects_noncanonical_wire_fields() {
         let server = MockServer::start().await;
         let body = serde_json::json!([{
             "id": "peer1",
@@ -933,13 +908,10 @@ mod tests {
             .mount(&server)
             .await;
 
-        let reps = admin_for(&server)
+        admin_for(&server)
             .list_replicators()
             .await
-            .expect("list legacy replicators");
-
-        assert_eq!(reps.len(), 1);
-        assert_eq!(reps[0].filters, None);
+            .expect_err("noncanonical replicator response must fail closed");
     }
 
     #[tokio::test]

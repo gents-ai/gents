@@ -27,6 +27,7 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -90,6 +91,7 @@ async fn status_includes_p2p_runtime_info() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -212,6 +214,7 @@ async fn status_and_metrics_surface_overridden_p2p_admission_knobs() -> Result<(
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -342,6 +345,7 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

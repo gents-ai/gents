@@ -482,7 +482,8 @@ pub async fn create_request_for_agent_with_signed_fields(
                 {valid_until}
                 {metadata}
                 retry_count: 0,
-                max_retries: {max_retries}
+                max_retries: {max_retries},
+                subagent_depth: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,

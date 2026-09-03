@@ -1241,13 +1241,12 @@ fn child_bridge_is_corroborated(
     {
         return false;
     }
-    let root_doc_id = nonempty(root_request.doc_id.as_deref());
-    let child_parent_doc_id = nonempty(child_request.caused_by_parent_request_doc_id.as_deref());
-    let physical_bridge = match (root_doc_id, child_parent_doc_id) {
-        (Some(root_doc_id), Some(parent_doc_id)) if root_doc_id == parent_doc_id => true,
-        (None, None) if nonempty(child_request.doc_id.as_deref()).is_none() => false,
-        _ => return false,
+    let Some(root_doc_id) = nonempty(root_request.doc_id.as_deref()) else {
+        return false;
     };
+    if nonempty(child_request.caused_by_parent_request_doc_id.as_deref()) != Some(root_doc_id) {
+        return false;
+    }
     if request_only_control_link_is_corroborated(child_request) {
         return true;
     }
@@ -1256,18 +1255,14 @@ fn child_bridge_is_corroborated(
     else {
         return false;
     };
-    let parent_tool_doc_id = nonempty(child_request.caused_by_parent_tool_call_doc_id.as_deref());
+    let Some(parent_tool_doc_id) =
+        nonempty(child_request.caused_by_parent_tool_call_doc_id.as_deref())
+    else {
+        return false;
+    };
     tool_calls.iter().any(|tool_call| {
-        let physical_ids_match = if physical_bridge {
-            parent_tool_doc_id.is_some()
-                && nonempty(tool_call.doc_id.as_deref()) == parent_tool_doc_id
-                && nonempty(tool_call.request_doc_id.as_deref()) == root_doc_id
-        } else {
-            parent_tool_doc_id.is_none()
-                && nonempty(tool_call.doc_id.as_deref()).is_none()
-                && nonempty(tool_call.request_doc_id.as_deref()).is_none()
-        };
-        physical_ids_match
+        nonempty(tool_call.doc_id.as_deref()) == Some(parent_tool_doc_id)
+            && nonempty(tool_call.request_doc_id.as_deref()) == Some(root_doc_id)
             && nonempty(tool_call.request_id.as_deref()) == Some(root_request.request_id.as_str())
             && tool_call.tool_call_id == parent_tool_call_id
             && nonempty(tool_call.child_request_id.as_deref())
@@ -1987,11 +1982,14 @@ mod tests {
             "capture_seam": "transport_body",
             "capture_scope": scope,
             "assembly_trace": {
-                "trace_version": 2,
+                "trace_version": 4,
                 "build_path": "budgeted",
                 "effective_message_count": 0,
+                "effective_messages": null,
                 "assistant_message_ids": [],
-                "threaded_tool_results": []
+                "threaded_tool_results": [],
+                "reduction_keys": [],
+                "context_accounting": null
             }
         });
         if let Some((call_id, call_seq)) = call_id {
@@ -2035,6 +2033,7 @@ mod tests {
     fn rendered_captures_interleave_with_their_inference_calls() {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
+                doc_id: Some("doc-req-1".to_string()),
                 request_id: "req-1".to_string(),
                 session_id: Some("session-1".to_string()),
                 execution_origin: Some("triggered".to_string()),
@@ -2047,6 +2046,7 @@ mod tests {
                 TimelineInferenceCallRow {
                     call_id: "call-1".to_string(),
                     request_id: "req-1".to_string(),
+                    request_doc_id: Some("doc-req-1".to_string()),
                     call_seq: 1,
                     attempt: 1,
                     call_state: "completed".to_string(),
@@ -2061,6 +2061,7 @@ mod tests {
                 TimelineInferenceCallRow {
                     call_id: "call-2".to_string(),
                     request_id: "req-1".to_string(),
+                    request_doc_id: Some("doc-req-1".to_string()),
                     call_seq: 2,
                     attempt: 2,
                     call_state: "completed".to_string(),
@@ -2483,7 +2484,7 @@ mod tests {
     }
 
     #[test]
-    fn external_logical_child_bridge_without_document_ids_is_emitted() {
+    fn external_logical_child_bridge_without_document_ids_is_rejected() {
         let timeline = build_run_timeline(RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-root".to_string(),
@@ -2504,7 +2505,7 @@ mod tests {
             ..Default::default()
         });
 
-        assert_eq!(timeline.child_request_ids, vec!["req-child"]);
+        assert!(timeline.child_request_ids.is_empty());
     }
 
     #[test]

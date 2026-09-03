@@ -113,6 +113,7 @@ pub(super) async fn insert_backend_with_health(
             create_InferenceBackend(input: {{
                 backend_id: "{escaped_backend_id}",
                 name: "Balanced Backend",
+                provider_kind: "OpenAiCompatible",
                 endpoint: "{escaped_endpoint}",
                 max_concurrent: 2,
                 enabled: {enabled},

@@ -158,6 +158,7 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
             r#"mutation { create_InferenceBackend(input: {
                     backend_id: "other-agent-backend",
                     name: "other-agent-backend",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "http://127.0.0.1:9991/v1",
                     max_concurrent: 1,
                     max_queue_depth: 8,
@@ -180,6 +181,7 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
             r#"mutation { create_InferenceBackend(input: {
                     backend_id: "stale-backend",
                     name: "stale-backend",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "http://127.0.0.1:9992/v1",
                     max_concurrent: 1,
                     max_queue_depth: 8,

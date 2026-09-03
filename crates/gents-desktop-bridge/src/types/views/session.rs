@@ -145,7 +145,6 @@ pub enum ToolPresentationView {
 pub struct RenderedToolCallView {
     pub item_key: String,
     pub tool_name: String,
-    pub status: Option<String>,
     pub status_kind: String,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
@@ -331,8 +330,7 @@ pub struct SessionRequestContextView {
 
 /// Observable context pressure for the session. `last_request` is the exact,
 /// prompt-free accounting captured at the most recent provider boundary; the
-/// remaining fields project the durable conversation and remain available as
-/// a fallback for sessions created before request accounting was introduced.
+/// remaining fields are estimates computed directly from the durable rows.
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionContextView {

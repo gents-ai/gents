@@ -951,7 +951,7 @@ fn desired_tool_selection(
         selection_id: doc.id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some(doc.content.clone()),
-        tool_policy_version: None,
+        tool_policy_version: gents::tool_surface::TOOL_POLICY_V1.to_string(),
         enable_file_tools: false,
         file_tools_mode: "disabled".to_string(),
         file_tool_root: None,
@@ -975,7 +975,6 @@ fn desired_tool_selection(
             .map(|reference| reference.id.clone())
             .collect(),
         required_mcp_service_ids: Vec::new(),
-        delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
         enable_memory: false,
         enable_session_history_tool: false,
@@ -1046,7 +1045,7 @@ fn desired_tool_service(doc: &LeanApplyDesiredDoc) -> desired_state::DesiredTool
         tailscale_ip: None,
         lan_ip: None,
         mcp_port: None,
-        mcp_path: None,
+        mcp_path: "/mcp".to_string(),
         send_agent_did: false,
     }
 }

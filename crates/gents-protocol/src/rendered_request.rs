@@ -269,12 +269,6 @@ impl From<CaptureScopeParseError> for CaptureOrderKeyError {
     }
 }
 
-/// Provenance manifest versions this reader understands. A version outside the
-/// range is reported as [`ParsedProvenance::Unsupported`], never guessed at.
-/// v2 rows (written by #1059 runtimes) stay readable forever; their optional
-/// v3 fields deserialize as absent.
-pub const SUPPORTED_PROVENANCE_MANIFEST_VERSIONS: std::ops::RangeInclusive<u32> = 2..=3;
-
 /// Outcome of reading a `provenance_json` column.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParsedProvenance {
@@ -334,7 +328,7 @@ impl ProvenanceManifest {
             .and_then(serde_json::Value::as_u64)
             .and_then(|version| u32::try_from(version).ok())
             .ok_or(ProvenanceParseError::MissingVersion)?;
-        if !SUPPORTED_PROVENANCE_MANIFEST_VERSIONS.contains(&manifest_version) {
+        if manifest_version != PROVENANCE_MANIFEST_VERSION {
             return Ok(ParsedProvenance::Unsupported { manifest_version });
         }
         serde_json::from_value(value)
@@ -529,17 +523,14 @@ pub struct AssemblyTrace {
     /// after request-context rendering or per-turn compaction introduces
     /// request-local content. Native `Message`s, not provider wire shapes: this is
     /// the *input* to assembly, whereas `request_json` is its output.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effective_messages: Option<Vec<Message>>,
     pub assistant_message_ids: Vec<AssistantMessageId>,
     pub threaded_tool_results: Vec<ThreadedToolResult>,
     /// Ordered immutable per-turn reduction facts that causally determine the
     /// sticky provider projection used for this request. Empty on ordinary
-    /// assembly and on pre-v3 traces.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// assembly.
     pub reduction_keys: Vec<String>,
-    /// Exact accounting used at the dispatch gate. Absent on pre-v4 traces.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Exact accounting used at the dispatch gate.
     pub context_accounting: Option<ContextAccounting>,
 }
 
@@ -974,38 +965,44 @@ mod tests {
     }
 
     #[test]
-    fn manifest_reader_gates_on_version() {
-        let v2 = json!({
-            "manifest_version": 2,
+    fn manifest_reader_accepts_only_the_current_version() {
+        let current = json!({
+            "manifest_version": PROVENANCE_MANIFEST_VERSION,
             "status": "captured_only",
             "status_reason": "r",
             "capture_seam": "transport_body",
             "capture_scope": "inference.1",
             "assembly_trace": {
-                "trace_version": 2,
+                "trace_version": 4,
                 "build_path": "budgeted",
                 "effective_message_count": 0,
+                "effective_messages": null,
                 "assistant_message_ids": [],
-                "threaded_tool_results": []
+                "threaded_tool_results": [],
+                "reduction_keys": [],
+                "context_accounting": null
             }
         });
-        let parsed = ProvenanceManifest::parse(&v2.to_string()).expect("v2 parses");
+        let parsed = ProvenanceManifest::parse(&current.to_string()).expect("current parses");
         match parsed {
             ParsedProvenance::Manifest(manifest) => {
-                assert_eq!(manifest.manifest_version, 2);
+                assert_eq!(manifest.manifest_version, PROVENANCE_MANIFEST_VERSION);
                 assert_eq!(manifest.capture_scope, "inference.1");
                 assert_eq!(manifest.status, ProvenanceStatus::CapturedOnly);
             }
             other => panic!("expected manifest, got {other:?}"),
         }
 
-        let v99 = json!({ "manifest_version": 99, "anything": true });
-        assert_eq!(
-            ProvenanceManifest::parse(&v99.to_string()).expect("well-formed unknown version"),
-            ParsedProvenance::Unsupported {
-                manifest_version: 99
-            }
-        );
+        for version in [2, 99] {
+            let unsupported = json!({ "manifest_version": version, "anything": true });
+            assert_eq!(
+                ProvenanceManifest::parse(&unsupported.to_string())
+                    .expect("well-formed unknown version"),
+                ParsedProvenance::Unsupported {
+                    manifest_version: version
+                }
+            );
+        }
 
         assert!(matches!(
             ProvenanceManifest::parse(""),
@@ -1019,9 +1016,11 @@ mod tests {
             ProvenanceManifest::parse(r#"{"status":"captured_only"}"#),
             Err(ProvenanceParseError::MissingVersion)
         ));
-        // In-range version whose body does not match the declared shape.
+        // Current version whose body does not match the declared shape.
         assert!(matches!(
-            ProvenanceManifest::parse(r#"{"manifest_version":2}"#),
+            ProvenanceManifest::parse(&format!(
+                r#"{{"manifest_version":{PROVENANCE_MANIFEST_VERSION}}}"#
+            )),
             Err(ProvenanceParseError::InvalidManifest(_))
         ));
     }
@@ -1111,19 +1110,5 @@ mod tests {
                 .estimated_input_tokens(),
             170
         );
-    }
-
-    #[test]
-    fn pre_accounting_trace_remains_readable() {
-        let legacy = serde_json::json!({
-            "trace_version": 3,
-            "build_path": "budgeted",
-            "effective_message_count": 0,
-            "assistant_message_ids": [],
-            "threaded_tool_results": []
-        });
-        let decoded: AssemblyTrace =
-            serde_json::from_value(legacy).expect("pre-v4 trace remains readable");
-        assert_eq!(decoded.context_accounting, None);
     }
 }

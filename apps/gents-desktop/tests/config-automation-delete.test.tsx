@@ -117,7 +117,7 @@ describe("automation document deletion", () => {
           {
             backendId: "openai-main",
             name: "OpenAI",
-            providerKind: "openai",
+            providerKind: "OpenAiCompatible",
             endpoint: "http://127.0.0.1:1/v1",
             apiKeyConfigured: false,
             maxConcurrent: 1,

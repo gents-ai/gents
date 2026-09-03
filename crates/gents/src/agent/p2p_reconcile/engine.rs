@@ -1126,8 +1126,6 @@ impl AppliedStateRow {
     }
 }
 
-pub const DEFAULT_PAIRING_TEMPLATE: &str = "conversation";
-
 #[derive(Deserialize)]
 struct PeerIdRow {
     peer_id: String,
@@ -1151,15 +1149,9 @@ fn desired_from_pairing_row(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .unwrap_or(DEFAULT_PAIRING_TEMPLATE);
-    let template = resolve_template(template_id).unwrap_or_else(|| {
-        tracing::warn!(
-            template = template_id,
-            "unknown pairing scope template; falling back to default \"{DEFAULT_PAIRING_TEMPLATE}\""
-        );
-        resolve_template(DEFAULT_PAIRING_TEMPLATE)
-            .expect("default pairing template is in the catalog")
-    });
+        .context("pairing row is missing its scope template")?;
+    let template = resolve_template(template_id)
+        .with_context(|| format!("unknown pairing scope template {template_id:?}"))?;
 
     if template.id == APP_COLLECTIONS_TEMPLATE {
         tracing::warn!(
@@ -1270,25 +1262,21 @@ fn data_plane_desired_from_pairing_row(
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
-        .unwrap_or(DEFAULT_PAIRING_TEMPLATE);
-    let template = resolve_template(template_id).unwrap_or_else(|| {
-        tracing::warn!(
-            template = template_id,
-            "unknown data-plane pairing scope template; falling back to default \"{DEFAULT_PAIRING_TEMPLATE}\""
-        );
-        resolve_template(DEFAULT_PAIRING_TEMPLATE)
-            .expect("default pairing template is in the catalog")
-    });
-    // Runtime enrollment rows historically use the unsuffixed member peer as
-    // their return-route key. Desktop-owned routes carry an explicit suffix,
-    // and that direction must survive enrollment materialization: it decides
-    // both which collections may leave this node and which DID owns each side
-    // of the requester/agent filter.
+        .context("data-plane pairing row is missing its scope template")?;
+    let template = resolve_template(template_id)
+        .with_context(|| format!("unknown data-plane pairing scope template {template_id:?}"))?;
     let client_route_direction = if template.scope == Scope::ClientRoute {
-        row.peer_id
-            .as_deref()
-            .and_then(|route_id| super::policy::client_route_direction(route_id).ok())
-            .unwrap_or(super::policy::PairingDirection::RuntimeToClient)
+        if row.source.as_deref() == Some("enrollment") {
+            super::policy::PairingDirection::RuntimeToClient
+        } else {
+            let route_id = row
+                .peer_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|route_id| !route_id.is_empty())
+                .context("client data-plane pairing row is missing its durable route key")?;
+            super::policy::client_route_direction(route_id)?
+        }
     } else {
         super::policy::PairingDirection::RuntimeToClient
     };

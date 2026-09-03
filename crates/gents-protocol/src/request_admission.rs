@@ -273,9 +273,10 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     ] {
         require_optional_identifier(name, value)?;
     }
-    if let Some(origin) = request.execution_origin {
-        require_enum("execution_origin", origin, &["interactive", "scheduled"])?;
-    }
+    let origin = request
+        .execution_origin
+        .ok_or_else(|| anyhow::anyhow!("execution_origin is required"))?;
+    require_enum("execution_origin", origin, &["interactive", "scheduled"])?;
     if let Some(kind) = request.caused_by_trigger_kind {
         require_enum(
             "caused_by_trigger_kind",
@@ -1250,6 +1251,13 @@ mod tests {
         let mut value = local_create();
         value.content = "  preserve opaque content exactly  ".into();
         assert!(value.graphql_input_fields().is_ok());
+
+        let fields = value.signing_fields();
+        assert!(validate_signing_fields(&AgentRequestSigningFields {
+            execution_origin: None,
+            ..fields
+        })
+        .is_err());
 
         for hostile in [" request-1", "request-1 "] {
             let mut value = local_create();

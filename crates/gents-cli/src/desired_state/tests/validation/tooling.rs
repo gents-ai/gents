@@ -176,20 +176,26 @@ fn validate_accepts_local_did_target_when_cross_deployment_off() {
 }
 
 #[test]
-fn write_tools_deserializer_converges_object_and_string_shapes() {
-    fn deser_write_tools(write_tools: serde_json::Value) -> Vec<String> {
-        let selection = json!({
+fn write_tools_deserializer_accepts_only_canonical_objects() {
+    fn selection(write_tools: serde_json::Value) -> serde_json::Value {
+        json!({
             "selection_id": "conv-sel",
             "agent_did": "did:test:test",
+            "tool_policy_version": gents::tool_surface::TOOL_POLICY_V1,
+            "display_name": null,
             "enable_file_tools": false,
             "file_tools_mode": "ReadOnly",
+            "file_tool_root": null,
             "enable_bash": false,
             "bash_mode": "ReadOnly",
             "enable_meta_tools": false,
             "write_tools": write_tools,
-        });
+        })
+    }
+
+    fn deser_write_tools(write_tools: serde_json::Value) -> Vec<String> {
         let parsed: DesiredToolSelection =
-            serde_json::from_value(selection).expect("DesiredToolSelection deserializes");
+            serde_json::from_value(selection(write_tools)).expect("canonical selection");
         parsed.write_tools
     }
 
@@ -201,13 +207,13 @@ fn write_tools_deserializer_converges_object_and_string_shapes() {
         }
     ]));
 
-    let string_list = deser_write_tools(json!([
-        "{\"collection\":\"ActionRequest\",\"fields\":[{\"required\":true,\"name\":\"drift_sig\"}],\"tool_name\":\"request_action\"}"
-    ]));
-
-    assert_eq!(
-        object_list, string_list,
-        "object-list and string-list shapes of the same decl must canonicalize to the SAME storage Vec<String> (else false apply/diff drift)"
+    assert_eq!(object_list.len(), 1);
+    assert!(
+        serde_json::from_value::<DesiredToolSelection>(selection(json!([
+            "{\"collection\":\"ActionRequest\",\"fields\":[{\"required\":true,\"name\":\"drift_sig\"}],\"tool_name\":\"request_action\"}"
+        ])))
+        .is_err(),
+        "DefraDB's encoded storage shape is not a valid manifest input"
     );
 }
 

@@ -15,9 +15,7 @@ pub async fn desktop_tool_surface_explain(
     state: State<'_, DesktopAppState>,
 ) -> Result<Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let snapshot = core.store().snapshot();
@@ -33,7 +31,7 @@ pub async fn desktop_tool_surface_explain(
     let mcp_services_online = snapshot
         .tool_service_registries
         .iter()
-        .any(|row| row.status.as_deref().unwrap_or("online") == "online");
+        .any(|row| row.status.as_deref() == Some("online"));
     let active_behavior_ids = snapshot
         .behaviors
         .iter()
@@ -43,14 +41,14 @@ pub async fn desktop_tool_surface_explain(
     let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &agent_did)
         .await
         .map_err(|error| {
-            BridgeError::from_legacy_message(format!(
+            BridgeError::untyped(format!(
                 "loading DatastoreToolSurface documents for {agent_did}: {error}"
             ))
         })?;
     let eth_tools = gents::list_eth_tools(core.node(), &agent_did)
         .await
         .map_err(|error| {
-            BridgeError::from_legacy_message(format!(
+            BridgeError::untyped(format!(
                 "loading EthTool documents for {agent_did}: {error}"
             ))
         })?;
@@ -71,9 +69,7 @@ pub async fn desktop_tool_surface_explain(
             let document: gents::ToolSelectionDocument = serde_json::to_value(row)
                 .and_then(serde_json::from_value)
                 .map_err(|error| {
-                    BridgeError::from_legacy_message(format!(
-                        "decoding ToolSelection {selection_id}: {error}"
-                    ))
+                    BridgeError::untyped(format!("decoding ToolSelection {selection_id}: {error}"))
                 })?;
             let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
                 &behavior.behavior_id,
@@ -83,7 +79,7 @@ pub async fn desktop_tool_surface_explain(
                 &ceiling,
                 Vec::new(),
             )
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+            .map_err(|error| BridgeError::untyped(error.to_string()))?;
             ("document", config, document.tool_policy_version.clone())
         }
         None => (
@@ -94,7 +90,7 @@ pub async fn desktop_tool_surface_explain(
                 &ceiling,
                 Vec::new(),
             )
-            .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
+            .map_err(|error| BridgeError::untyped(error.to_string()))?,
             None,
         ),
     };
@@ -102,9 +98,8 @@ pub async fn desktop_tool_surface_explain(
     let explanation =
         config.explain_with_runtime(mcp_services_online, &agent_did, &active_behavior_ids);
     let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
-        Ok(ToolPolicyVersion::LegacyDefaults) => "legacy-permissive",
         Ok(ToolPolicyVersion::V1) => "tool-policy/v1",
-        Err(_) => "unknown",
+        Err(_) => "invalid",
     };
 
     Ok(json!({
@@ -116,7 +111,7 @@ pub async fn desktop_tool_surface_explain(
         "toolPolicySemantics": tool_policy_semantics,
         "ceilingSource": ceiling_source,
         "mcpServicesOnline": mcp_services_online,
-        "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::from_legacy_message(error.to_string()))?,
+        "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::untyped(error.to_string()))?,
     }))
 }
 

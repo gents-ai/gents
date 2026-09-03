@@ -482,7 +482,6 @@ async fn fetch_graphql_agent_identity(
     let query = r#"
         query DesktopRuntimeIdentity {
             AgentPrincipal { agent_did display_name enabled }
-            AgentRuntime { agent_did }
         }
     "#;
     let response = client
@@ -514,27 +513,26 @@ async fn fetch_graphql_agent_identity(
     let data = response
         .data
         .context("GraphQL identity query returned no data")?;
-    let principal = data
+    let principals = data
         .get("AgentPrincipal")
         .and_then(Value::as_array)
-        .and_then(|rows| {
-            rows.iter()
-                .find(|row| row.get("enabled").and_then(Value::as_bool) != Some(false))
-                .or_else(|| rows.first())
-        });
-    let runtime = data
-        .get("AgentRuntime")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first());
-    let agent_did = principal
-        .and_then(|row| string_at(row, "/agent_did"))
-        .or_else(|| runtime.and_then(|row| string_at(row, "/agent_did")))
-        .context("GraphQL identity query returned no agent_did")?
+        .context("GraphQL identity query returned no AgentPrincipal rows")?;
+    let enabled = principals
+        .iter()
+        .filter(|row| row.get("enabled").and_then(Value::as_bool) == Some(true))
+        .collect::<Vec<_>>();
+    let [principal] = enabled.as_slice() else {
+        anyhow::bail!(
+            "GraphQL identity query must return exactly one enabled AgentPrincipal, found {}",
+            enabled.len()
+        );
+    };
+    let agent_did = string_at(principal, "/agent_did")
+        .context("enabled AgentPrincipal has no agent_did")?
         .to_string();
-    let agent_name = principal
-        .and_then(|row| string_at(row, "/display_name"))
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| fallback_agent_name(&agent_did));
+    let agent_name = string_at(principal, "/display_name")
+        .context("enabled AgentPrincipal has no display_name")?
+        .to_string();
 
     Ok((agent_did, agent_name))
 }
@@ -553,15 +551,6 @@ fn string_at<'a>(value: &'a Value, pointer: &str) -> Option<&'a str> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-}
-
-fn fallback_agent_name(agent_did: &str) -> String {
-    agent_did
-        .rsplit(':')
-        .next()
-        .filter(|value| !value.is_empty())
-        .unwrap_or(agent_did)
-        .to_string()
 }
 
 fn url_host_is_loopback_or_unspecified(url: &reqwest::Url) -> bool {

@@ -13,15 +13,10 @@ use rig::http_client::{
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
-// Re-export the shared OAuth credential shell so existing `chatgpt_codex::` call sites stay stable.
-pub use crate::oauth_credential::{
-    classify_chatgpt_auth_error, list_oauth_credentials, lookup_oauth_credential,
-    lookup_oauth_credential_by_doc_id, lookup_oauth_credential_by_id,
-    oauth_credential_by_doc_id_query, oauth_credential_by_id_query, oauth_credential_id,
-    oauth_credential_query, oauth_credential_upsert_mutation, oauth_credentials_for_agent_query,
-    oauth_credentials_from_response, shared_bearer, token_is_fresh, upsert_oauth_credential,
-    BearerSource, ChatGptAuthProblem, DbCredentialBearer, OAuthAuthProblem, OAuthCredential,
-    OAuthProduct, OAuthRefreshKind, CHATGPT_OAUTH_PRODUCT,
+use crate::oauth_credential::{
+    classify_chatgpt_auth_error, lookup_oauth_credential, oauth_credential_id, shared_bearer,
+    BearerSource, DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthRefreshKind,
+    CHATGPT_OAUTH_PRODUCT,
 };
 
 pub const CHATGPT_CODEX_PROVIDER: &str = "chatgpt-codex";
@@ -570,7 +565,7 @@ pub async fn build_responses_client(
             anyhow::anyhow!(classify_chatgpt_auth_error(
                 agent_did,
                 provider,
-                &ChatGptAuthProblem::Missing,
+                &OAuthAuthProblem::Missing,
             ))
         })?;
     let headers =
@@ -867,7 +862,7 @@ mod tests {
         let msg = classify_chatgpt_auth_error(
             "did:key:zAgent",
             CHATGPT_CODEX_PROVIDER,
-            &ChatGptAuthProblem::Missing,
+            &OAuthAuthProblem::Missing,
         );
 
         assert!(msg.contains("did:key:zAgent"), "names the agent DID: {msg}");
@@ -882,7 +877,7 @@ mod tests {
         let msg = classify_chatgpt_auth_error(
             "did:key:zAgent",
             CHATGPT_CODEX_PROVIDER,
-            &ChatGptAuthProblem::WrongMode {
+            &OAuthAuthProblem::WrongMode {
                 found_mode: "disabled".to_string(),
             },
         );
@@ -896,7 +891,7 @@ mod tests {
         let msg = classify_chatgpt_auth_error(
             "did:key:zAgent",
             CHATGPT_CODEX_PROVIDER,
-            &ChatGptAuthProblem::Expired,
+            &OAuthAuthProblem::Expired,
         );
 
         assert!(msg.to_lowercase().contains("expired"), "{msg}");

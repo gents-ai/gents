@@ -185,9 +185,6 @@ fn receipt(step: &LeanEnrollmentTraceStep) -> EnrollmentRouteReceipt {
 fn apply_step(state: &mut EnrollmentState, step: &LeanEnrollmentTraceStep) {
     let request = request(step);
     let action = match step.action.as_str() {
-        "observe_legacy_pairing_desired" => {
-            EnrollmentAction::ObserveLegacyPairingDesired(step.peer_admission_did.clone())
-        }
         "observe_offer" => EnrollmentAction::ObserveOffer(offer(step)),
         "confirm_admin_pin" => EnrollmentAction::ConfirmAdminPin(offer(step)),
         "accept_request" => EnrollmentAction::AcceptRequest(offer(step), request.clone()),
@@ -253,10 +250,7 @@ fn assert_step(state: &EnrollmentState, step: &LeanEnrollmentTraceStep, context:
         step.action.as_str(),
         "observe_offer" | "confirm_admin_pin" | "accept_request"
     );
-    let has_request = !matches!(
-        step.action.as_str(),
-        "observe_legacy_pairing_desired" | "observe_offer" | "confirm_admin_pin"
-    );
+    let has_request = !matches!(step.action.as_str(), "observe_offer" | "confirm_admin_pin");
     let has_decision = matches!(
         step.action.as_str(),
         "approve_request"
@@ -406,7 +400,7 @@ fn assert_step(state: &EnrollmentState, step: &LeanEnrollmentTraceStep, context:
 #[test]
 fn generated_enrollment_cases_match_production_transition_core() {
     let cases = lean_enrollment_cases();
-    assert_eq!(cases.len(), 37);
+    assert_eq!(cases.len(), 36);
     for case in cases {
         let mut state = EnrollmentState::default();
         assert!(!case.steps.is_empty(), "{}", case.name);

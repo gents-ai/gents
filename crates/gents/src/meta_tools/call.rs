@@ -255,26 +255,6 @@ fn normalize_arguments(
 ) -> Result<Value, StructuredToolError> {
     match arguments {
         Value::Object(_) => Ok(arguments.clone()),
-        Value::String(raw) => match parse_stringified_object(raw) {
-            Ok(Value::Object(map)) => Ok(Value::Object(map)),
-            Ok(other) => Err(StructuredToolError::invalid_tool_arguments(
-                service_id,
-                tool_name,
-                "/arguments",
-                format!(
-                    "call_tool.arguments must decode to a JSON object, got {}",
-                    json_type_name(&other)
-                ),
-            )),
-            Err(error) => Err(StructuredToolError::invalid_tool_arguments(
-                service_id,
-                tool_name,
-                "/arguments",
-                format!(
-                    "call_tool.arguments must be a JSON object or stringified JSON object: {error}"
-                ),
-            )),
-        },
         other => Err(StructuredToolError::invalid_tool_arguments(
             service_id,
             tool_name,
@@ -284,15 +264,6 @@ fn normalize_arguments(
                 json_type_name(other)
             ),
         )),
-    }
-}
-
-fn parse_stringified_object(raw: &str) -> Result<Value, serde_json::Error> {
-    match serde_json::from_str::<Value>(raw) {
-        Ok(value) => Ok(value),
-        Err(first_error) => crate::llm::tool::repair_tool_arguments(raw)
-            .and_then(|repaired| serde_json::from_str::<Value>(&repaired).ok())
-            .ok_or(first_error),
     }
 }
 
@@ -569,16 +540,13 @@ mod tests {
 
         assert_eq!(error.failure_class, "invalid_tool_arguments");
         assert_eq!(error.path, "/arguments");
-        assert!(error.message.contains("stringified JSON object"));
+        assert!(error.message.contains("must be a JSON object"));
     }
 
     #[test]
-    fn accepts_stringified_json_object_for_compatibility() {
-        let arguments =
-            normalize_arguments("x-data", "search_bookmarks", &json!("{\"query\":\"amy\"}"))
-                .expect("stringified object should normalize");
-
-        assert_eq!(arguments, json!({ "query": "amy" }));
+    fn rejects_stringified_json_object() {
+        normalize_arguments("x-data", "search_bookmarks", &json!("{\"query\":\"amy\"}"))
+            .expect_err("stringified arguments are not part of the tool contract");
     }
 
     #[test]
@@ -701,26 +669,5 @@ mod tests {
 
         assert!(!was_truncated);
         assert_eq!(result, small_text);
-    }
-
-    #[test]
-    fn parse_stringified_object_recovers_lone_backslash() {
-        // A stringified arguments object with a raw lone backslash (`\d`) is not
-        // valid JSON; the escape-only repair doubles it so the object parses.
-        let raw = r#"{"pattern":"regex \d+ here"}"#;
-        let value =
-            parse_stringified_object(raw).expect("lone-backslash object should be repaired");
-        assert_eq!(value["pattern"], "regex \\d+ here");
-    }
-
-    #[test]
-    fn parse_stringified_object_rejects_truncation() {
-        // A truncated (finish_reason=length) object must never be closed-and-run:
-        // escape-only repair cannot complete it, so it stays an error.
-        let raw = r#"{"pattern":"a long value that got cut o"#;
-        assert!(
-            parse_stringified_object(raw).is_err(),
-            "a truncated stringified object must be rejected, not repaired-and-accepted"
-        );
     }
 }

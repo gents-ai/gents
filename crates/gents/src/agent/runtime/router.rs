@@ -430,20 +430,35 @@ pub(super) async fn resolve_behavior_for_request(
     })
 }
 
-async fn fail_routed_request(
+pub(super) async fn fail_routed_request(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: &str,
     request: AgentRequest,
     behavior_id: &str,
     error_message: &str,
 ) -> Result<()> {
+    let execution_origin =
+        match ExecutionOrigin::from_persisted(request.execution_origin.as_deref()) {
+            Ok(origin) => origin,
+            Err(error) => {
+                let reason = format!("request admission denied: {error:#}");
+                return crate::request_admission::terminalize_pending_request_rejection(
+                    node.as_ref(),
+                    &request.doc_id,
+                    agent_did,
+                    &reason,
+                    "terminalize_invalid_execution_origin_before_route_rejection",
+                )
+                .await;
+            }
+        };
     let mut lifecycle = RequestLifecycle::new_with_execution_binding(
         node.clone(),
         behavior_id,
         agent_did,
         request.clone(),
         Duration::from_secs(30).as_secs(),
-        ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),
+        execution_origin,
         "",
     );
 

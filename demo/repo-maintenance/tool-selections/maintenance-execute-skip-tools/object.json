@@ -1,5 +1,6 @@
 {
   "selection_id": "maintenance-execute-skip-tools",
+  "tool_policy_version": "tool-policy/v1",
   "agent_did": "did:key:zMaintenanceAgentPlaceholder0000000000000000000000000",
   "display_name": "Zero-finding skip: execution ledger only",
   "enable_file_tools": false,
@@ -22,7 +23,6 @@
   "write_tools": [],
   "datastore_tool_surface_ids": ["maintenance-execute-writes", "maintenance-publish-writes"],
   "subagent_spawn_enabled": false,
-  "orchestration_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,
   "subagent_default_await_mode": null,

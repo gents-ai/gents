@@ -91,7 +91,9 @@ export function createDesktopShellPeerActions({
           throw new Error("desktop client failed to start before enrollment");
         }
       }
-      return await api.requestStatusEnrollment(serverAddress);
+      const request = await api.requestStatusEnrollment(serverAddress);
+      setSnapshot(await api.fetchDesktopSnapshot());
+      return request;
     } catch (err) {
       const message = formatPeerConnectionError(err, "peer-status");
       setError(message);

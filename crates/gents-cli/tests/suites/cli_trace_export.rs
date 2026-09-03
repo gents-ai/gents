@@ -101,7 +101,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     );
     assert_eq!(
         failed.get("tool_status").and_then(Value::as_str),
-        Some("completed")
+        Some("failed")
     );
     assert_eq!(
         failed.get("tool_result_ok").and_then(Value::as_bool),
@@ -188,19 +188,14 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
             .and_then(Value::as_str),
         Some("serviceUnavailable")
     );
-    assert_eq!(
-        missing_tool
-            .get("tool_error")
-            .and_then(|value| value.get("available_tools")),
-        Some(&json!(["search_posts"]))
-    );
-    assert_eq!(
-        missing_tool
-            .get("tool_error")
-            .and_then(|value| value.get("requested_tool_name"))
-            .and_then(Value::as_str),
-        Some("search_post")
-    );
+    assert!(missing_tool
+        .get("tool_error")
+        .and_then(|value| value.get("available_tools"))
+        .is_none());
+    assert!(missing_tool
+        .get("tool_error")
+        .and_then(|value| value.get("requested_tool_name"))
+        .is_none());
 
     assert_eq!(
         succeeded.get("tool_call_id").and_then(Value::as_str),
@@ -505,11 +500,14 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
             "capture_scope": "inference.1",
             "admission": { "call_id": call_id, "call_seq": call_seq },
             "assembly_trace": {
-                "trace_version": 2,
+                "trace_version": 4,
                 "build_path": "budgeted",
                 "effective_message_count": 0,
+                "effective_messages": null,
                 "assistant_message_ids": [],
-                "threaded_tool_results": []
+                "threaded_tool_results": [],
+                "reduction_keys": [],
+                "context_accounting": null
             }
         })
         .to_string();
@@ -1493,6 +1491,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 args: "{{\"path\":\"README.md\"}}",
                 result: "README contents",
                 status: "completed",
+                lifecycle_state: "completed",
                 started_at: "2026-05-04T12:00:02Z",
                 completed_at: "2026-05-04T12:00:03Z"
             }}) {{ _docID }}
@@ -1516,6 +1515,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 args: "{{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}}",
                 result: "{}",
                 status: "completed",
+                lifecycle_state: "failed",
+                tool_failure_class: "toolReturnedError",
                 child_request_id: "req-child",
                 started_at: "2026-05-04T12:00:03Z",
                 completed_at: "2026-05-04T12:00:04.500Z"
@@ -1663,6 +1664,8 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                     args: "{{\"service_id\":\"x-data\",\"tool_name\":\"search_post\"}}",
                     result: "{}",
                     status: "completed",
+                    lifecycle_state: "failed",
+                    tool_failure_class: "serviceUnavailable",
                     started_at: "2026-05-04T12:00:04Z",
                     completed_at: "2026-05-04T12:00:04.250Z"
                 }}) {{ _docID }}
@@ -1790,6 +1793,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 args: "{{\"path\":\"README.md\"}}",
                 result: "README contents",
                 status: "completed",
+                lifecycle_state: "completed",
                 started_at: "2026-05-04T13:00:02Z",
                 completed_at: "2026-05-04T13:00:03Z"
             }}) {{ _docID }}

@@ -255,12 +255,12 @@ pub use runtime_snapshot::{
 #[cfg(feature = "agent-memory")]
 pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
-    ensure_config_bootstrap_schemas, ensure_runtime_schemas, ensure_schemas, AGENT_BEHAVIOR_SCHEMA,
-    AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
-    AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
-    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA,
-    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA,
-    SCHEDULE_SCHEMA, TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
+    ensure_runtime_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA,
+    AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA,
+    AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA,
+    COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
+    INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA,
+    TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
     TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
@@ -316,7 +316,7 @@ mod public_api_tests {
     #[test]
     fn downstream_oneshot_analysis_surface_is_available_from_crate_root() {
         let _strategy = CompactionStrategy::StripThenSummarize;
-        let _ensure = ensure_schemas;
+        let _ensure = ensure_runtime_schemas;
         let _history = load_history;
         let _oneshot = run_openai_oneshot_with_tools;
     }

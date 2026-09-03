@@ -19,6 +19,7 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -37,7 +38,7 @@ async fn codex_shim_model_list_enumerates_backend_models() -> Result<()> {
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
@@ -188,6 +189,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -202,7 +204,7 @@ async fn codex_shim_config_read_reflects_doc_mutation() -> Result<()> {
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
@@ -292,6 +294,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -308,7 +311,7 @@ async fn codex_shim_config_value_write_model_mutates_behavior() -> Result<()> {
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;
@@ -448,6 +451,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -461,7 +465,7 @@ async fn codex_shim_config_value_write_rejects_unknown_model() -> Result<()> {
     let mut serve = spawn_server_with_env(
         &home_dir,
         server_port,
-        &["--codex-shim", "--codex-shim-port", &shim_port_string],
+        &["--codex-shim-port", &shim_port_string],
         &[],
     )?;
     wait_for_port(server_port, &mut serve)?;

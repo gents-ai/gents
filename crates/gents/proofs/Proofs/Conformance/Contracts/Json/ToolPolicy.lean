@@ -92,8 +92,8 @@ structure GoalCapabilityResolutionCase where
   explicitGoalCreate : Option Bool
 
 def goalCapabilityResolutionCases : List GoalCapabilityResolutionCase :=
-  [ ⟨"legacy_meta_on_inherits_goal_tools", true, none, none⟩
-  , ⟨"legacy_meta_off_omits_goal_tools", false, none, none⟩
+  [ ⟨"missing_goal_tools_is_off_with_meta_on", true, none, none⟩
+  , ⟨"missing_goal_tools_is_off_with_meta_off", false, none, none⟩
   , ⟨"explicit_goal_on_meta_off", false, some true, none⟩
   , ⟨"explicit_goal_off_meta_on", true, some false, none⟩
   , ⟨"creation_unset_stays_off", true, some true, none⟩
@@ -110,7 +110,7 @@ def goalCapabilityResolutionCaseJson (c : GoalCapabilityResolutionCase) : String
     ++ "\"explicit_goal_tools\":" ++ optionalBoolJson c.explicitGoalTools ++ ","
     ++ "\"explicit_goal_create\":" ++ optionalBoolJson c.explicitGoalCreate ++ ","
     ++ "\"expected_goal_tools\":"
-      ++ boolJson (ToolPolicy.resolveGoalTools c.meta c.explicitGoalTools) ++ ","
+      ++ boolJson (ToolPolicy.resolveGoalTools c.explicitGoalTools) ++ ","
     ++ "\"expected_goal_create\":"
       ++ boolJson (ToolPolicy.resolveGoalCreate c.explicitGoalCreate)
   ++ "}"

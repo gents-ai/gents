@@ -19,13 +19,11 @@ pub async fn desktop_peer_status_fetch(
     state: State<'_, DesktopAppState>,
 ) -> Result<serde_json::Value, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
     let peer_id = request.peer_id.trim();
     if peer_id.is_empty() {
-        return Err(BridgeError::from_legacy_message("peer_id is required"));
+        return Err(BridgeError::untyped("peer_id is required"));
     }
     let addr = core
         .peer_records()
@@ -36,7 +34,7 @@ pub async fn desktop_peer_status_fetch(
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
     fetch_runtime_connection_payload(&addr)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))
+        .map_err(|error| BridgeError::untyped(error.to_string()))
 }
 
 #[tauri::command]
@@ -45,19 +43,15 @@ pub async fn desktop_peer_enroll_status(
     state: State<'_, DesktopAppState>,
 ) -> Result<EnrollmentRequestView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
     let address = request.server_address.trim();
     if address.is_empty() {
-        return Err(BridgeError::from_legacy_message(
-            "server_address is required",
-        ));
+        return Err(BridgeError::untyped("server_address is required"));
     }
     let status = fetch_runtime_connection_payload(address)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let server_label = status
         .get("agent_name")
         .and_then(serde_json::Value::as_str)
@@ -69,9 +63,7 @@ pub async fn desktop_peer_enroll_status(
         .and_then(serde_json::Value::as_str)
         .filter(|token| !token.trim().is_empty())
         .ok_or_else(|| {
-            BridgeError::from_legacy_message(
-                "server does not advertise authenticated status enrollment",
-            )
+            BridgeError::untyped("server does not advertise authenticated status enrollment")
         })?;
     core.request_status_enrollment(token)
         .await
@@ -80,7 +72,7 @@ pub async fn desktop_peer_enroll_status(
             view.server_label = server_label;
             view
         })
-        .map_err(|error| BridgeError::from_legacy_message(format!("{error:#}")))
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
 }
 
 #[tauri::command]
@@ -89,14 +81,12 @@ pub async fn desktop_p2p_repair<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     repair_p2p(core.as_ref(), Duration::from_millis(250))
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -107,14 +97,12 @@ pub async fn desktop_peer_remove<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<PeerRemoveResponse, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let mutation = remove_peer(core.as_ref(), peer_id)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let snapshot = emit_config_update_and_snapshot(&app, &core, &state).await?;
     Ok(PeerRemoveResponse::new(snapshot, mutation))
 }
@@ -127,14 +115,12 @@ pub async fn desktop_peer_rename<R: Runtime>(
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     rename_peer(core.as_ref(), peer_id, label)
         .await
-        .map_err(|error| BridgeError::from_legacy_message(error.to_string()))?;
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await
 }
 
@@ -143,9 +129,7 @@ pub async fn desktop_network_status(
     state: State<'_, DesktopAppState>,
 ) -> Result<NetworkStatusView, BridgeError> {
     let Some(core) = current_core(&state) else {
-        return Err(BridgeError::from_legacy_message(
-            "desktop client is not running",
-        ));
+        return Err(BridgeError::untyped("desktop client is not running"));
     };
 
     let status = core.network_status().await;

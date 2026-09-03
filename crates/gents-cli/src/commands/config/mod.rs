@@ -9,7 +9,6 @@ pub(crate) mod binding;
 mod crud;
 pub(crate) mod diff;
 pub(crate) mod export;
-pub(crate) mod import;
 pub(crate) mod profile;
 pub(crate) mod skill;
 pub(crate) mod task_run;
@@ -63,11 +62,6 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             }
             InferenceProfileCommand::Rm(args) => crud::config_rm(crud::PROFILE_SPEC, args).await,
         },
-        ConfigCommand::Task { command } => match command {
-            TaskCommand::List(args) => crate::commands::task::task_list(args).await,
-            TaskCommand::Show(args) => crate::commands::task::task_show(args).await,
-            TaskCommand::Run(args) => task_run::config_task_run(args).await,
-        },
         ConfigCommand::Trigger { command } => match command {
             ConfigTriggerCommand::List(args) => crud::config_list(crud::TRIGGER_SPEC, args).await,
             ConfigTriggerCommand::Show(args) => crud::config_show(crud::TRIGGER_SPEC, args).await,
@@ -101,6 +95,5 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,
-        ConfigCommand::Import(args) => import::config_import(args).await,
     }
 }

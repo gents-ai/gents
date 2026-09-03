@@ -88,8 +88,8 @@ pub struct CompactionEntry {
     pub files_modified: Vec<String>,
     pub messages_compacted: u32,
     /// Inclusive canonical `AgentMessage.sequence` cursor for the cumulative
-    /// compacted provider prefix. `None` keeps legacy entries on the safe
-    /// full-load projection.
+    /// compacted provider prefix. Storage decoding remains nullable so missing
+    /// cursors can be rejected explicitly at the validation boundary.
     pub compacted_through_sequence: Option<u32>,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
@@ -109,37 +109,6 @@ pub(crate) struct PromptCompactionState {
     /// compaction generation. Such a request may read that generation but must
     /// not append a new compaction to the live session chain.
     pub is_latest_generation: bool,
-}
-
-/// Session-specific projection of the canonical provider view. Old rows that
-/// predate raw transcript cursors are handled only at this persistence edge;
-/// the reduction engine receives an exact active view and never sees legacy
-/// offsets.
-pub(crate) struct ActiveSessionProviderHistory {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) prior_provider_prefix: usize,
-}
-
-impl PromptCompactionState {
-    pub(crate) fn apply_to_provider_history(
-        &self,
-        provider_history: Vec<Message>,
-    ) -> Result<ActiveSessionProviderHistory> {
-        if self.compacted_through_sequence.is_some() {
-            return Ok(ActiveSessionProviderHistory {
-                messages: provider_history,
-                prior_provider_prefix: 0,
-            });
-        }
-        let messages = crate::compaction::active_provider_history(
-            provider_history,
-            self.total_messages_compacted,
-        )?;
-        Ok(ActiveSessionProviderHistory {
-            messages,
-            prior_provider_prefix: self.total_messages_compacted,
-        })
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

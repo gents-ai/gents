@@ -478,18 +478,6 @@ instance (s : State) (memberDid : Did) : Decidable
     (peerOperationallyAuthorized s memberDid) := by
   unfold peerOperationallyAuthorized; infer_instance
 
-/--
-The operational admission projector accepts legacy materialization rows only as
-an explicit ignored input. They may witness effects but never grant authority.
--/
-def projectsPeerAdmission (s : State) (_legacyDesiredPeers : Finset Did)
-    (memberDid : Did) : Prop :=
-  peerOperationallyAuthorized s memberDid
-
-instance (s : State) (legacyDesiredPeers : Finset Did) (memberDid : Did) : Decidable
-    (projectsPeerAdmission s legacyDesiredPeers memberDid) := by
-  unfold projectsPeerAdmission; infer_instance
-
 def membershipFor (r : Request) (d : Decision) : Membership :=
   { requestId := r.requestId, requestDigest := r.digest
   , networkId := r.networkId, memberDid := r.candidateDid

@@ -177,7 +177,9 @@ async fn setup_background_tool_hook(
     .await
     .expect("resume background theorem hook")
     .with_background_tool_registry(registry);
-    hook.set_active_request_id(Some(request_id.clone())).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;
     (db, hook, session_id, request_id)
@@ -593,12 +595,12 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
             "inference_failure_retains_snapshot_for_bounded_redrive",
             "response_persisted_before_crash_recovers_completed_ack",
             "acknowledgement_projection_restart_is_atomic",
-            "legacy_subagent_completion_source_aliases_canonical_key",
+            "noncanonical_subagent_completion_source_is_rejected",
             "list_processes_same_requester_next_turn_authorized",
             "read_process_same_requester_next_turn_authorized",
             "wait_process_same_requester_next_turn_authorized",
             "cancel_process_same_requester_next_turn_authorized",
-            "originating_request_authorizes_legacy_row_without_requester",
+            "originating_request_without_matching_requester_is_denied",
             "absent_requester_next_turn_authorized",
             "empty_requester_does_not_alias_absent",
             "process_control_cross_session_denied",
@@ -674,10 +676,13 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
         Some("background_completion:900")
     );
 
-    let legacy =
-        lean_r6_backgrounding_case("legacy_subagent_completion_source_aliases_canonical_key");
-    assert_eq!(legacy.queue_source.as_deref(), Some("subagent_completion"));
-    assert_eq!(legacy.queue_key.as_deref(), canonical.queue_key.as_deref());
+    let noncanonical =
+        lean_r6_backgrounding_case("noncanonical_subagent_completion_source_is_rejected");
+    assert_eq!(
+        noncanonical.queue_source.as_deref(),
+        Some("subagent_completion")
+    );
+    assert_eq!(noncanonical.queue_key, None);
 
     let redrive = lean_r6_backgrounding_case("failed_background_wake_with_budget_redrives");
     assert!(redrive.legal);
@@ -1813,8 +1818,9 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     .expect("resume next-turn hook")
     .with_background_execution_registry(shared_processes);
     next_turn_hook
-        .set_active_request_id(Some(next_request_id))
-        .await;
+        .set_active_request_lineage(Some(next_request_id), None)
+        .await
+        .expect("bind persisted request lineage");
     next_turn_hook
         .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;
@@ -1866,8 +1872,9 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
     .await
     .expect("resume restart-shaped hook");
     restarted_hook
-        .set_active_request_id(Some(request_id.clone()))
-        .await;
+        .set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .expect("bind persisted request lineage");
     restarted_hook
         .set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
         .await;

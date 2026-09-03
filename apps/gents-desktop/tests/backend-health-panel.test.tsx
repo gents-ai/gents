@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 
 import { BackendHealthPanel } from "@source-inc/gents-desktop-operations";
@@ -6,6 +6,7 @@ import { deriveDisplayState, STATE_LABEL } from "@source-inc/gents-desktop-opera
 import type {
   BackendDisplayState,
   BackendHealth,
+  DesktopApiAdapter,
 } from "@source-inc/gents-desktop-client";
 
 type WitnessCase = {
@@ -86,6 +87,9 @@ function makeBackend(witness: WitnessCase): BackendHealth {
 }
 
 const NOW = new Date("2026-05-20T17:32:18Z");
+const api = {
+  listBackendsWithHealth: vi.fn(async () => []),
+} as unknown as DesktopApiAdapter;
 
 describe("BackendHealthPanel — Lean witness coverage", () => {
   it("deriveDisplayState lands every Lean witness in the expected bucket", () => {
@@ -99,7 +103,7 @@ describe("BackendHealthPanel — Lean witness coverage", () => {
 
   it("renders all seven Lean witnesses with visually distinct state badges", () => {
     const backends = LEAN_WITNESSES.map(makeBackend);
-    render(<BackendHealthPanel initialBackends={backends} now={NOW} />);
+    render(<BackendHealthPanel api={api} initialBackends={backends} now={NOW} />);
 
     const distinctStates = new Set(backends.map((b) => b.displayState));
     const expectedChipCount = distinctStates.size + 1;

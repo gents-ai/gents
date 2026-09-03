@@ -285,6 +285,7 @@ async fn setup_parent_hook_on_db(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: parent_agent_did.to_string(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 case.target_behavior_id.clone(),
                 target_owner_did,
@@ -450,6 +451,7 @@ async fn upsert_active_child_behavior_from_default(
         &ToolSelectionDocument {
             selection_id: selection_id.clone(),
             agent_did: child_agent_did,
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_spawn_enabled: Some(true),
             subagent_background_enabled: Some(true),
             subagent_allow_cross_deployment: Some(true),

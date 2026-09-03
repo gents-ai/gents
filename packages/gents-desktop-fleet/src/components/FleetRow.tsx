@@ -84,8 +84,7 @@ export function FleetRow({
   const defaultBehavior = deployment.behaviors.find(
     (behavior) =>
       behavior.behaviorId ===
-      (deployment.defaultBehaviorId ??
-        deployment.agentPrincipal.defaultBehaviorId),
+      deployment.agentPrincipal.defaultBehaviorId,
   );
   const toolIcons = toolCeilingIcons(
     deployment.toolSelections,

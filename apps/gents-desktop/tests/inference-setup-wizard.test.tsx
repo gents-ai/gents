@@ -55,7 +55,7 @@ describe("InferenceSetupWizard", () => {
       expect(props.onSaveBackendConfig).toHaveBeenCalledWith(
         expect.objectContaining({
           backendId: "backend-a",
-          providerKind: "openai",
+          providerKind: "OpenAiCompatible",
           openaiWireApi: "responses",
           endpoint: "https://api.openai.com/v1",
           apiKey: "sk-test",
@@ -84,7 +84,7 @@ describe("InferenceSetupWizard", () => {
     await waitFor(() => {
       expect(props.onSaveBackendConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          providerKind: "openai",
+          providerKind: "OpenAiCompatible",
           openaiWireApi: "chat_completions",
           endpoint: "http://127.0.0.1:11434/v1",
           models: ["llama-x"],

@@ -26,6 +26,7 @@ async fn tools_holds_lists_and_approve_writes_decision() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

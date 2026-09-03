@@ -41,29 +41,27 @@ pub fn resolve_network_id() -> String {
 
 pub const DEFAULT_OFFERED_TEMPLATES: &[&str] = &["conversation", "agent-config"];
 
-pub fn validate_offered_templates<I, S>(offered: I) -> Vec<String>
+pub fn validate_offered_templates<I, S>(offered: I) -> Result<Vec<String>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
+    let offered = offered.into_iter().collect::<Vec<_>>();
     let mut seen = std::collections::BTreeSet::new();
     let mut out: Vec<String> = Vec::new();
     for id in offered {
         let id = id.as_ref().trim();
-        if id.is_empty() || resolve_template(id).is_none() {
-            continue;
+        if id.is_empty() {
+            anyhow::bail!("offered scope template must not be blank");
+        }
+        if resolve_template(id).is_none() {
+            anyhow::bail!("unknown offered scope template {id:?}");
         }
         if seen.insert(id.to_string()) {
             out.push(id.to_string());
         }
     }
-    if out.is_empty() {
-        return DEFAULT_OFFERED_TEMPLATES
-            .iter()
-            .map(|id| id.to_string())
-            .collect();
-    }
-    out
+    Ok(out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -261,7 +259,8 @@ async fn tick_registry(
         peer_id: peer_id.clone(),
         agent_did: agent_did.to_string(),
         addresses,
-        templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied()),
+        templates: validate_offered_templates(DEFAULT_OFFERED_TEMPLATES.iter().copied())
+            .expect("built-in registry templates must resolve"),
         display_name: None,
         status: status.to_string(),
         network_id: network_id.to_string(),
@@ -480,14 +479,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_offered_templates_keeps_known_drops_unknown_and_dedups() {
-        let out = validate_offered_templates([
-            "conversation",
-            "nope",
-            "agent-config",
-            "conversation",
-            "  ",
-        ]);
+    fn validate_offered_templates_keeps_known_and_dedups() {
+        let out =
+            validate_offered_templates(["conversation", "agent-config", "conversation"]).unwrap();
         assert_eq!(
             out,
             vec!["conversation".to_string(), "agent-config".to_string()]
@@ -495,18 +489,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_offered_templates_falls_back_to_defaults_when_empty() {
-        let out = validate_offered_templates(Vec::<String>::new());
-        assert_eq!(
-            out,
-            DEFAULT_OFFERED_TEMPLATES
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-        );
-        // All defaults must resolve in the catalog.
-        for id in &out {
-            assert!(resolve_template(id).is_some(), "default {id} must resolve");
-        }
+    fn validate_offered_templates_preserves_an_empty_offer() {
+        let out = validate_offered_templates(Vec::<String>::new()).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn validate_offered_templates_rejects_unknown_and_blank_values() {
+        assert!(validate_offered_templates(["conversation", "nope"]).is_err());
+        assert!(validate_offered_templates(["conversation", "  "]).is_err());
     }
 }

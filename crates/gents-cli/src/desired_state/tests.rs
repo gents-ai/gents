@@ -357,7 +357,7 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         selection_id: selection_id.to_string(),
         agent_did: "did:test:test".to_string(),
         display_name: None,
-        tool_policy_version: None,
+        tool_policy_version: gents::tool_surface::TOOL_POLICY_V1.to_string(),
         enable_file_tools: false,
         file_tools_mode: "ReadOnly".to_string(),
         file_tool_root: None,
@@ -374,7 +374,6 @@ fn sample_tool_selection(selection_id: &str) -> DesiredToolSelection {
         enable_goal_creation: None,
         allowed_mcp_service_ids: Vec::new(),
         required_mcp_service_ids: Vec::new(),
-        delegate_to: Vec::new(),
         backgroundable_tool_names: Vec::new(),
         enable_memory: false,
         enable_session_history_tool: false,
@@ -565,13 +564,13 @@ fn desired_tool_service_registry_normalizes_address_storage_fields() {
     assert_eq!(service.hostname.as_deref(), Some(""));
     assert_eq!(service.tailscale_ip.as_deref(), Some("100.64.0.10"));
     assert_eq!(service.lan_ip.as_deref(), Some(""));
-    assert_eq!(service.mcp_path.as_deref(), Some("/mcp"));
+    assert_eq!(service.mcp_path, "/mcp");
     assert!(!service.send_agent_did);
 }
 
 #[test]
-fn live_tool_service_registry_preserves_null_storage_for_diff() {
-    let service = tool_service_registry_from_live_value(&json!({
+fn live_tool_service_registry_rejects_missing_path() {
+    let error = tool_service_registry_from_live_value(&json!({
         "service_id": "observability-mcp",
         "hostname": null,
         "tailscale_ip": null,
@@ -579,13 +578,8 @@ fn live_tool_service_registry_preserves_null_storage_for_diff() {
         "mcp_port": 9201,
         "mcp_path": null
     }))
-    .expect("live tool service should parse");
-
-    assert_eq!(service.hostname, None);
-    assert_eq!(service.tailscale_ip, None);
-    assert_eq!(service.lan_ip, None);
-    assert_eq!(service.mcp_path, None);
-    assert!(!service.send_agent_did);
+    .expect_err("live tool service without an MCP path must fail closed");
+    assert!(error.to_string().contains("missing mcp_path"));
 }
 
 #[test]
@@ -601,7 +595,7 @@ fn tool_service_registry_round_trip_preserves_send_agent_did() {
             tailscale_ip: Some(String::new()),
             lan_ip: Some(String::new()),
             mcp_port: Some(9201),
-            mcp_path: Some("/mcp".to_string()),
+            mcp_path: "/mcp".to_string(),
             send_agent_did: true,
         });
 
@@ -682,17 +676,17 @@ fn tool_selection_round_trip_preserves_subagent_controls() {
 #[test]
 fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
     let mut manifest = empty_manifest("did:test:test");
-    let legacy = sample_tool_selection("legacy-tools");
-    manifest.tool_selections.push(legacy);
+    let sparse = sample_tool_selection("sparse-tools");
+    manifest.tool_selections.push(sparse);
     let mut explicit = sample_tool_selection("goal-tools");
     explicit.enable_meta_tools = false;
     explicit.enable_goal_tools = Some(Some(true));
     explicit.enable_goal_creation = Some(Some(false));
     manifest.tool_selections.push(explicit);
-    let mut inherited = sample_tool_selection("inherited-goal-tools");
-    inherited.enable_goal_tools = Some(None);
-    inherited.enable_goal_creation = Some(None);
-    manifest.tool_selections.push(inherited);
+    let mut explicitly_cleared = sample_tool_selection("cleared-goal-tools");
+    explicitly_cleared.enable_goal_tools = Some(None);
+    explicitly_cleared.enable_goal_creation = Some(None);
+    manifest.tool_selections.push(explicitly_cleared);
 
     let bundle = export_bundle_from_manifest(&manifest, "local").expect("export bundle");
     let rows = &bundle.as_bundle().tool_selections;
@@ -704,13 +698,13 @@ fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
     assert!(rows[2]["enable_goal_creation"].is_null());
 
     let round = manifest_from_export_bundle(bundle.as_bundle()).expect("import bundle");
-    let legacy = round
+    let sparse = round
         .tool_selections
         .iter()
-        .find(|selection| selection.selection_id == "legacy-tools")
-        .expect("legacy selection");
-    assert_eq!(legacy.enable_goal_tools, None);
-    assert_eq!(legacy.enable_goal_creation, None);
+        .find(|selection| selection.selection_id == "sparse-tools")
+        .expect("sparse selection");
+    assert_eq!(sparse.enable_goal_tools, None);
+    assert_eq!(sparse.enable_goal_creation, None);
     let explicit = round
         .tool_selections
         .iter()
@@ -718,13 +712,13 @@ fn tool_selection_round_trip_preserves_nullable_goal_capability_state() {
         .expect("explicit selection");
     assert_eq!(explicit.enable_goal_tools, Some(Some(true)));
     assert_eq!(explicit.enable_goal_creation, Some(Some(false)));
-    let inherited = round
+    let explicitly_cleared = round
         .tool_selections
         .iter()
-        .find(|selection| selection.selection_id == "inherited-goal-tools")
-        .expect("inherited selection");
-    assert_eq!(inherited.enable_goal_tools, None);
-    assert_eq!(inherited.enable_goal_creation, None);
+        .find(|selection| selection.selection_id == "cleared-goal-tools")
+        .expect("cleared selection");
+    assert_eq!(explicitly_cleared.enable_goal_tools, None);
+    assert_eq!(explicitly_cleared.enable_goal_creation, None);
 }
 
 #[test]
@@ -749,7 +743,7 @@ fn desired_documents_distinguish_absent_goal_fields_from_explicit_null() {
 #[test]
 fn task_round_trip_preserves_optional_goal_declaration() {
     let mut manifest = manifest_with_default_behavior();
-    manifest.tasks.push(sample_task("legacy-task"));
+    manifest.tasks.push(sample_task("ordinary-task"));
     let mut durable = sample_task("durable-task");
     durable.goal_objective_template = Some(Some("Finish {{ node.behavior_id }} work".to_string()));
     durable.goal_token_budget = Some(Some(50_000));
@@ -760,14 +754,14 @@ fn task_round_trip_preserves_optional_goal_declaration() {
     manifest.tasks.push(cleared);
 
     let bundle = export_bundle_from_manifest(&manifest, "local").expect("export bundle");
-    let legacy = bundle
+    let ordinary = bundle
         .as_bundle()
         .tasks
         .iter()
-        .find(|task| task["task_id"] == "legacy-task")
-        .expect("legacy task");
-    assert!(legacy.get("goal_objective_template").is_none());
-    assert!(legacy.get("goal_token_budget").is_none());
+        .find(|task| task["task_id"] == "ordinary-task")
+        .expect("ordinary task");
+    assert!(ordinary.get("goal_objective_template").is_none());
+    assert!(ordinary.get("goal_token_budget").is_none());
     let durable = bundle
         .as_bundle()
         .tasks
@@ -789,13 +783,13 @@ fn task_round_trip_preserves_optional_goal_declaration() {
     assert!(cleared["goal_token_budget"].is_null());
 
     let round = manifest_from_export_bundle(bundle.as_bundle()).expect("import bundle");
-    let legacy = round
+    let ordinary = round
         .tasks
         .iter()
-        .find(|task| task.task_id == "legacy-task")
-        .expect("legacy task");
-    assert_eq!(legacy.goal_objective_template, None);
-    assert_eq!(legacy.goal_token_budget, None);
+        .find(|task| task.task_id == "ordinary-task")
+        .expect("ordinary task");
+    assert_eq!(ordinary.goal_objective_template, None);
+    assert_eq!(ordinary.goal_token_budget, None);
     let durable = round
         .tasks
         .iter()
@@ -982,31 +976,6 @@ mod load_manifest_root {
         assert_eq!(manifest.agent_principal.agent_did, "did:key:example");
         assert_eq!(manifest.agent_behaviors.len(), 1);
         assert!(manifest.tasks.is_empty());
-    }
-
-    #[test]
-    fn loads_tool_selection_with_retired_orchestration_field() {
-        let tmp = tempdir().unwrap();
-        write_minimal_root(tmp.path());
-
-        let selection_dir = tmp.path().join("tool-selections").join("legacy-tools");
-        fs::create_dir_all(&selection_dir).unwrap();
-        let mut selection = super::sample_tool_selection("legacy-tools");
-        selection.agent_did = "did:key:example".to_string();
-        let mut value = serde_json::to_value(selection).unwrap();
-        value
-            .as_object_mut()
-            .unwrap()
-            .insert("orchestration_enabled".to_string(), serde_json::json!(true));
-        fs::write(
-            selection_dir.join("object.json"),
-            serde_json::to_vec_pretty(&value).unwrap(),
-        )
-        .unwrap();
-
-        let (manifest, report) = load_manifest_root(tmp.path());
-        assert!(report.ok, "errors: {:?}", report.errors);
-        assert_eq!(manifest.unwrap().tool_selections.len(), 1);
     }
 
     #[test]
@@ -1405,43 +1374,6 @@ mod load_manifest_root {
         );
         assert!(written.get("created_at").is_none());
         assert!(written.get("updated_at").is_none());
-    }
-
-    #[test]
-    fn deprecated_backend_capability_fields_are_ignored() {
-        let tmp = tempdir().unwrap();
-        write_minimal_root(tmp.path());
-
-        let backend_dir = tmp.path().join("inference-backends").join("local");
-        fs::create_dir_all(&backend_dir).unwrap();
-        fs::write(
-            backend_dir.join("object.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "backend_id": "local",
-                "name": "Local",
-                "provider_kind": "OpenAiCompatible",
-                "endpoint": "http://127.0.0.1:11434/v1",
-                "api_key": null,
-                "api_key_env_var": null,
-                "max_concurrent": 1,
-                "max_queue_depth": 100,
-                "enabled": true,
-                "supports_tool_calls": true,
-                "supports_streaming": true,
-                "supports_structured_outputs": false,
-                "supports_json_schema": false,
-                "models": ["test-model"],
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-
-        let (_, report) = load_manifest_root(tmp.path());
-        assert!(
-            report.ok,
-            "expected valid manifest, got {:?}",
-            report.errors
-        );
     }
 }
 

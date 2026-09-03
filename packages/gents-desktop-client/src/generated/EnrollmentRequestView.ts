@@ -5,4 +5,4 @@ export type EnrollmentRequestView = { requestId: string, networkId: string, admi
  * Presentation-only label advertised by the authenticated status endpoint.
  * It is never used for enrollment authority or route selection.
  */
-serverLabel: string | null, ownerAgent: string, state: string, };
+serverLabel: string | null, ownerAgent: string, state: string, expiresAt: string, };

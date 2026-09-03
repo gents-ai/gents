@@ -9,12 +9,12 @@ pub(crate) use snapshot::resolve_document_runtime_snapshot_from_view;
 use std::collections::{BTreeSet, HashMap};
 
 use crate::backend_registry::InferenceBackend;
-use crate::chatgpt_codex::OAuthCredential;
 use crate::document_config::{
     AgentBehavior, AgentPrincipal, DatastoreToolSurfaceDocument, EthToolDocument, EventTrigger,
     GraphDefinition, GraphRunPin, InferenceProfile, Schedule, SkillDocument, Task,
     ToolSelectionDocument,
 };
+use crate::oauth_credential::OAuthCredential;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DocumentRecord<T> {

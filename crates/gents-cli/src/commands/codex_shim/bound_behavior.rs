@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::{
-    default_behavior_id_for_agent, load_agent_behavior, load_agent_principal,
-    load_inference_profile, AgentBehaviorDocument, DEFAULT_CONTEXT_WINDOW,
+    load_agent_behavior, load_agent_principal, load_inference_profile, AgentBehaviorDocument,
+    DEFAULT_CONTEXT_WINDOW,
 };
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
@@ -16,26 +16,24 @@ fn explicit_override(override_behavior_id: Option<&str>) -> Option<String> {
 
 /// Resolve the behavior the Codex shim binds to.
 ///
-/// An explicit override always wins. Otherwise we use the agent principal's
-/// configured `default_behavior_id` — that is the id behaviors are actually
-/// stored under (e.g. `default` from an applied manifest). We only fall back to
-/// the synthesized `<did>:default` form when the principal is missing or has no
-/// default set, keeping legacy homes that use synthesized ids compatible.
+/// An explicit override always wins. Otherwise the exact principal document
+/// and its configured default behavior are required.
 pub(super) async fn resolve_bound_behavior_id(
     node: &EmbeddedNode,
     override_behavior_id: Option<&str>,
     agent_did: &str,
-) -> String {
+) -> Result<String> {
     if let Some(value) = explicit_override(override_behavior_id) {
-        return value;
+        return Ok(value);
     }
-    match load_agent_principal(node, agent_did).await {
-        Ok(Some(principal)) => principal
-            .default_behavior_id
-            .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| default_behavior_id_for_agent(agent_did)),
-        _ => default_behavior_id_for_agent(agent_did),
-    }
+    let principal = load_agent_principal(node, agent_did)
+        .await?
+        .ok_or_else(|| anyhow!("agent principal {agent_did:?} is not configured"))?;
+    principal
+        .default_behavior_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow!("agent principal {agent_did:?} has no default behavior binding"))
 }
 
 pub(super) async fn load_bound_inference_profile_id(
@@ -169,14 +167,6 @@ mod tests {
         assert_eq!(explicit_override(Some("")), None);
         assert_eq!(explicit_override(Some("   ")), None);
         assert_eq!(explicit_override(None), None);
-    }
-
-    #[test]
-    fn synthesized_fallback_matches_did_default() {
-        assert_eq!(
-            default_behavior_id_for_agent("did:key:zABC"),
-            "did:key:zABC:default"
-        );
     }
 
     #[test]

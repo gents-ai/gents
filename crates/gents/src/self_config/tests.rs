@@ -354,6 +354,7 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
             create_InferenceBackend(input: {{
                 backend_id: "openai",
                 name: "OpenAI",
+                provider_kind: "OpenAiCompatible",
                 enabled: true,
                 models: ["gpt-5"]
             }}) {{ _docID }}
@@ -460,6 +461,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
             create_InferenceBackend(input: {{
                 backend_id: "openai",
                 name: "OpenAI",
+                provider_kind: "OpenAiCompatible",
                 enabled: true,
                 models: ["gpt-5"]
             }}) {{ _docID }}

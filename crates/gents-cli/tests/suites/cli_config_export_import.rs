@@ -58,6 +58,7 @@ async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Resu
             agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -138,6 +139,7 @@ fn write_simple_manifest_root(
             &dir.join("object.json"),
             &serde_json::json!({
                 "selection_id": selection_id,
+            "tool_policy_version": "tool-policy/v1",
                 "agent_did": agent_did,
                 "display_name": "Standard",
                 "enable_file_tools": false,
@@ -157,6 +159,7 @@ fn write_simple_manifest_root(
             &serde_json::json!({
                 "backend_id": backend_id,
                 "name": backend_id,
+                "provider_kind": "OpenAiCompatible",
                 "endpoint": backend_endpoint,
                 "api_key_env_var": null,
                 "max_concurrent": 2,
@@ -168,156 +171,6 @@ fn write_simple_manifest_root(
     }
 
     Ok((agent_did, behavior_id, selection_id, backend_id))
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn config_import_round_trips_and_requires_override() -> Result<()> {
-    let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let source_home = tempdir.path().join("source-home");
-    let target_home = tempdir.path().join("target-home");
-    fs::create_dir_all(&source_home)?;
-    fs::create_dir_all(&target_home)?;
-    run_init_json(
-        &target_home,
-        &["--identity-only", "--agent-name", "cli-import-target"],
-    )?;
-
-    let agent_name = format!("cli-import-{}", Uuid::new_v4().simple());
-    let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
-    let default_behavior_id = "default".to_string();
-    let tool_selection_id = format!("{default_behavior_id}-tools");
-    let profile_id_a = format!("{default_behavior_id}-profile-a");
-    let profile_id_b = format!("{default_behavior_id}-profile-b");
-    let backend_id = format!("{agent_name}-backend");
-    let export_path = tempdir.path().join("agent-config.json");
-
-    let bundle = serde_json::json!({
-        "format": "gents-config/v2",
-        "agent_did": agent_did,
-        "exported_at": "2026-01-01T00:00:00Z",
-        "access_mode": "local",
-        "agent_principal": {
-            "agent_did": agent_did,
-            "display_name": agent_name,
-            "default_behavior_id": default_behavior_id,
-            "enabled": true
-        },
-        "agent_behaviors": [{
-            "behavior_id": default_behavior_id,
-            "agent_did": agent_did,
-            "display_name": "Default",
-            "system_prompt": "Keep responses short.",
-            "backend_id": backend_id,
-            "model_name": "mock-model",
-            "tool_selection_id": tool_selection_id,
-            "enabled": true
-        }],
-        "tool_selections": [{
-            "selection_id": tool_selection_id,
-            "agent_did": agent_did,
-            "display_name": "Standard",
-            "enable_file_tools": false,
-            "enable_bash": false,
-            "enable_meta_tools": false
-        }],
-        "inference_backends": [{
-            "backend_id": backend_id,
-            "name": backend_id,
-            "endpoint": "http://127.0.0.1:8999/v1",
-            "enabled": true,
-            "models": ["mock-model"]
-        }],
-        "inference_profiles": [
-            {
-                "profile_id": profile_id_a,
-                "display_name": "Fast",
-                "context_window": 8192,
-                "max_output_tokens": 1024,
-                "max_turns": 16,
-                "temperature": 0.0,
-                "stream_batch_ms": 40,
-                "stream_liveness_timeout_secs": 90,
-                "deadline_duration_secs": 300
-            },
-            {
-                "profile_id": profile_id_b,
-                "display_name": "Deep",
-                "context_window": 16384,
-                "max_output_tokens": 2048,
-                "max_turns": 32,
-                "temperature": 0.2,
-                "stream_batch_ms": 80,
-                "stream_liveness_timeout_secs": 120,
-                "deadline_duration_secs": 600
-            }
-        ],
-        "tool_service_registries": [],
-        "tasks": [],
-        "schedules": []
-    });
-
-    fs::write(&export_path, serde_json::to_vec_pretty(&bundle)?)
-        .context("writing inline bundle fixture")?;
-
-    let imported = run_cli_json(
-        &target_home,
-        &[
-            "config",
-            "import",
-            export_path.to_str().expect("utf-8 export path"),
-        ],
-    )?;
-    assert_eq!(
-        imported.get("status").and_then(Value::as_str),
-        Some("imported")
-    );
-    assert_eq!(
-        imported
-            .pointer("/counts/agent_principal")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        imported
-            .pointer("/counts/agent_behaviors")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        imported
-            .pointer("/counts/inference_profiles")
-            .and_then(Value::as_u64),
-        Some(2)
-    );
-
-    let stderr = run_cli_failure_stderr(
-        &target_home,
-        &[
-            "config",
-            "import",
-            export_path.to_str().expect("utf-8 export path"),
-        ],
-    )?;
-    assert!(
-        stderr.contains("gents config import --override"),
-        "expected override guidance in stderr, got:\n{stderr}"
-    );
-
-    let overridden = run_cli_json(
-        &target_home,
-        &[
-            "config",
-            "import",
-            export_path.to_str().expect("utf-8 export path"),
-            "--override",
-        ],
-    )?;
-    assert_eq!(
-        overridden.get("override").and_then(Value::as_bool),
-        Some(true)
-    );
-
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -62,27 +62,20 @@ fn replicate_template_resolves_to_subscription_without_filter() {
     );
 }
 
-/// Rows without a template default to `conversation` (matches the migration
-/// backfill), and an unknown template also falls back to the default.
 #[test]
-fn missing_and_unknown_template_default_to_conversation() {
+fn missing_and_unknown_templates_are_rejected() {
     let missing = desired_from_pairing_row(desired_row(None, Some("did:key:bob")), "did:key:self")
-        .expect("default resolves")
-        .expect("some desired layer");
-    assert!(missing.collections.is_empty());
-    assert!(missing.replicator_filter.contains_key("AgentRequest"));
+        .expect_err("missing template must not create routing authority");
+    assert!(missing.to_string().contains("missing its scope template"));
 
     let unknown = desired_from_pairing_row(
         desired_row(Some("not-a-template"), Some("did:key:bob")),
         "did:key:self",
     )
-    .expect("default resolves")
-    .expect("some desired layer");
-    assert_eq!(
-        unknown.replicator_collections,
-        missing.replicator_collections
-    );
-    assert!(unknown.replicator_filter.contains_key("AgentRequest"));
+    .expect_err("unknown template must not create routing authority");
+    assert!(unknown
+        .to_string()
+        .contains("unknown pairing scope template"));
 }
 
 #[test]

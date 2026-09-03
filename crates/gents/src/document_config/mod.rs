@@ -116,22 +116,17 @@ pub async fn ensure_agent_principal(
     agent_did: &str,
 ) -> Result<PrincipalBootstrap> {
     let existing_principal = load_agent_principal(node, agent_did).await?;
-    let (default_behavior_id, created_principal) = match existing_principal.as_ref() {
+    let created_principal = existing_principal.is_none();
+    let default_behavior_id = match existing_principal.as_ref() {
         Some(principal) => {
-            let behavior_id =
-                serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
-                    .map(ToOwned::to_owned)
-                    .unwrap_or_else(|| default_behavior_id_for_agent(agent_did));
-            (behavior_id, false)
+            serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| anyhow!("AgentPrincipal {agent_did} has no default_behavior_id"))?
         }
-        None => (default_behavior_id_for_agent(agent_did), true),
+        None => default_behavior_id_for_agent(agent_did),
     };
 
-    let default_inference_profile_id =
-        inference_profile::default_inference_profile_id_for_behavior(&default_behavior_id);
-
-    let mut created_profile_with_default_behavior = false;
-    let (mut default_behavior, created_default_behavior) = match load_agent_behavior(
+    let (default_behavior, created_default_behavior) = match load_agent_behavior(
         node,
         &default_behavior_id,
     )
@@ -147,15 +142,7 @@ pub async fn ensure_agent_principal(
             (behavior, false)
         }
         None => {
-            if existing_principal
-                .as_ref()
-                .and_then(|principal| {
-                    serde_helpers::normalize_optional_string(
-                        principal.default_behavior_id.as_deref(),
-                    )
-                })
-                .is_some()
-            {
+            if existing_principal.is_some() {
                 return Err(anyhow!(
                     "AgentPrincipal {agent_did} references missing default behavior {default_behavior_id}"
                 ));
@@ -164,7 +151,6 @@ pub async fn ensure_agent_principal(
             let profile =
                 inference_profile::create_default_inference_profile(node, &default_behavior_id)
                     .await?;
-            created_profile_with_default_behavior = true;
             create_default_behavior(node, agent_did, &default_behavior_id, &profile.profile_id)
                 .await?;
             let behavior = load_agent_behavior(node, &default_behavior_id)
@@ -176,45 +162,22 @@ pub async fn ensure_agent_principal(
         }
     };
 
-    let (default_inference_profile, created_default_inference_profile) =
-        match load_inference_profile(node, &default_inference_profile_id).await? {
-            Some(profile) => (profile, created_profile_with_default_behavior),
-            None => (
-                inference_profile::create_default_inference_profile(node, &default_behavior_id)
-                    .await?,
-                true,
-            ),
-        };
-
-    if serde_helpers::normalize_optional_string(default_behavior.inference_profile_id.as_deref())
-        .is_none()
-    {
-        default_behavior.inference_profile_id = Some(default_inference_profile.profile_id.clone());
-        upsert_agent_behavior(node, &default_behavior).await?;
-        default_behavior = load_agent_behavior(node, &default_behavior_id)
-            .await?
-            .ok_or_else(|| anyhow!("default behavior {default_behavior_id} was not persisted"))?;
-    }
+    let default_inference_profile_id =
+        serde_helpers::normalize_optional_string(default_behavior.inference_profile_id.as_deref())
+            .ok_or_else(|| {
+                anyhow!("AgentBehavior {default_behavior_id} has no inference_profile_id")
+            })?;
+    let default_inference_profile = load_inference_profile(node, default_inference_profile_id)
+        .await?
+        .ok_or_else(|| {
+            anyhow!(
+                "AgentBehavior {default_behavior_id} references missing inference profile {default_inference_profile_id}"
+            )
+        })?;
+    let created_default_inference_profile = created_default_behavior;
 
     match existing_principal {
-        Some(principal) => {
-            if serde_helpers::normalize_optional_string(principal.default_behavior_id.as_deref())
-                .is_none()
-            {
-                let fallback_display_name = serde_helpers::default_display_name_for_did(agent_did);
-                upsert_agent_principal(
-                    node,
-                    agent_did,
-                    principal
-                        .display_name
-                        .as_deref()
-                        .or(Some(fallback_display_name.as_str())),
-                    Some(&default_behavior_id),
-                    principal.enabled,
-                )
-                .await?;
-            }
-        }
+        Some(_) => {}
         None => {
             let fallback_display_name = serde_helpers::default_display_name_for_did(agent_did);
             upsert_agent_principal(

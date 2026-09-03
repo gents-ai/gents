@@ -31,6 +31,7 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
             &format!("cli-subagent-cancel-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -138,6 +139,7 @@ async fn subagent_cancel_local_cascades_bridge_lifecycle_dispatch() -> Result<()
             &format!("cli-subagent-cancel-local-{}", Uuid::new_v4().simple()),
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

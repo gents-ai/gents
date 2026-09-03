@@ -27,6 +27,7 @@ async fn setup_db(
         &ToolSelectionDocument {
             selection_id: "r4c-parent-tools".to_string(),
             agent_did: agent_did.clone(),
+            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(vec![gents::subagent_target_entry(
                 CHILD_BEHAVIOR_ID,
                 &agent_did,
@@ -127,8 +128,9 @@ async fn create_parent_hook(
     )
     .await
     .unwrap();
-    hook.set_active_request_id(Some(request_id.to_string()))
-        .await;
+    hook.set_active_request_lineage(Some(request_id.to_string()), None)
+        .await
+        .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(deadline)).await;
     hook
 }

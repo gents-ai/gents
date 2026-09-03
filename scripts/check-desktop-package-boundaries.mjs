@@ -482,6 +482,45 @@ if (
     "Gents Desktop production composition must own and inject one instance-bound bridge",
   );
 }
+
+const syncProjectorPath = join(
+  root,
+  "packages/gents-desktop-client/src/operationalState.ts",
+);
+const syncProjector = readFileSync(syncProjectorPath, "utf8");
+if (
+  !syncProjector.includes(
+    'export type SyncHealthStateName = "healthy" | "syncing" | "offline" | "failed";',
+  ) ||
+  !syncProjector.includes("export function projectSyncOperationalStatus(")
+) {
+  failures.push(
+    "gents-desktop-client must own the exact four-state sync projection",
+  );
+}
+for (const sourceRoot of [
+  ...packageNames.map((name) => join(root, "packages", name, "src")),
+  join(root, "apps/gents-desktop/src"),
+]) {
+  for (const file of filesUnder(sourceRoot, (path) =>
+    /\.[cm]?[jt]sx?$/.test(path),
+  )) {
+    if (file === syncProjectorPath || file.includes(`${sep}generated${sep}`)) {
+      continue;
+    }
+    const source = readFileSync(file, "utf8");
+    if (/syncHealth\??\.state/.test(source)) {
+      failures.push(
+        `${relative(root, file)} interprets raw sync state outside the canonical projector`,
+      );
+    }
+    if (/\bsync[-_ ]?stalled\b|["']stalled["']/i.test(source)) {
+      failures.push(
+        `${relative(root, file)} restores the removed synthetic stalled state`,
+      );
+    }
+  }
+}
 for (const path of [
   "apps/gents-desktop/src/hooks/desktopShellChatActions.ts",
   "apps/gents-desktop/src/hooks/desktopShellConfigActions.ts",
@@ -551,7 +590,6 @@ for (const path of [
 }
 
 for (const [path, maximumLines] of [
-  ["packages/gents-desktop-client/src/api.ts", 100],
   ["packages/gents-desktop-client/src/api/adapter.ts", 350],
   ["packages/gents-desktop-fleet/src/InferenceSetupWizard.tsx", 100],
   [

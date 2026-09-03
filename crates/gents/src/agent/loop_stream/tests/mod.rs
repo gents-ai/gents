@@ -16,7 +16,7 @@ use rig::streaming::{
 use tokio::sync::Mutex;
 
 use super::*;
-use crate::ensure_schemas;
+use crate::ensure_runtime_schemas;
 use crate::hook::{DefraSessionHook, FailurePolicy};
 use crate::test_support::first_content;
 

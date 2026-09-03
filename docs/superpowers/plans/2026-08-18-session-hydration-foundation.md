@@ -1,6 +1,7 @@
 # Session Hydration Foundation (#1142) Implementation Plan
 
-> Historical implementation plan. Current hydration admission derives exact
+> **Do not execute this plan.** It is historical implementation evidence.
+> Current hydration admission derives exact
 > applied routes and current authorization from authenticated enrollment
 > (#1312–#1313); older pairing/membership wording below is not an alternate
 > authority path.

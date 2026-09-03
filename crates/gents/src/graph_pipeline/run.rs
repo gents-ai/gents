@@ -222,15 +222,15 @@ async fn load_plan(executor: &(impl GraphRunQuery + ?Sized), digest: &str) -> Re
     Ok(plan)
 }
 
-fn request_is_terminal(state: Option<&str>, status: &str) -> bool {
+fn request_is_terminal(state: Option<&str>) -> bool {
     matches!(
-        state.unwrap_or(status),
-        "complete" | "completed" | "error" | "failed" | "dead" | "interrupted" | "superseded"
+        state,
+        Some("completed" | "failed" | "dead" | "interrupted" | "superseded")
     )
 }
 
-fn request_succeeded(state: Option<&str>, status: &str) -> bool {
-    state.unwrap_or(status) == "completed" && matches!(status, "complete" | "completed")
+fn request_succeeded(state: Option<&str>) -> bool {
+    state == Some("completed")
 }
 
 fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
@@ -321,8 +321,8 @@ async fn load_requests(
                     .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
                     .cloned(),
                 behavior_id,
-                terminal: request_is_terminal(lifecycle_state.as_deref(), &status),
-                succeeded: request_succeeded(lifecycle_state.as_deref(), &status),
+                terminal: request_is_terminal(lifecycle_state.as_deref()),
+                succeeded: request_succeeded(lifecycle_state.as_deref()),
                 status,
                 lifecycle_state,
                 failure_reason: row
@@ -1291,10 +1291,10 @@ mod tests {
     }
 
     #[test]
-    fn request_terminality_accepts_legacy_status_when_lifecycle_is_absent() {
-        assert!(request_is_terminal(None, "error"));
-        assert!(request_is_terminal(None, "complete"));
-        assert!(!request_is_terminal(None, "processing"));
+    fn request_terminality_requires_authoritative_lifecycle_state() {
+        assert!(!request_is_terminal(None));
+        assert!(request_is_terminal(Some("failed")));
+        assert!(request_succeeded(Some("completed")));
     }
 
     #[test]

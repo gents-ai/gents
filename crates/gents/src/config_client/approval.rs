@@ -151,7 +151,7 @@ mod tests {
             .build()
             .await
             .unwrap();
-        crate::ensure_schemas(&node).await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
         let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
         // Persist a held row shaped like the runtime's hold_for_approval.

@@ -267,9 +267,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             let trace_attrs = RequestTraceAttrs::from_request(&request);
             let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
-            let execution_origin = crate::lifecycle::ExecutionOrigin::from_persisted(
-                request.execution_origin.as_deref(),
-            );
 
             self.process_request(request, shutdown.clone())
                 .instrument(tracing::info_span!(
@@ -281,7 +278,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     behavior_id = %behavior_id,
                     requested_behavior_id = %trace_attrs.requested_behavior_id,
                     backend_id = %backend_id,
-                    execution_origin = %execution_origin.as_str(),
+                    execution_origin = %trace_attrs.execution_origin,
                     persisted_execution_origin = %trace_attrs.execution_origin,
                     deadline_at = %trace_attrs.deadline_at,
                     has_deadline = trace_attrs.has_deadline,
@@ -314,13 +311,16 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         else {
             return;
         };
+        let execution_origin =
+            crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref())
+                .expect("fresh request admission requires a canonical execution_origin");
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
             self.node.clone(),
             &self.behavior.behavior_id,
             self.behavior.agent_did(),
             request.clone(),
             self.behavior.deadline_duration.as_secs(),
-            crate::lifecycle::ExecutionOrigin::from_persisted(request.execution_origin.as_deref()),
+            execution_origin,
             self.behavior.backend_id.clone().unwrap_or_default(),
         );
 

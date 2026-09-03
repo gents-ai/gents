@@ -270,12 +270,6 @@ theorem membership_growth_requires_current_admin_approval {s : State} {r : Reque
     · exact False.elim (hold hnew)
   · exact False.elim (hold hnew)
 
-/-- A legacy desired-row observation is not a transition and cannot grant peer admission. -/
-theorem legacy_pairing_materialization_cannot_grant_peer_admission
-    (s : State) (legacyDesiredPeers : Finset Did) (memberDid injected : Did) :
-    projectsPeerAdmission s (insert injected legacyDesiredPeers) memberDid ↔
-      projectsPeerAdmission s legacyDesiredPeers memberDid := Iff.rfl
-
 theorem current_enrollment_grants_peer_admission {s : State} {r : Request} {d : Decision}
     (hcurrent : currentApproval s r d) :
     peerOperationallyAuthorized s r.candidateDid := by

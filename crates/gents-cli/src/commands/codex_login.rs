@@ -17,7 +17,7 @@ pub(crate) struct CodexLoginOptions {
 
 pub(crate) struct CodexLoginOutcome {
     pub(crate) doc_id: String,
-    pub(crate) credential: gents::chatgpt_codex::OAuthCredential,
+    pub(crate) credential: gents::oauth_credential::OAuthCredential,
 }
 
 pub(crate) async fn codex_login(args: CodexLoginArgs) -> Result<()> {
@@ -85,7 +85,7 @@ pub(crate) async fn run_codex_login(
             .context("ChatGPT browser login failed")?
     };
 
-    let credential = gents::chatgpt_codex::OAuthCredential::from_login_tokens(
+    let credential = gents::oauth_credential::OAuthCredential::from_login_tokens(
         agent_did,
         &provider,
         &tokens.id_token,
@@ -93,7 +93,7 @@ pub(crate) async fn run_codex_login(
         tokens.refresh_token,
         chrono::Utc::now(),
     );
-    let mutation = gents::chatgpt_codex::oauth_credential_upsert_mutation(&credential);
+    let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
     let response = access.execute(&mutation).await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
 

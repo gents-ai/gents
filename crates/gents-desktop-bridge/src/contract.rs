@@ -6,7 +6,9 @@ use ts_rs::TS;
 
 use crate::error::BridgeErrorCode;
 
-/// `MAJOR.MINOR` contract version. MINOR = additive; MAJOR = breaking.
+/// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 6.0: breaking — exact-version matching, single-owner client state, and
+//      compatibility aliases removed; includes the 5.2 goal save fields.
 // 5.2: additive — goal capability and Task goal save fields may be omitted to
 //      preserve stored values; explicit null clears the override/declaration.
 // 5.1: additive — durable-goal tool capabilities and Task declarations.
@@ -38,13 +40,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "5.2";
+pub const CONTRACT_VERSION: &str = "6.0";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "13bdf77c3f8a6d9c7b6710762f7cd653c9c7734eeb2c64855ad318fef65f066b";
+    "bc2cb1e3ebc4879b73fcca4dd171d381a19a10f92152fe64fb54fea16b51ae34";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

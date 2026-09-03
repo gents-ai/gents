@@ -33,10 +33,10 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     let credential = load_oauth_credential(&access, &agent_did, &provider)
         .await?
         .ok_or_else(|| {
-            anyhow::anyhow!(gents::chatgpt_codex::classify_chatgpt_auth_error(
+            anyhow::anyhow!(gents::oauth_credential::classify_chatgpt_auth_error(
                 &agent_did,
                 &provider,
-                &gents::chatgpt_codex::ChatGptAuthProblem::Missing,
+                &gents::oauth_credential::OAuthAuthProblem::Missing,
             ))
         })?;
 
@@ -75,10 +75,10 @@ pub(crate) async fn codex_auth_probe(args: CodexAuthProbeArgs) -> Result<()> {
     if !status.is_success() {
         let body = String::from_utf8_lossy(&body);
         if status.as_u16() == 401 || status.as_u16() == 403 {
-            let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
+            let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
                 &agent_did,
                 &provider,
-                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
+                &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
             bail!("models request failed with HTTP {status}: {body}\n{guidance}");
         }
@@ -136,10 +136,10 @@ pub(crate) async fn load_oauth_credential(
     access: &ConfigAccess,
     agent_did: &str,
     provider: &str,
-) -> Result<Option<gents::chatgpt_codex::OAuthCredential>> {
-    let query = gents::chatgpt_codex::oauth_credential_query(agent_did, provider);
+) -> Result<Option<gents::oauth_credential::OAuthCredential>> {
+    let query = gents::oauth_credential::oauth_credential_query(agent_did, provider);
     let response = access.execute(&query).await?;
-    gents::chatgpt_codex::oauth_credentials_from_response(&response)
+    gents::oauth_credential::oauth_credentials_from_response(&response)
         .into_iter()
         .next()
         .transpose()

@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import {
-  getDesktopApiAdapter,
-  type DeploymentView,
-  type DesktopApiAdapter,
-  type ProviderAccountView,
+import type {
+  DeploymentView,
+  DesktopApiAdapter,
+  ProviderAccountView,
 } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 
@@ -38,13 +37,12 @@ const PROVIDERS: Array<{ id: Provider; title: string; description: string }> = [
 ];
 
 export function ProviderAccountsPanel({
-  api: explicitApi,
+  api,
   deployment,
 }: {
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   deployment: DeploymentView;
 }) {
-  const api = getDesktopApiAdapter(explicitApi);
   const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyProvider, setBusyProvider] = useState<Provider | null>(null);

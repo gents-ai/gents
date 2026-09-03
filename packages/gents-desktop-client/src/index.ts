@@ -1,7 +1,7 @@
 export {
-  assertCompatibleBridgeContract,
+  assertExactBridgeContract,
   createDesktopClient,
-  MINIMUM_BRIDGE_CONTRACT_VERSION,
+  BRIDGE_CONTRACT_VERSION,
   PACKAGE_VERSION,
   type DesktopBridgeContract,
   type DesktopClient,
@@ -26,7 +26,11 @@ export {
   normalizeInvokeError,
   type BridgeErrorPayload,
 } from "./errors.js";
-export * from "./api.js";
+export { createDesktopApiAdapter } from "./api/adapter.js";
+export type {
+  DesktopApiAdapter,
+  ManagedServerStatus,
+} from "./api/types.js";
 export * from "./events.js";
 export * from "./operationalState.js";
 export * from "./types.js";

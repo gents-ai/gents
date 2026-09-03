@@ -83,7 +83,7 @@ function behaviorLabel(deployment: DeploymentView, behaviorId: string): string {
   );
 }
 
-/** Keep an explicit selection only while the selected runtime assigns it. */
+/** Keep an explicit selection only while its database behavior row exists. */
 export function selectedBehaviorIdForDeployment(
   deployment: DeploymentView | null,
   selectedBehaviorId: string | null,
@@ -91,13 +91,13 @@ export function selectedBehaviorIdForDeployment(
   if (!deployment) return null;
   if (
     selectedBehaviorId !== null &&
-    deployment.behaviorReadiness.behaviors.some(
+    deployment.behaviors.some(
       (behavior) => behavior.behaviorId === selectedBehaviorId,
     )
   ) {
     return selectedBehaviorId;
   }
-  return deployment.behaviorReadiness.defaultBehaviorId;
+  return deployment.agentPrincipal.defaultBehaviorId;
 }
 
 /** Select one runtime-authored readiness verdict for admission and display. */
@@ -110,7 +110,8 @@ export function selectedBehaviorReadinessDecision(
   }
 
   const readiness = deployment.behaviorReadiness;
-  const behaviorId = selectedBehaviorId ?? readiness.defaultBehaviorId ?? null;
+  const behaviorId =
+    selectedBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId ?? null;
   if (readiness.source.state === "unknown") {
     return { kind: "unknown", behaviorId, reason: readiness.source.reason };
   }
@@ -314,22 +315,9 @@ export function projectDeploymentOperationalState(
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
 
-  // A request route is usable only after both authenticated enrollment and the
-  // runtime's final chat-safety projection agree. Inconsistent snapshots fail
-  // closed while the newer half of the snapshot catches up.
-  const routeReady = deployment.pairingReady && deployment.chatSafe;
-  const route = projectRouteOperationalStatus(routeReady);
+  const route = projectRouteOperationalStatus(deployment.chatSafe);
   const localRuntime = isLocalRuntimeSource(deployment.source);
-  const sync = localRuntime
-    ? status({
-        kind: "ready",
-        layer: "sync",
-        reason: "local_runtime",
-        label: "Local database",
-        shortLabel: "Local",
-        detail: "This runtime uses the local database directly.",
-      })
-    : projectSyncOperationalStatus(syncHealth);
+  const sync = projectSyncOperationalStatus(syncHealth);
 
   const behaviorReadiness = selectedBehaviorReadinessDecision(
     deployment,

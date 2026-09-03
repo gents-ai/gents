@@ -537,7 +537,7 @@ fn turn_replacement_supersession_rank() {
 }
 
 #[test]
-fn persisted_response_status_aliases_share_one_decoder() {
+fn persisted_response_status_decoder_accepts_only_canonical_values() {
     assert_eq!(
         ResponseStatus::try_from("streaming"),
         Ok(ResponseStatus::Streaming)
@@ -546,19 +546,15 @@ fn persisted_response_status_aliases_share_one_decoder() {
         ResponseStatus::try_from("complete"),
         Ok(ResponseStatus::Complete)
     );
-    assert_eq!(
-        ResponseStatus::try_from("completed"),
-        Ok(ResponseStatus::Complete)
-    );
-    for status in ["error", "failed", "failure"] {
-        assert_eq!(ResponseStatus::try_from(status), Ok(ResponseStatus::Error));
+    assert_eq!(ResponseStatus::try_from("error"), Ok(ResponseStatus::Error));
+    for status in ["completed", "failed", "failure", "interrupted"] {
+        assert_eq!(
+            ResponseStatus::try_from(status)
+                .expect_err("non-canonical status should fail")
+                .value(),
+            status
+        );
     }
-    assert_eq!(
-        ResponseStatus::try_from("interrupted")
-            .expect_err("unsupported status should fail")
-            .value(),
-        "interrupted"
-    );
 }
 
 #[test]

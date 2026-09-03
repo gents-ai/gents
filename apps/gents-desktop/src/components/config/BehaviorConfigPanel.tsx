@@ -33,7 +33,7 @@ const DEFAULT_COMPACTION_STRATEGY = "StripThenSummarize";
 const DEFAULT_COMPACTION_THRESHOLD = "0.75";
 
 export type BehaviorConfigPanelProps = {
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   deployment: DeploymentView;
   selectedBehavior: BehaviorView | null;
   saving: boolean;
@@ -91,11 +91,7 @@ export function BehaviorConfigPanel({
         agentDid={deployment.agentDid}
         agentEnabled={deployment.agentPrincipal.enabled ?? true}
         behavior={selectedBehavior}
-        currentDefaultBehaviorId={
-          deployment.defaultBehaviorId ??
-          deployment.agentPrincipal.defaultBehaviorId ??
-          null
-        }
+        currentDefaultBehaviorId={deployment.agentPrincipal.defaultBehaviorId ?? null}
         inferenceBackends={deployment.inferenceBackends}
         inferenceProfiles={deployment.inferenceProfiles}
         savedStatus={savedStatus}
@@ -121,7 +117,7 @@ export function BehaviorConfigPanel({
 }
 
 export type BehaviorConfigEditorProps = {
-  api?: DesktopApiAdapter;
+  api: DesktopApiAdapter;
   agentDisplayName: string;
   agentDid: string;
   agentEnabled: boolean;
@@ -210,12 +206,9 @@ export function BehaviorConfigEditor({
     setSaveError(null);
   }, [behavior?.behaviorId]);
 
-  const effectiveProfileId = pickValidProfile(
-    [profileId, behavior?.inferenceProfileId ?? ""],
-    inferenceProfiles,
+  const profileBindingExists = inferenceProfiles.some(
+    (profile) => profile.profileId === profileId,
   );
-  const submittedProfileId =
-    profileId || behavior?.inferenceProfileId || effectiveProfileId;
 
   const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
   const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");
@@ -260,7 +253,7 @@ export function BehaviorConfigEditor({
       behaviorId,
       systemPrompt,
       backendId,
-      profileId: effectiveProfileId,
+      profileId,
       toolSelectionId,
       compactionStrategy,
       compactionThreshold,
@@ -271,7 +264,7 @@ export function BehaviorConfigEditor({
     },
     {
       ...base,
-      profileId: pickValidProfile([base.profileId], inferenceProfiles),
+      profileId: base.profileId,
       skillRefs: [...base.skillRefs].sort(),
       skillExcludes: [...base.skillExcludes].sort(),
     },
@@ -287,7 +280,7 @@ export function BehaviorConfigEditor({
         displayName: nextId,
         systemPrompt,
         backendId: optionalString(backendId),
-        inferenceProfileId: submittedProfileId,
+        inferenceProfileId: profileId,
         toolSelectionId: optionalString(toolSelectionId),
         compactionStrategy: optionalString(compactionStrategy),
         compactionThreshold: parseOptionalFloat(compactionThreshold),
@@ -372,10 +365,13 @@ export function BehaviorConfigEditor({
             <select
               data-testid="behavior-profile-id"
               onChange={(event) => setProfileId(event.currentTarget.value)}
-              value={effectiveProfileId}
+              value={profileId}
             >
-              {!inferenceProfiles.length ? (
-                <option value="">No profiles available</option>
+              {!profileId ? <option value="">Select a profile</option> : null}
+              {profileId && !profileBindingExists ? (
+                <option disabled value={profileId}>
+                  {profileId} (unavailable)
+                </option>
               ) : null}
               {inferenceProfiles.map((profile) => (
                 <option key={profile.profileId} value={profile.profileId}>
@@ -457,7 +453,6 @@ export function BehaviorConfigEditor({
             >
               <option value="StripThenSummarize">Strip then summarize</option>
               <option value="StripToolResults">Strip tool results</option>
-              <option value="Summarize">Summarize</option>
             </select>
           </label>
           <label className="field">
@@ -577,7 +572,7 @@ export function BehaviorConfigEditor({
             saving ||
             !behaviorId.trim() ||
             !systemPrompt.trim() ||
-            !effectiveProfileId ||
+            !profileBindingExists ||
             !compactionThresholdValid
           }
           type="submit"
@@ -606,13 +601,4 @@ function behaviorFormValues(behavior: BehaviorView | null) {
     skillRefs: behavior?.skillRefs ?? [],
     skillExcludes: behavior?.skillExcludes ?? [],
   };
-}
-
-function pickValidProfile(candidates: string[], profiles: InferenceProfileView[]) {
-  for (const candidate of candidates) {
-    if (candidate && profiles.some((profile) => profile.profileId === candidate)) {
-      return candidate;
-    }
-  }
-  return profiles[0]?.profileId ?? "";
 }

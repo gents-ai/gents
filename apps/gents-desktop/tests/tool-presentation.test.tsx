@@ -121,6 +121,6 @@ describe("unified tool presentation", () => {
     );
     expect(screen.getByText("process · spawn")).toBeInTheDocument();
     expect(screen.getByText("background")).toBeInTheDocument();
-    expect(screen.getByText("running")).toBeInTheDocument();
+    expect(screen.getByText("working")).toBeInTheDocument();
   });
 });

@@ -175,6 +175,8 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
       { requestAdmissionBase .localSelf with requesterMatchesTarget := false }
   , requestAdmissionCase "tampered-signed-request-fields"
       { requestAdmissionBase .enrollment with signedFieldsMatch := false }
+  , requestAdmissionCase "missing-or-unknown-execution-origin"
+      { requestAdmissionBase .enrollment with signedFieldsMatch := false }
   , requestAdmissionCase "caller-authored-preclaim-deadline"
       { requestAdmissionBase .enrollment with pendingDeadlineAbsent := false }
   , requestAdmissionCase "enrollment-with-foreign-branch-fields"
@@ -237,7 +239,6 @@ def enrollmentRouteReceipt : RouteReceipt :=
   serverRouteReceiptFor enrollmentRequest enrollmentDecision
 
 inductive EnrollmentAction where
-  | observeLegacyDesired (memberDid : Did)
   | observe (offer : Offer)
   | confirmPin (offer : Offer)
   | accept (offer : Offer) (request : Request)
@@ -251,7 +252,6 @@ inductive EnrollmentAction where
   deriving Repr
 
 def applyEnrollmentAction (state : Enrollment.State) : EnrollmentAction → Enrollment.State
-  | .observeLegacyDesired _ => state
   | .observe offer => observeOffer state offer
   | .confirmPin offer => confirmAdminPin state offer
   | .accept offer request => acceptRequest state offer request
@@ -264,7 +264,6 @@ def applyEnrollmentAction (state : Enrollment.State) : EnrollmentAction → Enro
   | .merge _ _ revision => mergeAuthorization state revision
 
 private def actionName : EnrollmentAction → String
-  | .observeLegacyDesired _ => "observe_legacy_pairing_desired"
   | .observe _ => "observe_offer"
   | .confirmPin _ => "confirm_admin_pin"
   | .accept _ _ => "accept_request"
@@ -301,7 +300,6 @@ private def actionReceipt? : EnrollmentAction → Option RouteReceipt
   | _ => none
 
 private def actionPeerAdmissionDid : EnrollmentAction → Did
-  | .observeLegacyDesired memberDid => memberDid
   | action => actionRequest? action |>.map Request.candidateDid |>.getD ""
 
 private def routeDirectionName : RouteDirection → String
@@ -626,9 +624,7 @@ def enrollmentCases : List EnrollmentCase :=
     kind := RevisionKind.revoked }
   let unsignedReceipt := { enrollmentRouteReceipt with adminSigned := false }
   let wrongGenerationReceipt := { enrollmentRouteReceipt with authorizationSequence := 2 }
-  [ enrollmentCase "legacy_pairing_desired_cannot_grant_peer_admission"
-      [.observeLegacyDesired enrollmentRequest.candidateDid]
-  , enrollmentCase "status_first_ordering"
+  [ enrollmentCase "status_first_ordering"
       [.accept enrollmentOffer enrollmentRequest, .observe enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest, .confirmPin enrollmentOffer,
        .accept enrollmentOffer enrollmentRequest]

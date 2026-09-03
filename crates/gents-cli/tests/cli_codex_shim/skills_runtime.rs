@@ -19,6 +19,7 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -30,7 +31,6 @@ async fn codex_shim_live_skill_add_reaches_model_in_conversation() -> Result<()>
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",
@@ -166,6 +166,7 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -177,7 +178,6 @@ async fn codex_shim_live_skill_toggle_reaches_model_in_conversation() -> Result<
         &home_dir,
         server_port,
         &[
-            "--codex-shim",
             "--codex-shim-port",
             &shim_port_string,
             "--codex-shim-poll-ms",

@@ -36,7 +36,7 @@ function makeDeployment(): DeploymentView {
       {
         backendId: "backend-a",
         name: "Backend A",
-        providerKind: "openai",
+        providerKind: "OpenAiCompatible",
         endpoint: "http://localhost:1234/v1",
         models: ["m-1"],
         enabled: true,
@@ -44,7 +44,7 @@ function makeDeployment(): DeploymentView {
       {
         backendId: "backend-b",
         name: "Backend B",
-        providerKind: "openai",
+        providerKind: "OpenAiCompatible",
         endpoint: "http://localhost:5678/v1",
         models: ["m-2"],
         enabled: true,
@@ -189,7 +189,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
       commandForbiddenArgvPrefixes: [],
       cliToolNames: [],
       allowedMcpServiceIds: [],
-      delegateTo: ["mcp-late"],
       backgroundableToolNames: [],
       subagentTargets: [],
       defraQueryCollections: [],
@@ -222,6 +221,6 @@ describe("config editors preserve in-progress edits across snapshot refreshes", 
     expect(screen.getByTestId("tool-selection-display-name")).toHaveValue(
       "Edited Tools",
     );
-    expect(screen.getByTestId("tool-delegate-to")).toHaveValue("mcp-late");
+    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-late")).not.toBeChecked();
   });
 });

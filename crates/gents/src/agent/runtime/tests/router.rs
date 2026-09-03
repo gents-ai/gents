@@ -58,6 +58,106 @@ fn routed_snapshot(
 }
 
 #[tokio::test]
+async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_router() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:test:invalid-origin-route";
+    let response = node
+        .execute(
+            r#"mutation {
+                create_AgentRequest(input: {
+                    request_id: "invalid-origin-route-request"
+                    agent_did: "did:test:invalid-origin-route"
+                    behavior_id: "general"
+                    session_id: "invalid-origin-route-session"
+                    content: "hostile"
+                    status: "pending"
+                    lifecycle_state: "pending"
+                    created_at: "2026-09-03T00:00:00Z"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create malformed routed request: {:?}",
+        response.errors
+    );
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "invalid-origin-route-request" } }
+                    limit: 1
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "lookup malformed routed request: {:?}",
+        response.errors
+    );
+    let doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .expect("malformed request doc id")
+        .to_string();
+    let mut malformed = request(Some("general"), "invalid-origin-route-session");
+    malformed.doc_id = doc_id;
+    malformed.request_id = "invalid-origin-route-request".to_string();
+    malformed.agent_did = agent_did.to_string();
+
+    super::super::router::fail_routed_request(
+        node.clone(),
+        agent_did,
+        malformed,
+        "general",
+        "behavior unavailable",
+    )
+    .await
+    .expect("invalid origin must be terminalized, not escape the router");
+
+    let response = node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "invalid-origin-route-request" } }
+                    limit: 1
+                ) { status lifecycle_state failure_reason }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "reload terminal row: {:?}",
+        response.errors
+    );
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(|rows| rows.as_array())
+        .and_then(|rows| rows.first())
+        .expect("terminal request row");
+    assert_eq!(row.get("status").and_then(Value::as_str), Some("error"));
+    assert_eq!(
+        row.get("lifecycle_state").and_then(Value::as_str),
+        Some("failed")
+    );
+    assert!(row
+        .get("failure_reason")
+        .and_then(Value::as_str)
+        .is_some_and(|reason| reason.contains("execution_origin")));
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();

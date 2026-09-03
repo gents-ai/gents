@@ -33,6 +33,7 @@ async fn config_apply_sigkill_mid_apply_leaves_db_unchanged() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

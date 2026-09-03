@@ -110,11 +110,10 @@ struct ToolCallDocIdRow {
 }
 
 impl ToolCallRow {
-    fn cancel_policy(&self) -> CancelPolicy {
+    fn cancel_policy(&self) -> Option<CancelPolicy> {
         self.cancel_policy
             .as_deref()
             .and_then(CancelPolicy::from_persisted)
-            .unwrap_or(CancelPolicy::Cascade)
     }
 }
 
@@ -136,31 +135,21 @@ struct ParentRequestRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentTerminalRow {
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: String,
 }
 
 fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
     matches!(
-        row.status.as_deref(),
-        Some("error" | "superseded" | "dead" | "interrupted")
-    ) || matches!(
-        row.lifecycle_state.as_deref(),
-        Some("failed" | "superseded" | "dead" | "interrupted")
+        row.lifecycle_state.as_str(),
+        "failed" | "superseded" | "dead" | "interrupted"
     )
 }
 
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(alias = "target", alias = "target_behavior_id")]
+    name: String,
+    agent_did: String,
     behavior_id: String,
-    #[serde(alias = "message", alias = "content")]
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
@@ -180,10 +169,7 @@ struct SpawnArgs {
 
 impl SpawnArgs {
     fn target_name(&self) -> &str {
-        self.name
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&self.behavior_id)
+        &self.name
     }
 }
 
@@ -388,7 +374,6 @@ impl SubagentSource {
                     filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{
-                    status
                     lifecycle_state
                 }}
             }}"#
@@ -501,9 +486,13 @@ impl SubagentSource {
         message: impl Into<String>,
         allowed_targets: &[String],
     ) -> anyhow::Result<bool> {
-        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
-        let payload =
-            subagent_tool_not_allowed_payload(tool_name, path, requested, message, allowed_targets);
+        let payload = subagent_tool_not_allowed_payload(
+            &row.tool_name,
+            path,
+            requested,
+            message,
+            allowed_targets,
+        );
         fail_running_subagent_tool_call(
             &self.node,
             &row.doc_id,
@@ -546,11 +535,10 @@ impl SubagentSource {
             return Ok(None);
         }
 
-        let processed_key = row
-            .tool_call_key
-            .clone()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| row.doc_id.clone());
+        let Some(processed_key) = row.tool_call_key.clone().filter(|value| !value.is_empty())
+        else {
+            return Ok(None);
+        };
         if self.processed_tool_calls.contains(&processed_key) {
             return Ok(None);
         }
@@ -581,53 +569,58 @@ impl SubagentSource {
             None => return Ok(None),
         };
         let spawn_args: SpawnArgs = serde_json::from_str(&row.args)?;
-        let row_spawn_target_did =
-            non_empty(row.spawn_target_did.as_deref()).map(ToOwned::to_owned);
-        let args_target_did = non_empty(spawn_args.agent_did.as_deref()).map(ToOwned::to_owned);
-        if let (Some(row_did), Some(args_did)) = (&row_spawn_target_did, &args_target_did) {
-            if row_did != args_did {
-                let failed = self
-                    .fail_unauthorized_tool_call(
-                        &row,
-                        "/agent_did",
-                        args_did,
-                        "subagent target DID args do not match immutable spawn_target_did",
-                        &[],
-                    )
-                    .await?;
-                self.processed_tool_calls.insert(processed_key);
-                tracing::warn!(
-                    parent_request_id = %parent_request_id,
-                    parent_tool_call_id = %parent_tool_call_id,
-                    spawn_target_did = %row_did,
-                    args_agent_did = %args_did,
-                    failed_tool_call = failed,
-                    "subagent source rejected spawn with mismatched target DID fields",
-                );
-                return Ok(None);
-            }
+        let Some(row_spawn_target_did) = non_empty(row.spawn_target_did.as_deref()) else {
+            return Ok(None);
+        };
+        let Some(args_target_did) = non_empty(Some(&spawn_args.agent_did)) else {
+            return Ok(None);
+        };
+        if row_spawn_target_did != args_target_did {
+            let failed = self
+                .fail_unauthorized_tool_call(
+                    &row,
+                    "/agent_did",
+                    args_target_did,
+                    "subagent target DID args do not match immutable spawn_target_did",
+                    &[],
+                )
+                .await?;
+            self.processed_tool_calls.insert(processed_key);
+            tracing::warn!(
+                parent_request_id = %parent_request_id,
+                parent_tool_call_id = %parent_tool_call_id,
+                spawn_target_did = %row_spawn_target_did,
+                args_agent_did = %args_target_did,
+                failed_tool_call = failed,
+                "subagent source rejected spawn with mismatched target DID fields",
+            );
+            return Ok(None);
         }
-        let resolved_target_did = row_spawn_target_did.clone().or(args_target_did);
-        let await_mode = row
+        let Some(await_mode) = row
             .await_mode
             .as_deref()
             .and_then(AwaitMode::from_persisted)
-            .unwrap_or(AwaitMode::Foreground);
+        else {
+            return Ok(None);
+        };
+        let Some(bridge_cancel_policy) = row.cancel_policy() else {
+            return Ok(None);
+        };
 
         let parent = self.load_parent_request(&parent_request_doc_id).await?;
-        if parent
-            .as_ref()
-            .is_some_and(|parent| parent.request_id != parent_request_id)
-        {
-            anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-        }
         let snapshot = self.snapshot_rx.borrow().clone();
-        let bridge_authoring_did = non_empty(row.agent_did.as_deref()).map(ToOwned::to_owned);
-        let parent_authoring_did = parent
-            .as_ref()
-            .map(|parent| parent.agent_did.clone())
-            .or_else(|| bridge_authoring_did.clone())
+        let bridge_authoring_did = non_empty(row.agent_did.as_deref())
             .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
+        let parent_authoring_did = match parent.as_ref() {
+            Some(parent)
+                if parent.request_id == parent_request_id
+                    && bridge_authoring_did == parent.agent_did =>
+            {
+                parent.agent_did.clone()
+            }
+            Some(_) => anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent),
+            None => bridge_authoring_did.to_string(),
+        };
         let parent_is_local = parent.as_ref().is_some_and(|parent| {
             !snapshot.local_did.trim().is_empty()
                 && parent.agent_did.trim() == snapshot.local_did.trim()
@@ -635,14 +628,6 @@ impl SubagentSource {
         let trusted_paired_peer = if parent_is_local {
             false
         } else {
-            if let (Some(bridge_did), Some(parent_did)) = (
-                bridge_authoring_did.as_deref(),
-                parent.as_ref().map(|parent| parent.agent_did.as_str()),
-            ) {
-                if bridge_did != parent_did {
-                    anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-                }
-            }
             if !self
                 .peer_admission
                 .fresh_member_authorized(&parent_authoring_did)
@@ -652,25 +637,17 @@ impl SubagentSource {
             }
             true
         };
-        let tool_name = non_empty(Some(&row.tool_name)).unwrap_or("spawn_subagent");
+        let Some(tool_name) = non_empty(Some(&row.tool_name)) else {
+            return Ok(None);
+        };
         if trusted_paired_peer {
             let local_did = snapshot.local_did.trim();
-            let Some(spawn_target_did) = row_spawn_target_did.as_deref() else {
+            if local_did.is_empty() || row_spawn_target_did != local_did {
                 tracing::debug!(
                     parent_request_id = %parent_request_id,
                     parent_tool_call_id = %parent_tool_call_id,
                     parent_authoring_did = %parent_authoring_did,
-                    local_did = %local_did,
-                    "subagent source skipping trusted spawn: immutable spawn target is missing",
-                );
-                return Ok(None);
-            };
-            if local_did.is_empty() || spawn_target_did != local_did {
-                tracing::debug!(
-                    parent_request_id = %parent_request_id,
-                    parent_tool_call_id = %parent_tool_call_id,
-                    parent_authoring_did = %parent_authoring_did,
-                    spawn_target_did = %spawn_target_did,
+                    spawn_target_did = %row_spawn_target_did,
                     local_did = %local_did,
                     "subagent source skipping trusted spawn: immutable spawn target is not this host DID",
                 );
@@ -782,11 +759,7 @@ impl SubagentSource {
 
         if !trusted_paired_peer {
             let local_did = snapshot.local_did.trim();
-            let target_owner_did = resolved_target_did
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .unwrap_or_else(|| parent_authoring_did.trim());
+            let target_owner_did = row_spawn_target_did;
             if local_did.is_empty() || target_owner_did != local_did {
                 tracing::debug!(
                     parent_request_id = %parent_request_id,
@@ -805,29 +778,25 @@ impl SubagentSource {
             return Ok(None);
         }
 
-        let row_parent_depth = parent
-            .as_ref()
-            .and_then(|parent| parent.subagent_depth)
-            .and_then(|depth| u32::try_from(depth).ok());
-        if let (Some(bridge_depth), Some(row_depth)) =
-            (spawn_args.parent_subagent_depth, row_parent_depth)
-        {
-            if bridge_depth != row_depth {
-                anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-            }
-        }
-        let parent_depth = spawn_args
+        let bridge_depth = spawn_args
             .parent_subagent_depth
-            .or(row_parent_depth)
-            .or_else(|| parent.as_ref().map(|_| 0))
             .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
+        let parent_depth = match parent.as_ref() {
+            Some(parent) => {
+                let row_depth = parent
+                    .subagent_depth
+                    .and_then(|depth| u32::try_from(depth).ok())
+                    .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
+                if bridge_depth != row_depth {
+                    anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
+                }
+                row_depth
+            }
+            None => bridge_depth,
+        };
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
-        let child_agent_did = if trusted_paired_peer && !snapshot.local_did.trim().is_empty() {
-            snapshot.local_did.clone()
-        } else {
-            resolved_target_did.unwrap_or_else(|| parent_authoring_did.clone())
-        };
+        let child_agent_did = row_spawn_target_did.to_string();
         let parent_workspace = ParentWorkspaceStamp::from_fields(
             parent.as_ref().and_then(|row| row.workspace_id.as_deref()),
             parent
@@ -923,7 +892,6 @@ impl SubagentSource {
         // interrupt when the bridge policy is Cascade AND a real cancel signal is
         // present. A parent that completed NORMALLY is NOT a cancel signal — a
         // cleanly-completed parent never cascade-cancels its tools anywhere else.
-        let bridge_cancel_policy = row.cancel_policy();
         if bridge_cancel_policy != CancelPolicy::Cascade {
             tracing::debug!(
                 child_request_id = %request_id,
@@ -941,9 +909,9 @@ impl SubagentSource {
                     tracing::warn!(
                         child_request_id = %request_id,
                         %error,
-                        "subagent source failed to re-read bridge lifecycle after child create; assuming not cancelled",
+                        "subagent source failed to re-read bridge lifecycle after child create; cancelling child",
                     );
-                    false
+                    true
                 }
             };
             let parent_interrupted = if parent.is_some() {
@@ -955,9 +923,9 @@ impl SubagentSource {
                         tracing::warn!(
                             parent_request_id = %parent_request_id,
                             %error,
-                            "subagent source failed to re-read parent interrupt latch after child create; assuming not interrupted",
+                            "subagent source failed to re-read parent interrupt latch after child create; cancelling child",
                         );
-                        false
+                        true
                     }
                 }
             } else {
@@ -971,9 +939,9 @@ impl SubagentSource {
                         tracing::warn!(
                             parent_request_id = %parent_request_id,
                             %error,
-                            "subagent source failed to re-read parent terminal state after child create; assuming not terminal",
+                            "subagent source failed to re-read parent terminal state after child create; cancelling child",
                         );
-                        false
+                        true
                     }
                 }
             } else {

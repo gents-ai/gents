@@ -92,10 +92,9 @@ pub(super) fn build_session_context_view(
     let compacted_through_sequence = compaction_rows
         .last()
         .and_then(|row| row.compacted_through_sequence);
-    // Sequence is nillable for legacy/partially replicated rows. The cursor
-    // projection is valid only when every durable message participates in the
-    // same nonnegative ordered sequence space; otherwise preserve the proven
-    // full-provider-view plus cumulative-count fallback.
+    // A compaction cursor only owns rows in the canonical nonnegative sequence
+    // space. If any row is unsequenced, project the durable rows as-is instead
+    // of reconstructing an answer from cumulative counts.
     let usable_cursor = compacted_through_sequence.filter(|cursor| {
         *cursor >= 0
             && durable_messages
@@ -109,26 +108,7 @@ pub(super) fn build_session_context_view(
         })
         .map(|(_, message)| message)
         .collect::<Vec<_>>();
-    let (provider_messages, _) = gents::compaction::provider_view(provider_input);
-    let active_provider_messages = if usable_cursor.is_some() {
-        provider_messages
-    } else {
-        match gents::compaction::active_provider_history(
-            provider_messages.clone(),
-            total_compacted_messages,
-        ) {
-            Ok(messages) => messages,
-            Err(error) => {
-                tracing::warn!(
-                    session_id,
-                    total_compacted_messages,
-                    error = %error,
-                    "session context projection retained full provider history because its legacy compaction prefix was invalid"
-                );
-                provider_messages
-            }
-        }
-    };
+    let (active_provider_messages, _) = gents::compaction::provider_view(provider_input);
     let summaries = compaction_rows
         .iter()
         .filter_map(|row| row.summary.clone())

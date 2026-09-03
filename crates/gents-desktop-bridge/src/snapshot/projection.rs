@@ -112,6 +112,7 @@ pub fn project_runtime_snapshot(
 ) -> DesktopRuntimeSnapshot {
     if !grants.fleet_read {
         runtime.listen_addresses.clear();
+        runtime.enrollment_requests = None;
     }
     runtime.deployments = runtime
         .deployments
@@ -235,8 +236,8 @@ mod tests {
     use crate::types::{
         AgentPrincipalView, BehaviorEnvironmentView, BehaviorView, ClientRouteStatusView,
         ConversationSummary, DeploymentView, DesktopBootstrapSummary, DesktopClientSnapshot,
-        DesktopRuntimeSnapshot, MailboxItemView, P2PHealthView, PairingCollectionStatusView,
-        SavedPeerView, SkillView, SyncHealthView,
+        DesktopRuntimeSnapshot, EnrollmentRequestView, MailboxItemView, P2PHealthView,
+        PairingCollectionStatusView, SavedPeerView, SkillView, SyncHealthView,
     };
 
     fn sample_snapshot() -> DesktopClientSnapshot {
@@ -286,6 +287,16 @@ mod tests {
                     exhausted_fetch_count: Some(0),
                     quarantined_dag_count: Some(0),
                 }),
+                enrollment_requests: Some(vec![EnrollmentRequestView {
+                    request_id: "request_1".into(),
+                    network_id: "network_1".into(),
+                    admin_did: "did:test:admin".into(),
+                    server_peer: "peer_1".into(),
+                    server_label: None,
+                    owner_agent: "did:test:remote".into(),
+                    state: "pending_approval".into(),
+                    expires_at: "2099-01-01T00:00:00Z".into(),
+                }]),
                 bootstrap_errors: vec![],
                 last_mutation_error: None,
                 focused_request_id: None,
@@ -302,7 +313,6 @@ mod tests {
                     source: Some("local".into()),
                     graphql: Some("http://127.0.0.1/graphql".into()),
                     dial_succeeded: true,
-                    pairing_ready: true,
                     chat_safe: true,
                     pairing: vec![PairingCollectionStatusView {
                         collection_id: "AgentSession".into(),
@@ -331,7 +341,6 @@ mod tests {
                         })
                         .collect(),
                     last_error: None,
-                    default_behavior_id: Some("default".into()),
                     agent_principal: AgentPrincipalView {
                         agent_did: "did:test:local".into(),
                         display_name: Some("Local".into()),

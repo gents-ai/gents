@@ -1,35 +1,29 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 
-vi.mock("@source-inc/gents-desktop-chat", async (importOriginal) => ({
-  ...(await importOriginal()),
-  previewChatInterruptCascade: vi.fn(),
-  interruptChatRequest: vi.fn(),
-}));
-
-import {
-  previewChatInterruptCascade,
-  interruptChatRequest,
-} from "@source-inc/gents-desktop-chat";
 import { ActiveChatWorkspace } from "../src/components/ChatWorkspace";
+import { deployment as fixtureDeployment } from "./config-panel-wiring/fixtures";
 import type {
   DeploymentView,
+  DesktopApiAdapter,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
 
-const mockedPreview = vi.mocked(previewChatInterruptCascade);
-const mockedInterrupt = vi.mocked(interruptChatRequest);
+const mockedPreview = vi.fn();
+const mockedInterrupt = vi.fn();
+const api = {
+  previewInterruptCascade: mockedPreview,
+  interruptRequest: mockedInterrupt,
+  listToolCallHolds: vi.fn().mockResolvedValue([]),
+} as unknown as DesktopApiAdapter;
 
 const baseDeployment: DeploymentView = {
-  deploymentId: "dep-1",
+  ...fixtureDeployment,
   agentDid: "did:test:operator",
-  displayName: "test",
-  defaultBehaviorId: "default",
-  behaviors: [{ behaviorId: "default", displayName: "default" }],
-  conversations: [],
-  process: null,
-  runtime: null,
-  inbox: { hasUnread: false, count: 0 },
+  agentPrincipal: {
+    ...fixtureDeployment.agentPrincipal,
+    agentDid: "did:test:operator",
+  },
 };
 
 const streamingSession: DesktopSessionSnapshot = {
@@ -48,6 +42,7 @@ const streamingSession: DesktopSessionSnapshot = {
 };
 
 const baseProps = {
+  api,
   activeRequestId: "req_root",
   activityStatus: {
     kind: "working" as const,

@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
-use std::io::Read;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use gents::graphql::escape_graphql_string;
 use gents::Collection;
 use serde_json::Value;
@@ -16,10 +15,7 @@ use crate::config_writes::{
 use crate::desired_state;
 use crate::desired_state::DesiredApplyBundle;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
-use crate::{
-    extract_mutation_doc_id, graphql_input_literal, graphql_string_list_literal,
-    CONFIG_EXPORT_FORMAT, CONFIG_EXPORT_FORMAT_V1,
-};
+use crate::{extract_mutation_doc_id, graphql_input_literal, graphql_string_list_literal};
 
 #[cfg(test)]
 #[path = "../../gents/src/lean_vocab_test/support.rs"]
@@ -62,59 +58,6 @@ struct PreparedImportDocument {
 struct AliasedMutationField {
     alias: String,
     field: String,
-}
-
-pub(crate) fn read_config_import_bundle(
-    path: Option<&std::path::Path>,
-) -> Result<ConfigExportBundle> {
-    let contents = match path {
-        Some(path) => std::fs::read_to_string(path)
-            .with_context(|| format!("reading config import from {}", path.display()))?,
-        None => {
-            let mut contents = String::new();
-            std::io::stdin()
-                .read_to_string(&mut contents)
-                .context("reading config import from stdin")?;
-            contents
-        }
-    };
-    let mut bundle: ConfigExportBundle =
-        serde_json::from_str(&contents).context("decoding config import JSON")?;
-    migrate_config_import_bundle(&mut bundle);
-    Ok(bundle)
-}
-
-pub(crate) fn validate_config_import_bundle(bundle: &ConfigExportBundle) -> Result<()> {
-    if !matches!(
-        bundle.format.as_str(),
-        CONFIG_EXPORT_FORMAT | CONFIG_EXPORT_FORMAT_V1
-    ) {
-        anyhow::bail!(
-            "unsupported config import format {}; expected {}",
-            bundle.format,
-            CONFIG_EXPORT_FORMAT
-        );
-    }
-    if bundle.agent_did.trim().is_empty() {
-        anyhow::bail!("config import is missing agent_did");
-    }
-    Ok(())
-}
-
-pub(crate) fn migrate_config_import_bundle(bundle: &mut ConfigExportBundle) {
-    for selection in &mut bundle.tool_selections {
-        if let Some(object) = selection.as_object_mut() {
-            desired_state::strip_retired_tool_selection_fields(object);
-        }
-    }
-    for backend in &mut bundle.inference_backends {
-        if let Some(object) = backend.as_object_mut() {
-            desired_state::strip_deprecated_inference_backend_fields(object);
-        }
-    }
-    if bundle.format == CONFIG_EXPORT_FORMAT_V1 {
-        bundle.format = CONFIG_EXPORT_FORMAT.to_string();
-    }
 }
 
 pub(crate) async fn apply_import_collection(

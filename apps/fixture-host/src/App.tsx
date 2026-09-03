@@ -118,7 +118,7 @@ export function App() {
     void run("chat_send", () =>
       bridge.chatSend({
         agentDid: selectedDeployment.agentDid,
-        behaviorId: selectedDeployment.defaultBehaviorId ?? null,
+        behaviorId: selectedDeployment.agentPrincipal.defaultBehaviorId ?? null,
         sessionId: selectedConversation?.sessionId ?? null,
         content,
       }),
@@ -226,7 +226,9 @@ export function App() {
                 }
           }
           approxSerializedBytes={runtime?.approxSerializedBytes ?? 0}
-          behaviorLabel={selectedDeployment?.defaultBehaviorId ?? null}
+          behaviorLabel={
+            selectedDeployment?.agentPrincipal.defaultBehaviorId ?? null
+          }
           canSend={Boolean(selectedDeployment) && Boolean(draft.trim())}
           draft={draft}
           interruptVisible={false}
@@ -252,14 +254,17 @@ export function App() {
           }
           bootstrap={snapshot?.bootstrap ?? null}
           deployments={deployments}
+          enrollmentRequests={runtime?.enrollmentRequests ?? null}
           loading={false}
           p2pHealth={runtime?.p2pHealth ?? null}
           repairingP2P={false}
           starting={!storeState.started && busy}
           onRequestStatusEnrollment={(address) =>
-            run("peer_enroll", () =>
-              bridge.api.requestStatusEnrollment(address),
-            )
+            run("peer_enroll", async () => {
+              const request = await bridge.api.requestStatusEnrollment(address);
+              await store.refresh();
+              return request;
+            })
           }
           onOpenChat={(agentDid) => push(`open_chat: ${agentDid}`)}
           onOpenConfig={(agentDid) => push(`open_config: ${agentDid}`)}

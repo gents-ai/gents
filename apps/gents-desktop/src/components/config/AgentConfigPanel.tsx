@@ -4,7 +4,6 @@ import type { FormEvent } from "react";
 import type {
   AgentConfigSaveRequest,
   AgentPrincipalView,
-  BehaviorView,
   BootstrapSummary,
   DeploymentView,
 } from "@source-inc/gents-desktop-client";
@@ -31,7 +30,6 @@ export function AgentConfigPanel({
     <section className="config-single-layout">
       <AgentConfigEditor
         agent={deployment.agentPrincipal}
-        behaviors={deployment.behaviors}
         bootstrap={bootstrap}
         savedStatus={savedStatus}
         saving={saving}
@@ -44,7 +42,6 @@ export function AgentConfigPanel({
 
 export type AgentConfigEditorProps = {
   agent: AgentPrincipalView;
-  behaviors: BehaviorView[];
   bootstrap: BootstrapSummary | null;
   saving: boolean;
   savedStatus: string | null;
@@ -54,7 +51,6 @@ export type AgentConfigEditorProps = {
 
 export function AgentConfigEditor({
   agent,
-  behaviors,
   bootstrap,
   saving,
   savedStatus,
@@ -73,11 +69,7 @@ export function AgentConfigEditor({
 
   const dirty = editingDisplayName && displayName !== (agent.displayName ?? "");
 
-  const defaultBehaviorId =
-    agent.defaultBehaviorId ??
-    behaviors.find((behavior) => behavior.isDefault)?.behaviorId ??
-    behaviors[0]?.behaviorId ??
-    "";
+  const defaultBehaviorId = agent.defaultBehaviorId ?? "";
 
   async function submitAgent(event: FormEvent) {
     event.preventDefault();

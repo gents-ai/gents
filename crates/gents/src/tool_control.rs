@@ -77,7 +77,7 @@ pub async fn cancel_background_tool_call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ensure_schemas;
+    use crate::ensure_runtime_schemas;
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
@@ -93,7 +93,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ensure_schemas(&node).await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
 
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
@@ -154,7 +154,7 @@ mod tests {
                 .await
                 .unwrap(),
         );
-        ensure_schemas(&node).await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
 
         let mut lifecycle = ToolCallLifecycle::new_background_tool(
             node.clone(),

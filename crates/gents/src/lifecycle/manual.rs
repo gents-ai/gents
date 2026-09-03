@@ -91,14 +91,14 @@ mod tests {
 
     use super::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
     use crate::identity::{AgentIdentity, KeyIdentity};
-    use crate::schema::ensure_schemas;
+    use crate::schema::ensure_runtime_schemas;
 
     async fn test_node() -> (Arc<EmbeddedNode>, String) {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
         let did = identity.did().to_string();
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        ensure_schemas(node.as_ref()).await.unwrap();
+        ensure_runtime_schemas(node.as_ref()).await.unwrap();
         (node, did)
     }
 

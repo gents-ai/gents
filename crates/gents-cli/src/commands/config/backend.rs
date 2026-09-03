@@ -81,10 +81,10 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             if target.provider_kind == BackendProviderKind::ChatGptCodex
                 && discovery_error_is_auth(&error) =>
         {
-            let guidance = gents::chatgpt_codex::classify_chatgpt_auth_error(
+            let guidance = gents::oauth_credential::classify_chatgpt_auth_error(
                 oauth_agent_did.as_deref().unwrap_or(""),
                 gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
-                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
+                &gents::oauth_credential::OAuthAuthProblem::Expired,
             );
             anyhow::bail!("{error:#}\n{guidance}");
         }

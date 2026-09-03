@@ -210,7 +210,7 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
     .await
     {
         Ok(Some(credential))
-            if gents::chatgpt_codex::token_is_fresh(credential.access_token_expires_at) =>
+            if gents::oauth_credential::token_is_fresh(credential.access_token_expires_at) =>
         {
             json!({
                 "ok": true,
@@ -226,19 +226,19 @@ pub(crate) async fn diagnose(args: DiagnoseArgs) -> Result<()> {
             "credential_id": credential.credential_id,
             "provider": credential.provider,
             "expires_at": credential.access_token_expires_at,
-            "guidance": gents::chatgpt_codex::classify_chatgpt_auth_error(
+            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
                 &agent_did,
                 chatgpt_provider,
-                &gents::chatgpt_codex::ChatGptAuthProblem::Expired,
+                &gents::oauth_credential::OAuthAuthProblem::Expired,
             ),
         }),
         Ok(None) => json!({
             "ok": false,
             "provider": chatgpt_provider,
-            "guidance": gents::chatgpt_codex::classify_chatgpt_auth_error(
+            "guidance": gents::oauth_credential::classify_chatgpt_auth_error(
                 &agent_did,
                 chatgpt_provider,
-                &gents::chatgpt_codex::ChatGptAuthProblem::Missing,
+                &gents::oauth_credential::OAuthAuthProblem::Missing,
             ),
         }),
         Err(error) => json!({

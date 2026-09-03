@@ -703,7 +703,6 @@ async fn verify_cross_deployment_child_source(
     )?;
     #[derive(Deserialize)]
     struct SpawnTargetArgs {
-        #[serde(alias = "target", alias = "target_behavior_id")]
         behavior_id: String,
     }
     let args: SpawnTargetArgs = serde_json::from_str(bridge.args.as_deref().unwrap_or_default())
@@ -842,7 +841,6 @@ async fn verify_exact_parent_tool_call(
     struct SpawnTargetArgs {
         #[serde(default)]
         name: Option<String>,
-        #[serde(alias = "target", alias = "target_behavior_id")]
         behavior_id: String,
     }
     let args: SpawnTargetArgs = serde_json::from_str(tool.args.as_deref().unwrap_or_default())
@@ -1263,7 +1261,7 @@ mod tests {
     use super::{require_pending_deadline_absent, AgentRequestAdmissionVerifier};
     use crate::agent::p2p_reconcile::enrollment_authority_channel;
     use crate::identity::{AgentIdentity, KeyIdentity};
-    use crate::schema::ensure_schemas;
+    use crate::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
 
     #[test]
@@ -1282,7 +1280,7 @@ mod tests {
         let identity: Arc<dyn AgentIdentity> =
             Arc::new(KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap());
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        ensure_schemas(node.as_ref()).await.unwrap();
+        ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut create = AgentRequestCreate::base(
@@ -1360,7 +1358,7 @@ mod tests {
     #[tokio::test]
     async fn runtime_trigger_source_requires_current_trigger_and_target_policy() {
         let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-        ensure_schemas(&node).await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
         let response = node
             .execute(
                 r#"mutation {
@@ -1471,7 +1469,7 @@ mod tests {
         assert!(!unavailable.is_denied(), "schema/query failure must retry");
 
         let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-        ensure_schemas(&node).await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
         let denied = super::verify_exact_parent_subagent_policy(
             &node,
             Some("parent-behavior"),

@@ -89,13 +89,11 @@ export function toolCeilingIcons(
   selectedToolSelectionId?: string | null,
   serverCeiling?: string | null,
 ): ToolIcon[] {
-  const activeSelections =
-    selectedToolSelectionId == null
-      ? selections
-      : selections.filter(
-          (selection) => selection.selectionId === selectedToolSelectionId,
-        );
-  const source = activeSelections.length ? activeSelections : selections;
+  const source = selectedToolSelectionId
+    ? selections.filter(
+        (selection) => selection.selectionId === selectedToolSelectionId,
+      )
+    : [];
   const icons: ToolIcon[] = [];
   const ceilingSuffix = serverCeiling
     ? ` Server ceiling: ${displayToolCeiling(serverCeiling)}.`

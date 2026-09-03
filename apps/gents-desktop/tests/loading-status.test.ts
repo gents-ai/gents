@@ -23,11 +23,14 @@ function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
   return {
     agentDid: "did:test:agent",
     dialSucceeded: true,
-    pairingReady: true,
     chatSafe: true,
     source: "enrolled",
     lastError: null,
     runtime: null,
+    agentPrincipal: {
+      agentDid: "did:test:agent",
+      defaultBehaviorId: "default",
+    },
     behaviors: [
       {
         behaviorId: "default",
@@ -40,7 +43,6 @@ function deployment(overrides: Partial<DeploymentView> = {}): DeploymentView {
       source: { state: "current" },
       activeGeneration: 1,
       routerGeneration: 1,
-      defaultBehaviorId: "default",
       updatedAt: "2026-09-02T00:00:00Z",
       behaviors: [{ state: "ready", behaviorId: "default" }],
     },

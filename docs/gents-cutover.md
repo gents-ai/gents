@@ -10,10 +10,11 @@ principal, behavior, deployment, and request also remains unchanged.
 
 The behavior-readiness cut is also fresh-state only. The canonical
 `AgentRuntime` baseline no longer stores runnable/unavailable behavior counts;
-`AgentBehaviorReadiness` is the sole durable authority. Any pre-cut v0.14
-server database and desktop/phone state must be wiped and re-created together.
-The runtime deliberately does not upgrade or dual-read the old AgentRuntime
-version.
+`AgentBehaviorReadiness` is the sole durable authority for runtime process and
+admission readiness. It is not a source of client transport or database-sync
+state. Any pre-cut v0.14 server database and desktop/phone state must be wiped
+and re-created together. The runtime deliberately does not upgrade or dual-read
+the old AgentRuntime version.
 
 ## Locked mapping
 

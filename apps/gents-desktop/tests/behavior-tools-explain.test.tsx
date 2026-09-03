@@ -1,23 +1,20 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { BehaviorToolSurface } from "../src/components/config/BehaviorToolSurface";
-import { setDesktopApiAdapterForTests } from "@source-inc/gents-desktop-client";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 function withExplanation(payload: unknown, fail = false) {
-  setDesktopApiAdapterForTests({
+  return {
     explainToolSurface: fail
       ? vi.fn().mockRejectedValue(new Error("remote agents not yet supported"))
       : vi.fn().mockResolvedValue(payload),
-  } as unknown as DesktopApiAdapter);
+  } as unknown as DesktopApiAdapter;
 }
 
 describe("behavior tool surface", () => {
-  afterEach(() => setDesktopApiAdapterForTests(null));
-
   it("stays collapsed until opened, then renders the resolved surface", async () => {
-    withExplanation({
+    const api = withExplanation({
       behaviorId: "default",
       enabled: true,
       toolSelectionSource: "document",
@@ -32,7 +29,7 @@ describe("behavior tool surface", () => {
         warnings: [{ code: "w1", message: "subagent target inactive" }],
       },
     });
-    render(<BehaviorToolSurface agentDid="did:a" behaviorId="default" />);
+    render(<BehaviorToolSurface agentDid="did:a" api={api} behaviorId="default" />);
 
     expect(screen.queryByTestId("behavior-tools-explain-refresh")).toBeNull();
     fireEvent.click(screen.getByTestId("behavior-tools-explain-toggle"));
@@ -48,8 +45,8 @@ describe("behavior tool surface", () => {
   });
 
   it("surfaces explanation failures with retry", async () => {
-    withExplanation(null, true);
-    render(<BehaviorToolSurface agentDid="did:a" behaviorId="default" />);
+    const api = withExplanation(null, true);
+    render(<BehaviorToolSurface agentDid="did:a" api={api} behaviorId="default" />);
     fireEvent.click(screen.getByTestId("behavior-tools-explain-toggle"));
 
     await waitFor(() =>
@@ -61,9 +58,9 @@ describe("behavior tool surface", () => {
   });
 
   it("renders nothing for an unsaved behavior", () => {
-    withExplanation({});
+    const api = withExplanation({});
     const { container } = render(
-      <BehaviorToolSurface agentDid="did:a" behaviorId={null} />,
+      <BehaviorToolSurface agentDid="did:a" api={api} behaviorId={null} />,
     );
     expect(container.firstChild).toBeNull();
   });

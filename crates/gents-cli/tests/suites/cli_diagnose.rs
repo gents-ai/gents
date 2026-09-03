@@ -24,6 +24,7 @@ async fn diagnose_works_from_local_home_without_server() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -114,6 +115,7 @@ async fn live_diagnose_uses_authoritative_readiness_and_rejects_malformed_rows()
             "live-diagnose",
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -261,6 +263,7 @@ async fn diagnose_with_explicit_graphql_does_not_reuse_unrelated_local_p2p_state
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;

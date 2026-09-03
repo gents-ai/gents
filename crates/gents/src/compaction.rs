@@ -214,13 +214,11 @@ pub(crate) fn apply_reduction_decision<T, C>(
 #[derive(Debug, Clone)]
 pub enum CompactionStrategy {
     StripToolResults,
-    Summarize,
     StripThenSummarize,
 }
 
 /// Canonical runtime behavior after accepting the durable configuration
-/// vocabulary. `Summarize` and `StripThenSummarize` remain valid external
-/// spellings, but they do not survive as duplicate branches in the engine.
+/// vocabulary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReductionMode {
     StripOnly,
@@ -237,7 +235,6 @@ impl CompactionStrategy {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::StripToolResults => "StripToolResults",
-            Self::Summarize => "Summarize",
             Self::StripThenSummarize => "StripThenSummarize",
         }
     }
@@ -245,7 +242,7 @@ impl CompactionStrategy {
     pub(crate) const fn reduction_mode(&self) -> ReductionMode {
         match self {
             Self::StripToolResults => ReductionMode::StripOnly,
-            Self::Summarize | Self::StripThenSummarize => ReductionMode::Summarize,
+            Self::StripThenSummarize => ReductionMode::Summarize,
         }
     }
 }
@@ -932,23 +929,6 @@ fn provider_view_with_sources(
         )),
     );
     (sanitized, activity)
-}
-
-/// Project the active tail from a canonical provider view after applying the
-/// durable compacted-prefix count. Re-sanitization preserves compatibility
-/// with legacy entries whose prefix could end inside a tool turn.
-pub fn active_provider_history(
-    mut provider_history: Vec<Message>,
-    compacted_messages: usize,
-) -> Result<Vec<Message>> {
-    anyhow::ensure!(
-        compacted_messages <= provider_history.len(),
-        "session compaction prefix exceeds the canonical provider history: compacted={}, available={}",
-        compacted_messages,
-        provider_history.len()
-    );
-    let active = provider_history.split_off(compacted_messages);
-    Ok(sanitize_history_for_provider(active))
 }
 
 /// Find the inclusive canonical message cursor that denotes a provider-view

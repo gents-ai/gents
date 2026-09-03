@@ -220,9 +220,8 @@ fn init_tool_audit_flags_parse() {
 }
 
 #[test]
-fn init_write_and_yolo_flags_parse() {
+fn init_tool_package_shorthands_parse() {
     assert!(parse_init(&["--write"]).write_tools);
-    assert!(parse_init(&["--write-tools"]).write_tools);
     let yolo = parse_init(&["--yolo"]);
     assert!(yolo.yolo);
     assert!(!yolo.write_tools);
@@ -231,6 +230,10 @@ fn init_write_and_yolo_flags_parse() {
     assert!(
         Cli::try_parse_from(["gents", "init", "--write", "--yolo"]).is_err(),
         "--write and --yolo conflict"
+    );
+    assert!(
+        Cli::try_parse_from(["gents", "init", "--write-tools"]).is_err(),
+        "the removed field-name alias must not parse"
     );
 }
 
@@ -341,7 +344,7 @@ fn subagent_tool_flags_preserve_when_omitted_and_parse_when_present() {
 }
 
 #[test]
-fn legacy_tool_bool_flags_are_patch_optional() {
+fn tool_bool_flags_are_patch_optional() {
     let bare = parse_tools_set(&["--enable-file-tools", "--enable-bash"]);
     assert_eq!(bare.enable_file_tools, Some(true));
     assert_eq!(bare.enable_bash, Some(true));
@@ -475,69 +478,16 @@ fn top_level_task_list_and_show_parse() {
 }
 
 #[test]
-fn config_task_run_remains_available_as_compatibility_path() {
-    let cli = Cli::try_parse_from([
-        "gents",
-        "config",
-        "task",
-        "run",
-        "--task-id",
-        "host-check",
-        "--args",
-        r#"{"scope":"host"}"#,
-        "--graphql",
-        "http://127.0.0.1:9191/api/v0/graphql",
-    ])
-    .expect("config task run should parse");
-
-    match cli.command {
-        Command::Config {
-            command:
-                ConfigCommand::Task {
-                    command: TaskCommand::Run(args),
-                },
-        } => assert_task_run_args(args),
-        _ => panic!("expected `config task run`"),
-    }
-}
-
-#[test]
-fn config_task_list_and_show_remain_available() {
-    let list = Cli::try_parse_from(["gents", "config", "task", "list"])
-        .expect("config task list should parse");
-    match list.command {
-        Command::Config {
-            command:
-                ConfigCommand::Task {
-                    command: TaskCommand::List(_),
-                },
-        } => {}
-        _ => panic!("expected `config task list`"),
-    }
-
-    let show = Cli::try_parse_from(["gents", "config", "task", "show", "--task-id", "host-check"])
-        .expect("config task show should parse");
-    match show.command {
-        Command::Config {
-            command:
-                ConfigCommand::Task {
-                    command: TaskCommand::Show(args),
-                },
-        } => {
-            assert_eq!(args.task_id, None);
-            assert_eq!(args.task_id_flag.as_deref(), Some("host-check"));
-        }
-        _ => panic!("expected `config task show`"),
-    }
-}
-
-#[test]
-fn deprecated_spellings_still_parse() {
+fn removed_command_paths_are_rejected() {
     for argv in [
         vec!["gents", "config", "task", "list"],
         vec!["gents", "show", "request", "req-1"],
+        vec!["gents", "config", "import", "agent-config.json"],
     ] {
-        Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
+        assert!(
+            Cli::try_parse_from(&argv).is_err(),
+            "removed path should fail parsing: {argv:?}"
+        );
     }
 }
 
@@ -832,37 +782,6 @@ fn demo_init_parses_pack_and_home() {
 }
 
 #[test]
-fn every_deprecated_path_warns() {
-    use crate::cli::deprecations::{deprecation_warning, DEPRECATED};
-
-    for (path, replacement) in DEPRECATED {
-        let mut argv = vec!["gents".to_string()];
-        argv.extend(path.iter().copied().map(str::to_string));
-        argv.extend(deprecated_path_required_args(path));
-
-        let warning =
-            deprecation_warning(&argv).unwrap_or_else(|| panic!("missing warning: {argv:?}"));
-        assert!(
-            warning.contains(&format!("use `gents {}`", replacement)),
-            "warning did not mention replacement for {argv:?}: {warning}"
-        );
-
-        if deprecated_path_still_parses(path) {
-            Cli::try_parse_from(&argv).unwrap_or_else(|err| panic!("{argv:?}: {err}"));
-        } else {
-            assert!(
-                Cli::try_parse_from(&argv).is_err(),
-                "{argv:?}: expected removed deprecated path to fail clap parsing"
-            );
-        }
-    }
-}
-
-fn deprecated_path_still_parses(path: &[&str]) -> bool {
-    !matches!(path, ["p2p", "pair"] | ["p2p", "unpair"])
-}
-
-#[test]
 fn chain_key_commands_parse() {
     let list = Cli::try_parse_from(["gents", "chain", "key", "list"]).expect("list");
     assert!(matches!(
@@ -928,16 +847,5 @@ fn chain_query_command_parses() {
             assert_eq!(args.params.as_deref(), Some("[]"));
         }
         _ => panic!("expected chain query"),
-    }
-}
-
-fn deprecated_path_required_args(path: &[&str]) -> Vec<String> {
-    match path {
-        ["config", "task"] => vec!["list".to_string()],
-        ["show", "request"] | ["show", "response"] => vec!["req-1".to_string()],
-        ["p2p", "pair"] | ["p2p", "unpair"] => {
-            vec!["--peer".to_string(), "peer-1".to_string()]
-        }
-        _ => panic!("no parse fixture for deprecated path: {path:?}"),
     }
 }

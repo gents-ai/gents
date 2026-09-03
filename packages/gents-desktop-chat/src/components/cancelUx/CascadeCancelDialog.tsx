@@ -7,9 +7,9 @@ import {
   type MouseEvent,
 } from "react";
 
-import {
-  interruptChatRequest,
-  previewChatInterruptCascade,
+import type {
+  InterruptChatRequest,
+  PreviewChatInterruptCascade,
 } from "../../interruptRequest.js";
 import type {
   CascadeAffectedRequest,
@@ -24,8 +24,8 @@ export type CascadeCancelDialogProps = {
   onAccepted: (interruptRequestedAt: string | null) => void;
   onAlreadyInterrupted: () => void;
   onError?: (message: string) => void;
-  previewInterrupt?: typeof previewChatInterruptCascade;
-  interrupt?: typeof interruptChatRequest;
+  previewInterrupt: PreviewChatInterruptCascade;
+  interrupt: InterruptChatRequest;
 };
 
 type Phase = "loading" | "showing" | "submitting";
@@ -41,8 +41,8 @@ export function CascadeCancelDialog(
     onAccepted,
     onAlreadyInterrupted,
     onError,
-    previewInterrupt = previewChatInterruptCascade,
-    interrupt = interruptChatRequest,
+    previewInterrupt,
+    interrupt,
   } = props;
 
   const [phase, setPhase] = useState<Phase>("loading");

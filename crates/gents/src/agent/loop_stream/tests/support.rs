@@ -376,15 +376,6 @@ pub(super) fn usage_echo_tool_turn(
     ]
 }
 
-/// Set the request context that on_tool_call/on_tool_result require. The
-/// session itself is created by the generator's per-turn on_completion_call.
-pub(super) async fn ready_hook_for(hook: &DefraSessionHook) {
-    hook.set_active_request_id(Some(uuid::Uuid::new_v4().to_string()))
-        .await;
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
-        .await;
-}
-
 pub(super) fn tool_result_text(content: &ToolResultContent) -> &str {
     match content {
         ToolResultContent::Text(text) => text.text.as_str(),
@@ -581,12 +572,62 @@ pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionH
             .await
             .unwrap(),
     );
-    ensure_schemas(&node).await.unwrap();
-    let hook = DefraSessionHook::with_identity(
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now();
+    let deadline_at = now + chrono::Duration::seconds(60);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentSession(input: {{
+                session_id: "{session_id}",
+                agent_name: "general",
+                agent_did: "did:test:test",
+                behavior_id: "general",
+                started: "{now}",
+                status: "active"
+            }}) {{ _docID }}
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "did:test:test",
+                behavior_id: "general",
+                session_id: "{session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "loop test request",
+                status: "processing",
+                lifecycle_state: "processing",
+                backend_id: "",
+                execution_origin: "user",
+                created_at: "{now}",
+                valid_until: "{deadline_at}",
+                retry_count: 0,
+                max_retries: {max_retries}
+            }}) {{ _docID }}
+        }}"#,
+        now = now.to_rfc3339(),
+        deadline_at = deadline_at.to_rfc3339(),
+        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create loop test request context failed: {:?}",
+        response.errors
+    );
+    let hook = DefraSessionHook::resume_with_identity_policy(
         node.clone(),
+        &session_id,
         "general",
         "did:test:test",
         FailurePolicy::default(),
-    );
+    )
+    .await
+    .expect("resume loop test session");
+    hook.set_active_request_lineage(Some(request_id), None)
+        .await
+        .expect("bind persisted loop test request");
+    hook.set_request_deadline_at(Some(deadline_at)).await;
     (node, hook)
 }

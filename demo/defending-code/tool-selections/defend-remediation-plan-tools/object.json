@@ -1,5 +1,6 @@
 {
   "selection_id": "defend-remediation-plan-tools",
+  "tool_policy_version": "tool-policy/v1",
   "agent_did": "did:key:zDefendingCodeAgentPlaceholder0000000000000000000000",
   "display_name": "Remediation planner: bounded graph IO only",
   "enable_file_tools": false,
@@ -22,7 +23,6 @@
   "write_tools": [],
   "datastore_tool_surface_ids": ["defend-remediation-plan-io"],
   "subagent_spawn_enabled": false,
-  "orchestration_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,
   "subagent_default_await_mode": null,
