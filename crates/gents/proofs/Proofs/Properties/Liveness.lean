@@ -9,6 +9,7 @@ def terminationMeasure (r : RequestContext) : Nat :=
   | .superseded => 0
   | .dead => 0
   | .interrupted => 0
+  | .workspaceBindingPending => r.maxRetries + 5
   | .pending => r.maxRetries + 4
   | .claimed => r.maxRetries + 3
   | .processing => (r.maxRetries - r.retryCount) + 2
@@ -20,6 +21,9 @@ theorem phase_change_decreases_measure
     (h_phase_change : pre.state ≠ post.state) :
     terminationMeasure post < terminationMeasure pre := by
   cases h_trans with
+  | bind_workspace h_pre _ h_post =>
+    rw [h_post]
+    simp [terminationMeasure, h_pre]
   | claim h_pre _ _ h_post =>
     rw [h_post]
     simp [terminationMeasure, h_pre]

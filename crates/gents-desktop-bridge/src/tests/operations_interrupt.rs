@@ -64,7 +64,7 @@ async fn descendant_that_terminalized_after_preview_is_not_latched() {
     let terminalize = r#"mutation {
         update_AgentRequest(
             filter: { request_id: { _eq: "req_b91" } },
-            input: { status: "completed", lifecycle_state: "completed" }
+            input: { lifecycle_state: "completed" }
         ) { _docID }
     }"#;
     let response = core.node().execute(terminalize).await;
@@ -145,7 +145,7 @@ async fn interrupt_request_rejects_terminal_request_without_latching_it() {
     let terminalize = r#"mutation {
         update_AgentRequest(
             filter: { request_id: { _eq: "req_solo" } },
-            input: { status: "completed", lifecycle_state: "completed" }
+            input: { lifecycle_state: "completed" }
         ) { _docID }
     }"#;
     let response = core.node().execute(terminalize).await;

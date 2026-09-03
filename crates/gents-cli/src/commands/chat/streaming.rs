@@ -4,12 +4,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::client_protocol::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::{
-    hydrate_materialized_response_content, is_terminal_lifecycle_state,
-    materialized_response_diagnostic, post_graphql, request_diagnostic_hint,
-    MaterializedResponsePresentation,
+    hydrate_materialized_response_content, materialized_response_diagnostic, post_graphql,
+    request_diagnostic_hint, MaterializedResponsePresentation,
 };
 
 use super::SubmittedRequest;
@@ -227,10 +227,10 @@ pub(super) async fn stream_turn_progress(
             .as_ref()
             .map(|progress| progress.status.as_str())
             .unwrap_or("");
-        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
+        let terminal_by_request = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
         let terminal_by_response = matches!(
             response_status,
-            "complete" | "completed" | "error" | "failed" | "interrupted"
+            "complete" | "completed" | "error" | "failed" | "interrupted" // AgentResponse.status
         );
 
         if terminal_by_request || terminal_by_response {
@@ -286,9 +286,12 @@ pub(super) async fn stream_turn_progress(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .or_else(|| {
-                    matches!(lifecycle_state, "failed" | "dead")
-                        .then_some(failure_reason.trim())
-                        .filter(|value| !value.is_empty())
+                    matches!(
+                        RequestLifecycleState::parse_opt(Some(lifecycle_state)),
+                        Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
+                    )
+                    .then_some(failure_reason.trim())
+                    .filter(|value| !value.is_empty())
                 });
             if let Some(error_message) = error_message {
                 if !terminal_content.contains(error_message) {
@@ -296,7 +299,12 @@ pub(super) async fn stream_turn_progress(
                     println!("[inspect] gents response show {}", submitted.request_id);
                     io::stdout().flush()?;
                 }
-            } else if response_status == "error" || matches!(lifecycle_state, "failed" | "dead") {
+            } else if response_status == "error"
+                || matches!(
+                    RequestLifecycleState::parse_opt(Some(lifecycle_state)),
+                    Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
+                )
+            {
                 println!("[inspect] gents response show {}", submitted.request_id);
                 io::stdout().flush()?;
             }

@@ -358,7 +358,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             escape_graphql_string(&default_behavior_id),
         ),
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", status: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         r#"mutation { create_AgentMessage(input: { message_key: "self-budget-session:1", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }) { _docID } }"#.to_string(),
         r#"mutation { create_CompactionEntry(input: { compaction_key: "self-budget-ce", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }) { _docID } }"#.to_string(),
@@ -1397,7 +1397,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
 
     let mutations = [
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", status: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         r#"mutation { create_AgentResponse(input: { response_key: "trace-resp", request_id: "trace-req", session_id: "trace-session", content: "hello", status: "completed", token_count: 7 }) { _docID } }"#.to_string(),
         r#"mutation { create_AgentMessage(input: { message_key: "trace-msg", session_id: "trace-session", sequence: 1, role: "assistant", content: "encoded-blob" }) { _docID } }"#.to_string(),
@@ -1422,7 +1422,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
             "--field",
             "session_id",
             "--field",
-            "status",
+            "lifecycle_state",
             "--filter",
             r#"{"request_id":{"_eq":"trace-req"}}"#,
         ],
@@ -1434,7 +1434,7 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     );
     let req_row = &request["results"][0];
     assert_eq!(req_row["session_id"].as_str(), Some("trace-session"));
-    assert_eq!(req_row["status"].as_str(), Some("completed"));
+    assert_eq!(req_row["lifecycle_state"].as_str(), Some("completed"));
 
     let tool_calls = run_cli_json(
         &home_dir,
@@ -1619,7 +1619,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     for mutation in [
         format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", status: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", lifecycle_state: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
     ] {

@@ -420,9 +420,10 @@ fn print_progress_text(
         .inference_calls
         .iter()
         .filter(|call| {
+            // InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
             !matches!(
                 call.call_state.as_str(),
-                "completed" | "failed" | "cancelled"
+                "failed" | "completed" | "cancelled"
             )
         })
         .count();
@@ -497,7 +498,7 @@ fn print_progress_text(
             .lifecycle_state
             .as_deref()
             .or_else(|| session.and_then(|session| session.status.as_deref()))
-            .unwrap_or(request.status.as_str());
+            .unwrap_or("unknown");
         let node = request.node_id.as_deref().unwrap_or("unknown");
         let calls = activity
             .inference_calls

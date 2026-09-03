@@ -11,7 +11,6 @@ use crate::support::{
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusRow {
-    status: String,
     lifecycle_state: Option<String>,
 }
 
@@ -119,7 +118,6 @@ async fn pending_request_hydrates_sampling_fields_and_metadata() {
                 seed: 1234,
                 max_tokens: 512,
                 metadata: "{escaped_metadata}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -224,12 +222,11 @@ async fn claim_queues_when_earlier_processing_request_exists() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later" } },
                     limit: 1
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.status, "pending");
     assert_eq!(row.lifecycle_state.as_deref(), Some("pending"));
 }
 
@@ -305,12 +302,11 @@ async fn queued_request_interrupt_wins_before_queue_block() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-interrupted" } },
                     limit: 1
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.status, "interrupted");
     assert_eq!(row.lifecycle_state.as_deref(), Some("interrupted"));
 }
 
@@ -386,12 +382,11 @@ async fn queued_request_valid_until_wins_before_queue_block() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-expired" } },
                     limit: 1
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.status, "dead");
     assert_eq!(row.lifecycle_state.as_deref(), Some("dead"));
 }
 
@@ -461,12 +456,11 @@ async fn earliest_pending_claim_leaves_later_same_session_pending() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-late" } },
                     limit: 1
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.status, "pending");
     assert_eq!(row.lifecycle_state.as_deref(), Some("pending"));
 }
 
@@ -636,12 +630,11 @@ async fn terminal_earlier_request_allows_later_same_session_claim() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-after-terminal" } },
                     limit: 1
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.status, "processing");
     assert_eq!(row.lifecycle_state.as_deref(), Some("claimed"));
 }
 
@@ -662,7 +655,6 @@ async fn claim_preserves_explicit_behavior_id() {
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -769,7 +761,6 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
                 session_id: "session-pinned",
                 retry_root_request: "req-switch",
                 content: "switch behavior",
-                status: "pending",
                 lifecycle_state: "pending",
                 execution_origin: "interactive",
                 created_at: "2026-03-23T00:00:01Z",
@@ -810,13 +801,12 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         .execute(
             r#"{
                 AgentRequest(filter: { request_id: { _eq: "req-switch" } }) {
-                    status lifecycle_state
+                    lifecycle_state
                 }
             }"#,
         )
         .await;
     let request = first_row::<StatusRow>(&request, "AgentRequest");
-    assert_eq!(request.status, "pending");
     assert_eq!(request.lifecycle_state.as_deref(), Some("pending"));
 
     let sessions = db
@@ -862,7 +852,6 @@ async fn claim_preserves_explicit_request_deadline() {
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -943,7 +932,6 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",

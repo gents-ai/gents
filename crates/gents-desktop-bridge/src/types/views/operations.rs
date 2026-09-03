@@ -124,8 +124,6 @@ pub struct SubagentNodeView {
     #[serde(default)]
     pub lifecycle_state: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
     pub subagent_depth: Option<i64>,
     #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,

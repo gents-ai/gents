@@ -9,6 +9,7 @@ use gents::{
     ConfigAccess, DescendantEdge, DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -16,17 +17,6 @@ use crate::types::{SubagentEdgeView, SubagentNodeView, SubagentTreeView};
 
 pub const DEFAULT_SUBAGENT_TREE_MAX_DEPTH: usize = 8;
 pub const HARD_SUBAGENT_TREE_MAX_DEPTH: usize = 32;
-
-const TERMINAL_STATES: &[&str] = &[
-    "completed",
-    "failed",
-    "error",
-    "timedout",
-    "cancelled",
-    "interrupted",
-    "superseded",
-    "dead",
-];
 
 #[derive(Debug, Deserialize)]
 struct RootRequestEnvelope {
@@ -46,8 +36,6 @@ struct RequestRow {
     behavior_id: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
     #[serde(default)]
     subagent_depth: Option<i64>,
     #[serde(default)]
@@ -217,7 +205,6 @@ pub async fn build_subagent_tree(
                 agent_did: edge.principal_did.clone(),
                 behavior_id: edge.behavior_id.clone(),
                 lifecycle_state: Some(edge.lifecycle_state.clone()),
-                status: Some(edge.lifecycle_state.clone()),
                 subagent_depth: Some(edge.depth as i64),
                 caused_by_parent_request_id: Some(edge.immediate_parent_request_id.clone()),
                 caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
@@ -280,7 +267,6 @@ fn request_row_into_node(row: RequestRow) -> SubagentNodeView {
         agent_did: clean_optional_string(row.agent_did.as_deref()),
         behavior_id: clean_optional_string(row.behavior_id.as_deref()),
         lifecycle_state: clean_optional_string(row.lifecycle_state.as_deref()),
-        status: clean_optional_string(row.status.as_deref()),
         subagent_depth: row.subagent_depth,
         caused_by_parent_request_id: clean_optional_string(
             row.caused_by_parent_request_id.as_deref(),
@@ -308,7 +294,6 @@ async fn fetch_root_request(
                 agent_did
                 behavior_id
                 lifecycle_state
-                status
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
@@ -359,7 +344,7 @@ fn prune_terminal_subtrees(
     ) -> bool {
         let live_self = nodes
             .get(request_id)
-            .map(|node| !lifecycle_is_terminal(node.lifecycle_state.as_deref()))
+            .map(|node| !RequestLifecycleState::is_terminal_str(node.lifecycle_state.as_deref()))
             .unwrap_or(false);
         let mut keep_self = live_self;
         if let Some(child_ids) = children.get(request_id) {
@@ -381,14 +366,6 @@ fn prune_terminal_subtrees(
     edges.retain(|edge| {
         keep.contains(&edge.parent_request_id) && keep.contains(&edge.child_request_id)
     });
-}
-
-fn lifecycle_is_terminal(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    let value = value.trim().to_ascii_lowercase();
-    TERMINAL_STATES.iter().any(|terminal| value == *terminal)
 }
 
 fn clean_optional_string(value: Option<&str>) -> Option<String> {

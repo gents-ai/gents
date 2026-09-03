@@ -11,8 +11,7 @@
 //!   `AgentRequest`, filtering on the `(trigger_id, trigger_kind)` tuple and
 //!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
 //! * `supersede_active_runtime_requests_for_trigger` transitions every matching
-//!   active runtime request to `lifecycle_state = superseded` /
-//!   `status = superseded`.
+//!   active runtime request to `lifecycle_state = superseded`.
 //!
 //! Behavior lookup happens against a `watch::Receiver<Arc<ActiveRuntimeSnapshot>>`
 //! so the materializer always sees the latest resolved snapshot without
@@ -25,9 +24,10 @@ use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
-    active_runtime_lifecycle_state_graphql_list,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     task_goal_conversation_title, task_run_conversation_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
@@ -111,8 +111,7 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
     let query = format!(
         r#"{{
             AgentRequest(filter: {{
-                status: {{ _eq: "workspace_binding_pending" }},
-                lifecycle_state: {{ _eq: "pending" }},
+                lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
                 workspace_owner_deployment_id: {{ _eq: "{deployment_id}" }}
             }}) {{
                 _docID
@@ -124,6 +123,7 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
                 workspace_seal_hash
             }}
         }}"#,
+        workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
         deployment_id = escape_graphql_string(local_deployment_id),
     );
     let response = graphql_with_transaction_retry(
@@ -180,7 +180,10 @@ fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::
         .get("lifecycle_state")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("");
-    if state != "claimed" && state != "processing" {
+    if !matches!(
+        RequestLifecycleState::parse_opt(Some(state)),
+        Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+    ) {
         return true;
     }
     let Some(deadline) = row
@@ -407,7 +410,7 @@ impl MaterializerHandle for ProductionMaterializer {
             .map(escape_graphql_string)
             .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
-        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
             // Strict tuple match on `(agent_did, caused_by_trigger_id,
             // caused_by_trigger_kind)` + active runtime `lifecycle_state`.
@@ -482,7 +485,7 @@ impl MaterializerHandle for ProductionMaterializer {
             .map(escape_graphql_string)
             .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
-        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
             let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
             let mutation = format!(
@@ -495,7 +498,6 @@ impl MaterializerHandle for ProductionMaterializer {
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }},
                         input: {{
-                            status: "superseded",
                             lifecycle_state: "superseded",
                             terminalized_at: "{terminalized_at}",
                             terminal_redrive_attempts: 0

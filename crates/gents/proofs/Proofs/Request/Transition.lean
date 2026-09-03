@@ -3,6 +3,11 @@ import Proofs.Request.State
 namespace RequestContext
 
 inductive Transition : RequestContext → RequestContext → Prop where
+  | bind_workspace {pre post : RequestContext} :
+      pre.state = .workspaceBindingPending →
+      pre.admission = .released →
+      post = { pre with state := .pending } →
+      Transition pre post
   | claim {pre post : RequestContext} :
       pre.state = .pending →
       pre.admission = .released →

@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::tool_surface::FileToolMode;
 use crate::toolset::{
     apply_workspace_authority, CommandExecutionMode, CommandExecutionPolicy, WorkspaceAuthority,
@@ -330,19 +332,17 @@ fn live_tree_hash_drift_fails_closed() {
 
 #[test]
 fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
-    assert!(super::request_lifecycle_is_live(Some("processing"), None));
-    assert!(super::request_lifecycle_is_live(
-        Some("inputRequired"),
-        None
-    ));
-    assert!(super::request_lifecycle_is_live(None, Some("claimed")));
-    assert!(!super::request_lifecycle_is_live(Some("completed"), None));
-    assert!(!super::request_lifecycle_is_live(Some("failed"), None));
-    assert!(!super::request_lifecycle_is_live(Some("dead"), None));
-    assert!(!super::request_lifecycle_is_live(Some("interrupted"), None));
-    assert!(!super::request_lifecycle_is_live(Some("superseded"), None));
-    assert!(!super::request_lifecycle_is_live(None, Some("error")));
-    assert!(!super::request_lifecycle_is_live(None, None));
+    assert!(super::request_lifecycle_is_live(Some("processing")));
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::InputRequired.as_str()
+    )));
+    assert!(super::request_lifecycle_is_live(Some("claimed")));
+    assert!(!super::request_lifecycle_is_live(Some("completed")));
+    assert!(!super::request_lifecycle_is_live(Some("failed")));
+    assert!(!super::request_lifecycle_is_live(Some("dead")));
+    assert!(!super::request_lifecycle_is_live(Some("interrupted")));
+    assert!(!super::request_lifecycle_is_live(Some("superseded")));
+    assert!(!super::request_lifecycle_is_live(None));
 }
 
 #[test]

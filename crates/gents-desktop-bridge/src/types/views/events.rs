@@ -27,7 +27,6 @@ pub struct TaskRunResult {
     pub session_id: String,
     pub agent_did: String,
     pub behavior_id: String,
-    pub status: Option<String>,
     pub lifecycle_state: Option<String>,
 }
 

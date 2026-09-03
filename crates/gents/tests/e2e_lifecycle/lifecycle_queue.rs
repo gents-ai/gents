@@ -30,7 +30,6 @@ async fn create_pending_request_with_metadata(
                 superseded_by_request: "",
                 content: "queued",
                 metadata: "{escaped_metadata}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
@@ -138,7 +137,6 @@ async fn interrupt_request_drains_automated_wakeups_but_preserves_user_queue() {
     assert_eq!(parent.lifecycle_state, "pending");
 
     let auto = fetch_request_snapshot(&db.node, &auto_doc_id).await;
-    assert_eq!(auto.status, "interrupted");
     assert_eq!(auto.lifecycle_state, "interrupted");
     assert_eq!(
         auto.failure_reason,
@@ -146,15 +144,12 @@ async fn interrupt_request_drains_automated_wakeups_but_preserves_user_queue() {
     );
 
     let user = fetch_request_snapshot(&db.node, &user_doc_id).await;
-    assert_eq!(user.status, "pending");
     assert_eq!(user.lifecycle_state, "pending");
 
     let interactive_auto = fetch_request_snapshot(&db.node, &interactive_auto_doc_id).await;
-    assert_eq!(interactive_auto.status, "pending");
     assert_eq!(interactive_auto.lifecycle_state, "pending");
 
     let plain = fetch_request_snapshot(&db.node, &plain_doc_id).await;
-    assert_eq!(plain.status, "pending");
     assert_eq!(plain.lifecycle_state, "pending");
 }
 
@@ -186,6 +181,5 @@ async fn already_interrupted_request_still_drains_automated_wakeups() {
         .unwrap();
 
     let auto = fetch_request_snapshot(&db.node, &auto_doc_id).await;
-    assert_eq!(auto.status, "interrupted");
     assert_eq!(auto.lifecycle_state, "interrupted");
 }

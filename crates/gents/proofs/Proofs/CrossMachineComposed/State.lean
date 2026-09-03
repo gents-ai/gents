@@ -50,7 +50,8 @@ def AllToolsLinked (s : ComposedState) : Prop :=
   ∀ t ∈ s.tools, t.requestId = s.requestId
 
 def NoToolsBeforeProcessing (s : ComposedState) : Prop :=
-  ∀ t ∈ s.tools, s.request.state ≠ .pending ∧ s.request.state ≠ .claimed
+  ∀ t ∈ s.tools, s.request.state ≠ .pending ∧ s.request.state ≠ .claimed ∧
+    s.request.state ≠ .workspaceBindingPending
 
 theorem coherent_tool_deadline_eq_request_deadline
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}

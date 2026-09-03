@@ -100,7 +100,6 @@ fn request_row(
         "behavior_id": "default",
         "session_id": "session-1",
         "content": "turn",
-        "status": lifecycle_state,
         "lifecycle_state": lifecycle_state,
         "execution_origin": execution_origin,
         "metadata": metadata,

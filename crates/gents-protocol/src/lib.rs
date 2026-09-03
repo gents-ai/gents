@@ -8,6 +8,7 @@ pub mod network_token;
 pub mod persona;
 pub mod rendered_request;
 pub mod request_admission;
+pub mod request_lifecycle;
 pub mod row;
 pub mod schemas;
 pub mod session_hydration;

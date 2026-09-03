@@ -17,7 +17,7 @@ function stateFor(
   request: AgentRequestRow | undefined,
   documentExists: boolean,
 ): DefenseNodeState {
-  const lifecycle = request?.lifecycle_state ?? request?.status ?? "";
+  const lifecycle = request?.lifecycle_state ?? "";
   if (lifecycle === "inputRequired") {
     return "input-required";
   }
@@ -112,7 +112,7 @@ function verifierActivity(
   if (!request) {
     return "queued";
   }
-  const lifecycle = (request.lifecycle_state ?? request.status ?? "").toLowerCase();
+  const lifecycle = (request.lifecycle_state ?? "").toLowerCase();
   if (FAILED.has(lifecycle)) {
     return "failed";
   }

@@ -143,6 +143,8 @@ theorem detach_does_not_cancel_child
       rw [h_req]
     | request_step h_req_inner _ _ _ _ _ _ =>
       cases h_req_inner with
+      | bind_workspace _ _ h_post =>
+        rw [h_post]
       | claim _ _ _ h_post =>
         rw [h_post]
       | dedup_lose _ _ h_post =>

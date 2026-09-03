@@ -112,6 +112,8 @@ theorem allToolsCoherent_preserved
       rw [h_tools] at h_in_post
       exact h_in_post
     cases h_request_step with
+    | bind_workspace h_state _ _ =>
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.2 h_state)
     | claim h_state _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | dedup_lose h_state _ _ =>
@@ -119,7 +121,7 @@ theorem allToolsCoherent_preserved
     | admission_reject h_state _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | begin_inference h_state _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | advance _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
@@ -130,13 +132,13 @@ theorem allToolsCoherent_preserved
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
     | fail_before_stream h_state _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | expire h_state _ _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | interrupt_before_claim h_state _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | interrupt_claimed h_state _ _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | interrupt_processing _ _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
@@ -262,17 +264,21 @@ theorem noToolsBeforeProcessing_preserved
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | request_step h_request_step _ _ h_tools _ _ _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
     cases h_request_step with
+    | bind_workspace h_state _ _ =>
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.2 h_state)
     | claim h_state _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | dedup_lose h_state _ _ =>
@@ -280,9 +286,9 @@ theorem noToolsBeforeProcessing_preserved
     | admission_reject h_state _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | begin_inference h_state _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | advance h_state _ h_post =>
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         have h_pre_pending : pre.request.state = .pending := by
           simpa [h_post] using h_pending
@@ -293,95 +299,119 @@ theorem noToolsBeforeProcessing_preserved
           simpa [h_post] using h_claimed
         rw [h_state] at h_pre_claimed
         cases h_pre_claimed
+      · intro h_wbp
+        have h_pre_wbp : pre.request.state = .workspaceBindingPending := by
+          simpa [h_post] using h_wbp
+        rw [h_state] at h_pre_wbp
+        cases h_pre_wbp
     | finish _ _ h_post =>
       have h_state_post : post.request.state = .completed := by
         simp [h_post]
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         rw [h_state_post] at h_pending
         cases h_pending
       · intro h_claimed
         rw [h_state_post] at h_claimed
         cases h_claimed
+      · intro h_wbp
+        rw [h_state_post] at h_wbp
+        cases h_wbp
     | fail _ _ h_post =>
       have h_state_post : post.request.state = .failed := by
         simp [h_post]
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         rw [h_state_post] at h_pending
         cases h_pending
       · intro h_claimed
         rw [h_state_post] at h_claimed
         cases h_claimed
+      · intro h_wbp
+        rw [h_state_post] at h_wbp
+        cases h_wbp
     | fail_before_stream h_state _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | expire h_state _ _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | interrupt_before_claim h_state _ _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | interrupt_claimed h_state _ _ _ =>
-      exact False.elim ((h_no_early_tools tool h_in_pre).2 h_state)
+      exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
     | interrupt_processing _ _ _ h_post =>
       have h_state_post : post.request.state = .interrupted := by
         simp [h_post]
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         rw [h_state_post] at h_pending
         cases h_pending
       · intro h_claimed
         rw [h_state_post] at h_claimed
         cases h_claimed
+      · intro h_wbp
+        rw [h_state_post] at h_wbp
+        cases h_wbp
   | slot_acquire _ _ h_request _ _ h_tools _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | request_interrupt _ h_request _ _ h_tools _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | clock_advance t _ h_request _ _ h_tools _ =>
     have h_in_map : tool ∈ pre.tools.map (fun tool => { tool with currentTime := t }) := by
       rw [h_tools] at h_in_post
       exact h_in_post
     obtain ⟨toolPre, h_in_pre, h_eq⟩ := List.mem_map.mp h_in_map
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools toolPre h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools toolPre h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | persistence_step _ _ _ h_request _ _ h_tools _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | call_step _ h_request _ h_tools _ =>
     have h_in_pre : tool ∈ pre.tools := by
       rw [h_tools] at h_in_post
       exact h_in_post
-    obtain ⟨h_not_pending, h_not_claimed⟩ := h_no_early_tools tool h_in_pre
-    refine ⟨?_, ?_⟩
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ := h_no_early_tools tool h_in_pre
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
   | @tool_spawn newTool h_processing _ h_tools h_request _ _ _ _ _ _ =>
     have h_in_append : tool ∈ pre.tools ++ [newTool] := by
       rw [h_tools] at h_in_post
@@ -390,34 +420,41 @@ theorem noToolsBeforeProcessing_preserved
       simpa using (List.mem_append.mp h_in_append)
     cases h_cases with
     | inl h_in_pre =>
-      obtain ⟨h_not_pending, h_not_claimed⟩ :=
+      obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ :=
         h_no_early_tools tool h_in_pre
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         exact h_not_pending (by simpa [h_request] using h_pending)
       · intro h_claimed
         exact h_not_claimed (by simpa [h_request] using h_claimed)
+      · intro h_wbp
+        exact h_not_wbp (by simpa [h_request] using h_wbp)
     | inr h_eq =>
       subst h_eq
       have h_post_state : post.request.state = .processing := by
         simpa [h_request] using h_processing
-      refine ⟨?_, ?_⟩
+      refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         rw [h_post_state] at h_pending
         cases h_pending
       · intro h_claimed
         rw [h_post_state] at h_claimed
         cases h_claimed
+      · intro h_wbp
+        rw [h_post_state] at h_wbp
+        cases h_wbp
   | @tool_step idx toolPre _ h_idx _ _ h_request _ _ _ _ _ _ =>
     have h_toolPre_in : toolPre ∈ pre.tools :=
       List.mem_iff_getElem?.mpr ⟨idx, h_idx⟩
-    obtain ⟨h_not_pending, h_not_claimed⟩ :=
+    obtain ⟨h_not_pending, h_not_claimed, h_not_wbp⟩ :=
       h_no_early_tools toolPre h_toolPre_in
-    refine ⟨?_, ?_⟩
+    refine ⟨?_, ?_, ?_⟩
     · intro h_pending
       exact h_not_pending (by simpa [h_request] using h_pending)
     · intro h_claimed
       exact h_not_claimed (by simpa [h_request] using h_claimed)
+    · intro h_wbp
+      exact h_not_wbp (by simpa [h_request] using h_wbp)
 
 structure WellFormed (s : ComposedState) : Prop where
   allToolsCoherent : s.AllToolsCoherent

@@ -572,7 +572,6 @@ mod tests {
                         behavior_id: "general"
                         session_id: "session-timeline"
                         content: "run"
-                        status: "completed"
                         lifecycle_state: "completed"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }
@@ -707,7 +706,6 @@ mod tests {
                         behavior_id: "general"
                         session_id: "session-goal-history"
                         content: "ship the timeline"
-                        status: "completed"
                         lifecycle_state: "completed"
                         created_at: "2026-08-14T12:00:00Z"
                     }) { _docID }

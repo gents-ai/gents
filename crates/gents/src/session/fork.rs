@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use super::retry::log_mutation_timing;
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::active_runtime_lifecycle_state_graphql_list;
 
 const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
 
@@ -188,7 +188,7 @@ async fn verify_source_idle(
     source_session_id: &str,
 ) -> Result<bool> {
     let escaped = escape_graphql_string(source_session_id);
-    let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+    let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
     let query = format!(
         r#"{{
             AgentRequest(

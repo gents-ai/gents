@@ -596,7 +596,6 @@ pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionH
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "loop test request",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "user",

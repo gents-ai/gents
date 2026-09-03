@@ -1171,7 +1171,7 @@ mod tests {
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "mailbox-observer-child", agent_did: "did:test:agent",
                 requester_did: "did:test:owner", behavior_id: "operator",
-                session_id: "session-1", content: "observe", status: "pending",
+                session_id: "session-1", content: "observe",
                 lifecycle_state: "pending", execution_origin: "scheduled",
                 caused_by_trigger_kind: "event", caused_by_source_doc_id: "{}",
                 created_at: "{}"
@@ -1203,7 +1203,7 @@ mod tests {
             r#"mutation {{ create_AgentRequest(input: {{
                 request_id: "mailbox-request", agent_did: "did:test:agent",
                 requester_did: "did:test:owner", behavior_id: "operator",
-                session_id: "session-1", content: "continue", status: "pending",
+                session_id: "session-1", content: "continue",
                 lifecycle_state: "pending", execution_origin: "interactive",
                 caused_by_source_doc_id: "{}", created_at: "{}"
             }}) {{ _docID }} }}"#,

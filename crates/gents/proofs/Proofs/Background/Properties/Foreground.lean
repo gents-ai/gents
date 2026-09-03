@@ -16,6 +16,8 @@ theorem foreground_blocks_parent_advance
     cases h_inner with
     | request_step h_req _ _ h_tools _ _ h_no_block =>
       cases h_req with
+      | bind_workspace _ _ h_post =>
+        constructor <;> rw [h_post]
       | claim _ _ _ h_post =>
         constructor <;> rw [h_post]
       | dedup_lose _ _ h_post =>

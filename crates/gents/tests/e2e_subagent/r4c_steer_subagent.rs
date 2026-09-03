@@ -22,7 +22,6 @@ struct RequestRow {
     session_id: String,
     behavior_id: Option<String>,
     content: String,
-    status: Option<String>,
     lifecycle_state: Option<String>,
     metadata: Option<String>,
     subagent_depth: Option<u32>,
@@ -187,7 +186,6 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -297,7 +295,6 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> RequestRow {
                 session_id
                 behavior_id
                 content
-                status
                 lifecycle_state
                 metadata
                 subagent_depth
@@ -333,21 +330,14 @@ async fn latest_user_message(node: &EmbeddedNode, session_id: &str) -> MessageRo
     crate::support::first_row(&response, "AgentMessage")
 }
 
-async fn update_request_state(
-    node: &EmbeddedNode,
-    request_id: &str,
-    status: &str,
-    lifecycle_state: &str,
-) {
+async fn update_request_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
     let request_id = escape_graphql_string(request_id);
-    let status = escape_graphql_string(status);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
-                    status: "{status}",
                     lifecycle_state: "{lifecycle_state}"
                 }}
             ) {{ _docID }}
@@ -389,7 +379,6 @@ async fn create_child_session_queued_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "queued child session request",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{execution_origin}",
@@ -497,7 +486,6 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     );
     assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(queued.caused_by_parent_tool_call_doc_id.as_deref(), None);
-    assert_eq!(queued.status.as_deref(), Some("pending"));
     assert_eq!(queued.lifecycle_state.as_deref(), Some("pending"));
     let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["queue"]["source"], "steering");
@@ -542,7 +530,7 @@ async fn steer_subagent_rejects_terminal_child() {
     let hook = create_parent_hook(&db, "parent-terminal", "session-terminal").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-terminal", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
-    update_request_state(db.node.as_ref(), child_request_id, "completed", "completed").await;
+    update_request_state(db.node.as_ref(), child_request_id, "completed").await;
 
     let result = steer_subagent(
         &hook,
@@ -611,13 +599,7 @@ async fn steer_subagent_interrupt_latches_active_child_request() {
     let hook = create_parent_hook(&db, "parent-interrupt", "session-interrupt").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-interrupt", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
-    update_request_state(
-        db.node.as_ref(),
-        child_request_id,
-        "processing",
-        "processing",
-    )
-    .await;
+    update_request_state(db.node.as_ref(), child_request_id, "processing").await;
 
     let result = steer_subagent(
         &hook,
@@ -659,13 +641,7 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-drain", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap();
     let child_session_id = child["child_session_id"].as_str().unwrap();
-    update_request_state(
-        db.node.as_ref(),
-        child_request_id,
-        "processing",
-        "processing",
-    )
-    .await;
+    update_request_state(db.node.as_ref(), child_request_id, "processing").await;
     let wake_request_id = "r4c-steer-drain-wake";
     create_child_session_queued_request(
         db.node.as_ref(),
@@ -698,7 +674,6 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
         .iter()
         .any(|id| id.as_str() == Some(wake_request_id)));
     let wake = fetch_request(db.node.as_ref(), wake_request_id).await;
-    assert_eq!(wake.status.as_deref(), Some("interrupted"));
     assert_eq!(wake.lifecycle_state.as_deref(), Some("interrupted"));
 }
 
@@ -710,13 +685,7 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-cascade", "do work").await;
     let child_request_id = child["child_request_id"].as_str().unwrap().to_string();
     let child_session_id = child["child_session_id"].as_str().unwrap().to_string();
-    update_request_state(
-        db.node.as_ref(),
-        &child_request_id,
-        "processing",
-        "processing",
-    )
-    .await;
+    update_request_state(db.node.as_ref(), &child_request_id, "processing").await;
 
     let grandchild_request_id = "r4c-steer-grandchild";
     let child_request_doc_id =

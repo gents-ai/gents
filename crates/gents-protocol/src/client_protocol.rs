@@ -12,6 +12,8 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
+
 /// The 6 client-visible turn states, mirroring `ClientTurnState` in Client.lean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTurnState {
@@ -41,75 +43,6 @@ impl ClientTurnState {
             self,
             Self::Completed | Self::Failed | Self::Superseded | Self::Interrupted
         )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RequestLifecycleState {
-    Pending,
-    Claimed,
-    Processing,
-    InputRequired,
-    Completed,
-    Failed,
-    Superseded,
-    Dead,
-    Interrupted,
-}
-
-impl RequestLifecycleState {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Claimed => "claimed",
-            Self::Processing => "processing",
-            Self::InputRequired => "inputRequired",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Superseded => "superseded",
-            Self::Dead => "dead",
-            Self::Interrupted => "interrupted",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidRequestLifecycleState {
-    state: String,
-}
-
-impl InvalidRequestLifecycleState {
-    pub fn value(&self) -> &str {
-        &self.state
-    }
-}
-
-impl Display for InvalidRequestLifecycleState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid request lifecycle state: {}", self.state)
-    }
-}
-
-impl Error for InvalidRequestLifecycleState {}
-
-impl TryFrom<&str> for RequestLifecycleState {
-    type Error = InvalidRequestLifecycleState;
-
-    fn try_from(value: &str) -> Result<Self, Self::Error> {
-        match value {
-            "pending" => Ok(Self::Pending),
-            "claimed" => Ok(Self::Claimed),
-            "processing" => Ok(Self::Processing),
-            "inputRequired" => Ok(Self::InputRequired),
-            "completed" => Ok(Self::Completed),
-            "failed" => Ok(Self::Failed),
-            "superseded" => Ok(Self::Superseded),
-            "dead" => Ok(Self::Dead),
-            "interrupted" => Ok(Self::Interrupted),
-            _ => Err(InvalidRequestLifecycleState {
-                state: value.to_string(),
-            }),
-        }
     }
 }
 
@@ -250,7 +183,8 @@ fn derive_observation(
         RequestLifecycleState::Completed => ClientTurnState::Completed,
         RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
         RequestLifecycleState::Interrupted => ClientTurnState::Interrupted,
-        RequestLifecycleState::Pending
+        RequestLifecycleState::WorkspaceBindingPending
+        | RequestLifecycleState::Pending
         | RequestLifecycleState::Claimed
         | RequestLifecycleState::Processing
         | RequestLifecycleState::InputRequired => match response_status {

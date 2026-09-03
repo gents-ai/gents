@@ -423,7 +423,7 @@ mod tests {
                     request_id: "request-context",
                     agent_did: "did:key:z-context",
                     session_id: "session-context",
-                    status: "completed",
+                    lifecycle_state: "completed",
                     created_at: "2026-06-03T10:00:00Z"
                 }) { _docID }
             }"#,

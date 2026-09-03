@@ -5,6 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{graphql_input_literal, graphql_string_list_literal};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -52,7 +53,6 @@ pub struct GraphRunRequestView {
     pub session_id: Option<String>,
     pub node_id: Option<String>,
     pub behavior_id: String,
-    pub status: String,
     pub lifecycle_state: Option<String>,
     pub failure_reason: Option<String>,
     pub terminal: bool,
@@ -222,17 +222,6 @@ async fn load_plan(executor: &(impl GraphRunQuery + ?Sized), digest: &str) -> Re
     Ok(plan)
 }
 
-fn request_is_terminal(state: Option<&str>) -> bool {
-    matches!(
-        state,
-        Some("completed" | "failed" | "dead" | "interrupted" | "superseded")
-    )
-}
-
-fn request_succeeded(state: Option<&str>) -> bool {
-    state == Some("completed")
-}
-
 fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
     let mut nodes_by_trigger = BTreeMap::new();
     for entry in &plan.entries {
@@ -281,7 +270,7 @@ async fn load_requests(
                     }},
                     order: {{ created_at: ASC }}
                 ) {{
-                    request_id session_id behavior_id caused_by_trigger_id status lifecycle_state failure_reason
+                    request_id session_id behavior_id caused_by_trigger_id lifecycle_state failure_reason
                 }}
             }}"#,
             escape_graphql_string(correlation),
@@ -291,11 +280,6 @@ async fn load_requests(
     let mut requests = rows(&response, "AgentRequest")
         .iter()
         .map(|row| {
-            let status = row
-                .get("status")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
             let lifecycle_state = row
                 .get("lifecycle_state")
                 .and_then(Value::as_str)
@@ -321,9 +305,9 @@ async fn load_requests(
                     .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
                     .cloned(),
                 behavior_id,
-                terminal: request_is_terminal(lifecycle_state.as_deref()),
-                succeeded: request_succeeded(lifecycle_state.as_deref()),
-                status,
+                terminal: RequestLifecycleState::is_terminal_str(lifecycle_state.as_deref()),
+                succeeded: RequestLifecycleState::parse_opt(lifecycle_state.as_deref())
+                    == Some(RequestLifecycleState::Completed),
                 lifecycle_state,
                 failure_reason: row
                     .get("failure_reason")
@@ -1248,7 +1232,6 @@ mod tests {
                 session_id: Some("session".to_owned()),
                 node_id: Some("terminal".to_owned()),
                 behavior_id: "behavior".to_owned(),
-                status: "completed".to_owned(),
                 lifecycle_state: Some("completed".to_owned()),
                 failure_reason: None,
                 terminal: true,
@@ -1288,13 +1271,6 @@ mod tests {
             "failure must wait for correlated work to quiesce"
         );
         assert!(should_interrupt_active_work(&active));
-    }
-
-    #[test]
-    fn request_terminality_requires_authoritative_lifecycle_state() {
-        assert!(!request_is_terminal(None));
-        assert!(request_is_terminal(Some("failed")));
-        assert!(request_succeeded(Some("completed")));
     }
 
     #[test]

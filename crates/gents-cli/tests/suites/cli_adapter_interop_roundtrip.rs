@@ -562,7 +562,6 @@ async fn create_request(node: &EmbeddedNode, row: &TimelineRequestRow) -> Result
                     {}
                     {}
                     {}
-                    {}
                 }}) {{ _docID }}
             }}"#,
             esc(&row.request_id),
@@ -571,7 +570,6 @@ async fn create_request(node: &EmbeddedNode, row: &TimelineRequestRow) -> Result
             string_field("session_id", row.session_id.as_deref()),
             string_field("content", row.content.as_deref()),
             string_field("metadata", row.metadata.as_deref()),
-            string_field("status", row.status.as_deref()),
             string_field("lifecycle_state", row.lifecycle_state.as_deref()),
             string_field("backend_id", row.backend_id.as_deref()),
             string_field("failure_reason", row.failure_reason.as_deref()),

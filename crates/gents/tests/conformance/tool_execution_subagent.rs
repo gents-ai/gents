@@ -44,7 +44,6 @@ async fn make_completed_request(
                 retry_root_request: "{rid}",
                 superseded_by_request: "",
                 content: "{content}",
-                status: "completed",
                 lifecycle_state: "completed",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -95,12 +94,6 @@ async fn make_terminal_request(
     let state_escaped = gents::graphql::escape_graphql_string(state);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let now_escaped = gents::graphql::escape_graphql_string(&now);
-    let legacy_status = match state {
-        "completed" => "completed",
-        "superseded" => "superseded",
-        "failed" | "dead" | "interrupted" => "error",
-        other => other,
-    };
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -112,7 +105,6 @@ async fn make_terminal_request(
                 retry_root_request: "{rid}",
                 superseded_by_request: "",
                 content: "",
-                status: "{legacy_status}",
                 lifecycle_state: "{state_escaped}",
                 backend_id: "",
                 execution_origin: "interactive",

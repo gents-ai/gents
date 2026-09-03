@@ -7,9 +7,7 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
             denial_reason: Some("requestNotObserved".to_string()),
         };
     };
-    if request.lifecycle_state.as_deref() != Some("failed")
-        || request.status.as_deref() != Some("error")
-    {
+    if request.lifecycle_state.as_deref() != Some(RequestLifecycleState::Failed.as_str()) {
         return RetryEligibilityView {
             eligible: false,
             denial_reason: Some("notFailed".to_string()),

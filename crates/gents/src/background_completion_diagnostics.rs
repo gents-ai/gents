@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
@@ -61,7 +62,6 @@ struct WakeRow {
     session_id: String,
     retry_root_request: Option<String>,
     metadata: Option<String>,
-    status: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
     created_at: Option<String>,
@@ -120,7 +120,7 @@ pub async fn load_background_completion_diagnostics(
                     agent_did: {{ _eq: "{agent_did}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}], limit: {WAKE_SCAN_LIMIT}) {{
-                    request_id session_id retry_root_request metadata status lifecycle_state
+                    request_id session_id retry_root_request metadata lifecycle_state
                     failure_reason created_at claimed_at terminalized_at
                     retry_count max_retries background_completion_input_through_sequence
                     background_completion_notification_keys_json
@@ -417,26 +417,31 @@ fn wake_rank(wake: &WakeRow) -> (i64, &str, &str) {
     )
 }
 
+fn wake_lifecycle_state(wake: &WakeRow) -> Option<RequestLifecycleState> {
+    RequestLifecycleState::parse_opt(wake.lifecycle_state.as_deref())
+}
+
 fn request_completed(wake: &WakeRow) -> bool {
-    state_is(wake, "completed")
+    wake_lifecycle_state(wake) == Some(RequestLifecycleState::Completed)
 }
 
 fn request_failed(wake: &WakeRow) -> bool {
-    state_is(wake, "failed") || wake.status.as_deref() == Some("error")
+    wake_lifecycle_state(wake) == Some(RequestLifecycleState::Failed)
 }
 
 fn request_pending(wake: &WakeRow) -> bool {
-    state_is(wake, "pending")
+    wake_lifecycle_state(wake) == Some(RequestLifecycleState::Pending)
 }
 
 fn request_active(wake: &WakeRow) -> bool {
-    ["claimed", "processing", "streaming", "input_required"]
-        .into_iter()
-        .any(|state| state_is(wake, state))
-}
-
-fn state_is(wake: &WakeRow, expected: &str) -> bool {
-    wake.lifecycle_state.as_deref() == Some(expected) || wake.status.as_deref() == Some(expected)
+    matches!(
+        wake_lifecycle_state(wake),
+        Some(
+            RequestLifecycleState::Claimed
+                | RequestLifecycleState::Processing
+                | RequestLifecycleState::InputRequired
+        )
+    )
 }
 
 fn parse_time(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -467,7 +472,6 @@ mod tests {
             session_id: "session-1".to_string(),
             retry_root_request: root.map(ToOwned::to_owned),
             metadata: Some(METADATA.to_string()),
-            status: Some(if state == "failed" { "error" } else { state }.to_string()),
             lifecycle_state: Some(state.to_string()),
             failure_reason: (state == "failed").then(|| "provider unavailable".to_string()),
             created_at: Some(format!("2026-08-12T00:00:0{retry_count}Z")),

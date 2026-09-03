@@ -435,7 +435,6 @@ async fn supersede_active_runtime_requests_for_trigger(
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 input: {{
-                    status: "superseded",
                     lifecycle_state: "superseded"
                 }}
             ) {{ _docID }}
@@ -455,7 +454,7 @@ async fn supersede_active_runtime_requests_for_trigger(
         .unwrap_or(0)
 }
 
-async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<(String, String)> {
+async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<String> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -464,7 +463,6 @@ async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<(S
                 limit: 1
             ) {{
                 lifecycle_state
-                status
             }}
         }}"#
     );
@@ -481,16 +479,10 @@ async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<(S
         .and_then(|rows| rows.first())
         .cloned()
         .map(|row| {
-            (
-                row.get("lifecycle_state")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned(),
-                row.get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned(),
-            )
+            row.get("lifecycle_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned()
         })
 }
 

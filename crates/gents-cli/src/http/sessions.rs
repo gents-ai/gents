@@ -30,7 +30,6 @@ pub(crate) struct SessionHistoryRow {
     pub(crate) started_at: Option<String>,
     pub(crate) ended_at: Option<String>,
     pub(crate) latest_request_id: Option<String>,
-    pub(crate) latest_request_status: Option<String>,
     pub(crate) latest_request_lifecycle_state: Option<String>,
     pub(crate) latest_request_created_at: Option<String>,
     pub(crate) request_count: i64,
@@ -87,8 +86,6 @@ struct RequestRow {
     session_id: Option<String>,
     #[serde(default)]
     behavior_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
@@ -160,7 +157,6 @@ fn recent_requests_query(agent_did: &str) -> String {
                 request_id
                 session_id
                 behavior_id
-                status
                 lifecycle_state
                 created_at
             }}
@@ -195,7 +191,6 @@ fn session_details_query(agent_did: &str, session_ids: &[String]) -> String {
                 request_id
                 session_id
                 behavior_id
-                status
                 lifecycle_state
                 created_at
             }}
@@ -281,7 +276,6 @@ fn build_session_history_snapshot(
                 started_at: session.and_then(|row| clean(row.started.as_deref())),
                 ended_at: session.and_then(|row| clean(row.ended.as_deref())),
                 latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_deref())),
-                latest_request_status: latest_request.and_then(|row| clean(row.status.as_deref())),
                 latest_request_lifecycle_state: latest_request
                     .and_then(|row| clean(row.lifecycle_state.as_deref())),
                 latest_request_created_at: latest_request
@@ -357,7 +351,6 @@ mod tests {
                 request_id: Some("req-newer".to_string()),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("terminal".to_string()),
                 created_at: Some("2026-06-05T10:00:00Z".to_string()),
             },
@@ -365,7 +358,6 @@ mod tests {
                 request_id: Some("req-other".to_string()),
                 session_id: Some("session-b".to_string()),
                 behavior_id: Some("behavior-b".to_string()),
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("running".to_string()),
                 created_at: Some("2026-06-05T09:00:00Z".to_string()),
             },
@@ -373,7 +365,6 @@ mod tests {
                 request_id: Some("req-older".to_string()),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("terminal".to_string()),
                 created_at: Some("2026-06-05T08:00:00Z".to_string()),
             },

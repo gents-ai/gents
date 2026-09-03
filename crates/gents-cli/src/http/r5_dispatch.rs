@@ -75,8 +75,6 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
@@ -199,7 +197,6 @@ fn subagent_dispatch_query(parent_request_id: Option<&str>) -> String {
                 request_id
                 agent_did
                 behavior_id
-                status
                 lifecycle_state
                 created_at
                 claimed_at
@@ -261,7 +258,6 @@ fn build_subagent_dispatch_snapshot(
                 .or_else(|| {
                     child.and_then(|child| clean_optional_string(child.lifecycle_state.as_deref()))
                 })
-                .or_else(|| child.and_then(|child| clean_optional_string(child.status.as_deref())))
                 .unwrap_or_else(|| "unknown".to_string());
             let started_at = clean_optional_string(bridge.started_at.as_deref())
                 .or_else(|| {
@@ -430,7 +426,6 @@ mod tests {
                         "request_id": "child-r5-api",
                         "agent_did": "deployment-b",
                         "behavior_id": "child-behavior-r5",
-                        "status": "processing",
                         "lifecycle_state": "processing",
                         "created_at": "2026-05-20T12:00:01Z",
                         "claimed_at": "2026-05-20T12:00:02Z",

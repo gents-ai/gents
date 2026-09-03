@@ -510,7 +510,7 @@ fn build_records(
                 behavior_id: behavior_id.map(ToOwned::to_owned),
                 session_id: tool_call.session_id.clone(),
                 request_id: request.map(|request| request.request_id.clone()),
-                request_status: request.and_then(|request| request.status.clone()),
+                request_status: request.and_then(|request| request.lifecycle_state.clone()),
                 request_lifecycle_state: request
                     .and_then(|request| request.lifecycle_state.clone()),
                 request_failure_reason: request.and_then(|request| request.failure_reason.clone()),
@@ -606,7 +606,6 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
                 session_id
                 content
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -645,7 +644,6 @@ async fn load_requests_for_sessions(
                 session_id
                 content
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -935,7 +933,6 @@ fn combined_request_failure_text(
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(request) = request {
-        push_nonempty(&mut parts, request.status.as_deref());
         push_nonempty(&mut parts, request.lifecycle_state.as_deref());
         push_nonempty(&mut parts, request.failure_reason.as_deref());
     }
@@ -1069,8 +1066,6 @@ struct RequestRow {
     content: Option<String>,
     #[serde(default)]
     metadata: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
@@ -1242,7 +1237,6 @@ mod tests {
             session_id: None,
             content: None,
             metadata: None,
-            status: None,
             lifecycle_state: None,
             backend_id: None,
             failure_reason: None,

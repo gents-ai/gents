@@ -2,6 +2,7 @@ use super::*;
 
 fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
+        ("workspaceBindingPending", "pending") => Some("bindWorkspace"),
         ("pending", "claimed") => Some("claim"),
         ("pending", "failed") => Some("admissionReject"),
         ("pending", "superseded") => Some("dedupLose"),
@@ -239,7 +240,6 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
         .unwrap();
 
     let request = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(request.status, "error");
     assert_eq!(request.lifecycle_state, "failed");
     assert!(fetch_session_snapshot(&db.node, &session_id)
         .await
@@ -377,11 +377,16 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
     let request_metadata =
         (action == "dedupLose").then(|| coalesce_metadata(&format!("dedup-{request_id}")));
+    let initial_state = if action == "bindWorkspace" {
+        "workspaceBindingPending"
+    } else {
+        "pending"
+    };
     let doc_id = create_request_with_signed_fields(
         &db.node,
         &request_id,
         &session_id,
-        "pending",
+        initial_state,
         &created_at,
         valid_until.as_deref(),
         request_metadata.as_deref(),
@@ -398,6 +403,11 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
     );
 
     match action {
+        "bindWorkspace" => {
+            gents::__test_internals::activate_workspace_bound_request(&db.node, &doc_id)
+                .await
+                .expect("bindWorkspace CAS mutation failed");
+        }
         "claim" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
         }
@@ -603,32 +613,13 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
         }
     }
 
-    assert_eq!(legal_count, 12);
-    assert_eq!(illegal_count, 49);
-    assert_eq!(product_unreachable_count, 17);
+    assert_eq!(legal_count, 13);
+    assert_eq!(illegal_count, 65);
+    assert_eq!(product_unreachable_count, 19);
     assert_eq!(recovery_reachable_count, 3);
 }
 
-/// Persisted `(status, lifecycle_state)` pair for a request, mirroring the bridge
-/// documented in `proofs/README.md`: in-flight work is `status="processing"` with
-/// the finer `lifecycle_state`, terminal work carries a terminal
-/// `lifecycle_state`, and `failed` is persisted with `status="error"`.
-fn persisted_status_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
-    match lifecycle_state {
-        "pending" => ("pending", "pending"),
-        "claimed" => ("processing", "claimed"),
-        "processing" => ("processing", "processing"),
-        "inputRequired" => ("processing", "inputRequired"),
-        "completed" => ("completed", "completed"),
-        "failed" => ("error", "failed"),
-        "superseded" => ("superseded", "superseded"),
-        "dead" => ("dead", "dead"),
-        "interrupted" => ("interrupted", "interrupted"),
-        other => panic!("unknown lifecycle_state: {other}"),
-    }
-}
-
-fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str) {
+fn assert_terminal_lifecycle_state(lifecycle_state: &str) {
     assert!(
         matches!(
             lifecycle_state,
@@ -636,17 +627,15 @@ fn terminal_persisted_pair(lifecycle_state: &str) -> (&'static str, &'static str
         ),
         "not a terminal lifecycle_state: {lifecycle_state}"
     );
-    persisted_status_pair(lifecycle_state)
 }
 
 async fn force_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
-    let (status, lifecycle_state) = persisted_status_pair(lifecycle_state);
-    force_persisted_pair(node, doc_id, status, lifecycle_state).await;
+    force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
 }
 
 async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
-    let (status, lifecycle_state) = terminal_persisted_pair(lifecycle_state);
-    force_persisted_pair(node, doc_id, status, lifecycle_state).await;
+    assert_terminal_lifecycle_state(lifecycle_state);
+    force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
 }
 
 /// Queue metadata marking a request as coalescible under `key`, the shape
@@ -717,18 +706,13 @@ async fn create_running_subagent_bridge(
     );
 }
 
-async fn force_persisted_pair(
-    node: &EmbeddedNode,
-    doc_id: &str,
-    status: &str,
-    lifecycle_state: &str,
-) {
+async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+                input: {{ lifecycle_state: "{lifecycle_state}" }}
             ) {{ _docID }}
         }}"#
     );
@@ -754,14 +738,9 @@ async fn force_persisted_pair(
 /// Each writer is placed in its own locally-permitted state and the persisted row
 /// is then forced independently, so the in-memory `ensure_state` guard never
 /// short-circuits ahead of the mutation and the persisted CAS filter is what
-/// decides every case. Verified by weakening a CAS in production (dropping the
-/// `status` predicate from the terminal transition): this test then reports
-/// `production writers reached interrupted -> completed`.
-///
-/// One sensitivity limit worth knowing: fixtures force CANONICAL
-/// `(status, lifecycle_state)` pairs, and the terminal CAS conjoins both. Widening
-/// only a writer's `lifecycle_state` from-set therefore stays undetectable here —
-/// correctly, since the `status` predicate still makes the edge unreachable.
+/// decides every case. Verified by weakening a CAS in production (widening the
+/// `lifecycle_state` predicate on the terminal transition): this test then
+/// reports `production writers reached interrupted -> completed`.
 ///
 /// Coverage: every legal edge except `processing -> processing`, plus all three
 /// `recoveryReachable` edges. The two sweeps are driven against real auxiliary
@@ -774,7 +753,7 @@ async fn force_persisted_pair(
 /// edges across it would be tautological.
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
-    const START_STATES: [&str; 9] = [
+    const START_STATES: [&str; 10] = [
         "pending",
         "claimed",
         "processing",
@@ -784,8 +763,9 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "superseded",
         "dead",
         "interrupted",
+        "workspaceBindingPending",
     ];
-    const WRITERS: [&str; 10] = [
+    const WRITERS: [&str; 11] = [
         "claim",
         "admission_reject",
         "claim_after_ttl_lapse",
@@ -796,6 +776,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "repair_terminal_requests",
         "coalesce_pending",
         "subagent_liveness",
+        "bind_workspace",
     ];
 
     let mut observed: std::collections::BTreeSet<(String, String)> = Default::default();
@@ -849,7 +830,8 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 | "claim_after_ttl_lapse"
                 | "repair_terminal_requests"
                 | "coalesce_pending"
-                | "subagent_liveness" => {}
+                | "subagent_liveness"
+                | "bind_workspace" => {}
                 _ => {
                     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
                 }
@@ -959,6 +941,12 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 "subagent_liveness" => {
                     let _ =
                         ToolCallLifecycle::reconcile_subagent_liveness(&db.node, AGENT_DID).await;
+                }
+                "bind_workspace" => {
+                    let _ = gents::__test_internals::activate_workspace_bound_request(
+                        &db.node, &doc_id,
+                    )
+                    .await;
                 }
                 other => panic!("unhandled writer {other}"),
             }
@@ -1140,15 +1128,10 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
             };
 
             let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-            let (expected_status, expected_lifecycle_state) = terminal_persisted_pair(terminal);
             assert_eq!(
-                snap.lifecycle_state, expected_lifecycle_state,
+                snap.lifecycle_state, terminal,
                 "writer {writer} moved a persisted {terminal} request to {} — terminal states must be irreversible (S1)",
                 snap.lifecycle_state
-            );
-            assert_eq!(
-                snap.status, expected_status,
-                "writer {writer} changed the persisted status of a {terminal} request"
             );
         }
     }
@@ -1184,7 +1167,6 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            status: "processing".into(),
             lifecycle_state: "claimed".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -1290,7 +1272,6 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            status: "processing".into(),
             lifecycle_state: "processing".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -1366,7 +1347,6 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            status: "error".into(),
             lifecycle_state: "failed".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -1421,7 +1401,6 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
         RequestSnapshot {
-            status: "processing".into(),
             lifecycle_state: "claimed".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -1599,7 +1578,6 @@ async fn serial_skip_does_not_create_request() {
 
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(still_claimed.lifecycle_state, "claimed");
-    assert_eq!(still_claimed.status, "processing");
 }
 
 #[tokio::test]
@@ -1628,7 +1606,6 @@ async fn latest_only_transition_to_superseded() {
 
     let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(before.lifecycle_state, "claimed");
-    assert_eq!(before.status, "processing");
 
     let supersede = r#"mutation {
             update_AgentRequest(
@@ -1638,7 +1615,6 @@ async fn latest_only_transition_to_superseded() {
                     lifecycle_state: { _in: ["pending", "claimed", "processing"] }
                 },
                 input: {
-                    status: "superseded",
                     lifecycle_state: "superseded"
                 }
             ) { _docID }
@@ -1666,7 +1642,6 @@ async fn latest_only_transition_to_superseded() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
         RequestSnapshot {
-            status: "superseded".into(),
             lifecycle_state: "superseded".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -1744,7 +1719,6 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
                 lifecycle_state: { _in: ["pending", "claimed", "processing"] }
             },
             input: {
-                status: "superseded",
                 lifecycle_state: "superseded"
             }
         ) { _docID }
@@ -1769,7 +1743,6 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "superseded");
 
     let snap = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(snap.status, "processing");
     assert_eq!(snap.lifecycle_state, "inputRequired");
 }
 
@@ -1967,7 +1940,6 @@ async fn serial_skip_event_does_not_create_request() {
 
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(still_claimed.lifecycle_state, "claimed");
-    assert_eq!(still_claimed.status, "processing");
 }
 
 #[tokio::test]
@@ -1996,7 +1968,6 @@ async fn latest_only_event_transition_to_superseded() {
 
     let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
     assert_eq!(before.lifecycle_state, "claimed");
-    assert_eq!(before.status, "processing");
 
     let supersede = r#"mutation {
         update_AgentRequest(
@@ -2006,7 +1977,6 @@ async fn latest_only_event_transition_to_superseded() {
                 lifecycle_state: { _in: ["pending", "claimed", "processing"] }
             },
             input: {
-                status: "superseded",
                 lifecycle_state: "superseded"
             }
         ) { _docID }
@@ -2033,7 +2003,6 @@ async fn latest_only_event_transition_to_superseded() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
         RequestSnapshot {
-            status: "superseded".into(),
             lifecycle_state: "superseded".into(),
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
@@ -2292,7 +2261,6 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
 #[derive(Debug, Clone, Deserialize)]
 struct QueueRuntimeRow {
     request_id: String,
-    status: String,
     lifecycle_state: Option<String>,
     metadata: Option<String>,
 }
@@ -2307,7 +2275,6 @@ struct QueueRuntimeSnapshot {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DeadlineRuntimeRow {
-    status: String,
     lifecycle_state: Option<String>,
     deadline: String,
 }
@@ -2328,24 +2295,20 @@ fn symbolic_request_id(
 }
 
 fn row_is_pending(row: &QueueRuntimeRow) -> bool {
-    row.status == "pending" && row.lifecycle_state.as_deref() == Some("pending")
+    row.lifecycle_state.as_deref() == Some("pending")
 }
 
 fn row_is_active(row: &QueueRuntimeRow) -> bool {
-    row.status == "processing"
-        && matches!(
-            row.lifecycle_state.as_deref(),
-            Some("claimed" | "processing")
-        )
+    matches!(
+        row.lifecycle_state.as_deref(),
+        Some("claimed" | "processing")
+    )
 }
 
 fn row_is_terminal(row: &QueueRuntimeRow) -> bool {
     matches!(
         row.lifecycle_state.as_deref(),
         Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    ) || matches!(
-        row.status.as_str(),
-        "completed" | "error" | "superseded" | "dead" | "interrupted"
     )
 }
 
@@ -2384,7 +2347,6 @@ async fn fetch_queue_runtime_snapshot(
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
                 request_id
-                status
                 lifecycle_state
                 metadata
             }}
@@ -2846,7 +2808,6 @@ async fn drive_claim_preserves_explicit_deadline(
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let row = fetch_deadline_runtime_row(db.node.as_ref(), request_id).await;
-    assert_eq!(row.status, "processing");
     assert_eq!(row.lifecycle_state.as_deref(), Some("claimed"));
 
     let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&row.deadline).unwrap();
@@ -2910,7 +2871,6 @@ async fn create_queue_request(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "queue deadline conformance",
-                status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
@@ -3119,7 +3079,7 @@ async fn persist_child_completion(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
+                input: {{ lifecycle_state: "completed" }}
             ) {{ _docID }}
         }}"#
     );
@@ -3194,7 +3154,7 @@ async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> D
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 limit: 1
-            ) {{ status lifecycle_state deadline }}
+            ) {{ lifecycle_state deadline }}
         }}"#
     );
     support::first_row::<DeadlineRuntimeRow>(&node.execute(&query).await, "AgentRequest")

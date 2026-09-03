@@ -292,7 +292,6 @@ pub(super) fn task_run_history(
             request_id: request.request_id.clone(),
             session_id: normalize_optional(request.session_id.as_deref()),
             behavior_id: normalize_optional(request.behavior_id.as_deref()),
-            status: normalize_optional(request.status.as_deref()),
             lifecycle_state: normalize_optional(request.lifecycle_state.as_deref()),
             execution_origin: normalize_optional(request.execution_origin.as_deref()),
             caused_by_trigger_id: normalize_optional(request.caused_by_trigger_id.as_deref()),

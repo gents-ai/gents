@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::snapshot::{compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow};
@@ -46,37 +47,8 @@ impl GraphqlAccess {
     }
 }
 
-/// Terminal lifecycle states — requests in these states are classified as
-/// `AlreadyTerminal` regardless of their `cancel_policy`.
-const TERMINAL_STATES: &[&str] = &[
-    "completed",
-    "failed",
-    "cancelled",
-    "superseded",
-    "dead",
-    "interrupted",
-];
-
 fn request_row_is_terminal(row: &Value) -> bool {
-    let lifecycle_terminal = string_field(row, "lifecycle_state")
-        .as_deref()
-        .is_some_and(|state| TERMINAL_STATES.contains(&state));
-    let status_terminal = string_field(row, "status")
-        .as_deref()
-        .is_some_and(|status| {
-            matches!(
-                status,
-                "completed"
-                    | "complete"
-                    | "error"
-                    | "failed"
-                    | "cancelled"
-                    | "superseded"
-                    | "dead"
-                    | "interrupted"
-            )
-        });
-    lifecycle_terminal || status_terminal
+    RequestLifecycleState::is_terminal_str(string_field(row, "lifecycle_state").as_deref())
 }
 
 #[derive(Debug, Clone)]
@@ -245,10 +217,7 @@ async fn bfs(
         let child_session_id = string_field(&child_row, "session_id");
         let child_behavior_id = string_field(&child_row, "behavior_id");
 
-        let is_terminal = child_lifecycle_state
-            .as_deref()
-            .map(|s| TERMINAL_STATES.contains(&s))
-            .unwrap_or(false);
+        let is_terminal = RequestLifecycleState::is_terminal_str(child_lifecycle_state.as_deref());
 
         let classification = if is_terminal {
             CascadeClassification::AlreadyTerminal
@@ -326,7 +295,6 @@ async fn fetch_request(
                 agent_did
                 behavior_id
                 session_id
-                status
                 lifecycle_state
                 interrupt_requested_at
             }}

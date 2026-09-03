@@ -221,11 +221,9 @@ pub(crate) async fn terminalize_pending_request_rejection(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     agent_did: {{ _eq: "{agent_did}" }},
-                    status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 input: {{
-                    status: "error",
                     lifecycle_state: "failed",
                     failure_reason: "{failure_reason}",
                     terminalized_at: "{terminalized_at}",

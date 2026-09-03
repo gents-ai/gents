@@ -20,7 +20,6 @@ pub(super) async fn load_timeline_request_by_id(
                 seed
                 max_total_tokens
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -74,7 +73,6 @@ pub(super) async fn load_timeline_requests_for_session(
                 seed
                 max_total_tokens
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason
@@ -121,7 +119,6 @@ pub(super) async fn load_timeline_child_requests(
                 seed
                 max_total_tokens
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason

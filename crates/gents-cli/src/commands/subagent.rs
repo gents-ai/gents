@@ -7,6 +7,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
+use gents_protocol::client_protocol::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -24,7 +25,6 @@ const AGENT_REQUEST_FIELDS: &str = r#"
     request_id
     agent_did
     behavior_id
-    status
     lifecycle_state
     created_at
     claimed_at
@@ -335,11 +335,10 @@ async fn wait_for_terminal_graphql(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let snapshots = snapshot_requests_graphql(graphql, request_ids).await?;
-        if snapshots.iter().all(|row| {
-            row.lifecycle_state
-                .as_deref()
-                .is_some_and(is_terminal_state)
-        }) {
+        if snapshots
+            .iter()
+            .all(|row| RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()))
+        {
             return Ok(snapshots);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -361,11 +360,10 @@ async fn wait_for_terminal_local(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let snapshots = snapshot_requests_local(node, request_ids).await?;
-        if snapshots.iter().all(|row| {
-            row.lifecycle_state
-                .as_deref()
-                .is_some_and(is_terminal_state)
-        }) {
+        if snapshots
+            .iter()
+            .all(|row| RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()))
+        {
             return Ok(snapshots);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -377,13 +375,6 @@ async fn wait_for_terminal_local(
         }
         tokio::time::sleep(WAIT_POLL_INTERVAL).await;
     }
-}
-
-fn is_terminal_state(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
-    )
 }
 
 async fn snapshot_requests_graphql(
@@ -708,7 +699,6 @@ async fn load_rooted_lineage(
                         request_id: edge.child_request_id,
                         agent_did: edge.principal_did,
                         behavior_id: edge.behavior_id,
-                        status: Some(edge.lifecycle_state.clone()),
                         lifecycle_state: Some(edge.lifecycle_state),
                         created_at: edge.created_at,
                         claimed_at: None,
@@ -1078,8 +1068,6 @@ struct AgentRequestLineageRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
     created_at: Option<String>,
@@ -1150,7 +1138,6 @@ impl LineageOutputRow {
             .lifecycle_state
             .as_deref()
             .and_then(non_empty_str)
-            .or_else(|| node.row.status.as_deref().and_then(non_empty_str))
             .unwrap_or("unknown")
             .to_string();
         let started_at = node
@@ -1198,7 +1185,6 @@ mod tests {
             request_id: request_id.to_string(),
             agent_did: Some("did:key:zTest".to_string()),
             behavior_id: Some(request_id.to_string()),
-            status: Some("pending".to_string()),
             lifecycle_state: Some("pending".to_string()),
             created_at: Some(created_at.to_string()),
             claimed_at: None,

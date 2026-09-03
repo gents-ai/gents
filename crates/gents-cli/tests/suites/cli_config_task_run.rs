@@ -187,7 +187,6 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
                     agent_did
                     behavior_id
                     content
-                    status
                     lifecycle_state
                     execution_origin
                     caused_by_trigger_id
@@ -208,17 +207,13 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         Some(behavior_id.as_str())
     );
     assert_eq!(row.get("content").and_then(Value::as_str), Some("hi Amy"));
-    let persisted_status = row.get("status").and_then(Value::as_str);
     let persisted_lifecycle_state = row.get("lifecycle_state").and_then(Value::as_str);
     assert!(
         matches!(
-            (persisted_status, persisted_lifecycle_state),
-            (Some("pending"), Some("pending"))
-                | (Some("processing"), Some("claimed"))
-                | (Some("processing"), Some("processing"))
-                | (Some("completed"), Some("completed"))
+            persisted_lifecycle_state,
+            Some("pending" | "claimed" | "processing" | "completed")
         ),
-        "manual task run should create a request that is pending or has advanced through the daemon lifecycle, got status={persisted_status:?} lifecycle_state={persisted_lifecycle_state:?}"
+        "manual task run should create a request that is pending or has advanced through the daemon lifecycle, got lifecycle_state={persisted_lifecycle_state:?}"
     );
     assert_eq!(
         row.get("execution_origin").and_then(Value::as_str),

@@ -16,7 +16,7 @@ use crate::support::{
 
 #[derive(Debug, Clone, Deserialize)]
 struct StatusRow {
-    status: String,
+    lifecycle_state: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -34,7 +34,6 @@ struct NotificationDeliveryRow {
 struct BackgroundWakeRetryRow {
     request_id: String,
     content: String,
-    status: String,
     lifecycle_state: String,
     execution_origin: String,
     retry_parent_request: String,
@@ -73,7 +72,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
                 superseded_by_request: "",
                 content: "continue after background completion",
                 metadata: "{escaped_metadata}",
-                status: "error",
                 lifecycle_state: "failed",
                 backend_id: "{BACKEND_ID}",
                 execution_origin: "scheduled",
@@ -123,7 +121,6 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         .iter()
         .find(|row| row.request_id != "failed-wake")
         .expect("retry successor");
-    assert_eq!(successor.status, "pending");
     assert_eq!(successor.lifecycle_state, "pending");
     assert_eq!(successor.execution_origin, "scheduled");
     assert_eq!(successor.retry_parent_request, "failed-wake");
@@ -174,7 +171,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
                 behavior_id: "{AGENT_NAME}", session_id: "{session_id}",
                 retry_parent_request: "", retry_root_request: "failed-wake-backoff",
                 superseded_by_request: "", content: "continue", metadata: "{escaped_metadata}",
-                status: "error", lifecycle_state: "failed", backend_id: "{BACKEND_ID}",
+                lifecycle_state: "failed", backend_id: "{BACKEND_ID}",
                 execution_origin: "scheduled", failure_reason: "provider failed",
                 terminalized_at: "{terminalized_at}", terminal_redrive_attempts: 0,
                 created_at: "{terminalized_at}", retry_count: 1, max_retries: 3,
@@ -268,7 +265,7 @@ async fn background_wake_retry_rows(
                     filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                     order: {{ created_at: ASC }}
                 ) {{
-                    request_id content status lifecycle_state execution_origin
+                    request_id content lifecycle_state execution_origin
                     retry_parent_request retry_root_request retry_count max_retries
                     metadata deadline valid_until
                 }}
@@ -289,7 +286,7 @@ async fn mark_request_interrupted(node: &gents::defra_node::EmbeddedNode, doc_id
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ status: "interrupted", lifecycle_state: "interrupted" }}
+                input: {{ lifecycle_state: "interrupted" }}
             ) {{ _docID }}
         }}"#
     );
@@ -335,13 +332,13 @@ async fn recover_all_marks_requests_as_error() {
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-1" } },
                     limit: 1
-                ) { status }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     assert_eq!(
-        first_row::<StatusRow>(&resp, "AgentRequest").status,
-        "error"
+        first_row::<StatusRow>(&resp, "AgentRequest").lifecycle_state,
+        "failed"
     );
 }
 
@@ -377,12 +374,12 @@ async fn recover_all_preserves_completed_response() {
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-complete" } },
                     limit: 1
-                ) { status }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     assert_eq!(
-        first_row::<StatusRow>(&request_resp, "AgentRequest").status,
+        first_row::<StatusRow>(&request_resp, "AgentRequest").lifecycle_state,
         "completed"
     );
 }

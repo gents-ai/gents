@@ -1,7 +1,7 @@
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
-use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
 use serde_json::{json, Value};
 
 use super::projection_state::ProjectionStatus;
@@ -359,7 +359,10 @@ pub(super) fn terminal_error_message(
     if response_status == "error" {
         return Some("GENTS response ended with status error".to_string());
     }
-    if matches!(lifecycle_state, "failed" | "dead") {
+    if matches!(
+        RequestLifecycleState::parse_opt(Some(lifecycle_state)),
+        Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
+    ) {
         return Some(
             failure_reason
                 .trim()

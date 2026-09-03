@@ -4,6 +4,7 @@ use chrono::DateTime;
 use gents_protocol::rendered_request::{
     CaptureOrderKey, CaptureScope, ParsedProvenance, ProvenanceManifest, ProvenanceStatus,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -113,8 +114,6 @@ pub struct TimelineRequestRow {
     pub max_total_tokens: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -651,8 +650,6 @@ pub struct TimelineRequestEvent {
     pub behavior_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1348,13 +1345,8 @@ fn retry_summary_for_request(
 }
 
 fn request_completed(request: &TimelineRequestRow) -> bool {
-    [
-        request.lifecycle_state.as_deref(),
-        request.status.as_deref(),
-    ]
-    .into_iter()
-    .flatten()
-    .any(|state| state == "completed")
+    RequestLifecycleState::parse_opt(request.lifecycle_state.as_deref())
+        == Some(RequestLifecycleState::Completed)
 }
 
 fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequestRow) {
@@ -1370,7 +1362,6 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         agent_did: request.agent_did.clone(),
         behavior_id: request.behavior_id.clone(),
         session_id: request.session_id.clone(),
-        status: request.status.clone(),
         lifecycle_state: request.lifecycle_state.clone(),
         failure_reason: request.failure_reason.clone(),
         content: request.content.clone(),
@@ -2302,7 +2293,6 @@ mod tests {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-recovered".to_string(),
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 created_at: Some("2026-05-04T12:00:00Z".to_string()),
                 ..Default::default()
@@ -2345,8 +2335,7 @@ mod tests {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-failed".to_string(),
-                status: Some("failed".to_string()),
-                lifecycle_state: Some("error".to_string()),
+                lifecycle_state: Some("failed".to_string()),
                 created_at: Some("2026-05-04T12:00:00Z".to_string()),
                 ..Default::default()
             },

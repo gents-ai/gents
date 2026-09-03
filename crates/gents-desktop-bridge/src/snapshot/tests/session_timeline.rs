@@ -393,7 +393,6 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("processing".to_string()),
             lifecycle_state: Some("processing".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -486,7 +485,6 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     rows.responses.clear();
     rows.requests[0].content =
         Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string());
-    rows.requests[0].status = Some("completed".to_string());
     rows.requests[0].lifecycle_state = Some("completed".to_string());
     rows.requests[0].execution_origin = Some("scheduled".to_string());
     rows.requests[0].metadata = Some(
@@ -703,7 +701,6 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -746,7 +743,6 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -931,7 +927,6 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("error".to_string()),
             lifecycle_state: Some("failed".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1051,7 +1046,6 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -1094,7 +1088,6 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -1225,7 +1218,6 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("processing".to_string()),
             lifecycle_state: Some("processing".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),

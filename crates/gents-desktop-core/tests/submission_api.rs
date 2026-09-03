@@ -18,7 +18,6 @@ struct RequestRow {
     behavior_id: String,
     session_id: String,
     content: String,
-    status: String,
     lifecycle_state: String,
     backend_id: Option<String>,
     execution_origin: String,
@@ -90,7 +89,6 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
                     behavior_id
                     session_id
                     content
-                    status
                     lifecycle_state
                     backend_id
                     execution_origin
@@ -110,7 +108,6 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     assert_eq!(request.behavior_id, format!("{agent_did}:default"));
     assert_eq!(request.session_id, session_id);
     assert_eq!(request.content, "hello   there\noperator");
-    assert_eq!(request.status, "pending");
     assert_eq!(request.lifecycle_state, "pending");
     assert!(request.backend_id.is_none());
     assert_eq!(request.execution_origin, "interactive");

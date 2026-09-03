@@ -4,23 +4,13 @@
 // (complete/fail/supersede) would require re-exporting private helpers across
 // submodules with no readability gain.
 use anyhow::Context;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::rows::{RequestStatusTransition, RequestViewRow};
 use super::*;
 
-fn request_status_is_terminal(status: &str) -> bool {
-    matches!(
-        status,
-        "completed" | "error" | "superseded" | "dead" | "interrupted"
-    )
-}
-
 fn request_view_is_terminal(view: &RequestViewRow) -> bool {
-    view.lifecycle_state
-        .as_deref()
-        .and_then(PersistedLifecycleState::from_persisted)
-        .is_some_and(PersistedLifecycleState::is_terminal)
-        || request_status_is_terminal(&view.status)
+    RequestLifecycleState::is_terminal_str(view.lifecycle_state.as_deref())
 }
 
 pub(super) fn projection_error_requires_atomic_retry(error: &anyhow::Error) -> bool {
@@ -308,13 +298,11 @@ impl RequestLifecycle {
 
         match self
             .transition_request_status(
-                "processing",
                 &[
-                    PersistedLifecycleState::Claimed,
-                    PersistedLifecycleState::Processing,
+                    RequestLifecycleState::Claimed,
+                    RequestLifecycleState::Processing,
                 ],
-                "completed",
-                PersistedLifecycleState::Completed,
+                RequestLifecycleState::Completed,
                 "completed",
             )
             .await?
@@ -323,7 +311,6 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_status = %current.status,
                     current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
                     "skipping completion because request is already terminal"
                 );
@@ -342,7 +329,7 @@ impl RequestLifecycle {
     pub async fn transition_to_interrupted(&mut self) -> Result<()> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
-        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let terminalized_at_value = chrono::Utc::now().to_rfc3339();
         let terminalized_at = escape_graphql_string(&terminalized_at_value);
         let mutation = format!(
@@ -351,11 +338,9 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        lifecycle_state: {{ _in: {active_runtime_states} }},
-                        status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
+                        lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     input: {{
-                        status: "interrupted",
                         lifecycle_state: "interrupted",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
@@ -388,23 +373,26 @@ impl RequestLifecycle {
 
         match self.request_view().await? {
             Some(current)
-                if current.status == "interrupted"
-                    && current.lifecycle_state.as_deref() == Some("interrupted") =>
+                if RequestLifecycleState::parse_opt(current.lifecycle_state.as_deref())
+                    == Some(RequestLifecycleState::Interrupted) =>
             {
                 self.state = LocalLifecycleState::Interrupted;
                 Ok(())
             }
             Some(current) if request_view_is_terminal(&current) => Ok(()),
-            Some(current) if current.lifecycle_state.as_deref() == Some("inputRequired") => {
+            Some(current)
+                if RequestLifecycleState::parse_opt(current.lifecycle_state.as_deref())
+                    == Some(RequestLifecycleState::InputRequired) =>
+            {
                 anyhow::bail!(
-                    "cannot interrupt request_id={} from reserved lifecycle_state=inputRequired",
-                    self.request.request_id
+                    "cannot interrupt request_id={} from reserved lifecycle_state={}",
+                    self.request.request_id,
+                    RequestLifecycleState::InputRequired.as_str()
                 )
             }
             Some(current) => anyhow::bail!(
-                "request {} could not transition to interrupted; current status={} lifecycle_state={}",
+                "request {} could not transition to interrupted; current lifecycle_state={}",
                 self.request.request_id,
-                current.status,
                 current.lifecycle_state.as_deref().unwrap_or("missing")
             ),
             None => anyhow::bail!(
@@ -443,13 +431,11 @@ impl RequestLifecycle {
 
         match self
             .transition_request_status(
-                "processing",
                 &[
-                    PersistedLifecycleState::Claimed,
-                    PersistedLifecycleState::Processing,
+                    RequestLifecycleState::Claimed,
+                    RequestLifecycleState::Processing,
                 ],
-                "error",
-                PersistedLifecycleState::Failed,
+                RequestLifecycleState::Failed,
                 "active",
             )
             .await?
@@ -458,7 +444,6 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_status = %current.status,
                     current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
                     "skipping failure because request is already terminal"
                 );
@@ -484,17 +469,14 @@ impl RequestLifecycle {
 
     pub(super) async fn transition_request_status(
         &self,
-        from_status: &str,
-        from_lifecycle_states: &[PersistedLifecycleState],
-        target_status: &str,
-        target_lifecycle_state: PersistedLifecycleState,
+        from_lifecycle_states: &[RequestLifecycleState],
+        target_lifecycle_state: RequestLifecycleState,
         conversation_status: &str,
     ) -> Result<RequestStatusTransition> {
         let doc_id = escape_graphql_string(&self.request.doc_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
-        let from_status = escape_graphql_string(from_status);
-        let target_status = escape_graphql_string(target_status);
-        let from_lifecycle_states = lifecycle_state_graphql_list_for(from_lifecycle_states);
+        let from_lifecycle_states_list =
+            RequestLifecycleState::graphql_list(from_lifecycle_states.iter().copied());
         let terminalized_at_value = chrono::Utc::now().to_rfc3339();
         let terminalized_at = escape_graphql_string(&terminalized_at_value);
         let mutation = format!(
@@ -503,11 +485,9 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "{from_status}" }},
-                        lifecycle_state: {{ _in: {from_lifecycle_states} }}
+                        lifecycle_state: {{ _in: {from_lifecycle_states_list} }}
                     }},
                     input: {{
-                        status: "{target_status}",
                         lifecycle_state: "{target_lifecycle_state}",
                         backend_id: "{backend_id}",
                         failure_reason: "{failure_reason}",
@@ -537,8 +517,8 @@ impl RequestLifecycle {
         .await
         .with_context(|| {
             format!(
-                "updating request status {} -> {} for doc_id={doc_id}",
-                from_status, target_status
+                "updating request lifecycle_state -> {} for doc_id={doc_id}",
+                target_lifecycle_state.as_str()
             )
         })?;
 
@@ -550,18 +530,15 @@ impl RequestLifecycle {
         {
             tracing::debug!(
                 doc_id = %doc_id,
-                from_status = %from_status,
-                target_status = %target_status,
-                "updated request status"
+                target_lifecycle_state = %target_lifecycle_state.as_str(),
+                "updated request lifecycle_state"
             );
             return Ok(RequestStatusTransition::Updated);
         }
 
         match self.request_view().await? {
             Some(current)
-                if current.status == target_status
-                    && current.lifecycle_state.as_deref()
-                        == Some(target_lifecycle_state.as_str()) =>
+                if current.lifecycle_state.as_deref() == Some(target_lifecycle_state.as_str()) =>
             {
                 Ok(RequestStatusTransition::AlreadyTarget)
             }
@@ -569,28 +546,23 @@ impl RequestLifecycle {
                 Ok(RequestStatusTransition::ConflictingTerminal(current))
             }
             Some(current) => anyhow::bail!(
-                "request {} could not transition {} -> {}; current status={} lifecycle_state={}",
+                "request {} could not transition lifecycle_state -> {}; current lifecycle_state={}",
                 self.request.request_id,
-                from_status,
-                target_status,
-                current.status,
+                target_lifecycle_state.as_str(),
                 current.lifecycle_state.as_deref().unwrap_or("missing")
             ),
             None => anyhow::bail!(
-                "request {} disappeared while transitioning {} -> {}",
+                "request {} disappeared while transitioning lifecycle_state -> {}",
                 self.request.request_id,
-                from_status,
-                target_status
+                target_lifecycle_state.as_str()
             ),
         }
     }
 
     pub(super) async fn transition_execution_view(
         &self,
-        from_status: &str,
-        from_lifecycle_state: PersistedLifecycleState,
-        target_status: &str,
-        target_lifecycle_state: PersistedLifecycleState,
+        from: RequestLifecycleState,
+        to: RequestLifecycleState,
     ) -> Result<()> {
         let doc_id = self.request.doc_id.clone();
         let escaped_doc_id = escape_graphql_string(&doc_id);
@@ -599,37 +571,25 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
-                        status: {{ _eq: "{from_status}" }},
-                        lifecycle_state: {{ _eq: "{from_lifecycle_state}" }}
+                        lifecycle_state: {{ _eq: "{from}" }}
                     }},
                     input: {{
-                        status: "{target_status}",
-                        lifecycle_state: "{target_lifecycle_state}",
+                        lifecycle_state: "{to}",
                         backend_id: "{backend_id}",
                         failure_reason: "{failure_reason}"
                     }}
                 ) {{ _docID }}
             }}"#,
-            from_lifecycle_state = from_lifecycle_state.as_str(),
-            target_lifecycle_state = target_lifecycle_state.as_str(),
             backend_id = escape_graphql_string(&self.backend_id),
             failure_reason =
                 escape_graphql_string(self.failure_reason.as_deref().unwrap_or_default()),
         );
 
-        let operation = format!(
-            "transition_execution_view_{}_to_{}",
-            from_lifecycle_state.as_str(),
-            target_lifecycle_state.as_str()
-        );
+        let operation = format!("transition_execution_view_{from}_to_{to}");
         let resp = session::execute_mutation_with_retry(&self.node, &mutation, &operation)
             .await
             .with_context(|| {
-                format!(
-                    "updating execution view {} -> {} for doc_id={doc_id}",
-                    from_lifecycle_state.as_str(),
-                    target_lifecycle_state.as_str()
-                )
+                format!("updating execution view {from} -> {to} for doc_id={doc_id}")
             })?;
 
         if resp
@@ -643,25 +603,19 @@ impl RequestLifecycle {
 
         let request_view = self.request_view().await?;
         match request_view {
-            Some(current)
-                if current.status == target_status
-                    && current.lifecycle_state.as_deref() == Some(target_lifecycle_state.as_str()) =>
-            {
-                Ok(())
-            }
+            Some(current) if current.lifecycle_state.as_deref() == Some(to.as_str()) => Ok(()),
             Some(current) => anyhow::bail!(
-                "request {} could not transition execution view {} -> {}; current status={} lifecycle_state={}",
+                "request {} could not transition execution view {} -> {}; current lifecycle_state={}",
                 self.request.request_id,
-                from_lifecycle_state.as_str(),
-                target_lifecycle_state.as_str(),
-                current.status,
+                from,
+                to,
                 current.lifecycle_state.as_deref().unwrap_or("missing")
             ),
             None => anyhow::bail!(
                 "request {} disappeared while transitioning execution view {} -> {}",
                 self.request.request_id,
-                from_lifecycle_state.as_str(),
-                target_lifecycle_state.as_str()
+                from,
+                to
             ),
         }
     }

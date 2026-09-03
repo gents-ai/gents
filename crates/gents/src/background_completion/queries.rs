@@ -88,18 +88,21 @@ pub(super) struct TerminalChildRow {
 }
 
 pub(super) async fn load_terminal_child_request_ids(node: &EmbeddedNode) -> Result<Vec<String>> {
-    let query = r#"{
+    let terminal_states = RequestLifecycleState::terminal_graphql_list();
+    let query = format!(
+        r#"{{
         AgentRequest(
-            filter: {
-                lifecycle_state: { _in: ["completed", "failed", "dead", "interrupted", "superseded"] }
-            }
-        ) {
+            filter: {{
+                lifecycle_state: {{ _in: {terminal_states} }}
+            }}
+        ) {{
             request_id
             caused_by_parent_request_id
             caused_by_parent_tool_call_id
-        }
-    }"#;
-    let response = node.execute(query).await;
+        }}
+    }}"#
+    );
+    let response = node.execute(&query).await;
     if response.has_errors() {
         anyhow::bail!(
             "query terminal child AgentRequests failed: {:?}",

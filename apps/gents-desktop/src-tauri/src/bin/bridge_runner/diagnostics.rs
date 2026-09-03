@@ -15,7 +15,6 @@ use gents_desktop_bridge::types::{
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestRowDiagnostics {
-    status: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
     created_at: Option<String>,
@@ -319,7 +318,6 @@ async fn build_request_diagnostics(
             .find(|row| row.session_id == session_id)
             .and_then(|row| row.updated_at.clone()),
         request: request.map(|row| RequestRowDiagnostics {
-            status: row.status.clone(),
             lifecycle_state: row.lifecycle_state.clone(),
             failure_reason: row.failure_reason.clone(),
             created_at: row.created_at.clone(),

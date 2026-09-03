@@ -70,7 +70,6 @@ struct BackgroundTheoremChildRequestRow {
     caused_by_parent_request_doc_id: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_parent_tool_call_doc_id: Option<String>,
-    status: String,
     lifecycle_state: Option<String>,
 }
 
@@ -332,7 +331,6 @@ async fn create_background_theorem_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -486,7 +484,6 @@ async fn fetch_background_theorem_child_request(
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
                 caused_by_parent_tool_call_doc_id
-                status
                 lifecycle_state
             }}
         }}"#
@@ -526,7 +523,6 @@ async fn fetch_background_theorem_child_request_optional(
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
                 caused_by_parent_tool_call_doc_id
-                status
                 lifecycle_state
             }}
         }}"#
@@ -1011,13 +1007,8 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
     // The foreground parent owns the session until terminal. Its completion
     // releases the FIFO head, after which the normal watcher claims the
     // generated wake as the next agent turn.
-    set_request_status_lifecycle_by_request_id(
-        db.node.as_ref(),
-        &parent_request_id,
-        "completed",
-        "completed",
-    )
-    .await;
+    set_request_lifecycle_state_by_request_id(db.node.as_ref(), &parent_request_id, "completed")
+        .await;
     let mut watcher = DefraWatcher::new(db.node.clone(), db.node_identity.did());
     let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
         .await
@@ -1318,7 +1309,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     child_lifecycle.begin_execution().await.unwrap();
     let child_pre =
         fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
-    assert_eq!(child_pre.status.as_str(), "processing");
     assert_eq!(
         child_pre.lifecycle_state.as_deref(),
         Some(witness.kind_field("child_pre_state"))
@@ -1366,7 +1356,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         child_post_state_expected,
     )
     .await;
-    assert_eq!(child_post.status.as_str(), child_post_state_expected);
     assert_eq!(
         child_post.lifecycle_state.as_deref(),
         Some(child_post_state_expected)
@@ -2027,10 +2016,9 @@ async fn seed_bridge_step_fixture(
     )
     .await;
     if case.parent_state == "interrupted" {
-        set_request_status_lifecycle_by_request_id(
+        set_request_lifecycle_state_by_request_id(
             db.node.as_ref(),
             &parent_request_id,
-            "interrupted",
             "interrupted",
         )
         .await;
@@ -2106,40 +2094,32 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
             .await;
         }
         "processing" => {
-            set_request_status_lifecycle_by_request_id(
+            set_request_lifecycle_state_by_request_id(
                 db.node.as_ref(),
                 &child_request_id,
-                "processing",
                 "processing",
             )
             .await;
         }
         "interrupted" => {
-            set_request_status_lifecycle_by_request_id(
+            set_request_lifecycle_state_by_request_id(
                 db.node.as_ref(),
                 &child_request_id,
-                "interrupted",
                 "interrupted",
             )
             .await;
         }
         "failed" => {
-            set_request_status_lifecycle_by_request_id(
+            set_request_lifecycle_state_by_request_id(
                 db.node.as_ref(),
                 &child_request_id,
-                "error",
                 "failed",
             )
             .await;
         }
         "dead" => {
-            set_request_status_lifecycle_by_request_id(
-                db.node.as_ref(),
-                &child_request_id,
-                "dead",
-                "dead",
-            )
-            .await;
+            set_request_lifecycle_state_by_request_id(db.node.as_ref(), &child_request_id, "dead")
+                .await;
         }
         other => panic!("unhandled child state {other}"),
     }
@@ -2199,13 +2179,8 @@ async fn drive_bridge_step_projection_case(case: &lean_vocab_test::LeanBridgeSte
 async fn drive_bridge_step_cascade_case(case: &lean_vocab_test::LeanBridgeStepCase) {
     let (db, mut lifecycle, _tool_call_id, child_request_id, _parent_session_id) =
         seed_bridge_step_fixture(case).await;
-    set_request_status_lifecycle_by_request_id(
-        db.node.as_ref(),
-        &child_request_id,
-        "processing",
-        "processing",
-    )
-    .await;
+    set_request_lifecycle_state_by_request_id(db.node.as_ref(), &child_request_id, "processing")
+        .await;
 
     if case.parent_state == "processing" {
         // Rejected shape: the bridge is still running (and the parent live),
@@ -2245,27 +2220,25 @@ async fn drive_bridge_step_cascade_case(case: &lean_vocab_test::LeanBridgeStepCa
     }
 }
 
-async fn set_request_status_lifecycle_by_request_id(
+async fn set_request_lifecycle_state_by_request_id(
     node: &EmbeddedNode,
     request_id: &str,
-    status: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
-    let status = escape_graphql_string(status);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+                input: {{ lifecycle_state: "{lifecycle_state}" }}
             ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "set request status/lifecycle failed: {:?}",
+        "set request lifecycle_state failed: {:?}",
         response.errors
     );
 }
@@ -2309,8 +2282,7 @@ async fn persist_bridge_step_child_completion(
     child_request_id: &str,
     child_session_id: &str,
 ) {
-    set_request_status_lifecycle_by_request_id(node, child_request_id, "completed", "completed")
-        .await;
+    set_request_lifecycle_state_by_request_id(node, child_request_id, "completed").await;
 
     let assistant = Message::Assistant {
         id: None,

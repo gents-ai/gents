@@ -4,6 +4,7 @@ use defra_node::EmbeddedNode;
 use gents::config_client::ConfigApplyTxn;
 use gents::skills::prompt_slash_skill_selection;
 use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
 use uuid::Uuid;
@@ -537,7 +538,6 @@ async fn load_retry_parent_in_txn(
                 max_tokens
                 max_total_tokens
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 execution_origin
@@ -655,8 +655,8 @@ fn ensure_retry_parent_eligible(
 ) -> Result<()> {
     // The Lean `.released` admission predicate is not persisted on
     // `AgentRequestRow`; on this desktop surface it is represented by requiring
-    // the parent to be terminal failed/error. Non-terminal rows, including rows
-    // still waiting on admission, fail this lifecycle/status gate.
+    // the parent to be terminal failed. Non-terminal rows, including rows
+    // still waiting on admission, fail this lifecycle gate.
     let lifecycle_state = normalize_required(
         "lifecycle_state",
         parent
@@ -664,18 +664,9 @@ fn ensure_retry_parent_eligible(
             .as_deref()
             .context("retry parent request must have a lifecycle_state")?,
     )?;
-    let status = normalize_required(
-        "status",
-        parent
-            .status
-            .as_deref()
-            .context("retry parent request must have a status")?,
-    )?;
 
-    if lifecycle_state != "failed" || status != "error" {
-        bail!(
-            "retry parent request must be failed/error, got lifecycle_state={lifecycle_state} status={status}"
-        );
+    if lifecycle_state != RequestLifecycleState::Failed.as_str() {
+        bail!("retry parent request must be failed, got lifecycle_state={lifecycle_state}");
     }
     if execution_origin != "interactive" {
         bail!(
@@ -750,7 +741,6 @@ fn build_add_agent_request_field(
                 retry_root_request: "{escaped_retry_root}",
                 superseded_by_request: "",
                 content: "{escaped_content}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "{escaped_backend_id}",
                 execution_origin: "{escaped_execution_origin}",
@@ -777,7 +767,10 @@ pub async fn resend_request(
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     let stale = fetch_request_view(node, stale_request_id, agent_did, requester_did).await?;
-    if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
+    if RequestLifecycleState::parse_opt(Some(stale.lifecycle_state.as_str()))
+        != Some(RequestLifecycleState::Dead)
+        || stale.failure_reason != "Stale"
+    {
         anyhow::bail!(
             "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
             stale.lifecycle_state,

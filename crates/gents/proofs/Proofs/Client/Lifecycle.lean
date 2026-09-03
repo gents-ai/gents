@@ -21,7 +21,8 @@ theorem deriveAttempt_nonterminal_response_driven
     {req : RequestSnapshot}
     {resp : Option ResponseSnapshot}
     (h_not_super : req.isSuperseded = false)
-    (h_state : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+    (h_state : req.lifecycleState = .workspaceBindingPending ∨ req.lifecycleState = .pending ∨
+               req.lifecycleState = .claimed ∨
                req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired) :
     deriveAttempt ⟨req, resp⟩ = match resp with
       | some r => match r.status with
@@ -31,10 +32,11 @@ theorem deriveAttempt_nonterminal_response_driven
       | none => .waitingForClaim := by
   cases req with
   | mk lifecycleState isSuperseded =>
-    rcases h_state with h | h | h | h <;>
+    rcases h_state with h | h | h | h | h <;>
       cases h <;> cases h_not_super <;> rfl
 
 def LifecycleTransition : RequestState → RequestState → Prop
+  | .workspaceBindingPending, .pending => True
   | .pending,        .claimed         => True
   | .pending,        .superseded      => True
   | .pending,        .failed          => True
@@ -54,6 +56,8 @@ theorem transition_implies_lifecycle
     (h : RequestContext.Transition pre post) :
     LifecycleTransition pre.state post.state := by
   cases h with
+  | bind_workspace h_state _ h_post =>
+    subst h_post; simp [LifecycleTransition, h_state]
   | claim h_state _ _ h_post =>
     subst h_post; simp [LifecycleTransition, h_state]
   | dedup_lose h_state _ h_post =>
@@ -101,7 +105,8 @@ theorem response_advance_monotonic_none_to_some
     {req : RequestSnapshot}
     {resp : ResponseSnapshot}
     (h_not_super : req.isSuperseded = false)
-    (h_nonterminal : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+    (h_nonterminal : req.lifecycleState = .workspaceBindingPending ∨
+                     req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
                      req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired) :
     (deriveAttempt ⟨req, some resp⟩).rank ≥
     (deriveAttempt ⟨req, none⟩).rank := by
@@ -113,7 +118,8 @@ theorem response_advance_monotonic_streaming_to_terminal
     {req : RequestSnapshot}
     {resp_new : ResponseSnapshot}
     (h_not_super : req.isSuperseded = false)
-    (h_nonterminal : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+    (h_nonterminal : req.lifecycleState = .workspaceBindingPending ∨
+                     req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
                      req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired)
     (h_terminal : resp_new.status = .complete ∨ resp_new.status = .error) :
     (deriveAttempt ⟨req, some resp_new⟩).rank ≥

@@ -94,7 +94,6 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -188,7 +187,6 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -231,7 +229,6 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
@@ -347,7 +344,6 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -472,7 +468,7 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
             .desktop_observed_turn_state
             .as_deref()
             .expect("request-lifecycle UI cases must observe a request turn");
-        let (_request_status, lifecycle_state) = request_state_for_turn(Some(observed_turn));
+        let lifecycle_state = request_state_for_turn(Some(observed_turn));
         saw_nonterminal_turn |= matches!(observed_turn, "waitingForClaim" | "streaming");
         saw_terminal_turn |= !matches!(observed_turn, "waitingForClaim" | "streaming");
 
@@ -733,7 +729,6 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("pending".to_string()),
             lifecycle_state: Some("pending".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -812,7 +807,6 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("processing".to_string()),
             lifecycle_state: Some("processing".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -904,7 +898,6 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1021,7 +1014,6 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("interrupted".to_string()),
             lifecycle_state: Some("interrupted".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1192,7 +1184,6 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("interrupted".to_string()),
             lifecycle_state: Some("interrupted".to_string()),
             backend_id: None,
             execution_origin: Some("subagent".to_string()),
@@ -1334,7 +1325,6 @@ fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1651,7 +1641,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     );
     let observed_request_id = case.desktop_observed_request_id.map(contract_request_id);
     let turn_state = case.desktop_observed_turn_state.as_deref();
-    let (request_status, lifecycle_state) = request_state_for_turn(turn_state);
+    let lifecycle_state = request_state_for_turn(turn_state);
 
     assert!(
         !case.frontend_conversation_present || case.desktop_snapshot_present,
@@ -1708,7 +1698,6 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some(request_status.to_string()),
             lifecycle_state: Some(lifecycle_state.to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1762,16 +1751,16 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     ClientStore::from_rows(rows)
 }
 
-fn request_state_for_turn(turn_state: Option<&str>) -> (&'static str, &'static str) {
+fn request_state_for_turn(turn_state: Option<&str>) -> &'static str {
     match turn_state {
-        Some("waitingForClaim") => ("pending", "pending"),
-        Some("streaming") => ("processing", "processing"),
-        Some("completed") => ("completed", "completed"),
-        Some("failed") => ("failed", "failed"),
-        Some("superseded") => ("superseded", "superseded"),
-        Some("interrupted") => ("interrupted", "interrupted"),
+        Some("waitingForClaim") => "pending",
+        Some("streaming") => "processing",
+        Some("completed") => "completed",
+        Some("failed") => "failed",
+        Some("superseded") => "superseded",
+        Some("interrupted") => "interrupted",
         Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
-        None => ("pending", "pending"),
+        None => "pending",
     }
 }
 
@@ -1821,7 +1810,6 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some(request_status_for_lifecycle(lifecycle_state).to_string()),
             lifecycle_state: Some(lifecycle_state.to_string()),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
@@ -1909,13 +1897,5 @@ fn request_lifecycle_for_streaming_post_status(status: &str) -> &'static str {
         "complete" => "completed",
         "error" => "failed",
         other => panic!("unsupported Lean streaming response post status {other:?}"),
-    }
-}
-
-fn request_status_for_lifecycle(lifecycle_state: &str) -> &str {
-    match lifecycle_state {
-        "completed" => "completed",
-        "failed" => "error",
-        other => other,
     }
 }

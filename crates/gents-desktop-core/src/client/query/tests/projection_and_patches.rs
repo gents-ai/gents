@@ -197,7 +197,6 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             behavior_id: "default",
             session_id: "sess-selected",
             content: "selected",
-            status: "processing",
             lifecycle_state: "processing",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
@@ -221,7 +220,6 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             behavior_id: "default",
             session_id: "sess-unrelated",
             content: "unrelated",
-            status: "completed",
             lifecycle_state: "completed",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }

@@ -3,6 +3,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, QueryResponse};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 use crate::graphql::{
@@ -215,12 +216,12 @@ pub enum GoalRequestTerminal {
 
 impl GoalRequestTerminal {
     pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            "dead" => Some(Self::Dead),
-            "interrupted" => Some(Self::Interrupted),
-            "superseded" => Some(Self::Superseded),
+        match RequestLifecycleState::parse(value).ok()? {
+            RequestLifecycleState::Completed => Some(Self::Completed),
+            RequestLifecycleState::Failed => Some(Self::Failed),
+            RequestLifecycleState::Dead => Some(Self::Dead),
+            RequestLifecycleState::Interrupted => Some(Self::Interrupted),
+            RequestLifecycleState::Superseded => Some(Self::Superseded),
             _ => None,
         }
     }
@@ -1230,7 +1231,7 @@ impl GoalBackedRequestFingerprint {
             workspace_authority: _,
             workspace_owner_deployment_id: _,
             workspace_seal_hash: _,
-            initial_status: _,
+            initial_lifecycle_state: _,
             admission: _,
         } = request;
         Ok(Self {

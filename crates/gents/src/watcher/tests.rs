@@ -397,7 +397,6 @@ async fn insert_incoherent_agent_request(
                 agent_did: "{escaped_agent_did}",
                 session_id: "sess-incoherent",
                 content: "test",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 created_at: "{created_at}",
@@ -441,14 +440,12 @@ async fn insert_agent_request_row(
     agent_did: &str,
     request_id: &str,
     session_id: &str,
-    status: &str,
     lifecycle_state: &str,
     created_at: &str,
 ) -> String {
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
     let session_id = crate::graphql::escape_graphql_string(session_id);
-    let status = crate::graphql::escape_graphql_string(status);
     let lifecycle_state = crate::graphql::escape_graphql_string(lifecycle_state);
     let created_at = crate::graphql::escape_graphql_string(created_at);
     let mutation = format!(
@@ -461,7 +458,6 @@ async fn insert_agent_request_row(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "test",
-                status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
                 created_at: "{created_at}",
@@ -505,7 +501,7 @@ async fn insert_malformed_agent_request_without_request_id(
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
         agent_did: "{}", session_id: "{}", content: "malformed",
-        status: "pending", lifecycle_state: "pending",
+        lifecycle_state: "pending",
         execution_origin: "interactive", created_at: "2026-03-12T00:00:00Z"
     }}) {{ _docID }} }}"#,
         crate::graphql::escape_graphql_string(agent_did),
@@ -543,7 +539,7 @@ async fn request_terminal_fields_by_doc_id(
         .execute(&format!(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1
-    ) {{ status lifecycle_state failure_reason claimed_at }} }}"#,
+    ) {{ lifecycle_state failure_reason claimed_at }} }}"#,
             crate::graphql::escape_graphql_string(doc_id)
         ))
         .await;
@@ -569,7 +565,6 @@ async fn set_request_terminal_completed(node: &defra_node::EmbeddedNode, doc_id:
             update_AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 input: {{
-                    status: "completed",
                     lifecycle_state: "completed"
                 }}
             ) {{ _docID }}
@@ -589,7 +584,7 @@ async fn set_request_processing(node: &defra_node::EmbeddedNode, doc_id: &str) {
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ status: "processing", lifecycle_state: "processing" }}
+                input: {{ lifecycle_state: "processing" }}
             ) {{ _docID }}
         }}"#
     );
@@ -635,7 +630,6 @@ async fn request_terminal_fields(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
                 failure_reason
                 terminalized_at
@@ -671,7 +665,6 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
         "req-active",
         "sess-queue",
         "processing",
-        "processing",
         "2026-03-12T00:00:00Z",
     )
     .await;
@@ -681,7 +674,6 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
         "req-queued",
         "sess-queue",
         "pending",
-        "pending",
         "2026-03-12T00:00:01Z",
     )
     .await;
@@ -690,7 +682,6 @@ async fn pending_requests_skip_queued_same_session_rows_until_claimable() {
         agent_did,
         "req-other",
         "sess-other",
-        "pending",
         "pending",
         "2026-03-12T00:00:02Z",
     )
@@ -729,7 +720,6 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
         "req-active",
         "sess-queue",
         "processing",
-        "processing",
         "2026-03-12T00:00:00Z",
     )
     .await;
@@ -738,7 +728,6 @@ async fn pending_requests_include_interrupted_queued_rows_for_terminalization() 
         agent_did,
         "req-queued-interrupt",
         "sess-queue",
-        "pending",
         "pending",
         "2026-03-12T00:00:01Z",
     )
@@ -774,7 +763,6 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
         "req-valid-pending",
         "sess-incoherent",
         "pending",
-        "pending",
         "2026-03-12T00:00:01Z",
     )
     .await;
@@ -790,7 +778,6 @@ async fn pending_requests_quarantines_incoherent_row_without_hiding_valid_work()
         "an incoherent row must not poison or queue-block coherent work"
     );
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-pending").await;
-    assert_eq!(terminal["status"], "error");
     assert_eq!(terminal["lifecycle_state"], "failed");
     assert!(terminal["terminalized_at"].is_string());
     assert_eq!(terminal["terminal_redrive_attempts"], 0);
@@ -816,7 +803,6 @@ async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_ro
         "req-valid-b",
         "sess-valid-b",
         "pending",
-        "pending",
         "2026-03-12T00:00:01Z",
     )
     .await;
@@ -831,7 +817,6 @@ async fn malformed_pending_row_terminalizes_by_doc_id_without_poisoning_valid_ro
         vec!["req-valid-b"]
     );
     let malformed = request_terminal_fields_by_doc_id(node.as_ref(), &malformed_doc).await;
-    assert_eq!(malformed["status"], "error");
     assert_eq!(malformed["lifecycle_state"], "failed");
     assert!(malformed["claimed_at"].is_null());
 }
@@ -850,7 +835,6 @@ async fn incoherent_live_row_still_blocks_a_second_same_session_claim() {
         agent_did,
         "req-valid-pending",
         "sess-incoherent",
-        "pending",
         "pending",
         "2026-03-12T00:00:01Z",
     )
@@ -873,7 +857,6 @@ async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
     let result = watcher.try_fetch_request(&doc_id).await.unwrap();
     assert!(result.is_none());
     let terminal = request_terminal_fields(node.as_ref(), "req-incoherent-fetch").await;
-    assert_eq!(terminal["status"], "error");
     assert_eq!(terminal["lifecycle_state"], "failed");
     assert!(terminal["terminalized_at"].is_string());
     assert_eq!(terminal["terminal_redrive_attempts"], 0);
@@ -895,7 +878,6 @@ async fn pending_requests_skip_workspace_bound_rows_owned_elsewhere() {
                 retry_root_request: "req-owned",
                 superseded_by_request: "",
                 content: "test",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 created_at: "{now}",

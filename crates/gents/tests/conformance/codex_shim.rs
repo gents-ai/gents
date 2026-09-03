@@ -209,7 +209,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     }
 
     let status_cases = lean_codex_shim_subagent_status_cases();
-    assert_eq!(status_cases.len(), 11);
+    assert_eq!(status_cases.len(), 12);
     for case in status_cases {
         let head = gents_protocol::client_protocol::project_persisted_attempt(
             &case.request_state,
@@ -372,7 +372,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(reset_before_terminal.completed_text, None);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 13);
+    assert_eq!(thread_status_cases.len(), 14);
     for case in thread_status_cases {
         use gents_protocol::client_protocol::ClientTurnState;
         let head = case.request_state.as_deref().and_then(|request_state| {

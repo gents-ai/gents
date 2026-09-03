@@ -7,6 +7,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -139,10 +140,9 @@ struct ParentTerminalRow {
 }
 
 fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
-    matches!(
-        row.lifecycle_state.as_str(),
-        "failed" | "superseded" | "dead" | "interrupted"
-    )
+    let state = RequestLifecycleState::parse_opt(Some(row.lifecycle_state.as_str()));
+    state.is_some_and(RequestLifecycleState::is_terminal)
+        && state != Some(RequestLifecycleState::Completed)
 }
 
 #[derive(Debug, Deserialize)]

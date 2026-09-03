@@ -11,6 +11,7 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -103,19 +104,13 @@ struct RequestRow {
 
 impl RequestRow {
     fn is_active(&self) -> bool {
-        matches!(
-            self.lifecycle_state.as_deref(),
-            Some("pending" | "claimed" | "processing")
-        )
+        RequestLifecycleState::parse_opt(self.lifecycle_state.as_deref())
+            .is_some_and(RequestLifecycleState::is_active_runtime)
     }
 
     fn terminal(&self) -> Option<&str> {
-        match self.lifecycle_state.as_deref() {
-            Some(state @ ("completed" | "failed" | "dead" | "interrupted" | "superseded")) => {
-                Some(state)
-            }
-            _ => None,
-        }
+        let state = self.lifecycle_state.as_deref()?;
+        RequestLifecycleState::is_terminal_str(Some(state)).then_some(state)
     }
 
     fn into_agent_request(self) -> AgentRequest {

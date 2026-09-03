@@ -46,7 +46,6 @@ async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: 
                 behavior_id: "parent",
                 session_id: "session-{request_id}",
                 content: "parent",
-                status: "processing",
                 lifecycle_state: "processing",
                 created_at: "2026-05-15T00:00:00Z",
                 deadline: "2026-05-15T00:05:00Z"

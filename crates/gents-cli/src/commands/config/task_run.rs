@@ -547,7 +547,6 @@ mod tests {
         );
         assert!(mutation.contains("execution_origin: \"interactive\""));
         assert!(mutation.contains("lifecycle_state: \"pending\""));
-        assert!(mutation.contains("status: \"pending\""));
         assert!(mutation.contains("content: \"hello Amy\""));
     }
 

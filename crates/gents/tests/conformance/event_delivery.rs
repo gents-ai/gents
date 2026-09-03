@@ -344,10 +344,7 @@ impl ProductionEventDeliveryDriver {
 
     async fn depersist_runtime_doc(&mut self, doc: &str) -> Result<(), String> {
         match self.source.name {
-            "Watcher" => {
-                self.update_agent_request_state(doc, "completed", "completed")
-                    .await
-            }
+            "Watcher" => self.update_agent_request_state(doc, "completed").await,
             "EventSource" | "SubagentSource" => Ok(()),
             other => Err(format!("unsupported source {other:?}")),
         }
@@ -355,10 +352,7 @@ impl ProductionEventDeliveryDriver {
 
     async fn mark_runtime_doc_processed(&self, doc: &str) -> Result<(), String> {
         match self.source.name {
-            "Watcher" => {
-                self.update_agent_request_state(doc, "completed", "completed")
-                    .await
-            }
+            "Watcher" => self.update_agent_request_state(doc, "completed").await,
             "EventSource" | "SubagentSource" => Ok(()),
             other => Err(format!("unsupported source {other:?}")),
         }
@@ -367,7 +361,6 @@ impl ProductionEventDeliveryDriver {
     async fn update_agent_request_state(
         &self,
         doc: &str,
-        status: &str,
         lifecycle_state: &str,
     ) -> Result<(), String> {
         let doc_id = self
@@ -375,14 +368,12 @@ impl ProductionEventDeliveryDriver {
             .get(doc)
             .ok_or_else(|| format!("doc {doc:?} has no AgentRequest row"))?;
         let doc_id = escape_graphql_string(doc_id);
-        let status = escape_graphql_string(status);
         let lifecycle_state = escape_graphql_string(lifecycle_state);
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     input: {{
-                        status: "{status}",
                         lifecycle_state: "{lifecycle_state}"
                     }}
                 ) {{ _docID }}

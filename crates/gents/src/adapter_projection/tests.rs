@@ -64,7 +64,7 @@ fn timeline_with_captures() -> crate::run_timeline::RunTimeline {
             behavior_id: Some("amy".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("hello".to_string()),
-            status: Some("completed".to_string()),
+            lifecycle_state: Some("completed".to_string()),
             created_at: Some("2026-08-07T12:00:00Z".to_string()),
             ..Default::default()
         },
@@ -225,7 +225,6 @@ fn external_descendant_projections_only_promote_readable_edges() {
             agent_did: Some("did:test:root".to_string()),
             behavior_id: Some("root".to_string()),
             session_id: Some("session-root".to_string()),
-            status: Some("running".to_string()),
             lifecycle_state: Some("running".to_string()),
             ..Default::default()
         },
@@ -391,7 +390,6 @@ fn delegated_coherence_timeline() -> RunTimeline {
             behavior_id: Some("coordinator".to_string()),
             session_id: Some("session-root".to_string()),
             content: Some("root private objective".to_string()),
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             created_at: Some("2026-06-05T00:00:00Z".to_string()),
             ..TimelineRequestRow::default()
@@ -402,7 +400,6 @@ fn delegated_coherence_timeline() -> RunTimeline {
             agent_did: Some("did:test:reviewer".to_string()),
             behavior_id: Some("reviewer".to_string()),
             session_id: Some("session-review".to_string()),
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             caused_by_parent_request_id: Some("req-root".to_string()),
             caused_by_parent_request_doc_id: Some("doc-req-root".to_string()),
@@ -1145,7 +1142,6 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             behavior_id: Some("root".to_string()),
             session_id: Some("session-1".to_string()),
             content: Some("sensitive prompt".to_string()),
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             created_at: Some("2026-06-05T00:00:00Z".to_string()),
             ..TimelineRequestRow::default()
@@ -1156,7 +1152,6 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             agent_did: Some("did:test:child".to_string()),
             behavior_id: Some("child".to_string()),
             session_id: Some("session-1".to_string()),
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             caused_by_parent_request_id: Some("req-1".to_string()),
             caused_by_parent_request_doc_id: Some("doc-req-1".to_string()),

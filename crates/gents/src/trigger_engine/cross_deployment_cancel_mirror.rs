@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::{EmbeddedNode, EventName};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -192,7 +193,7 @@ impl CrossDeploymentCancelMirror {
         if child.agent_did.as_deref() != Some(snapshot.local_did.as_str()) {
             return Ok(());
         }
-        if is_terminal_state(child.lifecycle_state.as_deref(), child.status.as_deref())
+        if RequestLifecycleState::is_terminal_str(child.lifecycle_state.as_deref())
             || child.interrupt_requested_at.is_some()
         {
             self.mirrored.insert(dedupe_key);
@@ -293,7 +294,6 @@ impl CrossDeploymentCancelMirror {
                     limit: 1
                 ) {{
                     agent_did
-                    status
                     lifecycle_state
                     interrupt_requested_at
                 }}
@@ -374,19 +374,8 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     agent_did: Option<String>,
-    status: Option<String>,
     lifecycle_state: Option<String>,
     interrupt_requested_at: Option<String>,
-}
-
-fn is_terminal_state(lifecycle_state: Option<&str>, status: Option<&str>) -> bool {
-    matches!(
-        lifecycle_state,
-        Some("completed" | "failed" | "dead" | "interrupted" | "superseded")
-    ) || matches!(
-        status,
-        Some("completed" | "error" | "dead" | "interrupted" | "superseded")
-    )
 }
 
 async fn write_child_interrupt_requested_at(
@@ -517,7 +506,6 @@ mod tests {
                     behavior_id: "child-behavior",
                     session_id: "child-session",
                     content: "child",
-                    status: "processing",
                     lifecycle_state: "processing",
                     created_at: "2026-05-15T00:00:30Z",
                     caused_by_parent_request_id: "parent-request",

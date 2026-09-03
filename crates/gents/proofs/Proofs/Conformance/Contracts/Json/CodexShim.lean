@@ -298,7 +298,9 @@ def codexShimSubagentStatusCaseJson
     ++ "}"
 
 def codexShimSubagentStatusCases : List CodexShimSubagentStatusCase :=
-  [ codexShimSubagentStatusCase "codex_shim.subagent_status.pending" .pending none
+  [ codexShimSubagentStatusCase "codex_shim.subagent_status.workspace_binding_pending"
+      .workspaceBindingPending none
+  , codexShimSubagentStatusCase "codex_shim.subagent_status.pending" .pending none
   , codexShimSubagentStatusCase "codex_shim.subagent_status.claimed" .claimed none
   , codexShimSubagentStatusCase "codex_shim.subagent_status.processing" .processing none
   , codexShimSubagentStatusCase "codex_shim.subagent_status.input_required" .inputRequired none
@@ -705,7 +707,9 @@ def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String
     ++ "}"
 
 def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
-  [ codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) none "active"
+  [ codexShimThreadStatusCase "codex_shim.thread_status.workspace_binding_pending" []
+      (some .workspaceBindingPending) none "active"
+  , codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) none "active"
   , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) none "active"
   , codexShimThreadStatusCase
       "codex_shim.thread_status.processing"

@@ -37,8 +37,8 @@
 //!   apply-owned fields untouched.
 //! * `latest_only_supersedes_prior_fire` — the supersede mutation (same shape
 //!   as `supersede_active_runtime_requests_for_trigger` uses) transitions every
-//!   active runtime request for a trigger tuple to `lifecycle_state = superseded`
-//!   / `status = superseded`.
+//!   active runtime request for a trigger tuple to `lifecycle_state =
+//!   superseded`.
 //! * `generation_bump_reconfigures_active_schedules` — inserting a Schedule
 //!   post-startup drives a snapshot reload and bumps `active_generation`;
 //!   toggling `enabled = false` after that drives another bump, matching the
@@ -438,7 +438,6 @@ async fn supersede_active_runtime_requests_for_trigger(
                     lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
                 }},
                 input: {{
-                    status: "superseded",
                     lifecycle_state: "superseded"
                 }}
             ) {{ _docID }}
@@ -492,7 +491,7 @@ async fn count_agent_requests_for_trigger(
 async fn fetch_request_state(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
-) -> Option<(String, String)> {
+) -> Option<String> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -501,7 +500,6 @@ async fn fetch_request_state(
                 limit: 1
             ) {{
                 lifecycle_state
-                status
             }}
         }}"#
     );
@@ -518,16 +516,10 @@ async fn fetch_request_state(
         .and_then(|rows| rows.first())
         .cloned()
         .map(|row| {
-            (
-                row.get("lifecycle_state")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned(),
-                row.get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_owned(),
-            )
+            row.get("lifecycle_state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_owned()
         })
 }
 
@@ -1009,9 +1001,8 @@ async fn latest_only_supersedes_prior_fire() {
         .await
         .expect("prior request still present after supersede");
     assert_eq!(
-        prior_state,
-        ("superseded".to_string(), "superseded".to_string()),
-        "prior AgentRequest must be in (lifecycle_state=superseded, status=superseded)"
+        prior_state, "superseded",
+        "prior AgentRequest must be in lifecycle_state=superseded"
     );
 
     let new_lineage = TriggerLineage {
@@ -1058,9 +1049,8 @@ async fn latest_only_supersedes_prior_fire() {
         .await
         .expect("new fire should be present");
     assert_eq!(
-        new_state,
-        ("claimed".to_string(), "processing".to_string()),
-        "new LatestOnly fire should land in lifecycle_state=claimed / status=processing"
+        new_state, "claimed",
+        "new LatestOnly fire should land in lifecycle_state=claimed"
     );
 }
 

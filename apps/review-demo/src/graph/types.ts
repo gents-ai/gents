@@ -85,7 +85,6 @@ export type AgentRequestRow = {
   request_id: string;
   session_id?: string | null;
   behavior_id?: string | null;
-  status?: string | null;
   lifecycle_state?: string | null;
   caused_by_trigger_id?: string | null;
   caused_by_correlation?: string | null;

@@ -1,24 +1,23 @@
 use super::lookup::lookup_response_status_by_request_id;
 use super::rows::{DedupPlan, DedupRow, RequestViewRow, StatusRow};
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 impl RequestLifecycle {
     pub(super) async fn check_deduplication(&self) -> Result<DedupPlan> {
         let escaped_session_id = escape_graphql_string(&self.request.session_id);
-        let active_runtime_states = active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
-                        status: {{ _in: ["pending", "processing"] }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
                     _docID
                     request_id
-                    status
                     lifecycle_state
                     created_at
                 }}
@@ -74,7 +73,6 @@ impl RequestLifecycle {
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     limit: 1
                 ) {{
-                    status
                     lifecycle_state
                     backend_id
                     execution_origin

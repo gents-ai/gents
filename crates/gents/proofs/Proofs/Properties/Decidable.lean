@@ -10,7 +10,7 @@ open RequestState ProcessState PersistenceState StorageObservation InferenceCall
 
 instance : Fintype RequestState :=
   Fintype.ofList
-    [.pending, .claimed, .processing, .inputRequired,
+    [.workspaceBindingPending, .pending, .claimed, .processing, .inputRequired,
      .completed, .failed, .superseded, .dead, .interrupted]
     (fun s => by cases s <;> simp)
 
@@ -54,6 +54,7 @@ def activeCoreRequestState : RequestState → Prop
 theorem active_request_no_deadlocks (s : RequestState) (h : activeCoreRequestState s) :
     ∃ s' : RequestState, s ≠ s' := by
   cases s with
+  | workspaceBindingPending => cases h
   | pending => exact ⟨.claimed, by decide⟩
   | claimed => exact ⟨.processing, by decide⟩
   | processing => exact ⟨.completed, by decide⟩

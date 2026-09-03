@@ -782,7 +782,7 @@ pub fn adapter_projection_eval_jsonl_records(
                     OpenAiCodexTraceItem::Request {
                         id,
                         status,
-                        lifecycle_state,
+                        lifecycle_state: _,
                         agent_did,
                         behavior_id,
                         parent_request_id,
@@ -797,7 +797,7 @@ pub fn adapter_projection_eval_jsonl_records(
                         id,
                         EvalRecordFields {
                             input: input.clone(),
-                            status: lifecycle_state.clone().or(status.clone()),
+                            status: status.clone(),
                             metadata: metadata([
                                 ("timestamp", timestamp.clone()),
                                 ("agent_did", agent_did.clone()),
@@ -1858,7 +1858,7 @@ fn build_openai_codex_run_trace(
             RunTimelineEvent::Request(event) => {
                 items.push(OpenAiCodexTraceItem::Request {
                     id: event.request_id.clone(),
-                    status: event.status.clone(),
+                    status: event.lifecycle_state.clone(),
                     lifecycle_state: event.lifecycle_state.clone(),
                     agent_did: event.agent_did.clone(),
                     behavior_id: event.behavior_id.clone(),
@@ -1916,11 +1916,7 @@ fn build_openai_codex_run_trace(
     OpenAiCodexRunTraceProjection {
         run_id: timeline.request_id.clone(),
         thread_id: timeline.session_id.clone(),
-        status: timeline
-            .request
-            .lifecycle_state
-            .clone()
-            .or(timeline.request.status.clone()),
+        status: timeline.request.lifecycle_state.clone(),
         items,
         child_run_ids: if timeline.descendant_edges.is_empty() {
             timeline.child_request_ids.clone()
@@ -1949,9 +1945,8 @@ fn build_langgraph_state_history(
         ("session_id".to_string(), json!(timeline.session_id)),
         ("agent_did".to_string(), json!(timeline.agent_did)),
         ("behavior_id".to_string(), json!(timeline.behavior_id)),
-        ("status".to_string(), json!(timeline.request.status)),
         (
-            "lifecycle_state".to_string(),
+            "status".to_string(),
             json!(timeline.request.lifecycle_state),
         ),
         (
@@ -2005,7 +2000,7 @@ fn build_langgraph_state_history(
                 event.behavior_id.clone(),
                 event.parent_request_id.clone(),
                 event.parent_tool_call_id.clone(),
-                event.lifecycle_state.clone().or(event.status.clone()),
+                event.lifecycle_state.clone(),
                 redact_option(event.content.as_deref(), context),
                 None,
             ),
@@ -2310,7 +2305,7 @@ fn build_multi_agent_task(
                             parent_tool_call_id: request.parent_tool_call_id.clone(),
                             agent_did: request.agent_did.clone(),
                             behavior_id: request.behavior_id.clone(),
-                            status: request.lifecycle_state.clone().or(request.status.clone()),
+                            status: request.lifecycle_state.clone(),
                             input: redact_option(request.content.as_deref(), context),
                         });
                     }
@@ -2352,11 +2347,7 @@ fn build_multi_agent_task(
     MultiAgentTaskProjection {
         task_id: timeline.request_id.clone(),
         context_id: timeline.session_id.clone(),
-        status: timeline
-            .request
-            .lifecycle_state
-            .clone()
-            .or(timeline.request.status.clone()),
+        status: timeline.request.lifecycle_state.clone(),
         participants,
         messages,
         delegations,

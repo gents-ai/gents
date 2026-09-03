@@ -2012,21 +2012,21 @@ mod tests {
                     first: create_AgentRequest(input: {{
                         request_id: "completed-request-1", agent_did: "did:key:worker",
                         requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        status: "completed", lifecycle_state: "completed",
+                        lifecycle_state: "completed",
                         caused_by_trigger_id: "{}", caused_by_correlation: "{}",
                         created_at: "2026-08-25T00:00:00Z"
                     }}) {{ _docID }}
                     second: create_AgentRequest(input: {{
                         request_id: "completed-request-2", agent_did: "did:key:worker",
                         requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        status: "completed", lifecycle_state: "completed",
+                        lifecycle_state: "completed",
                         caused_by_trigger_id: "{}", caused_by_correlation: "{}",
                         created_at: "2026-08-25T00:00:01Z"
                     }}) {{ _docID }}
                     third: create_AgentRequest(input: {{
                         request_id: "completed-request-3", agent_did: "did:key:worker",
                         requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        status: "completed", lifecycle_state: "completed",
+                        lifecycle_state: "completed",
                         caused_by_trigger_id: "{}", caused_by_correlation: "{}",
                         created_at: "2026-08-25T00:00:02Z"
                     }}) {{ _docID }}
@@ -2049,7 +2049,7 @@ mod tests {
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "cancel-recovery-request", agent_did: "did:key:worker",
                     requester_did: "did:key:owner", behavior_id: "worker-v1",
-                    status: "processing", lifecycle_state: "processing",
+                    lifecycle_state: "processing",
                     caused_by_trigger_id: "{}", caused_by_correlation: "{}",
                     created_at: "{}"
                 }}) {{ _docID }} }}"#,
@@ -2095,7 +2095,7 @@ mod tests {
             .execute(
                 r#"mutation { update_AgentRequest(
                     filter: { request_id: { _eq: "cancel-recovery-request" } },
-                    input: { status: "interrupted", lifecycle_state: "interrupted" }
+                    input: { lifecycle_state: "interrupted" }
                 ) { _docID } }"#,
             )
             .await;
@@ -2181,7 +2181,7 @@ mod tests {
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "request-1", agent_did: "did:key:worker",
                     requester_did: "did:key:owner", behavior_id: "worker-v1",
-                    status: "completed", lifecycle_state: "completed",
+                    lifecycle_state: "completed",
                     caused_by_trigger_id: "{}",
                     caused_by_correlation: "{}", created_at: "{}"
                 }}) {{ _docID }} }}"#,
@@ -2221,7 +2221,7 @@ mod tests {
                     request: create_AgentRequest(input: {{
                         request_id: "unrelated-request", agent_did: "did:key:worker",
                         requester_did: "did:key:owner", behavior_id: "operator-behavior",
-                        status: "processing", lifecycle_state: "processing",
+                        lifecycle_state: "processing",
                         caused_by_trigger_id: "operator-trigger",
                         caused_by_correlation: "{}", created_at: "{}"
                     }}) {{ _docID }}

@@ -159,7 +159,6 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -400,7 +399,7 @@ async fn mark_child_completed(node: &EmbeddedNode, child_request_id: &str) {
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
+                input: {{ lifecycle_state: "completed" }}
             ) {{ _docID }}
         }}"#
     );

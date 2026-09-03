@@ -168,7 +168,6 @@ async fn background_completion_transaction_attempt(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]

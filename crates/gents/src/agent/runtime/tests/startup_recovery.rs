@@ -109,7 +109,7 @@ impl crate::behavior_readiness_publisher::BehaviorReadinessWriter for ExhaustRea
 async fn wait_for_request_state(
     node: &defra_node::EmbeddedNode,
     doc_id: &str,
-    expected_status: &str,
+    expected_lifecycle_state: &str,
 ) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -117,7 +117,7 @@ async fn wait_for_request_state(
         let query = format!(
             r#"{{
                 AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
-                    status
+                    lifecycle_state
                 }}
             }}"#
         );
@@ -135,18 +135,18 @@ async fn wait_for_request_state(
             .and_then(|rows| rows.first())
             .cloned()
             .expect("AgentRequest row");
-        let status = row
-            .get("status")
+        let lifecycle_state = row
+            .get("lifecycle_state")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        if status == expected_status {
+        if lifecycle_state == expected_lifecycle_state {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {} to reach status={}, last row={:?}",
+            "timed out waiting for AgentRequest {} to reach lifecycle_state={}, last row={:?}",
             doc_id,
-            expected_status,
+            expected_lifecycle_state,
             row
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -772,7 +772,7 @@ async fn run_agent_starts_with_all_behaviors_unavailable_and_rejects_requests_at
         "hello",
     )
     .await;
-    wait_for_request_state(node.as_ref(), &request_doc_id, "error").await;
+    wait_for_request_state(node.as_ref(), &request_doc_id, "failed").await;
 
     let request_query = format!(
         r#"{{
@@ -954,8 +954,8 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
         .expect("agent task should join")
         .expect("agent run should return ok");
 
-    wait_for_request_state(node.as_ref(), &first_request_doc_id, "error").await;
-    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "error").await;
+    wait_for_request_state(node.as_ref(), &first_request_doc_id, "failed").await;
+    wait_for_request_state(node.as_ref(), &queued_request_doc_id, "failed").await;
 }
 
 #[tokio::test]

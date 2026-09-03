@@ -80,7 +80,6 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
                     behavior_id: "default",
                     session_id: "{session_id}",
                     content: "test",
-                    status: "pending",
                     lifecycle_state: "pending",
                     backend_id: "backend",
                     created_at: "{created_at}",

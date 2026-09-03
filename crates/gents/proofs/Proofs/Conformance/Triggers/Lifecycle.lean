@@ -7,6 +7,7 @@ def requestStateToTriggerTerminal : RequestState → Bool
   | .superseded => true
   | .dead => true
   | .interrupted => true
+  | .workspaceBindingPending => false
   | .pending => false
   | .claimed => false
   | .processing => false

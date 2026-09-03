@@ -36,8 +36,8 @@ impl GraphqlTurnState {
     pub fn response_is_durably_complete(&self) -> bool {
         self.request.as_ref().is_some_and(|request| {
             matches!(
-                request.lifecycle_state.as_deref(),
-                Some("completed" | "superseded")
+                RequestLifecycleState::parse_opt(request.lifecycle_state.as_deref()),
+                Some(RequestLifecycleState::Completed | RequestLifecycleState::Superseded)
             )
         }) && self.response.as_ref().is_some_and(|response| {
             matches!(response.status.as_deref(), Some("complete" | "completed"))

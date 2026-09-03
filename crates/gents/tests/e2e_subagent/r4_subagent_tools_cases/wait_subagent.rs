@@ -376,7 +376,6 @@ async fn corrupt_materialized_child_is_nonretryable_and_remains_listed() {
                 retry_root_request: "{child_request_id}",
                 superseded_by_request: "",
                 content: "corrupt child",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",

@@ -310,7 +310,6 @@ async fn wait_for_peer_request(
                 AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                     lifecycle_state
                     agent_did
-                    status
                 }}
             }}"#
         );
@@ -318,15 +317,11 @@ async fn wait_for_peer_request(
         struct Row {
             lifecycle_state: Option<String>,
             agent_did: Option<String>,
-            status: Option<String>,
         }
         let resp = node.execute(&query).await;
         if let Some(row) = first_optional_row::<Row>(&resp, "AgentRequest") {
             let state = row.lifecycle_state.unwrap_or_default();
-            last = format!(
-                "lifecycle={state} status={:?} did={:?}",
-                row.status, row.agent_did
-            );
+            last = format!("lifecycle={state} did={:?}", row.agent_did);
             if is_terminal(&state) {
                 assert_eq!(
                     row.agent_did.as_deref(),

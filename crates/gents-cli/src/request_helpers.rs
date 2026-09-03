@@ -7,6 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
+use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -162,13 +163,6 @@ pub(crate) fn request_terminal_query(request_id: &str) -> String {
     )
 }
 
-pub(crate) fn is_terminal_lifecycle_state(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
-    )
-}
-
 fn response_field_is_blank(response: &Value, field: &str) -> bool {
     response
         .get(field)
@@ -178,11 +172,12 @@ fn response_field_is_blank(response: &Value, field: &str) -> bool {
         .is_empty()
 }
 
+/// AgentResponse.status vocabulary, not AgentRequest.
 fn response_is_completed(response: &Value) -> bool {
     response
         .get("status")
         .and_then(Value::as_str)
-        .is_some_and(|status| matches!(status, "complete" | "completed"))
+        .is_some_and(|status| matches!(status, "complete" | "completed")) // AgentResponse.status
 }
 
 fn response_has_presentation(response: &Value) -> bool {
@@ -713,10 +708,10 @@ pub(crate) async fn wait_for_terminal_response(
             .and_then(|row| row.get("status"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let terminal_by_request = is_terminal_lifecycle_state(lifecycle_state);
+        let terminal_by_request = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
         let terminal_by_response = matches!(
             response_status,
-            "complete" | "completed" | "error" | "failed" | "interrupted"
+            "complete" | "completed" | "error" | "failed" | "interrupted" // AgentResponse.status
         );
         if terminal_by_request || terminal_by_response {
             let response_row = if response_row.is_some() {

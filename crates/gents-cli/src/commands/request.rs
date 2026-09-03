@@ -6,6 +6,7 @@ use gents::{
     graphql::escape_graphql_string, tool_call_lifecycle::CancelCause, ConfigAccess,
     DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
 };
+use gents_protocol::client_protocol::RequestLifecycleState;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -15,8 +16,7 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
-    ensure_local_request_signer, fetch_request_view, is_terminal_lifecycle_state,
-    parse_duration_suffix, parse_valid_until_flag,
+    ensure_local_request_signer, fetch_request_view, parse_duration_suffix, parse_valid_until_flag,
 };
 use crate::{
     create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
@@ -147,7 +147,6 @@ struct RequestShowHeader {
     agent_did: String,
     behavior_id: String,
     session_id: String,
-    status: String,
     lifecycle_state: String,
     backend_id: Option<String>,
     execution_origin: Option<String>,
@@ -246,7 +245,6 @@ struct NativeExecutorView {
 struct ChildRequestView {
     request_id: String,
     state: String,
-    status: String,
     behavior_id: String,
     created_at: Option<String>,
     caused_by_parent_tool_call_id: Option<String>,
@@ -311,10 +309,8 @@ async fn load_request_show_snapshot(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let native_executor_values = value_array(&liveness, "/active_native_executors");
-    let request_terminal = is_terminal_lifecycle_state(
-        string_field(&request_row, "lifecycle_state")
-            .unwrap_or_default()
-            .as_str(),
+    let request_terminal = RequestLifecycleState::is_terminal_str(
+        string_field(&request_row, "lifecycle_state").as_deref(),
     );
 
     let tool_names = tool_rows
@@ -425,7 +421,6 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "agent_did",
         "behavior_id",
         "session_id",
-        "status",
         "lifecycle_state",
         "backend_id",
         "execution_origin",
@@ -539,7 +534,6 @@ fn request_header_view(
         agent_did: string_field_or_unknown(row, "agent_did"),
         behavior_id: string_field_or_unknown(row, "behavior_id"),
         session_id: string_field_or_unknown(row, "session_id"),
-        status: string_field_or_unknown(row, "status"),
         lifecycle_state: string_field_or_unknown(row, "lifecycle_state"),
         backend_id: string_field(row, "backend_id"),
         execution_origin: string_field(row, "execution_origin"),
@@ -598,7 +592,7 @@ fn transition_history(
             note: Some("no dedicated begin timestamp is persisted".to_string()),
         });
     }
-    if state != "interrupted" {
+    if RequestLifecycleState::parse_opt(Some(&state)) != Some(RequestLifecycleState::Interrupted) {
         if let Some(interrupt_at) = string_field(request, "interrupt_requested_at") {
             let note = if terminal_action_for_state(&state).is_some() {
                 "interrupt was requested before this terminal snapshot"
@@ -632,18 +626,23 @@ fn transition_history(
 
 fn lifecycle_has_begun_inference(state: &str) -> bool {
     matches!(
-        state,
-        "processing" | "inputRequired" | "completed" | "superseded"
+        RequestLifecycleState::parse_opt(Some(state)),
+        Some(
+            RequestLifecycleState::Processing
+                | RequestLifecycleState::InputRequired
+                | RequestLifecycleState::Completed
+                | RequestLifecycleState::Superseded
+        )
     )
 }
 
 fn terminal_action_for_state(state: &str) -> Option<&'static str> {
-    match state {
-        "completed" => Some("finish"),
-        "failed" => Some("fail"),
-        "dead" => Some("expire"),
-        "interrupted" => Some("interrupt"),
-        "superseded" => Some("supersede"),
+    match RequestLifecycleState::parse_opt(Some(state))? {
+        RequestLifecycleState::Completed => Some("finish"),
+        RequestLifecycleState::Failed => Some("fail"),
+        RequestLifecycleState::Dead => Some("expire"),
+        RequestLifecycleState::Interrupted => Some("interrupt"),
+        RequestLifecycleState::Superseded => Some("supersede"),
         _ => None,
     }
 }
@@ -677,9 +676,9 @@ fn terminal_cause(
     cancel_cause: Option<&RequestCancelCauseView>,
 ) -> Option<String> {
     let state = string_field(request, "lifecycle_state")?;
-    match state.as_str() {
-        "completed" => Some("finish".to_string()),
-        "failed" => Some(format!(
+    match RequestLifecycleState::parse_opt(Some(&state))? {
+        RequestLifecycleState::Completed => Some("finish".to_string()),
+        RequestLifecycleState::Failed => Some(format!(
             "fail{}",
             cause_suffix(
                 string_field(request, "failure_reason")
@@ -687,18 +686,18 @@ fn terminal_cause(
                     .as_deref()
             )
         )),
-        "dead" => Some(format!(
+        RequestLifecycleState::Dead => Some(format!(
             "expire{}",
             cause_suffix(string_field(request, "failure_reason").as_deref())
         )),
-        "interrupted" => {
+        RequestLifecycleState::Interrupted => {
             let cause = cancel_cause
                 .map(|cause| cause.cause.as_str())
                 .filter(|cause| !cause.trim().is_empty())
                 .unwrap_or("unknown");
             Some(format!("interrupt: {cause}"))
         }
-        "superseded" => Some(format!(
+        RequestLifecycleState::Superseded => Some(format!(
             "supersede{}",
             cause_suffix(string_field(request, "superseded_by_request").as_deref())
         )),
@@ -722,7 +721,9 @@ fn request_cancel_cause_view(
     let request_cancel_at = string_field(request, "cancel_initiated_at");
     let interrupt_at = string_field(request, "interrupt_requested_at");
     let lifecycle_state = string_field(request, "lifecycle_state").unwrap_or_default();
-    let cascade_tool_cause = (lifecycle_state == "interrupted")
+    let is_interrupted = RequestLifecycleState::parse_opt(Some(lifecycle_state.as_str()))
+        == Some(RequestLifecycleState::Interrupted);
+    let cascade_tool_cause = is_interrupted
         .then(|| {
             tool_calls
                 .iter()
@@ -730,7 +731,7 @@ fn request_cancel_cause_view(
                 .map(|tool| tool.cancel_cause.clone())
         })
         .flatten();
-    let cascade_tool_cancel_at = (lifecycle_state == "interrupted")
+    let cascade_tool_cancel_at = is_interrupted
         .then(|| {
             tool_calls
                 .iter()
@@ -738,7 +739,7 @@ fn request_cancel_cause_view(
                 .and_then(|tool| tool.cancel_initiated_at.clone())
         })
         .flatten();
-    let was_cancelled = lifecycle_state == "interrupted"
+    let was_cancelled = is_interrupted
         || request_cause.is_some()
         || request_cancel_at.is_some()
         || interrupt_at.is_some();
@@ -810,7 +811,6 @@ fn child_request_view(edge: &gents::DescendantEdge) -> ChildRequestView {
     ChildRequestView {
         request_id: edge.child_request_id.clone(),
         state: edge.lifecycle_state.clone(),
-        status: edge.lifecycle_state.clone(),
         behavior_id: edge
             .behavior_id
             .clone()
@@ -939,10 +939,7 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     let mut lines = Vec::new();
     let request = &snapshot.request;
     lines.push(format!("Request {}", request.request_id));
-    lines.push(format!(
-        "state: {} (status: {})",
-        request.lifecycle_state, request.status
-    ));
+    lines.push(format!("state: {}", request.lifecycle_state));
     lines.push(format!("agent_did: {}", request.agent_did));
     lines.push(format!("behavior_id: {}", request.behavior_id));
     lines.push(format!("session_id: {}", request.session_id));
@@ -1083,8 +1080,8 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     } else {
         for child in &snapshot.child_requests {
             lines.push(format!(
-                "  - {} state={} status={} behavior_id={}",
-                child.request_id, child.state, child.status, child.behavior_id
+                "  - {} state={} behavior_id={}",
+                child.request_id, child.state, child.behavior_id
             ));
             push_option_line(
                 &mut lines,
@@ -1184,7 +1181,6 @@ async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<
                 agent_did
                 behavior_id
                 session_id
-                status
                 lifecycle_state
                 failure_reason
                 retry_count
@@ -1232,9 +1228,7 @@ async fn wait_for_terminal_request_state(
 }
 
 fn request_row_is_terminal(row: &Value) -> bool {
-    row.get("lifecycle_state")
-        .and_then(Value::as_str)
-        .is_some_and(is_terminal_lifecycle_state)
+    RequestLifecycleState::is_terminal_str(row.get("lifecycle_state").and_then(Value::as_str))
 }
 
 fn request_row_string(row: &Value, key: &str) -> Option<String> {
@@ -1258,7 +1252,6 @@ fn request_interrupt_summary(
         "agent_did": request_row_string(row, "agent_did"),
         "behavior_id": request_row_string(row, "behavior_id"),
         "session_id": request_row_string(row, "session_id"),
-        "status": request_row_string(row, "status"),
         "lifecycle_state": lifecycle_state,
         "failure_reason": request_row_string(row, "failure_reason"),
         "interrupt_requested_at": request_row_string(row, "interrupt_requested_at"),
@@ -1266,7 +1259,7 @@ fn request_interrupt_summary(
         "cause": cause,
         "already_interrupted": already_interrupted,
         "already_terminal": already_terminal,
-        "terminal": is_terminal_lifecycle_state(&lifecycle_state),
+        "terminal": RequestLifecycleState::is_terminal_str(Some(lifecycle_state.as_str())),
         "created_at": request_row_string(row, "created_at"),
         "claimed_at": request_row_string(row, "claimed_at"),
         "deadline": request_row_string(row, "deadline"),
@@ -1285,7 +1278,6 @@ fn print_interrupt_text(summary: &Value) -> Result<()> {
     };
     println!("request_id: {}", text("request_id"));
     println!("state: {}", text("lifecycle_state"));
-    println!("status: {}", text("status"));
     println!("interrupt_landed_at: {}", text("interrupt_landed_at"));
     println!("cause: {}", text("cause"));
     println!(
@@ -1333,7 +1325,10 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let stale = fetch_request_view(&graphql, &stale_id).await?;
-    if stale.lifecycle_state != "dead" || stale.failure_reason != "Stale" {
+    if RequestLifecycleState::parse_opt(Some(stale.lifecycle_state.as_str()))
+        != Some(RequestLifecycleState::Dead)
+        || stale.failure_reason != "Stale"
+    {
         anyhow::bail!(
             "request {stale_id} is not a stale terminal (lifecycle_state={}, failure_reason={}); resend is only valid for stale-dead requests",
             stale.lifecycle_state,
@@ -1404,13 +1399,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn lifecycle_helpers_cover_all_ten_states() {
+        let cases: [(RequestLifecycleState, bool, Option<&str>); 10] = [
+            (RequestLifecycleState::WorkspaceBindingPending, false, None),
+            (RequestLifecycleState::Pending, false, None),
+            (RequestLifecycleState::Claimed, false, None),
+            (RequestLifecycleState::Processing, true, None),
+            (RequestLifecycleState::InputRequired, true, None),
+            (RequestLifecycleState::Completed, true, Some("finish")),
+            (RequestLifecycleState::Failed, false, Some("fail")),
+            (RequestLifecycleState::Superseded, true, Some("supersede")),
+            (RequestLifecycleState::Dead, false, Some("expire")),
+            (RequestLifecycleState::Interrupted, false, Some("interrupt")),
+        ];
+
+        for (state, expect_begun_inference, expect_terminal_action) in cases {
+            let state_str = state.as_str();
+            assert_eq!(
+                lifecycle_has_begun_inference(state_str),
+                expect_begun_inference,
+                "lifecycle_has_begun_inference({state_str:?})"
+            );
+            assert_eq!(
+                terminal_action_for_state(state_str),
+                expect_terminal_action,
+                "terminal_action_for_state({state_str:?})"
+            );
+        }
+    }
+
+    #[test]
     fn request_show_json_retains_persisted_seed_and_aggregate_budget() {
         let request = json!({
             "request_id": "request-one",
             "agent_did": "did:key:agent",
             "behavior_id": "default",
             "session_id": "session-one",
-            "status": "pending",
             "lifecycle_state": "pending",
             "seed": 1234,
             "max_total_tokens": 250000,
@@ -1429,7 +1453,6 @@ mod tests {
             "agent_did": "did:key:agent",
             "behavior_id": "default",
             "session_id": "session-one",
-            "status": "pending",
             "lifecycle_state": "pending",
         });
         let header = request_header_view(&request, None, Vec::new());

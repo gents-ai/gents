@@ -369,7 +369,6 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     behavior_id: "default",
                     session_id: "{session_id}",
                     content: "stuck request seeded for liveness surface test",
-                    status: "processing",
                     lifecycle_state: "processing",
                     backend_id: "studios-cluster",
                     created_at: "2024-01-01T11:00:00Z",

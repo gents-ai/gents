@@ -48,7 +48,6 @@ struct MessageRow {
 
 #[derive(Debug, Deserialize)]
 struct ChildRequestStateRow {
-    status: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
 }
@@ -167,7 +166,6 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -334,7 +332,7 @@ async fn persist_child_completion(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
+                input: {{ lifecycle_state: "completed" }}
             ) {{ _docID }}
         }}"#
     );
@@ -406,17 +404,11 @@ async fn persist_child_completion(
 
 async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &str) {
     let request_id = escape_graphql_string(request_id);
-    let status = match state {
-        "completed" => "completed",
-        "processing" => "processing",
-        "superseded" => "superseded",
-        _ => "error",
-    };
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{state}" }}
+                input: {{ lifecycle_state: "{state}" }}
             ) {{ _docID }}
         }}"#
     );
@@ -440,7 +432,6 @@ async fn set_child_processing_deadline(
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
-                    status: "processing",
                     lifecycle_state: "processing",
                     deadline: "{deadline}"
                 }}
@@ -504,7 +495,6 @@ async fn fetch_child_request_state(
                 filter: {{ request_id: {{ _eq: "{child_request_id}" }} }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
                 failure_reason
             }}
@@ -585,7 +575,6 @@ async fn fetch_scheduled_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<ser
                 _docID
                 request_id
                 content
-                status
                 lifecycle_state
                 execution_origin
                 metadata
@@ -1073,7 +1062,6 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
     assert_eq!(report.tool_calls_recovered, 1);
 
     let child = fetch_child_request_state(db.node.as_ref(), &child_request_id).await;
-    assert_eq!(child.status.as_deref(), Some("dead"));
     assert_eq!(child.lifecycle_state.as_deref(), Some("dead"));
     assert!(
         child

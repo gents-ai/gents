@@ -60,11 +60,9 @@ pub async fn reconcile_coalesced_pending_request(
                     filter: {{
                         _docID: {{ _eq: "{duplicate_doc_id}" }},
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "superseded",
                         lifecycle_state: "superseded",
                         superseded_by_request: "{survivor_request_id}",
                         superseded_by_request_doc_id: "{survivor_doc_id}",
@@ -102,7 +100,6 @@ async fn matching_coalesced_pending_requests(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]

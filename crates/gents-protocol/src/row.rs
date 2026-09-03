@@ -232,8 +232,6 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub metadata: Option<String>,
     #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
     pub lifecycle_state: Option<String>,
     #[serde(default)]
     pub backend_id: Option<String>,
@@ -1152,7 +1150,6 @@ mod tests {
             "max_tokens": 512,
             "max_total_tokens": 4096,
             "metadata": "{\"run_id\":\"run-1\"}",
-            "status": "pending",
             "lifecycle_state": "pending",
             "backend_id": "",
             "execution_origin": "interactive",

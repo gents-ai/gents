@@ -7,14 +7,15 @@ namespace Conformance.Contracts
 open Conformance.ContractCases
 
 def requestStates : List RequestState :=
-  [ .pending, .claimed, .processing, .inputRequired, .completed
+  [ .workspaceBindingPending, .pending, .claimed, .processing, .inputRequired, .completed
   , .failed, .superseded, .dead, .interrupted ]
 
 def requestStateNames : List String :=
   requestStates.map RequestState.toDefraDB
 
 def requestActions : List (String × RequestContext.Action) :=
-  [ ("claim", .claim)
+  [ ("bindWorkspace", .bindWorkspace)
+  , ("claim", .claim)
   , ("dedupLose", .dedupLose)
   , ("admissionReject", .admissionReject)
   , ("beginInference", .beginInference)
@@ -52,7 +53,8 @@ def requestContext
   }
 
 def requestSamples : List RequestContext :=
-  [ requestContext .pending .released
+  [ requestContext .workspaceBindingPending .released
+  , requestContext .pending .released
   , requestContext .pending .released true
   , requestContext .pending .released false (some 0) 1
   , requestContext .claimed .waiting
