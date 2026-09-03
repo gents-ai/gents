@@ -13,4 +13,4 @@ Call `write_review_area` exactly once for each row below. For every call set `ex
 | `{{ event.correlation }}:security-concurrency` | `security-concurrency` | `all changed paths` | `Find concrete authorization, filesystem, identity, race, lifecycle, recovery, resource-bound, or unsafe-concurrency defects introduced by the complete diff.` |
 | `{{ event.correlation }}:workflow-invariants` | `workflow-invariants` | `all changed paths` | `Find concrete repository-specific workflow, evidence, worktree seal/integration, live-probe, review-gating, or never-merge invariant violations introduced by the complete diff.` |
 
-Emit all four complete calls now, preferably in one parallel batch. Never emit analysis or prose. Never retry a successful write.
+Emit all four complete calls now, preferably in one parallel batch. Never emit analysis or prose. Never retry a successful write. After all four writes succeed, call `update_goal` with `status="complete"`. Never complete the goal before the complete four-area ledger exists; if this turn cannot finish it, leave the goal active for continuation.

@@ -4,6 +4,8 @@
   "description": null,
   "behavior_id": "review-triage",
   "prompt_template": "./prompt.md",
+  "goal_objective_template": "Complete operator-facing triage for code-review run {{ event.correlation }} and persist its terminal merge report.",
+  "goal_token_budget": 500000,
   "enabled": true,
   "output_schema_ref": null
 }

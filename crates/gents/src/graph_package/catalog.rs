@@ -736,19 +736,53 @@ mod tests {
     }
 
     #[test]
-    fn code_review_generation_stages_cannot_loop_on_repository_tools() {
+    fn code_review_generation_stages_are_durable_without_repository_tool_loops() {
         let package = load_bundled_graph_package("code-review").unwrap();
-        for asset in [
-            "tool-selections/review-recon-tools/object.json",
-            "tool-selections/review-scan-tools/object.json",
+        for (stage, budget) in [
+            ("recon", 300_000),
+            ("scan", 2_000_000),
+            ("verify", 2_000_000),
+            ("triage", 500_000),
         ] {
+            let selection_asset = format!("tool-selections/review-{stage}-tools/object.json");
             let selection: Value =
-                serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
-            assert_eq!(selection["enable_file_tools"], false, "{asset}");
-            assert_eq!(selection["enable_bash"], false, "{asset}");
-            assert_eq!(selection["enable_lsp"], false, "{asset}");
-            assert_eq!(selection["enable_context_budget"], false, "{asset}");
-            assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
+                serde_json::from_str(package.asset_text(&selection_asset).unwrap()).unwrap();
+            assert_eq!(
+                selection["enable_context_budget"], true,
+                "{selection_asset}"
+            );
+            assert_eq!(selection["enable_goal_tools"], true, "{selection_asset}");
+            assert_eq!(
+                selection["enable_goal_creation"], false,
+                "{selection_asset}"
+            );
+
+            if matches!(stage, "recon" | "scan") {
+                assert_eq!(selection["enable_file_tools"], false, "{selection_asset}");
+                assert_eq!(selection["enable_bash"], false, "{selection_asset}");
+                assert_eq!(selection["enable_lsp"], false, "{selection_asset}");
+                assert_eq!(
+                    selection["backgroundable_tool_names"],
+                    json!([]),
+                    "{selection_asset}"
+                );
+            }
+
+            let task_asset = format!("tasks/review-{stage}-task/object.json");
+            let task: Value =
+                serde_json::from_str(package.asset_text(&task_asset).unwrap()).unwrap();
+            assert_eq!(task["goal_token_budget"], budget, "{task_asset}");
+            assert!(
+                task["goal_objective_template"]
+                    .as_str()
+                    .is_some_and(|objective| !objective.trim().is_empty()),
+                "{task_asset}"
+            );
+
+            let prompt_asset = format!("tasks/review-{stage}-task/prompt.md");
+            let prompt = package.asset_text(&prompt_asset).unwrap();
+            assert!(prompt.contains("`update_goal`"), "{prompt_asset}");
+            assert!(prompt.contains("`status=\"complete\"`"), "{prompt_asset}");
         }
     }
 }
