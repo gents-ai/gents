@@ -505,54 +505,74 @@ mod pin_tests {
             max_retries: 5,
             terminalized_at: Some("2029-12-31T23:59:59Z".to_string()),
         };
-        let request_id = "redrive-request-1";
-        let retry_key = "redrive-retry-key-1";
+        let request_id = "redrive-request-1".to_string();
+        let retry_key = "redrive-retry-key-1".to_string();
 
-        // --- reproduces redrive_mutation's DTO construction, with a fixed
-        // `now` in place of `Utc::now()` ---
+        // Driven through `build_signed_request` with the equivalent
+        // `RequestSpec` (a fixed `now` in place of `Utc::now()`), asserting
+        // against the output pinned by reproducing `redrive_mutation`'s
+        // DTO-construction statements directly.
         let now = "2030-01-01T00:00:00Z".to_string();
         let retry_root = candidate
             .retry_root_request
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or(&candidate.request_id);
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| candidate.request_id.clone());
         let admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
                 &candidate.agent_did,
                 &candidate.request_id,
             );
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            request_id,
-            &candidate.agent_did,
-            &candidate.agent_did,
-            &candidate.behavior_id,
-            &candidate.session_id,
-            BACKGROUND_COMPLETION_WAKE_PROMPT,
-            "scheduled",
-            &now,
+        let spec = crate::lifecycle::materialize::RequestSpec {
+            identity: crate::lifecycle::materialize::RequestIdentity {
+                request_id: request_id.clone(),
+                agent_did: candidate.agent_did.clone(),
+                requester_did: None,
+                behavior_id: candidate.behavior_id.clone(),
+                session_id: candidate.session_id.clone(),
+                content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
+                execution_origin: crate::lifecycle::ExecutionOrigin::Scheduled,
+                created_at: now,
+            },
             admission,
-        );
-        create.retry_parent_request = Some(candidate.request_id.clone());
-        create.retry_parent_request_doc_id = Some(candidate.doc_id.clone());
-        create.retry_root_request = Some(retry_root.to_string());
-        create.retry_key = Some(retry_key.to_string());
-        create.temperature = candidate.temperature;
-        create.top_p = candidate.top_p;
-        create.top_k = candidate.top_k;
-        create.seed = candidate.seed;
-        create.max_tokens = candidate.max_tokens;
-        create.max_total_tokens = candidate.max_total_tokens;
-        create.metadata = candidate.metadata.clone();
-        create.backend_id = candidate.backend_id.clone();
-        create.retry_count = candidate.retry_count + 1;
-        create.max_retries = candidate.max_retries;
-        create.subagent_depth = candidate.subagent_depth.unwrap_or_default();
-        create.caused_by_parent_request_id = Some(candidate.request_id.clone());
-        create.caused_by_parent_request_doc_id = Some(candidate.doc_id.clone());
-        crate::sign_agent_request_create_as_registered_target(&mut create)
-            .await
-            .expect("sign redrive request");
+            initial_lifecycle_state:
+                gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+            trigger_lineage: crate::lifecycle::TriggerLineage::default(),
+            trigger_doc_id: None,
+            workspace: None,
+            subagent: Some(crate::lifecycle::materialize::SubagentLink {
+                depth: candidate.subagent_depth.unwrap_or_default(),
+                parent_request_id: candidate.request_id.clone(),
+                parent_request_doc_id: candidate.doc_id.clone(),
+                parent_tool_call_id: None,
+                parent_tool_call_doc_id: None,
+            }),
+            retry: Some(crate::lifecycle::materialize::RetryLink {
+                parent_request_id: candidate.request_id.clone(),
+                parent_request_doc_id: candidate.doc_id.clone(),
+                root_request_id: retry_root,
+                retry_count: candidate.retry_count + 1,
+                max_retries: candidate.max_retries,
+            }),
+            sampling: Some(crate::lifecycle::materialize::SamplingCarryover {
+                temperature: candidate.temperature,
+                top_p: candidate.top_p,
+                top_k: candidate.top_k,
+                seed: candidate.seed,
+                max_tokens: candidate.max_tokens,
+                max_total_tokens: candidate.max_total_tokens,
+                backend_id: candidate.backend_id.clone(),
+            }),
+            metadata: candidate.metadata.clone(),
+            retry_key: Some(retry_key),
+            valid_until: None,
+        };
+        let create = crate::lifecycle::materialize::build_signed_request(
+            spec,
+            crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
+        )
+        .await
+        .expect("sign redrive request");
 
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(

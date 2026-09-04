@@ -290,6 +290,198 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     Ok(create)
 }
 
+/// The identity fields every writer decides for a fresh `AgentRequest`:
+/// who it is for, what session it belongs to, and what it says.
+#[allow(dead_code)]
+pub(crate) struct RequestIdentity {
+    pub request_id: String,
+    pub agent_did: String,
+    pub requester_did: Option<String>,
+    pub behavior_id: String,
+    pub session_id: String,
+    pub content: String,
+    pub execution_origin: ExecutionOrigin,
+    pub created_at: String,
+}
+
+/// Subagent parent linkage: the logical and physical identifiers of the
+/// tool call and request that spawned this child, plus its resulting depth.
+#[allow(dead_code)]
+pub(crate) struct SubagentLink {
+    pub depth: u32,
+    pub parent_request_id: String,
+    pub parent_request_doc_id: String,
+    pub parent_tool_call_id: Option<String>,
+    pub parent_tool_call_doc_id: Option<String>,
+}
+
+/// Retry linkage: the failed request this one supersedes, the root of the
+/// retry chain, and the counters carried forward from it.
+#[allow(dead_code)]
+pub(crate) struct RetryLink {
+    pub parent_request_id: String,
+    pub parent_request_doc_id: String,
+    pub root_request_id: String,
+    pub retry_count: i64,
+    pub max_retries: i64,
+}
+
+/// Sampling parameters and backend carried over from a prior request (used
+/// by background-wake redrive; unset for a fresh request).
+#[allow(dead_code)]
+pub(crate) struct SamplingCarryover {
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<i64>,
+    pub seed: Option<i64>,
+    pub max_tokens: Option<i64>,
+    pub max_total_tokens: Option<i64>,
+    pub backend_id: Option<String>,
+}
+
+/// Every input a writer decides before an `AgentRequestCreate` is built and
+/// signed. This is the single seam every production writer should build
+/// through; `build_signed_request` alone owns which of its fields become
+/// which stamped columns.
+#[allow(dead_code)]
+pub(crate) struct RequestSpec {
+    pub identity: RequestIdentity,
+    pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
+    pub initial_lifecycle_state: RequestLifecycleState,
+    /// Correlation/context/kind/id/source-doc lineage of the trigger that
+    /// caused this request. `trigger_doc_id` is carried separately because,
+    /// unlike the rest of `TriggerLineage`, it is not part of the signed
+    /// trigger-provenance payload validated by `validate_trigger_provenance`.
+    pub trigger_lineage: TriggerLineage,
+    pub trigger_doc_id: Option<String>,
+    pub workspace: Option<WorkspaceLineage>,
+    pub subagent: Option<SubagentLink>,
+    /// `None` means this is not a retry: `retry_root_request` defaults to
+    /// this request's own id and `max_retries` to `DEFAULT_REQUEST_MAX_RETRIES`.
+    pub retry: Option<RetryLink>,
+    pub sampling: Option<SamplingCarryover>,
+    pub metadata: Option<String>,
+    pub retry_key: Option<String>,
+    pub valid_until: Option<String>,
+}
+
+/// How the built `AgentRequestCreate` is signed: as the already-registered
+/// runtime principal named by `spec.identity.agent_did` (the common case for
+/// runtime-authored requests), or with an explicit caller-held identity.
+#[allow(dead_code)]
+pub(crate) enum RequestSigner<'a> {
+    RegisteredTarget,
+    Identity(&'a dyn crate::identity::AgentIdentity),
+}
+
+/// Build, stamp, and sign one `AgentRequestCreate`. This is the sole owner
+/// of the mapping from a writer's decisions (`RequestSpec`) to the DTO's
+/// stamped columns; every production writer should build through it rather
+/// than hand-rolling `AgentRequestCreate::base(...)` and stamping fields
+/// itself.
+#[allow(dead_code)]
+pub(crate) async fn build_signed_request(
+    spec: RequestSpec,
+    signer: RequestSigner<'_>,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    let RequestSpec {
+        identity,
+        admission,
+        initial_lifecycle_state,
+        trigger_lineage,
+        trigger_doc_id,
+        workspace,
+        subagent,
+        retry,
+        sampling,
+        metadata,
+        retry_key,
+        valid_until,
+    } = spec;
+
+    let request_id = identity.request_id.clone();
+    let requester_did = identity
+        .requester_did
+        .clone()
+        .unwrap_or_else(|| identity.agent_did.clone());
+
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        identity.request_id,
+        identity.agent_did,
+        requester_did,
+        identity.behavior_id,
+        identity.session_id,
+        identity.content,
+        identity.execution_origin.as_str(),
+        identity.created_at,
+        admission,
+    );
+
+    create.initial_lifecycle_state = initial_lifecycle_state;
+    create.metadata = metadata;
+    create.retry_key = retry_key;
+    create.valid_until = valid_until;
+
+    create.caused_by_trigger_id = trigger_lineage.trigger_id;
+    create.caused_by_trigger_kind = trigger_lineage.trigger_kind;
+    create.caused_by_trigger_doc_id = trigger_doc_id;
+    create.caused_by_source_doc_id = trigger_lineage.source_doc_id;
+    create.caused_by_correlation = trigger_lineage.correlation;
+    create.caused_by_trigger_context = trigger_lineage.trigger_context;
+
+    if let Some(workspace) = workspace {
+        create.workspace_id = workspace.workspace_id;
+        create.workspace_authority = workspace.workspace_authority;
+        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id;
+        create.workspace_seal_hash = workspace.workspace_seal_hash;
+    }
+
+    create.subagent_depth = subagent.as_ref().map_or(0, |link| link.depth);
+    if let Some(link) = subagent {
+        create.caused_by_parent_request_id = Some(link.parent_request_id);
+        create.caused_by_parent_request_doc_id = Some(link.parent_request_doc_id);
+        create.caused_by_parent_tool_call_id = link.parent_tool_call_id;
+        create.caused_by_parent_tool_call_doc_id = link.parent_tool_call_doc_id;
+    }
+
+    create.retry_root_request = Some(
+        retry
+            .as_ref()
+            .map_or_else(|| request_id.clone(), |link| link.root_request_id.clone()),
+    );
+    create.max_retries = retry
+        .as_ref()
+        .map_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES), |link| {
+            link.max_retries
+        });
+    create.retry_count = retry.as_ref().map_or(0, |link| link.retry_count);
+    if let Some(link) = retry {
+        create.retry_parent_request = Some(link.parent_request_id);
+        create.retry_parent_request_doc_id = Some(link.parent_request_doc_id);
+    }
+
+    if let Some(sampling) = sampling {
+        create.temperature = sampling.temperature;
+        create.top_p = sampling.top_p;
+        create.top_k = sampling.top_k;
+        create.seed = sampling.seed;
+        create.max_tokens = sampling.max_tokens;
+        create.max_total_tokens = sampling.max_total_tokens;
+        create.backend_id = sampling.backend_id;
+    }
+
+    match signer {
+        RequestSigner::RegisteredTarget => {
+            crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+        }
+        RequestSigner::Identity(identity) => {
+            crate::sign_agent_request_create(identity, &mut create).await?;
+        }
+    }
+
+    Ok(create)
+}
+
 pub async fn activate_workspace_bound_request(
     node: &EmbeddedNode,
     request_doc_id: &str,
@@ -767,35 +959,50 @@ mod pin_tests {
     }
 
     // --- Site 1: materialize.rs `build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title` ---
-    // Pure and public; called directly. `created_at`/`admission_signature`
-    // are internally generated (`Utc::now()`), so they are normalized out.
+    // Driven through `build_signed_request` with the equivalent `RequestSpec`
+    // (the same inputs the production function would derive its stamping
+    // from); still asserts against the output pinned by directly calling the
+    // production function. `created_at`/`admission_signature` are chosen by
+    // the caller here (the writer, in production, would still generate them
+    // from `Utc::now()`), so they are normalized out for the comparison.
 
     #[tokio::test]
     async fn pin_materialize_pending_manual_trigger() {
         let tempdir = tempfile::tempdir().unwrap();
         let _identity = fixed_signing_identity(tempdir.path());
 
-        let create =
-            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+        let spec = RequestSpec {
+            identity: RequestIdentity {
+                request_id: "req-materialize-pending-manual".to_string(),
+                agent_did: FIXED_TEST_DID.to_string(),
+                requester_did: None,
+                behavior_id: "behavior-1".to_string(),
+                session_id: "sess-materialize-pending-manual".to_string(),
+                content: "hello agent".to_string(),
+                execution_origin: ExecutionOrigin::Interactive,
+                created_at: "2030-01-01T00:00:00Z".to_string(),
+            },
+            admission: gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                 FIXED_TEST_DID,
-                "behavior-1",
-                "hello agent",
-                ExecutionOrigin::Interactive,
-                TriggerLineage {
-                    trigger_id: None,
-                    trigger_kind: Some("manual".to_string()),
-                    source_doc_id: None,
-                    correlation: None,
-                    trigger_context: None,
-                },
-                Some("My Conversation"),
-                None,
-                "req-materialize-pending-manual",
-                "sess-materialize-pending-manual",
-                None,
-                None,
-                None,
-            )
+            ),
+            initial_lifecycle_state: RequestLifecycleState::Pending,
+            trigger_lineage: TriggerLineage {
+                trigger_id: None,
+                trigger_kind: Some("manual".to_string()),
+                source_doc_id: None,
+                correlation: None,
+                trigger_context: None,
+            },
+            trigger_doc_id: None,
+            workspace: None,
+            subagent: None,
+            retry: None,
+            sampling: None,
+            metadata: Some(r#"{"conversation_title":"My Conversation"}"#.to_string()),
+            retry_key: None,
+            valid_until: None,
+        };
+        let create = build_signed_request(spec, RequestSigner::RegisteredTarget)
             .await
             .expect("build signed pending manual request");
 
@@ -826,21 +1033,34 @@ mod pin_tests {
             workspace_seal_hash: Some("seal-1".to_string()),
         };
 
-        let create =
-            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
-                FIXED_TEST_DID,
-                "behavior-1",
-                "hello agent",
-                ExecutionOrigin::Scheduled,
-                trigger_lineage,
-                Some("My Conversation"),
-                Some(&workspace_lineage),
-                "req-materialize-pending-event",
-                "sess-materialize-pending-event",
-                Some("retry-key-1"),
-                None,
-                Some("trigger-doc-1"),
-            )
+        let spec = RequestSpec {
+            identity: RequestIdentity {
+                request_id: "req-materialize-pending-event".to_string(),
+                agent_did: FIXED_TEST_DID.to_string(),
+                requester_did: None,
+                behavior_id: "behavior-1".to_string(),
+                session_id: "sess-materialize-pending-event".to_string(),
+                content: "hello agent".to_string(),
+                execution_origin: ExecutionOrigin::Scheduled,
+                created_at: "2030-01-01T00:00:00Z".to_string(),
+            },
+            admission:
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
+                    FIXED_TEST_DID,
+                    "trigger-1",
+                ),
+            initial_lifecycle_state: RequestLifecycleState::WorkspaceBindingPending,
+            trigger_lineage,
+            trigger_doc_id: Some("trigger-doc-1".to_string()),
+            workspace: Some(workspace_lineage),
+            subagent: None,
+            retry: None,
+            sampling: None,
+            metadata: Some(r#"{"conversation_title":"My Conversation"}"#.to_string()),
+            retry_key: Some("retry-key-1".to_string()),
+            valid_until: None,
+        };
+        let create = build_signed_request(spec, RequestSigner::RegisteredTarget)
             .await
             .expect("build signed pending event-triggered workspace-bound request");
 
@@ -855,10 +1075,10 @@ mod pin_tests {
     // --- Site 2: materialize.rs `RequestLifecycle::materialize_claimed_with_execution_binding` ---
     // This associate function claims the request against a live node in the
     // same call, so it cannot be driven directly in a field-stamping test.
-    // The block below reproduces its DTO-construction statements verbatim
-    // (see the production function above), substituting a fixed
-    // `created_at` for `Utc::now()` so the whole output — including the
-    // signature — is stable.
+    // Driven through `build_signed_request` with the equivalent `RequestSpec`
+    // and `RequestSigner::Identity` (matching the production function's
+    // `sign_agent_request_create(identity.as_ref(), ...)`), asserting against
+    // the output pinned by reproducing the production statements directly.
 
     #[tokio::test]
     async fn pin_materialize_claimed_with_execution_binding() {
@@ -866,10 +1086,6 @@ mod pin_tests {
         let identity = fixed_signing_identity(tempdir.path());
 
         let agent_did = identity.did().to_string();
-        let backend_id = "backend-1".to_string();
-        let behavior_id = "agent-name-1".to_string();
-        let request_id = "req-materialize-claimed".to_string();
-        let session_id = "sess-materialize-claimed".to_string();
         let trigger_lineage = TriggerLineage {
             trigger_id: Some("trigger-1".to_string()),
             trigger_kind: Some("event".to_string()),
@@ -877,29 +1093,41 @@ mod pin_tests {
             correlation: Some("corr-1".to_string()),
             trigger_context: Some(r#"{"k":"v"}"#.to_string()),
         };
-        let content = "resume the run";
-        let execution_origin = ExecutionOrigin::Scheduled;
-        let created_at = "2030-01-01T00:00:00Z".to_string();
 
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            request_id.clone(),
-            &agent_did,
-            &agent_did,
-            behavior_id.clone(),
-            session_id.clone(),
-            content,
-            execution_origin.as_str(),
-            created_at.clone(),
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
-        );
-        create.backend_id = (!backend_id.is_empty()).then(|| backend_id.clone());
-        create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
-        create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
-        create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
-        create.caused_by_correlation = trigger_lineage.correlation.clone();
-        create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
-        create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-        crate::sign_agent_request_create(&identity, &mut create)
+        let spec = RequestSpec {
+            identity: RequestIdentity {
+                request_id: "req-materialize-claimed".to_string(),
+                agent_did: agent_did.clone(),
+                requester_did: None,
+                behavior_id: "agent-name-1".to_string(),
+                session_id: "sess-materialize-claimed".to_string(),
+                content: "resume the run".to_string(),
+                execution_origin: ExecutionOrigin::Scheduled,
+                created_at: "2030-01-01T00:00:00Z".to_string(),
+            },
+            admission: gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                &agent_did,
+            ),
+            initial_lifecycle_state: RequestLifecycleState::Pending,
+            trigger_lineage,
+            trigger_doc_id: None,
+            workspace: None,
+            subagent: None,
+            retry: None,
+            sampling: Some(SamplingCarryover {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                seed: None,
+                max_tokens: None,
+                max_total_tokens: None,
+                backend_id: Some("backend-1".to_string()),
+            }),
+            metadata: None,
+            retry_key: None,
+            valid_until: None,
+        };
+        let create = build_signed_request(spec, RequestSigner::Identity(&identity))
             .await
             .expect("sign claimed request");
 
