@@ -51,6 +51,14 @@ pub(super) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 
 /// Shape of a `subagent_spawned` update payload (Grok pager
 /// `extensions::notification::SubagentSpawned`).
+///
+/// The trailing optional wire fields (`effective_context_source`,
+/// `capability_mode`, `persona`, `role`, `model`, `resumed_from`,
+/// `workflow_run_id`) stay absent: no durable Gents document carries them, and
+/// fabricating them would lie about the child's provenance. The required
+/// `context_normalized` flag is always `true` because every projected context
+/// window passes through the shim's normalization rule
+/// (`effective_context_window_tokens`), never a raw child-reported window.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct SubagentSpawnedUpdate {
     pub subagent_id: String,
@@ -59,6 +67,7 @@ pub(super) struct SubagentSpawnedUpdate {
     pub child_session_id: String,
     pub subagent_type: String,
     pub description: String,
+    pub context_normalized: bool,
 }
 
 /// Shape of a `subagent_progress` update payload.
@@ -286,6 +295,7 @@ impl SubagentUpdate {
                     "child_session_id": update.child_session_id,
                     "subagent_type": update.subagent_type,
                     "description": update.description,
+                    "context_normalized": update.context_normalized,
                 });
                 let object = payload
                     .as_object_mut()
@@ -577,6 +587,10 @@ fn project_child_rows(
             child_session_id: child.session_id.clone(),
             subagent_type: subagent_type.clone(),
             description: description.clone(),
+            // The projection always normalizes the child's context window
+            // through `effective_context_window_tokens` before it reaches the
+            // wire, so the audited spawned flag is unconditionally true.
+            context_normalized: true,
         }));
         chronology.push(spawn_sequence);
 
@@ -1093,6 +1107,7 @@ mod tests {
             child_session_id: "session-child-1".to_string(),
             subagent_type: "explore".to_string(),
             description: "list and summarize".to_string(),
+            context_normalized: true,
         });
         let payload = update.to_payload();
         // Exact key set and casing: the `sessionUpdate` enum tag stays
@@ -1107,6 +1122,7 @@ mod tests {
                 "subagent_type": "explore",
                 "description": "list and summarize",
                 "parent_prompt_id": "prompt-1",
+                "context_normalized": true,
             })
         );
         assert_eq!(update.session_update_kind(), "subagent_spawned");
@@ -1122,10 +1138,14 @@ mod tests {
             child_session_id: "session-child-1".to_string(),
             subagent_type: "general-purpose".to_string(),
             description: String::new(),
+            context_normalized: true,
         });
         let payload = update.to_payload();
         assert!(payload.get("parent_prompt_id").is_none());
         assert!(payload.get("parentPromptId").is_none());
+        // The required normalization flag is always present, even when every
+        // optional provenance field is absent.
+        assert_eq!(payload["context_normalized"], true);
     }
 
     #[test]
