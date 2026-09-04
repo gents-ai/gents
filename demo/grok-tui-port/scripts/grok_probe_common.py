@@ -12,6 +12,32 @@ from pathlib import Path
 PORTABLE_UNIX_PATH_BYTES = 100
 
 
+def _new_private_socket_directory(prefix: str, leaf_name: str) -> Path:
+    """Honor the configured temp directory, falling back when its path is too long."""
+    configured = Path(tempfile.gettempdir())
+    fallback = Path("/tmp")
+    parents = [configured]
+    if configured.resolve() != fallback.resolve():
+        parents.append(fallback)
+
+    last_error: OSError | None = None
+    for parent in parents:
+        try:
+            directory = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
+        except OSError as error:
+            last_error = error
+            continue
+        mode = stat.S_IMODE(directory.stat().st_mode)
+        if mode != 0o700:
+            directory.rmdir()
+            raise AssertionError(f"private socket directory has mode {mode:o}")
+        if len(os.fsencode(str(directory / leaf_name))) <= PORTABLE_UNIX_PATH_BYTES:
+            return directory
+        directory.rmdir()
+
+    raise OSError("no temporary directory yields a portable Unix socket path") from last_error
+
+
 class PortableSocketPath:
     """A short private alias for a long, identity-bearing Unix socket path."""
 
@@ -23,17 +49,10 @@ class PortableSocketPath:
         if len(os.fsencode(self.connect_path)) <= PORTABLE_UNIX_PATH_BYTES:
             return
 
-        alias_dir = Path(tempfile.mkdtemp(prefix=".gents-grok-client-", dir="/tmp"))
+        alias_dir = _new_private_socket_directory(".gents-grok-client-", "s")
         alias = alias_dir / "s"
         try:
-            mode = stat.S_IMODE(alias_dir.stat().st_mode)
-            if mode != 0o700:
-                raise AssertionError(f"private socket-alias directory has mode {mode:o}")
             alias.symlink_to(self.identity)
-            if len(os.fsencode(str(alias))) > PORTABLE_UNIX_PATH_BYTES:
-                raise AssertionError(
-                    "private leader-socket alias exceeds the portable Unix path limit"
-                )
         except BaseException:
             alias.unlink(missing_ok=True)
             alias_dir.rmdir()
@@ -55,33 +74,37 @@ class PortableSocketPath:
 
 def self_test_portable_socket_path() -> None:
     """Prove an over-limit published socket works through the private alias."""
-    with tempfile.TemporaryDirectory(prefix="gents-socket-test-", dir="/tmp") as root_text:
-        root = Path(root_text)
-        long_dir = root / ("x" * 88)
+    root = _new_private_socket_directory("gents-socket-test-", "b")
+    long_dir = root / ("x" * 88)
+    staged = root / "b"
+    published = long_dir / "leader.sock"
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    accepted: socket.socket | None = None
+    bridge: PortableSocketPath | None = None
+    try:
         long_dir.mkdir()
-        staged = root / "b"
-        published = long_dir / "leader.sock"
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        accepted: socket.socket | None = None
-        bridge: PortableSocketPath | None = None
-        try:
-            listener.bind(str(staged))
-            listener.listen(1)
-            os.rename(staged, published)
-            if len(os.fsencode(str(published.resolve()))) <= PORTABLE_UNIX_PATH_BYTES:
-                raise AssertionError("portable socket fixture is not over the absolute path limit")
-            bridge = PortableSocketPath(str(published))
-            if not Path(bridge.connect_path).is_absolute():
-                raise AssertionError("socket alias is not absolute")
-            client.connect(bridge.connect_path)
-            accepted, _ = listener.accept()
-            if Path(bridge.connect_path).resolve() != published.resolve():
-                raise AssertionError("alias identity drifted")
-        finally:
-            if accepted is not None:
-                accepted.close()
-            client.close()
-            listener.close()
-            if bridge is not None:
-                bridge.cleanup()
+        listener.bind(str(staged))
+        listener.listen(1)
+        os.rename(staged, published)
+        if len(os.fsencode(str(published.resolve()))) <= PORTABLE_UNIX_PATH_BYTES:
+            raise AssertionError("portable socket fixture is not over the absolute path limit")
+        bridge = PortableSocketPath(str(published))
+        if not Path(bridge.connect_path).is_absolute():
+            raise AssertionError("socket alias is not absolute")
+        client.connect(bridge.connect_path)
+        accepted, _ = listener.accept()
+        if Path(bridge.connect_path).resolve() != published.resolve():
+            raise AssertionError("alias identity drifted")
+    finally:
+        if accepted is not None:
+            accepted.close()
+        client.close()
+        listener.close()
+        if bridge is not None:
+            bridge.cleanup()
+        published.unlink(missing_ok=True)
+        staged.unlink(missing_ok=True)
+        if long_dir.exists():
+            long_dir.rmdir()
+        root.rmdir()
