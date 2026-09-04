@@ -899,3 +899,39 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn readiness_wait_survives_preflight_listener_closing_before_server_start() -> Result<()> {
+    let port = allocate_port()?;
+    let endpoint = graphql_url(port);
+    let did = "did:key:readiness-startup";
+    let mut ready = Box::pin(wait_for_runtime_ready(
+        &endpoint,
+        did,
+        Duration::from_secs(5),
+    ));
+    // The preflight socket is closed. Connection refusal during this phase
+    // must remain a bounded readiness wait, not fail or report readiness.
+    assert!(tokio::time::timeout(Duration::from_millis(50), &mut ready)
+        .await
+        .is_err());
+    let snapshot = serde_json::json!({
+        "format_version": 1, "process_state": "ready",
+        "active_generation": 1, "router_generation": 1,
+        "default_behavior_id": "default",
+        "behaviors": [{"behavior_id": "default", "state": "ready", "reason": null}]
+    });
+    let response = serde_json::json!({"data": {"AgentBehaviorReadiness": [{
+        "agent_did": did, "snapshot_json": snapshot.to_string(),
+        "updated_at": chrono::Utc::now().to_rfc3339()
+    }]}});
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
+    let app = axum::Router::new().route(
+        "/api/v0/graphql",
+        axum::routing::post(move || async move { axum::Json(response) }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await });
+    let result = ready.await;
+    server.abort();
+    result
+}
