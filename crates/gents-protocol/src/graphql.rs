@@ -36,7 +36,7 @@ impl GraphqlTurnState {
     pub fn response_is_durably_complete(&self) -> bool {
         self.request.as_ref().is_some_and(|request| {
             matches!(
-                RequestLifecycleState::parse_opt(request.lifecycle_state.as_deref()),
+                request.lifecycle_state,
                 Some(RequestLifecycleState::Completed | RequestLifecycleState::Superseded)
             )
         }) && self.response.as_ref().is_some_and(|response| {
@@ -52,9 +52,7 @@ impl GraphqlTurnState {
 
     fn attempt_view(&self) -> Option<AttemptView> {
         let request = self.request.as_ref()?;
-        let lifecycle =
-            RequestLifecycleState::try_from(request.lifecycle_state.as_deref().unwrap_or_default())
-                .ok()?;
+        let lifecycle = request.lifecycle_state?;
 
         Some(AttemptView {
             request: RequestSnapshot {

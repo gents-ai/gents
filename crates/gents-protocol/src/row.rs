@@ -12,6 +12,8 @@ use std::fmt;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::request_lifecycle::RequestLifecycleState;
+
 pub use crate::behavior_readiness::{
     decode_behavior_readiness_snapshot, effective_behavior_readiness_admission,
     project_behavior_readiness, project_behavior_readiness_source,
@@ -206,15 +208,45 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub requester_did: Option<String>,
     #[serde(default)]
+    pub admission_kind: Option<String>,
+    #[serde(default)]
+    pub admission_signer_did: Option<String>,
+    #[serde(default)]
+    pub admission_signature: Option<String>,
+    #[serde(default)]
+    pub enrollment_request_id: Option<String>,
+    #[serde(default)]
+    pub enrollment_request_digest: Option<String>,
+    #[serde(default)]
+    pub enrollment_admin_did: Option<String>,
+    #[serde(default)]
+    pub enrollment_authorization_sequence: Option<i64>,
+    #[serde(default)]
+    pub enrollment_authorization_expires_at: Option<String>,
+    #[serde(default)]
+    pub runtime_issuer_did: Option<String>,
+    #[serde(default)]
+    pub runtime_source_request_id: Option<String>,
+    #[serde(default)]
+    pub runtime_source_kind: Option<String>,
+    #[serde(default)]
+    pub runtime_bridge_author_did: Option<String>,
+    #[serde(default)]
     pub behavior_id: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
     pub retry_parent_request: Option<String>,
     #[serde(default)]
+    pub retry_parent_request_doc_id: Option<String>,
+    #[serde(default)]
     pub retry_root_request: Option<String>,
     #[serde(default)]
+    pub retry_key: Option<String>,
+    #[serde(default)]
     pub superseded_by_request: Option<String>,
+    #[serde(default)]
+    pub superseded_by_request_doc_id: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
     #[serde(default)]
@@ -232,7 +264,7 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub metadata: Option<String>,
     #[serde(default)]
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     pub backend_id: Option<String>,
     #[serde(default)]
@@ -252,6 +284,12 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub caused_by_parent_request_id: Option<String>,
     #[serde(default)]
+    pub caused_by_parent_request_doc_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_parent_tool_call_id: Option<String>,
+    #[serde(default)]
+    pub caused_by_parent_tool_call_doc_id: Option<String>,
+    #[serde(default)]
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub terminalized_at: Option<String>,
@@ -261,6 +299,10 @@ pub struct AgentRequestRow {
     pub created_at: Option<String>,
     #[serde(default)]
     pub claimed_at: Option<String>,
+    #[serde(default)]
+    pub background_completion_input_through_sequence: Option<i64>,
+    #[serde(default)]
+    pub background_completion_notification_keys_json: Option<String>,
     #[serde(default)]
     pub deadline: Option<String>,
     #[serde(default)]
@@ -272,6 +314,8 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub valid_until: Option<String>,
     #[serde(default)]
+    pub subagent_depth: Option<i64>,
+    #[serde(default)]
     pub workspace_id: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
@@ -279,6 +323,21 @@ pub struct AgentRequestRow {
     pub workspace_owner_deployment_id: Option<String>,
     #[serde(default)]
     pub workspace_seal_hash: Option<String>,
+}
+
+impl AgentRequestRow {
+    /// Terminal per `RequestLifecycleState::is_terminal`. A row with no
+    /// (or an absent) `lifecycle_state` is not terminal.
+    pub fn is_terminal(&self) -> bool {
+        self.lifecycle_state
+            .is_some_and(RequestLifecycleState::is_terminal)
+    }
+
+    /// Claimable per `RequestLifecycleState::is_claimable`.
+    pub fn is_claimable(&self) -> bool {
+        self.lifecycle_state
+            .is_some_and(RequestLifecycleState::is_claimable)
+    }
 }
 
 /// Replicated envelope for human attention. Clients render this row without
@@ -1167,9 +1226,42 @@ mod tests {
         assert_eq!(row.max_tokens, Some(512));
         assert_eq!(row.max_total_tokens, Some(4096));
         assert_eq!(row.metadata.as_deref(), Some(r#"{"run_id":"run-1"}"#));
+        assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
+        assert!(row.is_claimable());
+        assert!(!row.is_terminal());
         let re: String = serde_json::to_string(&row).expect("serialize");
         let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
         assert_eq!(row, round);
+    }
+
+    #[test]
+    fn agent_request_row_missing_lifecycle_state_is_not_terminal_or_claimable() {
+        let row: AgentRequestRow =
+            serde_json::from_str(r#"{ "request_id": "req-2" }"#).expect("parse");
+        assert_eq!(row.lifecycle_state, None);
+        assert!(!row.is_claimable());
+        assert!(!row.is_terminal());
+    }
+
+    #[test]
+    fn agent_request_row_rejects_unknown_lifecycle_state_naming_it() {
+        let json = r#"{ "request_id": "req-3", "lifecycle_state": "bogus" }"#;
+        let err =
+            serde_json::from_str::<AgentRequestRow>(json).expect_err("must reject unknown state");
+        assert!(err.to_string().contains("bogus"), "{err}");
+    }
+
+    #[test]
+    fn agent_request_row_terminal_states_report_terminal() {
+        for state in RequestLifecycleState::ALL {
+            let json = format!(
+                r#"{{ "request_id": "req-4", "lifecycle_state": "{}" }}"#,
+                state.as_str()
+            );
+            let row: AgentRequestRow = serde_json::from_str(&json).expect("parse");
+            assert_eq!(row.is_terminal(), state.is_terminal(), "{state:?}");
+            assert_eq!(row.is_claimable(), state.is_claimable(), "{state:?}");
+        }
     }
 
     #[test]
