@@ -18,6 +18,7 @@ class PortableSocketPath:
     def __init__(self, path: str) -> None:
         self.identity = Path(path).resolve()
         self.alias_dir: Path | None = None
+        self.alias_path: Path | None = None
         self.connect_path = str(self.identity)
         if len(os.fsencode(self.connect_path)) <= PORTABLE_UNIX_PATH_BYTES:
             return
@@ -38,13 +39,17 @@ class PortableSocketPath:
             alias_dir.rmdir()
             raise
         self.alias_dir = alias_dir
+        self.alias_path = alias
         self.connect_path = str(alias)
 
     def cleanup(self) -> None:
         if self.alias_dir is None:
             return
-        (self.alias_dir / "s").unlink(missing_ok=True)
+        if self.alias_path is None:
+            raise AssertionError("socket-alias path is missing for its private directory")
+        self.alias_path.unlink(missing_ok=True)
         self.alias_dir.rmdir()
+        self.alias_path = None
         self.alias_dir = None
 
 
