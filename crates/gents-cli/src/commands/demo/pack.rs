@@ -5399,6 +5399,10 @@ mod tests {
                 assert!(live_prompt.contains("grok_stock_pty_probe.py self-test"));
                 assert!(live_prompt.contains("grok_stock_pty_probe.py run"));
                 assert!(live_prompt.contains("grok_stock_pty_probe.py cleanup"));
+                assert!(live_prompt.contains("--total-timeout 95"));
+                assert!(live_prompt.contains("do not wrap it in another timeout"));
+                assert!(live_prompt.contains("pipe its output"));
+                assert!(live_prompt.contains("zero process exit"));
                 assert!(live_prompt.contains("write_port_live_environment_proof"));
                 assert!(live_prompt
                     .find("write_port_live_environment_proof")
@@ -5410,6 +5414,10 @@ mod tests {
                     .join(" ");
                 assert!(live_behavior_words.contains("Only after that stock proof"));
                 assert!(live_behavior_words.contains("subprocess, subagent, and cancel"));
+                assert!(live_behavior.contains("--total-timeout 95"));
+                assert!(
+                    live_behavior_words.contains("never pipe or otherwise mask its exit status")
+                );
                 let live_review =
                     std::fs::read_to_string(pack.join("tasks/port-live-review-task/prompt.md"))
                         .expect("live review prompt should load");

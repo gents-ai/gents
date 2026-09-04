@@ -12,7 +12,9 @@ backend and run one stock interactive `grok --leader --leader-socket` PTY smoke
 through the checked-in `grok_stock_pty_probe.py`. Its structured proof must
 show a fresh challenge whose expected marker is absent from the typed prompt,
 a post-Enter-only match, and a second distinct completed turn proving the
-idle/input transition. Local terminal echo is not evidence. Only after that
+idle/input transition. Run it with the full 120-second tool timeout and its
+bounded `--total-timeout 95`; never pipe or otherwise mask its exit status.
+Local terminal echo is not evidence. Only after that
 stock proof, run the checked-in framed edge probe separately for handshake,
 prompt, tool, subprocess, subagent, and cancel. Track and stop the exact
 run-home/port/socket HTTP listener PID, not a wrapper shell.

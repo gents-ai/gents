@@ -46,7 +46,11 @@ Immediately after readiness, run
 `grok` binary and `live_socket`, passing the exact job endpoint,
 backend ID `grok-port-backend-ws1`, run-owned live home, preflight JSON,
 actual listener PID, GraphQL URL, and repository cwd, and save its structured
-JSON under the run directory. The script queries the live-home
+JSON under the run directory. Invoke this foreground command with the full
+120-second tool timeout and pass `--ready-timeout 15 --timeout 90
+--total-timeout 95`; do not wrap it in another timeout, pipe its output, or
+otherwise mask its exit status. Require both a zero process exit and the saved
+proof before continuing. The script queries the live-home
 `InferenceBackend` itself and requires its endpoint to equal the job endpoint.
 It launches stock interactive
 `grok --leader --leader-socket <live_socket>` in a PTY, uses a fresh random

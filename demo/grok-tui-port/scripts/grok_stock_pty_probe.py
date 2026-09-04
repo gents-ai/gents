@@ -9,7 +9,9 @@ exercises the evidence validators without a server or Grok binary.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -19,20 +21,44 @@ import select
 import signal
 import shlex
 import stat
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+class ProbeDeadlineExceeded(TimeoutError):
+    pass
+
+
+@contextlib.contextmanager
+def hard_deadline(timeout: float) -> Iterator[None]:
+    """Bound the whole probe while leaving time for its deterministic teardown."""
+    require(timeout > 0, "total probe timeout must be positive")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def expire(_signum: int, _frame: Any) -> None:
+        raise ProbeDeadlineExceeded(f"stock pager probe exceeded {timeout:g}s")
+
+    signal.signal(signal.SIGALRM, expire)
+    signal.setitimer(signal.ITIMER_REAL, timeout)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def validate_endpoint(
@@ -202,6 +228,7 @@ def listener_pids(port: int) -> list[int]:
         check=False,
         capture_output=True,
         text=True,
+        timeout=5,
     )
     if result.returncode not in {0, 1}:
         raise AssertionError(f"lsof failed while resolving listener: {result.stderr.strip()}")
@@ -267,6 +294,7 @@ def process_command(
         check=False,
         capture_output=True,
         text=True,
+        timeout=5,
     )
     require(result.returncode == 0, f"listener PID {pid} is not running")
     command = result.stdout.strip()
@@ -306,6 +334,17 @@ def read_available(fd: int, timeout: float) -> bytes:
         chunks.append(chunk)
         ready, _, _ = select.select([fd], [], [], 0)
     return b"".join(chunks)
+
+
+def set_pty_size(fd: int, *, rows: int = 40, columns: int = 120) -> None:
+    """Give full-screen clients a real viewport before they initialize."""
+    require(rows > 0 and columns > 0, "PTY dimensions must be positive")
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+
+
+def bounded_deadline(overall_deadline: float, phase_timeout: float) -> float:
+    require(phase_timeout > 0, "probe phase timeout must be positive")
+    return min(overall_deadline, time.monotonic() + phase_timeout)
 
 
 def read_until_quiet(
@@ -379,6 +418,8 @@ def challenge_prompt() -> tuple[str, str, bytes]:
 
 
 def run_probe(args: argparse.Namespace) -> dict[str, Any]:
+    require(args.total_timeout > 0, "total probe timeout must be positive")
+    overall_deadline = time.monotonic() + args.total_timeout
     expected_endpoint = args.expected_endpoint
     preflight = load_preflight(args.preflight, graphql=args.graphql, socket_path=args.socket)
     applied_endpoint = queried_backend_endpoint(args.graphql, args.backend_id)
@@ -408,31 +449,35 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
     idle_expected_bytes = idle_expected.encode()
 
     master_fd, slave_fd = pty.openpty()
-    env = os.environ.copy()
-    env.setdefault("TERM", "xterm-256color")
-    process = subprocess.Popen(
-        [
-            args.grok_bin,
-            "--leader",
-            "--leader-socket",
-            str(socket_path),
-            "--cwd",
-            args.cwd,
-            "--no-alt-screen",
-            "--minimal",
-        ],
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        cwd=args.cwd,
-        env=env,
-        start_new_session=True,
-    )
-    os.close(slave_fd)
+    process: subprocess.Popen[bytes] | None = None
+    slave_open = True
     try:
+        set_pty_size(slave_fd)
+        env = os.environ.copy()
+        env.setdefault("TERM", "xterm-256color")
+        process = subprocess.Popen(
+            [
+                args.grok_bin,
+                "--leader",
+                "--leader-socket",
+                str(socket_path),
+                "--cwd",
+                args.cwd,
+                "--no-alt-screen",
+                "--minimal",
+            ],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=args.cwd,
+            env=env,
+            start_new_session=True,
+        )
+        os.close(slave_fd)
+        slave_open = False
         pre_submit, ready_quiet = read_until_quiet(
             master_fd,
-            deadline=time.monotonic() + args.ready_timeout,
+            deadline=bounded_deadline(overall_deadline, args.ready_timeout),
             quiet_seconds=args.quiet_seconds,
         )
         require(ready_quiet and process.poll() is None, "stock pager did not become input-ready")
@@ -443,7 +488,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         os.write(master_fd, b"\r")
         post_submit, first_quiet = read_until_quiet(
             master_fd,
-            deadline=time.monotonic() + args.timeout,
+            deadline=bounded_deadline(overall_deadline, args.timeout),
             quiet_seconds=args.quiet_seconds,
             predicate=lambda output: expected_bytes in output,
         )
@@ -452,7 +497,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             args.graphql,
             prompt_bytes.decode(),
             expected_session=None,
-            deadline=time.monotonic() + args.timeout,
+            deadline=bounded_deadline(overall_deadline, args.timeout),
         )
         between_turns = read_available(master_fd, 0.5)
         os.write(master_fd, idle_prompt_bytes)
@@ -460,7 +505,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         os.write(master_fd, b"\r")
         idle_output, second_quiet = read_until_quiet(
             master_fd,
-            deadline=time.monotonic() + args.timeout,
+            deadline=bounded_deadline(overall_deadline, args.timeout),
             quiet_seconds=args.quiet_seconds,
             predicate=lambda output: idle_expected_bytes in output,
         )
@@ -469,7 +514,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             args.graphql,
             idle_prompt_bytes.decode(),
             expected_session=stock_session_id,
-            deadline=time.monotonic() + args.timeout,
+            deadline=bounded_deadline(overall_deadline, args.timeout),
         )
         require(second_request_id != first_request_id, "input-ready proof reused the first request")
         require(second_session_id == stock_session_id, "input-ready proof changed sessions")
@@ -489,7 +534,18 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             idle_transition=idle_transition,
         )
     finally:
-        terminate_client(process, master_fd)
+        # The hard wall bounds active probe work.  Cleanup has its own bounded
+        # waits and must not itself be interrupted, or the isolated child
+        # process group could survive its caller.
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if slave_open:
+            try:
+                os.close(slave_fd)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+        if process is not None:
+            terminate_client(process, master_fd)
         os.close(master_fd)
 
     proof: dict[str, Any] = {
@@ -611,6 +667,25 @@ def self_test() -> dict[str, int]:
         time.monotonic() - ready_started >= 0.03,
         "ready quiet timer armed before the first byte",
     )
+
+    pty_master, pty_slave = pty.openpty()
+    try:
+        set_pty_size(pty_slave, rows=37, columns=109)
+        size = struct.unpack(
+            "HHHH", fcntl.ioctl(pty_slave, termios.TIOCGWINSZ, b"\0" * 8)
+        )
+        require(size[:2] == (37, 109), "PTY viewport size was not applied")
+    finally:
+        os.close(pty_master)
+        os.close(pty_slave)
+
+    try:
+        with hard_deadline(0.03):
+            time.sleep(0.2)
+    except ProbeDeadlineExceeded:
+        pass
+    else:
+        raise AssertionError("hard probe deadline did not fire")
 
     transient_calls = 0
 
@@ -775,8 +850,14 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--listener-pid", required=True, type=int)
     run.add_argument("--grok-bin", default="grok")
     run.add_argument("--cwd", default=os.getcwd())
-    run.add_argument("--ready-timeout", type=float, default=20.0)
-    run.add_argument("--timeout", type=float, default=180.0)
+    run.add_argument("--ready-timeout", type=float, default=15.0)
+    run.add_argument("--timeout", type=float, default=90.0)
+    run.add_argument(
+        "--total-timeout",
+        type=float,
+        default=95.0,
+        help="overall run deadline; defaults below the runtime's 120s shell ceiling",
+    )
     run.add_argument("--quiet-seconds", type=float, default=2.0)
     run.add_argument("--output")
 
@@ -796,7 +877,9 @@ def main() -> int:
         elif args.command == "preflight":
             write_json(preflight_probe(args), args.output)
         elif args.command == "run":
-            write_json(run_probe(args), args.output)
+            with hard_deadline(args.total_timeout):
+                proof = run_probe(args)
+            write_json(proof, args.output)
         else:
             write_json(cleanup_probe(args), args.output)
     except (AssertionError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
