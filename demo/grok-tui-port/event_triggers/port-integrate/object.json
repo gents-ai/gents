@@ -12,5 +12,5 @@
   "group_min_count": null,
   "workspace_authority": "integrate",
   "enabled": true,
-  "concurrency": "serial"
+  "concurrency": "parallel"
 }

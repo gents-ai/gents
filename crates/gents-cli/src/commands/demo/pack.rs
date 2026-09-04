@@ -4894,6 +4894,17 @@ mod tests {
                 assert!(trigger_ids.iter().any(|id| id == "port-converge"));
                 assert!(trigger_ids.iter().any(|id| id == "port-publish"));
                 assert!(trigger_ids.iter().any(|id| id == "port-review"));
+                let integrate_trigger = read_pack_json_defaults(
+                    &pack
+                        .join("event_triggers")
+                        .join("port-integrate")
+                        .join("object.json"),
+                )
+                .expect("port-integrate trigger should load");
+                assert_eq!(
+                    integrate_trigger["concurrency"], "parallel",
+                    "per-document integration triggers must not drop accepted closures while another integration is in flight; workspace binding remains the exclusive integration boundary"
+                );
                 for (stage, budget) in [
                     ("recon", 1_000_000),
                     ("recon-audit", 500_000),
