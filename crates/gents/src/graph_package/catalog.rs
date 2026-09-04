@@ -781,7 +781,7 @@ mod tests {
     }
 
     #[test]
-    fn code_review_generation_stages_use_read_only_repository_tools() {
+    fn code_review_stages_use_role_specific_least_privilege_tools() {
         let package = load_bundled_graph_package("code-review").unwrap();
         for asset in [
             "tool-selections/review-recon-tools/object.json",
@@ -789,23 +789,35 @@ mod tests {
         ] {
             let selection: Value =
                 serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
-            assert_eq!(selection["enable_file_tools"], true, "{asset}");
-            assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
-            assert_eq!(selection["enable_bash"], true, "{asset}");
-            assert_eq!(selection["bash_mode"], "ReadOnly", "{asset}");
-            assert_eq!(
-                selection["command_execution_policy"], "read_only",
-                "{asset}"
-            );
-            assert_eq!(selection["command_network_mode"], "disabled", "{asset}");
+            assert_eq!(selection["enable_file_tools"], false, "{asset}");
+            assert_eq!(selection["file_tools_mode"], "Off", "{asset}");
+            assert_eq!(selection["enable_bash"], false, "{asset}");
+            assert_eq!(selection["bash_mode"], "Off", "{asset}");
+            assert!(selection["command_execution_policy"].is_null(), "{asset}");
+            assert!(selection["command_network_mode"].is_null(), "{asset}");
             assert_eq!(selection["enable_lsp"], false, "{asset}");
             assert_eq!(selection["enable_context_budget"], true, "{asset}");
-            assert_eq!(
-                selection["backgroundable_tool_names"],
-                json!(["bash"]),
-                "{asset}"
-            );
+            assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
+
+        let asset = "tool-selections/review-verify-tools/object.json";
+        let selection: Value = serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
+        assert_eq!(selection["enable_file_tools"], true, "{asset}");
+        assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
+        assert_eq!(selection["enable_bash"], true, "{asset}");
+        assert_eq!(selection["bash_mode"], "Unrestricted", "{asset}");
+        assert_eq!(
+            selection["command_execution_policy"], "workspace_write",
+            "{asset}"
+        );
+        assert_eq!(selection["command_network_mode"], "disabled", "{asset}");
+        assert_eq!(selection["enable_lsp"], false, "{asset}");
+        assert_eq!(selection["enable_context_budget"], true, "{asset}");
+        assert_eq!(
+            selection["backgroundable_tool_names"],
+            json!(["bash"]),
+            "{asset}"
+        );
     }
 
     #[test]
