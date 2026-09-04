@@ -1,14 +1,14 @@
 //! Ordered startup recovery sweeps.
 //!
-//! Lean pins the inference-call recovery sweep at `.startup` cadence
+//! Lean requires inference-call recovery at startup and periodically
 //! (`Proofs/Recovery/Sweeps/Inference.lean`), and its implementation
 //! (`InferenceCall::recover_all`) is parent-gated: a queued/running call whose
 //! linked request is not interrupted or terminal is skipped, because a live
 //! parent may still own the call. That gate makes the sweep's convergence
-//! depend on ordering: after a crash the parents of every stale call are
-//! exactly the requests stuck in `claimed`/`processing`, so the request sweep
-//! must run first (issue #1001; `Proofs/Recovery/StartupOrder.lean`,
-//! `Recovery.request_before_inference_converges`).
+//! depend on ordering: request repair must run first (issue #1001;
+//! `Proofs/Recovery/StartupOrder.lean`). A still-live execution lease defers
+//! both repairs; the same order on later periodic ticks converges the pair
+//! after lease expiry (`Recovery.deferred_startup_then_expired_periodic_converges`).
 //!
 //! Keeping the ordered sequence in one place makes it drivable by conformance
 //! tests instead of burying the order as ad hoc calls in the startup observer,
@@ -36,11 +36,11 @@ pub struct StartupRecoveryOutcome {
 ///    parent liveness as persisted at the crash, before request repair
 ///    terminalizes those parents.
 /// 2. **Requests/responses/conversations** — terminalizes crash-stuck
-///    `claimed`/`processing` requests from their durable response outcome
-///    (creating the missing error response first when the crash predates it).
+///    `claimed`/`processing` requests whose execution leases have expired.
+///    Still-live leases are preserved for a later periodic recovery pass.
 /// 3. **Inference calls** — parent-gated; runs last so crash-orphaned
 ///    queued/running rows observe terminal parents and are terminalized in
-///    this same pass instead of surviving until the next restart
+///    this same pass, or the later periodic pass that repairs a deferred parent
 ///    (`Recovery.request_before_inference_converges`).
 pub async fn run_startup_recovery(node: &EmbeddedNode, agent_did: &str) -> StartupRecoveryOutcome {
     let tool_calls = ToolCallLifecycle::recover_all(node, agent_did).await;

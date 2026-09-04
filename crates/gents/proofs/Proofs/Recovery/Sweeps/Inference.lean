@@ -39,6 +39,43 @@ def inferenceCallRecover (row : InferenceCallRecoveryRow) : InferenceCallRecover
   | .staleRunning => { row with call := { row.call with state := .failed } }
   | .interruptedParent => { row with call := { row.call with state := .cancelled } }
 
+/-- Refinement of an atomic update guarded by the observed call state. The
+    document identity selects `current`; its state must still match the stale
+    observation. Recovery does not overwrite another owner's intervening step. -/
+def inferenceCallRecoverObserved
+    (observed : InferenceCallRecoveryRow) (current : InferenceCall) : InferenceCall :=
+  if current.state = observed.call.state ∧ inferenceCallRecoveryStale observed then
+    (inferenceCallRecover { observed with call := current }).call
+  else current
+
+theorem inferenceCallRecoverObserved_matches
+    (observed : InferenceCallRecoveryRow) (current : InferenceCall)
+    (h_match : current.state = observed.call.state)
+    (h_stale : inferenceCallRecoveryStale observed) :
+    inferenceCallRecoverObserved observed current =
+      (inferenceCallRecover { observed with call := current }).call := by
+  simp [inferenceCallRecoverObserved, h_match, h_stale]
+
+theorem inferenceCallRecoverObserved_changed_state_noop
+    (observed : InferenceCallRecoveryRow) (current : InferenceCall)
+    (h_changed : current.state ≠ observed.call.state) :
+    inferenceCallRecoverObserved observed current = current := by
+  simp [inferenceCallRecoverObserved, h_changed]
+
+/-- A completed call cannot satisfy a stale queued/running observation, even
+    when a recovery sweep selected it before the original owner completed. -/
+theorem inferenceCallRecoverObserved_completed_noop
+    (observed : InferenceCallRecoveryRow) (current : InferenceCall)
+    (h_completed : current.state = .completed) :
+    inferenceCallRecoverObserved observed current = current := by
+  unfold inferenceCallRecoverObserved
+  split
+  · rename_i h
+    have h_observed : observed.call.state = .completed := h.1.symm.trans h_completed
+    cases h_cause : observed.cause <;>
+      simp [inferenceCallRecoveryStale, h_observed, h_cause] at h
+  · rfl
+
 def inferenceCallUninterruptedTerminalize
     (row : InferenceCallRecoveryRow) : InferenceCallRecoveryRow :=
   match row.cause with
@@ -91,7 +128,7 @@ def inferenceCallRecoverySweep : RecoverySweep :=
   , collection := .inferenceCall
   , sweepId := "inference_call_recover_all_stale_calls"
   , rustFunction := "InferenceCall::recover_all"
-  , cadence := .startup
+  , cadence := .periodic
   , implementationStatus := .implemented
   , stale := inferenceCallRecoveryStale
   , recover := inferenceCallRecover

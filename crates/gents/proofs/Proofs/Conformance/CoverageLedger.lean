@@ -824,6 +824,8 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases"
       "conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  -- Inference cases include periodic cadence: startup may defer a live execution
+  -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"

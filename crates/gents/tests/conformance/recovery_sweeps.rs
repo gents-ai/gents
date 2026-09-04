@@ -538,6 +538,123 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     );
 }
 
+/// Lean: `Recovery.deferred_startup_then_expired_periodic_converges`.
+/// An ungraceful restart may precede lease expiry, so startup ordering alone
+/// cannot converge the linked inference row. Drive the real periodic registry.
+#[tokio::test]
+async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_registry() {
+    for (initial_call_state, terminal_call_state) in
+        [("running", "failed"), ("queued", "cancelled")]
+    {
+        let db = test_db(&format!("deferred-inference-{initial_call_state}")).await;
+        let request_id = format!("deferred-inference-{initial_call_state}");
+        let session_id = format!("deferred-inference-{initial_call_state}-session");
+        let doc_id = create_request(
+            &db.node,
+            &request_id,
+            &session_id,
+            "pending",
+            RECOVERY_CREATED_AT,
+        )
+        .await;
+        create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
+        create_conversation_row(
+            &db.node,
+            &session_id,
+            "deferred recovery",
+            "deferred recovery",
+            "processing",
+            RECOVERY_CREATED_AT,
+            RECOVERY_CREATED_AT,
+            &request_id,
+        )
+        .await;
+        // Retain the fixture owner: dropping it would relinquish the lease,
+        // unlike the hard process loss represented by these persisted rows.
+        let _owner = own_child_fixture(&db.node, &doc_id, &request_id, &session_id, true).await;
+        insert_inference_call(&db.node, &request_id, initial_call_state).await;
+        let startup = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
+        startup.tool_calls.expect("startup tool recovery");
+        assert_eq!(
+            startup
+                .requests
+                .expect("startup request recovery")
+                .requests_recovered,
+            0
+        );
+        assert_eq!(
+            startup
+                .inference_calls
+                .expect("startup inference recovery")
+                .calls_recovered,
+            0
+        );
+        let registry = gents::BackgroundExecutionRegistry::default();
+        let live =
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+                .await
+                .expect("live periodic recovery");
+        assert!(
+            live.iter().all(|run| run.is_noop()),
+            "live lease must preserve both rows: {live:?}"
+        );
+        assert_eq!(
+            fetch_request_recovery_row(&db.node, &request_id)
+                .await
+                .lifecycle_state
+                .as_str(),
+            "processing"
+        );
+        assert_eq!(
+            fetch_inference_recovery_row(&db.node, &request_id)
+                .await
+                .call_state,
+            initial_call_state
+        );
+
+        // Change only the expiry; preserve the generation and progress tuple
+        // that the recovery owner must fence when it wins terminalization.
+        let expired = db.node.execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{RECOVERY_CREATED_AT}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(&doc_id),
+        )).await;
+        assert!(
+            !expired.has_errors(),
+            "expire fixture lease: {:?}",
+            expired.errors
+        );
+        let repaired =
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+                .await
+                .expect("expired periodic recovery");
+        assert!(
+            repaired.iter().any(|run| !run.is_noop()),
+            "expired pair requires recovery"
+        );
+        assert_eq!(
+            fetch_request_recovery_row(&db.node, &request_id)
+                .await
+                .lifecycle_state
+                .as_str(),
+            "failed"
+        );
+        let call = fetch_inference_recovery_row(&db.node, &request_id).await;
+        assert_eq!(
+            call.call_state, terminal_call_state,
+            "periodic registry must recover the inference row after its parent"
+        );
+        assert!(!gents::call_state_holds_backend_slot(&call.call_state));
+        let second =
+            gents::periodic_recovery::run_periodic_recovery_sweeps(&db.node, AGENT_DID, &registry)
+                .await
+                .expect("second periodic recovery");
+        assert!(
+            second.iter().all(|run| run.is_noop()),
+            "recovery must be idempotent: {second:?}"
+        );
+    }
+}
+
 pub(super) async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
     let db = test_db("recovery-465-convergence").await;
 
