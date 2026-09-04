@@ -10,12 +10,17 @@ import socket
 import struct
 import sys
 import time
-import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Callable
 
-from grok_probe_common import PortableSocketPath, self_test_portable_socket_path
+from grok_probe_common import (
+    PortableSocketPath,
+    graphql_escape,
+    graphql_query,
+    require,
+    self_test_portable_socket_path,
+)
 
 
 DEFAULT_MODEL = "GLM-5.3-Flash-NVFP4"
@@ -55,21 +60,6 @@ def message_rail(message: dict[str, Any]) -> str | None:
     if method in SUBAGENT_LIFECYCLE_METHODS:
         return "extension"
     return None
-
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
-
-
-def graphql_escape(value: str) -> str:
-    return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
 
 
 class LeaderClient:
@@ -2614,16 +2604,7 @@ def query_subagent_documents(endpoint: str, session_id: str) -> dict[str, Any]:
         request_id tool_call_id tool_name child_request_id args
       }}
     }}"""
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.load(response)
-    require(not payload.get("errors"), f"GraphQL errors: {payload.get('errors')}")
-    data = payload.get("data", {})
+    data = graphql_query(endpoint, query, timeout=10)
     # Scope the child rows to children of THIS session's requests: the
     # spawn tool calls of this session name the child request ids we accept.
     spawn_rows = data.get("SpawnToolCalls", [])
@@ -2659,16 +2640,7 @@ def query_documents(endpoint: str, session_id: str) -> dict[str, Any]:
         request_id tool_call_id tool_name args result status lifecycle_state completed_at
       }}
     }}"""
-    request = urllib.request.Request(
-        endpoint,
-        data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=10) as response:
-        payload = json.load(response)
-    require(not payload.get("errors"), f"GraphQL errors: {payload.get('errors')}")
-    data = payload.get("data", {})
+    data = graphql_query(endpoint, query, timeout=10)
     require(data.get("AgentSession"), "no AgentSession document for probe session")
     return data
 

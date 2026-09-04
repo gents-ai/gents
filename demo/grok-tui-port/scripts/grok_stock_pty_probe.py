@@ -28,17 +28,17 @@ import termios
 import threading
 import time
 import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
-from grok_probe_common import PortableSocketPath, self_test_portable_socket_path
-
-
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise AssertionError(message)
+from grok_probe_common import (
+    PortableSocketPath,
+    graphql_escape,
+    graphql_query,
+    require,
+    self_test_portable_socket_path,
+)
 
 
 class ProbeDeadlineExceeded(TimeoutError):
@@ -75,6 +75,22 @@ def blocked_signal(signum: signal.Signals) -> Iterator[None]:
         yield
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
+
+
+def disarm_pending_alarm() -> bool:
+    """Disarm SIGALRM and consume a deadline queued after active work completed.
+
+    The caller must block SIGALRM first.  Consuming the pending signal keeps it
+    from raising after deterministic resource cleanup has already succeeded.
+    """
+    current_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+    require(signal.SIGALRM in current_mask, "SIGALRM must be blocked before disarm")
+    signal.setitimer(signal.ITIMER_REAL, 0)
+    if signal.SIGALRM not in signal.sigpending():
+        return False
+    received = signal.sigwait({signal.SIGALRM})
+    require(received == signal.SIGALRM, "consumed the wrong pending signal")
+    return True
 
 
 @contextlib.contextmanager
@@ -127,31 +143,6 @@ def graphql_port(graphql_url: str) -> int:
     parsed = urlparse(graphql_url)
     require(parsed.scheme in {"http", "https"}, "live GraphQL URL must be HTTP(S)")
     return parsed.port or (443 if parsed.scheme == "https" else 80)
-
-
-def graphql_escape(value: str) -> str:
-    return (
-        value.replace("\\", "\\\\")
-        .replace('"', '\\"')
-        .replace("\n", "\\n")
-        .replace("\r", "\\r")
-    )
-
-
-def graphql_query(graphql_url: str, query: str) -> dict[str, Any]:
-    request = urllib.request.Request(
-        graphql_url,
-        data=json.dumps({"query": query}).encode(),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        payload = json.load(response)
-    require(isinstance(payload, dict), "GraphQL response is not an object")
-    require(not payload.get("errors"), f"GraphQL query failed: {payload.get('errors')}")
-    data = payload.get("data")
-    require(isinstance(data, dict), "GraphQL response has no data object")
-    return data
 
 
 def backend_endpoint_from_data(data: dict[str, Any], backend_id: str) -> str:
@@ -302,6 +293,8 @@ def completed_request_for_prompt(
                         expected=expected,
                     )
                     return request_id, session_id
+        except ProbeDeadlineExceeded:
+            raise
         except urllib.error.HTTPError:
             raise
         except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
@@ -619,12 +612,12 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
         idle_transition = process.poll() is None
         require(idle_transition, "stock pager exited before completing the second turn")
     finally:
-        # The hard wall bounds active probe work.  Cleanup has its own bounded
-        # waits.  Defer an already-pending alarm until ownership is released;
-        # its handler still has a guarded process group during every earlier
-        # bytecode boundary.
+        # The hard wall bounds active probe work. Cleanup has its own bounded
+        # waits. Atomically block and disarm the alarm at the successful-body
+        # boundary; consume one signal queued after that boundary so it cannot
+        # discard the completed proof when the mask is restored.
         with blocked_signal(signal.SIGALRM):
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            disarm_pending_alarm()
             if slave_open:
                 try:
                     os.close(slave_fd)
@@ -805,7 +798,41 @@ def self_test() -> dict[str, int]:
         "deadline did not kill the guarded pager before raising",
     )
 
+    delivered_after_disarm: list[int] = []
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    signal.signal(
+        signal.SIGALRM,
+        lambda signum, _frame: delivered_after_disarm.append(signum),
+    )
+    try:
+        with blocked_signal(signal.SIGALRM):
+            signal.setitimer(signal.ITIMER_REAL, 0.01)
+            time.sleep(0.03)
+            require(disarm_pending_alarm(), "queued cleanup alarm was not consumed")
+        time.sleep(0.01)
+        require(not delivered_after_disarm, "cleanup alarm fired after successful disarm")
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+
     transient_calls = 0
+
+    def deadline_during_query(_graphql: str, _prompt: str) -> list[dict[str, Any]]:
+        raise ProbeDeadlineExceeded("injected hard deadline")
+
+    try:
+        completed_request_for_prompt(
+            "http://unused.invalid/graphql",
+            "deadline-prompt",
+            expected="unused",
+            expected_session=None,
+            deadline=time.monotonic() + 1.0,
+            query_rows=deadline_during_query,
+        )
+    except ProbeDeadlineExceeded:
+        pass
+    else:
+        raise AssertionError("hard deadline was swallowed by transient polling")
 
     def transient_then_complete(_graphql: str, prompt: str) -> list[dict[str, Any]]:
         nonlocal transient_calls

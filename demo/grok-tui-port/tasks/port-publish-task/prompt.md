@@ -23,6 +23,11 @@ Otherwise:
    push with upstream tracking.
 3. Run repository gates (`cargo fmt --all --check`, `cargo test -p gents`,
    `cargo check --workspace --all-targets`).
+   Use `spawn_process` with `tool_name: "bash_unrestricted"` for cargo commands
+   that may exceed the foreground bash timeout, then use
+   `wait_process`/`read_process` until that exact managed process is terminal.
+   Do not use `nohup`, shell `&`, or an untracked log file. A gate passes only
+   when the managed process reaches a terminal result with exit code zero.
 4. Open one normal, non-draft PR: `gh pr create --base <pr_base> --head <branch>`.
 5. Confirm the PR head equals both live `final_review_head` and the final
    review report's `head_sha`; copy its exact review-round and

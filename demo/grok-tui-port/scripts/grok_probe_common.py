@@ -1,15 +1,46 @@
-"""Shared Unix-socket support for the checked-in Grok live probes."""
+"""Shared dependency-free support for the checked-in Grok live probes."""
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import stat
 import tempfile
+import urllib.request
 from pathlib import Path
+from typing import Any
 
 
 PORTABLE_UNIX_PATH_BYTES = 100
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise AssertionError(message)
+
+
+def graphql_escape(value: str) -> str:
+    """Encode a value for the contents of a GraphQL string literal."""
+    return json.dumps(value, ensure_ascii=True)[1:-1]
+
+
+def graphql_query(
+    endpoint: str, query: str, *, timeout: float = 5
+) -> dict[str, Any]:
+    request = urllib.request.Request(
+        endpoint,
+        data=json.dumps({"query": query}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        payload = json.load(response)
+    require(isinstance(payload, dict), "GraphQL response is not an object")
+    require(not payload.get("errors"), f"GraphQL query failed: {payload.get('errors')}")
+    data = payload.get("data")
+    require(isinstance(data, dict), "GraphQL response has no data object")
+    return data
 
 
 def _new_private_socket_leaf(

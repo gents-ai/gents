@@ -5362,6 +5362,15 @@ mod tests {
                     .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
                     assert_eq!(tools["command_execution_policy"], "unrestricted");
                     assert_eq!(tools["command_network_mode"], "enabled");
+                    let expected_backgroundable = if selection == "port-publish-tools" {
+                        json!(["bash_unrestricted"])
+                    } else {
+                        json!([])
+                    };
+                    assert_eq!(
+                        tools["backgroundable_tool_names"], expected_backgroundable,
+                        "publish must track long repository gates with the managed process lifecycle"
+                    );
                 }
                 let live_io = read_pack_json_defaults(
                     &pack.join("datastore-tool-surfaces/port-live-io/object.json"),
