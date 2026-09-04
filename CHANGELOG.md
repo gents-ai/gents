@@ -41,7 +41,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   output), matching the request ledger; `/self` utilization is measured
   against the effective input budget.
 - A backend whose API-key environment variable is unset now fails loudly on
-  every path (previously the builder and prober silently ran without a key).
+  every path (previously the probers silently attempted unauthenticated calls).
 
 ## 0.15.0 - 2026-09-01
 

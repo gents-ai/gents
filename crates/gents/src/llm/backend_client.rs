@@ -223,16 +223,6 @@ mod tests {
         Arc::new(EmbeddedNode::builder().build().await.unwrap())
     }
 
-    /// `BackendClient` intentionally holds no `Debug` bound (every variant's
-    /// rig client type would need one for no reason a caller needs) so
-    /// `Result::expect_err` doesn't apply here; unwrap the error by hand.
-    fn expect_err(result: Result<BackendClient>, msg: &str) -> anyhow::Error {
-        match result {
-            Ok(_) => panic!("{msg}"),
-            Err(error) => error,
-        }
-    }
-
     fn test_behavior(kind: BackendProviderKind, wire_api: crate::OpenAiWireApi) -> AgentBehavior {
         let identity = KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("backend-client-table-{}.key", uuid::Uuid::new_v4())),
@@ -284,14 +274,33 @@ mod tests {
         assert!(matches!(client, BackendClient::OpenRouter(_)));
     }
 
-    /// The OAuth branches (ChatGPT Codex, Grok/xAI OAuth) hit DefraDB for a
-    /// credential that doesn't exist in this bare test node, so they cannot
-    /// reach a concrete client — but the shared constructor must still route
-    /// each `BackendProviderKind`/wire-API combination to the *correct*
-    /// provider's builder, which a provider-specific "missing OAuthCredential"
-    /// error proves (Codex names ChatGPT, xAI names Grok).
+    async fn seed_oauth_credential(node: &EmbeddedNode, behavior: &AgentBehavior, provider: &str) {
+        let agent_did = behavior.agent_did();
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: crate::oauth_credential::oauth_credential_id(agent_did, provider),
+            agent_did: agent_did.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-token".to_string(),
+            refresh_token: "refresh-token".to_string(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            last_refresh: None,
+            enabled: true,
+        };
+        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+            .await
+            .expect("test OAuthCredential must persist");
+    }
+
+    /// Seed credentials so every OAuth route reaches a concrete client. A
+    /// missing-credential assertion cannot distinguish xAI Chat Completions
+    /// from Responses because both fail in their shared bootstrap preamble.
     #[tokio::test]
-    async fn each_oauth_provider_kind_dispatches_to_its_own_builder() {
+    async fn each_oauth_provider_kind_yields_the_expected_client_variant() {
         let node = test_node().await;
         crate::migration::ensure_all_runtime_migrations(node.clone())
             .await
@@ -301,36 +310,46 @@ mod tests {
             BackendProviderKind::ChatGptCodex,
             crate::OpenAiWireApi::Responses,
         );
-        let result =
-            build_backend_client(node.clone(), &codex, "key", Duration::from_secs(5)).await;
-        let error = expect_err(result, "no OAuthCredential exists for this agent");
-        assert!(
-            format!("{error:#}").contains("ChatGPT"),
-            "must route to the Codex builder: {error:#}"
-        );
+        seed_oauth_credential(
+            node.as_ref(),
+            &codex,
+            crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
+        )
+        .await;
+        let client = build_backend_client(node.clone(), &codex, "key", Duration::from_secs(5))
+            .await
+            .expect("Codex client builds from the seeded credential without network I/O");
+        assert!(matches!(client, BackendClient::ChatGptCodex(_)));
 
         let xai_chat = test_behavior(
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::ChatCompletions,
         );
-        let result =
-            build_backend_client(node.clone(), &xai_chat, "key", Duration::from_secs(5)).await;
-        let error = expect_err(result, "no OAuthCredential exists for this agent");
-        assert!(
-            format!("{error:#}").contains("Grok"),
-            "must route to the Grok Chat Completions builder: {error:#}"
-        );
+        seed_oauth_credential(
+            node.as_ref(),
+            &xai_chat,
+            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+        )
+        .await;
+        let client = build_backend_client(node.clone(), &xai_chat, "key", Duration::from_secs(5))
+            .await
+            .expect("Grok Chat Completions client builds without network I/O");
+        assert!(matches!(client, BackendClient::XaiGrokChatCompletions(_)));
 
         let xai_responses = test_behavior(
             BackendProviderKind::XaiGrokOAuth,
             crate::OpenAiWireApi::Responses,
         );
-        let result =
-            build_backend_client(node.clone(), &xai_responses, "key", Duration::from_secs(5)).await;
-        let error = expect_err(result, "no OAuthCredential exists for this agent");
-        assert!(
-            format!("{error:#}").contains("Grok"),
-            "must route to the Grok Responses builder: {error:#}"
-        );
+        seed_oauth_credential(
+            node.as_ref(),
+            &xai_responses,
+            crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
+        )
+        .await;
+        let client =
+            build_backend_client(node.clone(), &xai_responses, "key", Duration::from_secs(5))
+                .await
+                .expect("Grok Responses client builds without network I/O");
+        assert!(matches!(client, BackendClient::XaiGrokResponses(_)));
     }
 }

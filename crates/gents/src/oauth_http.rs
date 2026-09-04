@@ -8,7 +8,7 @@
 //! provider-specific shaping the request body and response need, and whether
 //! identity headers ride per-request or as client-build defaults.
 //!
-//! [`BearerAuthHttpClient`] is the single wrapper; [`IdentityHeaders`] is the
+//! [`BearerAuthHttpClient`] is the single wrapper; [`OAuthHttpPolicy`] is the
 //! per-provider policy (a small `Default` marker type) that supplies those
 //! differences. `chatgpt_codex` and `xai_grok_oauth` each keep their own
 //! provider-specific body-patch/response-shaping free functions and instantiate
@@ -38,7 +38,7 @@ use crate::oauth_credential::{
 /// "the bearer is dead", plus the request/response shaping hooks each
 /// provider needs. Every method has a passthrough default so a provider only
 /// overrides what it actually differs on.
-pub trait IdentityHeaders: Clone + Default + Send + Sync + 'static {
+pub trait OAuthHttpPolicy: Clone + Default + Send + Sync + 'static {
     /// HTTP status codes on which the current bearer must be invalidated and
     /// refreshed on the next request. Codex: 401 and 403. xAI: 401 only — its
     /// proxy uses 403 as a NotEntitled tier gate that no refresh fixes, and
@@ -95,7 +95,7 @@ fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
 
 /// Single owner of "does this HTTP error mean the bearer is dead" for every
 /// OAuth-backed provider. `rejection_statuses` is the provider's
-/// [`IdentityHeaders::REJECTION_STATUSES`].
+/// [`OAuthHttpPolicy::REJECTION_STATUSES`].
 pub fn is_bearer_rejection(rejection_statuses: &[u16], error: &http_client::Error) -> bool {
     bearer_rejection_status(error).is_some_and(|status| rejection_statuses.contains(&status))
 }
@@ -112,15 +112,15 @@ pub fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
 }
 
 /// HTTP client that injects a fresh OAuth bearer on every request, applies a
-/// provider's [`IdentityHeaders`] policy, and invalidates the bearer when the
+/// provider's [`OAuthHttpPolicy`], and invalidates the bearer when the
 /// provider rejects it.
-pub struct BearerAuthHttpClient<S: BearerSource, P: IdentityHeaders, T = ReqwestClient> {
+pub struct BearerAuthHttpClient<S: BearerSource, P: OAuthHttpPolicy, T = ReqwestClient> {
     inner: T,
     bearer: Option<Arc<S>>,
     policy: P,
 }
 
-impl<S: BearerSource, P: IdentityHeaders, T: Clone> Clone for BearerAuthHttpClient<S, P, T> {
+impl<S: BearerSource, P: OAuthHttpPolicy, T: Clone> Clone for BearerAuthHttpClient<S, P, T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -130,7 +130,7 @@ impl<S: BearerSource, P: IdentityHeaders, T: Clone> Clone for BearerAuthHttpClie
     }
 }
 
-impl<S: BearerSource, P: IdentityHeaders, T: fmt::Debug> fmt::Debug
+impl<S: BearerSource, P: OAuthHttpPolicy, T: fmt::Debug> fmt::Debug
     for BearerAuthHttpClient<S, P, T>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,7 +141,7 @@ impl<S: BearerSource, P: IdentityHeaders, T: fmt::Debug> fmt::Debug
     }
 }
 
-impl<S: BearerSource, P: IdentityHeaders, T: Default> Default for BearerAuthHttpClient<S, P, T> {
+impl<S: BearerSource, P: OAuthHttpPolicy, T: Default> Default for BearerAuthHttpClient<S, P, T> {
     fn default() -> Self {
         Self {
             inner: T::default(),
@@ -151,7 +151,7 @@ impl<S: BearerSource, P: IdentityHeaders, T: Default> Default for BearerAuthHttp
     }
 }
 
-impl<S: BearerSource, P: IdentityHeaders> BearerAuthHttpClient<S, P, ReqwestClient> {
+impl<S: BearerSource, P: OAuthHttpPolicy> BearerAuthHttpClient<S, P, ReqwestClient> {
     pub fn new(bearer: Arc<S>) -> Self {
         Self {
             inner: ReqwestClient::default(),
@@ -161,7 +161,7 @@ impl<S: BearerSource, P: IdentityHeaders> BearerAuthHttpClient<S, P, ReqwestClie
     }
 }
 
-impl<S: BearerSource, P: IdentityHeaders, T> BearerAuthHttpClient<S, P, T> {
+impl<S: BearerSource, P: OAuthHttpPolicy, T> BearerAuthHttpClient<S, P, T> {
     pub fn with_inner(bearer: Arc<S>, inner: T) -> Self {
         Self {
             inner,
@@ -213,7 +213,7 @@ impl<S: BearerSource, P: IdentityHeaders, T> BearerAuthHttpClient<S, P, T> {
 impl<S, P, T> HttpClientExt for BearerAuthHttpClient<S, P, T>
 where
     S: BearerSource + 'static,
-    P: IdentityHeaders,
+    P: OAuthHttpPolicy,
     T: Clone + HttpClientExt + fmt::Debug + 'static,
 {
     fn send<A, U>(
@@ -334,7 +334,7 @@ mod tests {
     #[derive(Clone, Default)]
     struct TestPolicy;
 
-    impl IdentityHeaders for TestPolicy {
+    impl OAuthHttpPolicy for TestPolicy {
         const REJECTION_STATUSES: &'static [u16] = &[401, 403];
     }
 

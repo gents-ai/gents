@@ -99,7 +99,7 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     Ok(headers)
 }
 
-/// [`crate::oauth_http::IdentityHeaders`] policy for the Grok/xAI OAuth
+/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the Grok/xAI OAuth
 /// transport: only 401 kills the bearer (403 is the NotEntitled tier gate,
 /// which no refresh fixes — and with rotating refresh tokens a force-refresh
 /// loop would burn a rotation per request), identity headers ride
@@ -109,7 +109,7 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
 #[derive(Clone, Default)]
 pub struct XaiGrokOAuthPolicy;
 
-impl crate::oauth_http::IdentityHeaders for XaiGrokOAuthPolicy {
+impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401];
 
     /// Inject the Grok-CLI identity headers the proxy's auth middleware and
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn only_401_invalidates_bearer_403_is_a_tier_gate() {
-        use crate::oauth_http::{is_bearer_rejection, IdentityHeaders as _};
+        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
         // 401 = expired/revoked grant: refresh may fix it. 403 = NotEntitled
         // tier gate: refresh never fixes it, and with rotating refresh tokens
         // a force-refresh loop would burn a rotation per request.

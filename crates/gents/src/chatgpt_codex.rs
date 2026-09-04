@@ -123,7 +123,7 @@ pub fn chatgpt_codex_client_version() -> String {
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.144.4";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
-/// [`crate::oauth_http::IdentityHeaders`] policy for the ChatGPT Codex
+/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
 /// Responses transport: 401/403 kill the bearer, the `/responses` body needs
 /// the `instructions` hoist, and a buffered send must rewrite Codex's SSE
 /// body into the JSON `response.completed` shape rig expects. Codex's
@@ -133,7 +133,7 @@ const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSI
 #[derive(Clone, Default)]
 pub struct ChatGptCodexPolicy;
 
-impl crate::oauth_http::IdentityHeaders for ChatGptCodexPolicy {
+impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
     const REJECTION_STATUSES: &'static [u16] = &[401, 403];
 
     fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
@@ -640,7 +640,7 @@ mod tests {
 
     #[test]
     fn bearer_rejection_only_for_401_and_403() {
-        use crate::oauth_http::{is_bearer_rejection, IdentityHeaders as _};
+        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
         let statuses = ChatGptCodexPolicy::REJECTION_STATUSES;
         assert!(is_bearer_rejection(statuses, &status_error("401")));
         assert!(is_bearer_rejection(statuses, &status_error("403")));
