@@ -283,7 +283,7 @@ async fn apply_model_to_bound_behavior(
     // candidate from the readiness-filtered "available" set for product
     // reasons (don't offer a disabled/unready backend); this is the
     // unconditional correctness gate right before the write.
-    let refs = ConfigReferences::load(state.node.as_ref(), state.agent_did.as_ref())
+    let refs = ConfigReferences::load(&state.node, state.agent_did.as_ref())
         .await
         .context("loading config references to validate the selected model")?;
     behavior

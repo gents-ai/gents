@@ -33,7 +33,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 ### Fixed
 
 - Config documents are validated by one owner regardless of write path;
-  `gents config agent-behavior set` now rejects unknown backends, models,
+  `gents config behavior set` now rejects unknown backends, models,
   tool selections and profiles.
 - `/healthz` and `gents fleet-slots` now report backends the local prober has
   vetoed as degraded/not accepting, matching admission.

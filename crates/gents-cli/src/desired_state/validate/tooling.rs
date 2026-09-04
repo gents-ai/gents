@@ -445,19 +445,15 @@ fn validate_subagent_targets(
 ) {
     let mut seen_names: HashSet<String> = HashSet::new();
     for entry in entries {
-        let target = match SubagentTarget::parse(entry) {
-            Ok(target) => target,
-            Err(error) => {
-                errors.push(format!(
-                "tool selection {selection_id} subagent_targets entry {entry:?} is not valid SubagentTarget JSON: {error}"
-            ));
-                continue;
-            }
+        // Malformed/structurally-invalid entries are already reported by
+        // `ToolSelectionDocument::validate` (#1331, the single owner —
+        // called earlier in `validate_tool_selections`); skip them here
+        // without a second error message. Parsing still has to run because
+        // the checks below need the decoded fields.
+        let Ok(target) = SubagentTarget::parse(entry) else {
+            continue;
         };
         if !target.is_structurally_valid() {
-            errors.push(format!(
-            "tool selection {selection_id} subagent_targets entry {entry:?} must have non-empty name, agent_did, and behavior_id"
-        ));
             continue;
         }
         if !seen_names.insert(target.name.trim().to_string()) {

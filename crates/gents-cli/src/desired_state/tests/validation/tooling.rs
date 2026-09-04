@@ -9,10 +9,15 @@ fn validate_rejects_empty_string_in_subagent_targets() {
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
+    // `ToolSelectionDocument::validate` (#1331, the single owner) reports
+    // this now; its message doesn't repeat the selection_id (a document
+    // validator sees one document, not the manifest it came from) — the
+    // manifest-side `validate_subagent_targets` no longer re-checks entry
+    // parseability, only duplicate names and cross-deployment permission.
     assert!(
         errors
             .iter()
-            .any(|msg| msg.contains("subagent_targets") && msg.contains("agent-tools")),
+            .any(|msg| msg.contains("subagent_targets[0] is empty")),
         "expected empty subagent_targets entry rejection, got {errors:?}"
     );
 }

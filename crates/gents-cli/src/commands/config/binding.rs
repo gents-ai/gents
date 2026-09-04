@@ -735,9 +735,12 @@ mod tests {
 
         let mut errors = Vec::new();
         desired_state::validate::validate_manifest(&manifest, &mut errors);
+        // `ToolSelectionDocument::validate` (#1331, the single owner) reports
+        // this now; the manifest-side `validate_subagent_targets` no longer
+        // re-checks entry parseability (fix round 1).
         assert!(
             errors.iter().any(|msg| {
-                msg.contains("is not valid SubagentTarget JSON") && msg.contains("broken")
+                msg.contains("is not a valid SubagentTarget JSON object") && msg.contains("broken")
             }),
             "malformed entry must still produce an actionable validation error, got {errors:?}"
         );

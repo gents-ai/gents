@@ -1219,6 +1219,105 @@ fn inference_profile_validate_rejects_reasoning_effort_outside_the_vocabulary() 
 }
 
 // ---------------------------------------------------------------------------
+// Sampling bounds (#1331 fix round 1 — moved from the imperative
+// `gents config profile set` writer, the only place that enforced them).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inference_profile_validate_accepts_sampling_bounds_at_their_edges() {
+    let mut profile = base_profile("edges");
+    profile.top_p = Some(0.0);
+    profile.min_p = Some(1.0);
+    profile.top_k = Some(1);
+    profile.repetition_penalty = Some(f64::MIN_POSITIVE);
+    profile.frequency_penalty = Some(-2.0);
+    profile.presence_penalty = Some(2.0);
+    assert!(profile.validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_top_p_outside_unit_interval() {
+    for value in [-0.01, 1.01] {
+        let mut profile = base_profile("top-p");
+        profile.top_p = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("top_p must be within [0, 1]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_min_p_outside_unit_interval() {
+    for value in [-0.01, 1.01] {
+        let mut profile = base_profile("min-p");
+        profile.min_p = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("min_p must be within [0, 1]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_top_k() {
+    for value in [0, -1] {
+        let mut profile = base_profile("top-k");
+        profile.top_k = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(error.contains("top_k must be positive"), "{value}: {error}");
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_repetition_penalty() {
+    for value in [0.0, -1.0] {
+        let mut profile = base_profile("rep-penalty");
+        profile.repetition_penalty = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("repetition_penalty must be positive"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_frequency_and_presence_penalty_outside_range() {
+    for value in [-2.01, 2.01] {
+        let mut frequency = base_profile("freq-penalty");
+        frequency.frequency_penalty = Some(value);
+        let error = frequency.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("frequency_penalty must be within [-2, 2]"),
+            "{value}: {error}"
+        );
+
+        let mut presence = base_profile("presence-penalty");
+        presence.presence_penalty = Some(value);
+        let error = presence.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("presence_penalty must be within [-2, 2]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_reports_every_violation_at_once() {
+    let mut profile = base_profile("multi-bad");
+    profile.seed = Some(-1);
+    profile.top_p = Some(2.0);
+    profile.top_k = Some(0);
+    let error = profile.validate().unwrap_err().to_string();
+    assert!(error.contains("seed must be non-negative"), "{error}");
+    assert!(error.contains("top_p must be within [0, 1]"), "{error}");
+    assert!(error.contains("top_k must be positive"), "{error}");
+}
+
+// ---------------------------------------------------------------------------
 // InferenceBackend::validate lives in `backend_registry` (crate root); see
 // `crates/gents/src/backend_registry/tests.rs` for its table-driven cases.
 // ---------------------------------------------------------------------------
@@ -1394,4 +1493,71 @@ fn agent_behavior_validate_references_accepts_known_skills() {
     behavior.skill_excludes = vec!["known-skill".to_string()];
     let refs = refs_with(&[], &[], &[], &["known-skill"]);
     assert!(behavior.validate_references(&refs).is_ok());
+}
+
+// ---------------------------------------------------------------------------
+// ConfigReferences::load — lenient backend parsing (#1331, fix round 1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn config_references_load_tolerates_a_malformed_backend_row_beside_a_good_one() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    // Missing max_concurrent: `InferenceBackend::from_value` (the strict
+    // registry parser) requires it and would fail on this row. It still has
+    // a usable backend_id, so `ConfigReferences::load` — which reads
+    // backend_id/models directly, not through that parser — must not sink
+    // the whole load over it.
+    let malformed = node
+        .execute(
+            r#"mutation {
+                create_InferenceBackend(input: {
+                    backend_id: "malformed-backend",
+                    name: "Malformed",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "http://127.0.0.1:11434/v1",
+                    enabled: true,
+                    models: ["should-not-matter"],
+                    probe_status: "unknown"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!malformed.has_errors(), "{:?}", malformed.errors);
+
+    let good = node
+        .execute(
+            r#"mutation {
+                create_InferenceBackend(input: {
+                    backend_id: "good-backend",
+                    name: "Good",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "http://127.0.0.1:11434/v1",
+                    max_concurrent: 4,
+                    max_queue_depth: 100,
+                    enabled: true,
+                    models: ["model-a", "model-b"],
+                    probe_status: "healthy"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!good.has_errors(), "{:?}", good.errors);
+
+    let refs = ConfigReferences::load(&node, "did:test:whatever")
+        .await
+        .expect("load must tolerate a malformed unrelated backend row");
+
+    assert_eq!(
+        refs.backends.get("good-backend").map(Vec::as_slice),
+        Some(&["model-a".to_string(), "model-b".to_string()][..]),
+        "the good backend's models must still come through"
+    );
+    // The malformed row's own backend_id is fine — only max_concurrent is
+    // missing — so it's present too; ConfigReferences skips a row only when
+    // even backend_id is unusable. The point of this test is that its
+    // absence of max_concurrent doesn't fail the whole load, not that the
+    // row itself is excluded.
+    assert!(refs.backends.contains_key("malformed-backend"));
 }

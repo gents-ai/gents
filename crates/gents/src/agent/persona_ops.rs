@@ -26,7 +26,7 @@
 //! design, not drift: the "gents CLI" above means the persona-request
 //! subcommands (`config behavior create|clone|disable`), which submit a
 //! `PersonaConfigRequest` row like the reconciler and the self-config tool
-//! do. `config agent-behavior set` (a raw field edit — display name,
+//! do. `config behavior set` (a raw field edit — display name,
 //! backend/model, tool selection, profile, prompt, compaction knobs — with
 //! no catalog/preset semantics) and the codex-shim model switch are
 //! deliberately outside persona admission: they write `AgentBehavior`

@@ -44,29 +44,88 @@ impl InferenceProfile {
     /// (CLI desired state, self-config, `upsert_inference_profile`) calls.
     /// Mirrors the historical `gents-cli` desired-state rules exactly so no
     /// case is lost by the move (#1331).
+    /// Validate this profile's bounds. Reports every violated rule at once
+    /// (not just the first) — cheap here, and it means a `config apply`
+    /// user who broke two fields at once sees both in one round trip
+    /// instead of fixing them one at a time.
     pub fn validate(&self) -> Result<()> {
         let profile_id = self.profile_id.trim();
+        let mut violations: Vec<String> = Vec::new();
+
         let stream_liveness_timeout_secs = match self.stream_liveness_timeout_secs {
-            Some(value) if value <= 0 => anyhow::bail!(
-                "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
-            ),
-            Some(value) => value,
-            None => DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64,
+            Some(value) if value <= 0 => {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
         };
         let deadline_duration_secs = match self.deadline_duration_secs {
-            Some(value) if value <= 0 => anyhow::bail!(
-                "InferenceProfile {profile_id} deadline_duration_secs must be positive"
-            ),
-            Some(value) => value,
-            None => DEFAULT_DEADLINE_DURATION_SECS as i64,
+            Some(value) if value <= 0 => {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} deadline_duration_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
         };
-        if stream_liveness_timeout_secs >= deadline_duration_secs {
-            anyhow::bail!(
-                "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
-            );
+        // Only compare the two bounds when both are individually valid — an
+        // already-invalid bound would make this comparison noise on top of
+        // the violation already reported above.
+        if let (Some(stream_liveness_timeout_secs), Some(deadline_duration_secs)) =
+            (stream_liveness_timeout_secs, deadline_duration_secs)
+        {
+            if stream_liveness_timeout_secs >= deadline_duration_secs {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
+                ));
+            }
         }
         if self.seed.is_some_and(|value| value < 0) {
-            anyhow::bail!("InferenceProfile {profile_id} seed must be non-negative");
+            violations.push(format!(
+                "InferenceProfile {profile_id} seed must be non-negative"
+            ));
+        }
+        // Sampling bounds (#1331 fix round 1 — previously only enforced by
+        // the `gents config profile set` imperative writer, not the owner).
+        if self
+            .top_p
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            violations.push(format!(
+                "InferenceProfile {profile_id} top_p must be within [0, 1]"
+            ));
+        }
+        if self
+            .min_p
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            violations.push(format!(
+                "InferenceProfile {profile_id} min_p must be within [0, 1]"
+            ));
+        }
+        if self.top_k.is_some_and(|value| value <= 0) {
+            violations.push(format!(
+                "InferenceProfile {profile_id} top_k must be positive"
+            ));
+        }
+        if self.repetition_penalty.is_some_and(|value| value <= 0.0) {
+            violations.push(format!(
+                "InferenceProfile {profile_id} repetition_penalty must be positive"
+            ));
+        }
+        for (name, value) in [
+            ("frequency_penalty", self.frequency_penalty),
+            ("presence_penalty", self.presence_penalty),
+        ] {
+            if value.is_some_and(|value| !(-2.0..=2.0).contains(&value)) {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} {name} must be within [-2, 2]"
+                ));
+            }
         }
         // Empty reasoning effort is unset: DefraDB may materialize nullable
         // strings as empty values, and exported manifests must round-trip.
@@ -82,11 +141,16 @@ impl InferenceProfile {
                 )
             })
         {
-            anyhow::bail!(
+            violations.push(format!(
                 "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
-            );
+            ));
         }
-        Ok(())
+
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(violations.join("; "))
+        }
     }
 }
 

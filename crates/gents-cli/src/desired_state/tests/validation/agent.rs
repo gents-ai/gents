@@ -44,12 +44,11 @@ fn validate_rejects_non_positive_deadline_without_relationship_error() {
 }
 
 #[test]
-fn validate_reports_the_first_invalid_timeout_without_relationship_error() {
-    // `InferenceProfile::validate` (#1331, the single owner) returns
-    // `Result<()>` — one error per profile, not an accumulating list — so
-    // when both timeouts are invalid, only the first-checked rule
-    // (stream_liveness_timeout_secs) surfaces; the relationship check never
-    // runs because validation already failed.
+fn validate_reports_each_invalid_timeout_without_relationship_error() {
+    // `InferenceProfile::validate` (#1331, the single owner) reports every
+    // violated rule at once (fix round 1) — both timeout bounds surface
+    // when both are invalid, and the relationship check is still skipped
+    // (neither individual bound is valid enough to compare).
     let mut manifest = empty_manifest("did:test:test");
     let mut profile = profile("invalid-timeouts");
     profile.stream_liveness_timeout_secs = Some(0);
@@ -65,10 +64,10 @@ fn validate_reports_the_first_invalid_timeout_without_relationship_error() {
         "expected liveness validation error, got {errors:?}"
     );
     assert!(
-        !errors
+        errors
             .iter()
             .any(|message| message.contains("deadline_duration_secs must be positive")),
-        "expected the deadline rule to not run once liveness already failed, got {errors:?}"
+        "expected deadline validation error, got {errors:?}"
     );
     assert!(
         !errors
