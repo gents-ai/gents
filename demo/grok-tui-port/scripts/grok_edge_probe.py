@@ -2654,6 +2654,33 @@ def query_documents(endpoint: str, session_id: str) -> dict[str, Any]:
     return data
 
 
+def query_documents_until_turns(
+    endpoint: str,
+    session_id: str,
+    expected_turns: int,
+    require_interrupted: bool = False,
+    timeout_seconds: float = 5.0,
+) -> dict[str, Any]:
+    """Wait for request and response materialization for a completed wire turn."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        documents = query_documents(endpoint, session_id)
+        cardinality_ready = (
+            len(documents.get("AgentRequest", [])) == expected_turns
+            and len(documents.get("AgentResponse", [])) == expected_turns
+        )
+        interruption_ready = not require_interrupted or (
+            cardinality_ready
+            and bool(documents["AgentRequest"][-1].get("interrupt_requested_at"))
+            and bool(documents["AgentResponse"][-1].get("interrupted_at"))
+        )
+        if cardinality_ready and interruption_ready:
+            return documents
+        if time.monotonic() >= deadline:
+            return documents
+        time.sleep(0.05)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", help="Grok leader Unix socket (not needed for --edge offline)")
@@ -2727,9 +2754,6 @@ def main() -> int:
         if args.edge in ("cancel", "all"):
             output["cancel"] = probe_cancel(client, session_id, high_water)
         if args.graphql:
-            documents = query_documents(args.graphql, session_id)
-            requests = documents.get("AgentRequest", [])
-            responses = documents.get("AgentResponse", [])
             expected_turns = (
                 int(args.edge in ("prompt", "all"))
                 + int(args.edge in ("tool", "all"))
@@ -2737,6 +2761,14 @@ def main() -> int:
                 + int(args.edge in ("subagent", "all"))
                 + int(args.edge in ("cancel", "all"))
             )
+            documents = query_documents_until_turns(
+                args.graphql,
+                session_id,
+                expected_turns,
+                require_interrupted=args.edge in ("cancel", "all"),
+            )
+            requests = documents.get("AgentRequest", [])
+            responses = documents.get("AgentResponse", [])
             require(len(requests) == expected_turns, "unexpected AgentRequest count")
             require(len(responses) == expected_turns, "unexpected AgentResponse count")
             if args.edge in ("cancel", "all"):

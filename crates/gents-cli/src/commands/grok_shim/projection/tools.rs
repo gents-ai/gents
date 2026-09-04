@@ -137,7 +137,15 @@ impl ToolCallKind {
             "delete_file" | "remove_file" => ToolCallKind::Delete,
             "move_file" | "rename_file" => ToolCallKind::Move,
             "grep" | "glob" | "list_files" | "search" => ToolCallKind::Search,
-            "bash" | "shell" | "execute_command" | "run_command" => ToolCallKind::Execute,
+            "bash"
+            | "bash_unrestricted"
+            | "shell"
+            | "execute"
+            | "execute_command"
+            | "run_command"
+            | "run_terminal_command"
+            | "run_terminal_cmd"
+            | "terminal" => ToolCallKind::Execute,
             "think" | "reasoning" => ToolCallKind::Think,
             "fetch" | "web_fetch" | "web_search" => ToolCallKind::Fetch,
             _ => ToolCallKind::Other,
@@ -1068,7 +1076,23 @@ mod tests {
             ToolCallKind::from_tool_name("read_file"),
             ToolCallKind::Read
         );
-        assert_eq!(ToolCallKind::from_tool_name("bash"), ToolCallKind::Execute);
+        for name in [
+            "bash",
+            "bash_unrestricted",
+            "shell",
+            "execute",
+            "execute_command",
+            "run_command",
+            "run_terminal_command",
+            "run_terminal_cmd",
+            "terminal",
+        ] {
+            assert_eq!(
+                ToolCallKind::from_tool_name(name),
+                ToolCallKind::Execute,
+                "{name}"
+            );
+        }
         assert_eq!(ToolCallKind::from_tool_name("grep"), ToolCallKind::Search);
         assert_eq!(
             ToolCallKind::from_tool_name("unknown_tool"),
