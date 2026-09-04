@@ -52,7 +52,7 @@ class ClientGuard:
     def emergency_kill(self) -> None:
         """Kill without waiting so an asynchronous deadline cannot orphan the pager."""
         process = self.process
-        if process is None or process.poll() is not None:
+        if process is None:
             return
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -63,6 +63,16 @@ class ClientGuard:
 def raise_probe_deadline(timeout: float, emergency_kill: Callable[[], None]) -> None:
     emergency_kill()
     raise ProbeDeadlineExceeded(f"stock pager probe exceeded {timeout:g}s")
+
+
+@contextlib.contextmanager
+def blocked_signal(signum: signal.Signals) -> Iterator[None]:
+    """Defer one asynchronous signal across an ownership transition."""
+    previous_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signum})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
 
 
 @contextlib.contextmanager
@@ -478,25 +488,26 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
         set_pty_size(slave_fd)
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
-        process = subprocess.Popen(
-            [
-                args.grok_bin,
-                "--leader",
-                "--leader-socket",
-                str(socket_path),
-                "--cwd",
-                args.cwd,
-                "--no-alt-screen",
-                "--minimal",
-            ],
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            cwd=args.cwd,
-            env=env,
-            start_new_session=True,
-        )
-        client_guard.process = process
+        with blocked_signal(signal.SIGALRM):
+            process = subprocess.Popen(
+                [
+                    args.grok_bin,
+                    "--leader",
+                    "--leader-socket",
+                    str(socket_path),
+                    "--cwd",
+                    args.cwd,
+                    "--no-alt-screen",
+                    "--minimal",
+                ],
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=args.cwd,
+                env=env,
+                start_new_session=True,
+            )
+            client_guard.process = process
         os.close(slave_fd)
         slave_open = False
         pre_submit, ready_quiet = read_until_quiet(
@@ -559,19 +570,21 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
         )
     finally:
         # The hard wall bounds active probe work.  Cleanup has its own bounded
-        # waits and must not itself be interrupted, or the isolated child
-        # process group could survive its caller.
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        if slave_open:
-            try:
-                os.close(slave_fd)
-            except OSError as error:
-                if error.errno != errno.EBADF:
-                    raise
-        if process is not None:
-            terminate_client(process, master_fd)
-            client_guard.process = None
-        os.close(master_fd)
+        # waits.  Defer an already-pending alarm until ownership is released;
+        # its handler still has a guarded process group during every earlier
+        # bytecode boundary.
+        with blocked_signal(signal.SIGALRM):
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            if slave_open:
+                try:
+                    os.close(slave_fd)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+            if process is not None:
+                terminate_client(process, master_fd)
+                client_guard.process = None
+            os.close(master_fd)
 
     proof: dict[str, Any] = {
         "version": 1,
@@ -715,10 +728,6 @@ def self_test() -> dict[str, int]:
     class FakeProcess:
         pid = 4242
 
-        @staticmethod
-        def poll() -> None:
-            return None
-
     guarded = ClientGuard()
     guarded.process = FakeProcess()  # type: ignore[assignment]
     killed: list[tuple[int, signal.Signals]] = []
@@ -726,11 +735,13 @@ def self_test() -> dict[str, int]:
     os.killpg = lambda pid, sig: killed.append((pid, sig))  # type: ignore[assignment]
     try:
         try:
-            raise_probe_deadline(7, guarded.emergency_kill)
+            with hard_deadline(0.03, guarded.emergency_kill):
+                with blocked_signal(signal.SIGALRM):
+                    time.sleep(0.06)
         except ProbeDeadlineExceeded:
             pass
         else:
-            raise AssertionError("deadline helper did not raise")
+            raise AssertionError("pending deadline did not fire after signal unblock")
     finally:
         os.killpg = original_killpg
     require(
