@@ -19,7 +19,7 @@ def _new_private_socket_leaf(
     configured = Path(tempfile.gettempdir())
     fallback = Path("/tmp")
     parents = [configured]
-    if configured.resolve() != fallback.resolve():
+    if configured != fallback:
         parents.append(fallback)
 
     for parent in parents:
@@ -71,38 +71,29 @@ class PortableSocketPath:
 def self_test_portable_socket_path() -> None:
     """Prove an over-limit published socket works through the private alias."""
     root_owner, staged = _new_private_socket_leaf("gents-socket-test-", "b")
-    root = Path(root_owner.name)
-    long_dir = root / ("x" * 88)
-    published = long_dir / "leader.sock"
-    listener: socket.socket | None = None
-    client: socket.socket | None = None
-    accepted: socket.socket | None = None
-    bridge: PortableSocketPath | None = None
-    try:
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    with root_owner as root_text:
+        root = Path(root_text)
+        long_dir = root / ("x" * 88)
+        published = long_dir / "leader.sock"
         long_dir.mkdir()
-        listener.bind(str(staged))
-        listener.listen(1)
-        os.rename(staged, published)
-        if len(os.fsencode(str(published.resolve()))) <= PORTABLE_UNIX_PATH_BYTES:
-            raise AssertionError("portable socket fixture is not over the absolute path limit")
-        bridge = PortableSocketPath(str(published))
-        if not Path(bridge.connect_path).is_absolute():
-            raise AssertionError("socket alias is not absolute")
-        client.connect(bridge.connect_path)
-        accepted, _ = listener.accept()
-        if Path(bridge.connect_path).resolve() != published.resolve():
-            raise AssertionError("alias identity drifted")
-    finally:
-        if accepted is not None:
-            accepted.close()
-        if client is not None:
-            client.close()
-        if listener is not None:
-            listener.close()
-        try:
-            if bridge is not None:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener, socket.socket(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        ) as client:
+            listener.bind(str(staged))
+            listener.listen(1)
+            os.rename(staged, published)
+            if len(os.fsencode(str(published.resolve()))) <= PORTABLE_UNIX_PATH_BYTES:
+                raise AssertionError(
+                    "portable socket fixture is not over the absolute path limit"
+                )
+            bridge = PortableSocketPath(str(published))
+            try:
+                if not Path(bridge.connect_path).is_absolute():
+                    raise AssertionError("socket alias is not absolute")
+                client.connect(bridge.connect_path)
+                accepted, _ = listener.accept()
+                with accepted:
+                    if Path(bridge.connect_path).resolve() != published.resolve():
+                        raise AssertionError("alias identity drifted")
+            finally:
                 bridge.cleanup()
-        finally:
-            root_owner.cleanup()
