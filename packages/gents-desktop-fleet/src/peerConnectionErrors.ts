@@ -12,7 +12,10 @@ export function formatPeerConnectionError(
   copy: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName"> = {},
 ): string {
   const message = errorMessage(error);
-  const url = requestUrlFromMessage(message);
+  // Prefer the bridge's structured endpoint (BridgeErrorCode.endpointUnreachable,
+  // #1339) when the error carries one; only a command not yet wired to emit a
+  // typed BridgeError falls back to parsing the underlying transport message.
+  const url = structuredEndpointFromError(error) ?? requestUrlFromMessage(message);
   if (!url) {
     return message;
   }
@@ -30,6 +33,11 @@ export function formatPeerConnectionError(
   }
 
   return message;
+}
+
+function structuredEndpointFromError(error: unknown): string | null {
+  const payload = asBridgeErrorPayload(error);
+  return payload?.code === "endpointUnreachable" ? payload.endpoint : null;
 }
 
 function errorMessage(error: unknown): string {
@@ -61,6 +69,8 @@ function endpointLabel(url: string): string {
     return url;
   }
 }
+import { asBridgeErrorPayload } from "@source-inc/gents-desktop-client";
+
 import {
   DEFAULT_CLI_BINARY_NAME,
   DEFAULT_RUNTIME_PRODUCT_NAME,

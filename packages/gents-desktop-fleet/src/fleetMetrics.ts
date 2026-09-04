@@ -4,8 +4,10 @@ import type {
   ToolSelectionView,
 } from "@source-inc/gents-desktop-client";
 import {
+  behaviorReadinessIsInferenceFailure,
   isLocalRuntimeSource,
   projectDeploymentOperationalState,
+  selectedBehaviorReadinessDecision,
 } from "@source-inc/gents-desktop-client";
 
 export { isLocalRuntimeSource } from "@source-inc/gents-desktop-client";
@@ -76,11 +78,8 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
 }
 
 export function needsInferenceSetup(deployment: DeploymentView): boolean {
-  // Enrolled clients do not receive non-branchable backend documents and
-  // cannot configure them locally. Runtime-authored readiness is authoritative.
-  if (deployment.source === "enrollment") return false;
-  return !deployment.inferenceBackends.some(
-    (backend) => backend.enabled !== false && backend.models.length > 0,
+  return behaviorReadinessIsInferenceFailure(
+    selectedBehaviorReadinessDecision(deployment, null),
   );
 }
 

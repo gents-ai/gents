@@ -6,6 +6,7 @@ import type {
   DeploymentView,
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
 import {
   ChatIcon,
@@ -23,15 +24,6 @@ import {
   toolCeilingIcons,
   type ToolIcon,
 } from "../fleetMetrics.js";
-
-function isTerminalTurnState(turnState?: string | null) {
-  return (
-    turnState === "completed" ||
-    turnState === "failed" ||
-    turnState === "superseded" ||
-    turnState === "interrupted"
-  );
-}
 
 export type FleetRowProps = {
   bootstrap: BootstrapSummary | null;

@@ -4,4 +4,10 @@ import type { BridgeErrorCode } from "./BridgeErrorCode.js";
 /**
  * Serialized error shape returned by bridge commands after phase 3.
  */
-export type BridgeError = { code: BridgeErrorCode, message: string, retryable: boolean, };
+export type BridgeError = { code: BridgeErrorCode, message: string, retryable: boolean,
+/**
+ * The origin/address that could not be reached, for
+ * `EndpointUnreachable` errors. `None` for every other code. Structured
+ * so callers don't need to regex it back out of `message` (#1339).
+ */
+endpoint: string | null, };

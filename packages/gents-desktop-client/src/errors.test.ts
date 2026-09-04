@@ -19,6 +19,27 @@ describe("bridge error contract", () => {
         message: "query failed",
         retryable: true,
       }),
-    ).toEqual({ code: "backend", message: "query failed", retryable: true });
+    ).toEqual({
+      code: "backend",
+      message: "query failed",
+      retryable: true,
+      endpoint: null,
+    });
+  });
+
+  it("carries the structured endpoint for endpointUnreachable payloads", () => {
+    expect(
+      asBridgeErrorPayload({
+        code: "endpointUnreachable",
+        message: "sending GET request to http://127.0.0.1:9181/status",
+        retryable: true,
+        endpoint: "http://127.0.0.1:9181",
+      }),
+    ).toEqual({
+      code: "endpointUnreachable",
+      message: "sending GET request to http://127.0.0.1:9181/status",
+      retryable: true,
+      endpoint: "http://127.0.0.1:9181",
+    });
   });
 });

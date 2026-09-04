@@ -69,6 +69,10 @@ pub struct BridgeError {
     pub code: BridgeErrorCode,
     pub message: String,
     pub retryable: bool,
+    /// The origin/address that could not be reached, for
+    /// `EndpointUnreachable` errors. `None` for every other code. Structured
+    /// so callers don't need to regex it back out of `message` (#1339).
+    pub endpoint: Option<String>,
 }
 
 impl BridgeError {
@@ -77,11 +81,21 @@ impl BridgeError {
             code,
             message: message.into(),
             retryable: code.retryable(),
+            endpoint: None,
         }
     }
 
     pub fn untyped(message: impl Into<String>) -> Self {
         Self::new(BridgeErrorCode::Unknown, message)
+    }
+
+    /// An `EndpointUnreachable` error carrying the endpoint that could not be
+    /// reached as a structured field.
+    pub fn endpoint_unreachable(endpoint: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            endpoint: Some(endpoint.into()),
+            ..Self::new(BridgeErrorCode::EndpointUnreachable, message)
+        }
     }
 }
 
@@ -122,5 +136,20 @@ mod tests {
         assert_eq!(json["code"], "stalePreview");
         assert_eq!(json["retryable"], true);
         assert_eq!(json["message"], "preview drifted");
+        assert!(json["endpoint"].is_null());
+    }
+
+    #[test]
+    fn endpoint_unreachable_carries_the_endpoint_as_a_structured_field() {
+        let err = BridgeError::endpoint_unreachable(
+            "http://127.0.0.1:9181",
+            "sending GET request to http://127.0.0.1:9181/api/v0/p2p/shareable-address",
+        );
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert!(err.retryable);
+        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9181"));
+        let json = serde_json::to_value(&err).expect("serialize");
+        assert_eq!(json["code"], "endpointUnreachable");
+        assert_eq!(json["endpoint"], "http://127.0.0.1:9181");
     }
 }

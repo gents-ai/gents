@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
+use gents_desktop_core::local_runtime::{fetch_runtime_connection_payload, runtime_status_url};
 use tauri::{AppHandle, Runtime, State};
 
 use crate::error::BridgeError;
@@ -34,7 +34,16 @@ pub async fn desktop_peer_status_fetch(
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
     fetch_runtime_connection_payload(&addr)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))
+        .map_err(|error| {
+            // The endpoint is known structurally from the saved peer record, so
+            // it's attached directly rather than regexed back out of `error`.
+            let endpoint = runtime_status_url(&addr)
+                .ok()
+                .and_then(|url| reqwest::Url::parse(&url).ok())
+                .map(|url| url.origin().ascii_serialization())
+                .unwrap_or_else(|| addr.clone());
+            BridgeError::endpoint_unreachable(endpoint, error.to_string())
+        })
 }
 
 #[tauri::command]

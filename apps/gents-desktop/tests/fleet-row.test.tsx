@@ -110,7 +110,21 @@ describe("FleetRow", () => {
 
   it("shows inference setup status only on the affected deployment row", () => {
     const onSetupInference = vi.fn();
-    const missingInference = { ...deployment, inferenceBackends: [] };
+    const missingInference: DeploymentView = {
+      ...deployment,
+      inferenceBackends: [],
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: [
+          {
+            state: "unavailable",
+            behaviorId: "default",
+            reason: "backend_not_configured",
+          },
+          { state: "ready", behaviorId: "ops" },
+        ],
+      },
+    };
     renderRow({ onSetupInference }, missingInference);
 
     fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));

@@ -14,11 +14,11 @@ use super::super::cause_derivation::{
     ToolCallEvidence,
 };
 use super::super::types::{
-    normalize_optional, turn_state_label, CommandDenialView, DerivedCancelCauseView,
-    DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView, ResponseView,
-    RetryEligibilityView, SessionCompactionView, SessionContextView, SessionHydrationView,
-    SessionLiveDeltaView, SessionLiveTextPatchView, SessionProjectionRevisionView,
-    SessionTimelinePageView, ToolCallView, ToolResultView,
+    is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
+    DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView,
+    ResponseView, RetryEligibilityView, SessionCompactionView, SessionContextView,
+    SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
+    SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView, ToolResultView,
 };
 use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
 use super::{request_matches_agent, source_matches_agent};

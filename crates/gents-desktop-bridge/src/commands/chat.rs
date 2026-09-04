@@ -1,30 +1,8 @@
 use anyhow::{bail, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
-use gents_protocol::client_protocol::ClientTurnState;
 use uuid::Uuid;
 
 use super::super::types::{ChatSendRequest, ChatSendResult, ConversationRenameRequest};
-
-fn can_send_in_turn(state: ClientTurnState) -> bool {
-    matches!(
-        state,
-        ClientTurnState::Completed
-            | ClientTurnState::Failed
-            | ClientTurnState::Superseded
-            | ClientTurnState::Interrupted
-    )
-}
-
-fn turn_state_label(state: ClientTurnState) -> &'static str {
-    match state {
-        ClientTurnState::WaitingForClaim => "waitingForClaim",
-        ClientTurnState::Streaming => "streaming",
-        ClientTurnState::Completed => "completed",
-        ClientTurnState::Failed => "failed",
-        ClientTurnState::Superseded => "superseded",
-        ClientTurnState::Interrupted => "interrupted",
-    }
-}
 
 pub async fn send_chat_message(
     core: &ClientCore,
@@ -58,11 +36,8 @@ pub async fn send_chat_message(
 
     let store = core.store().snapshot();
     if let Some(turn_state) = store.derive_turn_for_agent(&session_id, &agent_did) {
-        if !can_send_in_turn(turn_state) {
-            bail!(
-                "cannot send while current turn is {}",
-                turn_state_label(turn_state)
-            );
+        if !turn_state.is_terminal() {
+            bail!("cannot send while current turn is {turn_state:?}");
         }
     }
 

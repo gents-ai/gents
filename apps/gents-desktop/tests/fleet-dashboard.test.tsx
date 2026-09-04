@@ -446,7 +446,22 @@ describe("FleetHostDashboard per-deployment inference status", () => {
   });
 
   it("places setup status on the affected deployment and opens its wizard", () => {
-    renderFleet([{ ...deployment, inferenceBackends: [] }]);
+    const missingInference: DeploymentView = {
+      ...deployment,
+      inferenceBackends: [],
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: [
+          {
+            state: "unavailable",
+            behaviorId: "default",
+            reason: "backend_not_configured",
+          },
+          { state: "ready", behaviorId: "ops" },
+        ],
+      },
+    };
+    renderFleet([missingInference]);
     expect(screen.queryByText("Finish setting up")).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("fleet-inference-setup-peer-1"));
     expect(screen.getByTestId("inference-wizard")).toBeInTheDocument();

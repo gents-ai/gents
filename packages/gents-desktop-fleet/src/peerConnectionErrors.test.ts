@@ -42,6 +42,22 @@ describe("formatPeerConnectionError", () => {
     );
   });
 
+  it("prefers the bridge's structured endpoint over parsing the message", () => {
+    expect(
+      formatPeerConnectionError(
+        {
+          code: "endpointUnreachable",
+          message: "unused: structured endpoint takes precedence",
+          retryable: true,
+          endpoint: "http://127.0.0.1:9181",
+        },
+        "peer-status",
+      ),
+    ).toBe(
+      "Could not fetch runtime connection details from http://127.0.0.1:9181. Check that the runtime is running and the address is reachable.",
+    );
+  });
+
   it("keeps already useful errors unchanged", () => {
     expect(
       formatPeerConnectionError(
