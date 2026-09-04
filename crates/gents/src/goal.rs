@@ -2248,6 +2248,8 @@ pub async fn claim_retry_continuation(
         .is_some_and(mutation_returned_rows))
 }
 
+/// Sum of tokens charged against the session's budget: the charged total,
+/// same as the request ledger (`crate::provider_usage::charged_usage_total`).
 pub async fn session_token_usage(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -2283,8 +2285,8 @@ pub async fn session_token_usage(
     let query = format!(
         r#"{{
             InferenceCall(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }}, request_id: {{ _in: [{request_ids}] }}, call_state: {{ _eq: "completed" }} }}
-            ) {{ prompt_tokens completion_tokens cached_input_tokens }}
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }}, request_id: {{ _in: [{request_ids}] }} }}
+            ) {{ prompt_tokens completion_tokens }}
         }}"#
     );
     #[derive(Deserialize)]
@@ -2293,23 +2295,18 @@ pub async fn session_token_usage(
         prompt_tokens: Option<i64>,
         #[serde(default)]
         completion_tokens: Option<i64>,
-        #[serde(default)]
-        cached_input_tokens: Option<i64>,
     }
     let response =
         graphql_with_transaction_retry(node, &query, "query goal inference usage").await?;
     let usage_rows: Vec<UsageRow> =
         rows(&response, "InferenceCall").context("decoding goal inference usage")?;
-    Ok(usage_rows.into_iter().fold(0_i64, |total, row| {
-        let fresh_input = row
-            .prompt_tokens
-            .unwrap_or_default()
-            .saturating_sub(row.cached_input_tokens.unwrap_or_default())
-            .max(0);
-        total.saturating_add(
-            fresh_input.saturating_add(row.completion_tokens.unwrap_or_default().max(0)),
-        )
-    }))
+    let charged = crate::provider_usage::sum_charged_from_persisted_parts(
+        usage_rows
+            .into_iter()
+            .map(|row| (row.prompt_tokens, row.completion_tokens)),
+    )
+    .context("summing goal inference usage")?;
+    Ok(i64::try_from(charged).unwrap_or(i64::MAX))
 }
 
 pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Result<i64> {

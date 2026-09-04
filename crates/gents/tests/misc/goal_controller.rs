@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use gents::goal::{
     claim_continuation, claim_retry_continuation, create_goal_for_session,
-    delete_goals_for_session, load_canonical_goal, load_goals_for_session, set_goal,
-    update_goal_fields, update_goal_fields_if_status, CreateGoalForSessionError,
+    delete_goals_for_session, load_canonical_goal, load_goals_for_session, session_token_usage,
+    set_goal, update_goal_fields, update_goal_fields_if_status, CreateGoalForSessionError,
     CreateGoalForSessionOutcome, GoalStatus,
 };
 use gents::{
@@ -1172,10 +1172,55 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         .expect("load goal")
         .expect("goal exists");
     assert_eq!(goal.parsed_status(), Some(GoalStatus::BudgetLimited));
-    assert_eq!(goal.tokens_used, Some(15));
+    // Charged total: prompt_tokens (100, cached input included by design) +
+    // completion_tokens (5) == 105, matching the request ledger's formula.
+    assert_eq!(goal.tokens_used, Some(105));
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(true));
     assert_eq!(goal_children(&db).await.len(), 1);
+}
+
+#[tokio::test]
+async fn session_token_usage_charges_cached_input_as_part_of_the_total() {
+    let db = test_db("goal-cached-input").await;
+    seed_completed_request(&db, "parent-cached").await;
+    let usage = format!(
+        r#"mutation {{
+        add_InferenceCall(input: {{
+            call_id: "goal-cached-call",
+            runtime_instance_id: "goal-test",
+            request_id: "parent-cached",
+            call_seq: 1,
+            backend_id: "backend-test",
+            behavior_id: "test",
+            agent_did: "{}",
+            call_kind: "inference",
+            attempt: 1,
+            call_state: "completed",
+            queued_at: "2026-07-15T00:00:00Z",
+            started_at: "2026-07-15T00:00:00Z",
+            ended_at: "2026-07-15T00:00:01Z",
+            priority: 0,
+            queue_depth_at_enqueue: 0,
+            controller_generation: 1,
+            backend_config_fingerprint: "goal-test",
+            prompt_tokens: 1000,
+            completion_tokens: 50,
+            cached_input_tokens: 800
+        }}) {{ _docID }}
+    }}"#,
+        db.node_identity.did()
+    );
+    let response = db.node.execute(&usage).await;
+    assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
+
+    let tokens = session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+        .await
+        .expect("session token usage");
+    // Charged total is prompt_tokens (1000, cached input included) +
+    // completion_tokens (50) == 1050, not the old "fresh input" formula
+    // ((1000 - 800) + 50 == 250).
+    assert_eq!(tokens, 1050);
 }
 
 #[tokio::test]
