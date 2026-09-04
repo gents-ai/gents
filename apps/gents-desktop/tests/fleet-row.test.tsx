@@ -148,10 +148,7 @@ describe("FleetRow", () => {
         ],
       },
     };
-    renderRow(
-      { onSetupInference },
-      hostManagedMissingCredentials,
-    );
+    renderRow({ onSetupInference }, hostManagedMissingCredentials);
 
     expect(
       screen.queryByTestId("fleet-inference-setup-peer-1"),
