@@ -610,6 +610,7 @@ mod tests {
             endpoint: "https://api.example.test/v1".to_string(),
             inference_profile_id: format!("{id}-profile"),
             context_window: Some(128_000),
+            compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
         }
     }
 
