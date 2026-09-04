@@ -404,57 +404,24 @@ pub(super) struct TurnManager {
     node: Arc<EmbeddedNode>,
     config: TurnManagerConfig,
     state: Mutex<ConnectionState>,
+    /// Parks `handle_prompt` before the insertion critical section.
     #[cfg(test)]
-    insertion_gate: Mutex<Option<InsertionGate>>,
+    insertion_gate: Mutex<Option<TestGate>>,
+    /// Parks disconnect after publishing closed+drained state.
     #[cfg(test)]
-    disconnect_gate: Mutex<Option<DisconnectGate>>,
+    disconnect_gate: Mutex<Option<TestGate>>,
+    /// Parks explicit cancel after removing the pending entry.
     #[cfg(test)]
-    cancel_drain_gate: Mutex<Option<CancelDrainGate>>,
+    cancel_drain_gate: Mutex<Option<TestGate>>,
+    /// Parks cancel after snapshotting matching entry generations.
     #[cfg(test)]
-    cancel_selection_gate: Mutex<Option<CancelSelectionGate>>,
+    cancel_selection_gate: Mutex<Option<TestGate>>,
 }
 
-/// Deterministic test seam: when armed, `handle_prompt` parks immediately
-/// before the insertion critical section until the gate is opened.
+/// Reusable deterministic test seam with explicit arrival and release phases.
 #[cfg(test)]
 #[derive(Debug, Clone)]
-struct InsertionGate {
-    arrived: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-/// Deterministic test seam: when armed, `handle_disconnect` parks
-/// after publishing its closed+drained state and before it latches the
-/// drained entries, so a concurrently failing submission can be observed in
-/// the exact window where the disconnect has not published the
-/// cancel-before-id latch yet.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct DisconnectGate {
-    arrived: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-/// Deterministic test seam: when armed, `drain_entry` (explicit
-/// `session/cancel` path) parks after removing the pending entry from the
-/// connection state but before it latches the removed entry's
-/// `cancel_before_id`, so a concurrently failing submission can be observed
-/// in the exact race window where the entry is gone and the latch is not
-/// published yet.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct CancelDrainGate {
-    arrived: Arc<tokio::sync::Notify>,
-    release: Arc<tokio::sync::Notify>,
-}
-
-/// Deterministic test seam: when armed, `handle_cancel` parks after
-/// snapshotting the matching entry generations but before attempting to
-/// drain them. A test can replace an exact key in that window and verify the
-/// stale cancellation does not drain the replacement generation.
-#[cfg(test)]
-#[derive(Debug, Clone)]
-struct CancelSelectionGate {
+struct TestGate {
     arrived: Arc<tokio::sync::Notify>,
     release: Arc<tokio::sync::Notify>,
 }
@@ -3203,7 +3170,7 @@ mod tests {
             },
         );
 
-        let gate = CancelSelectionGate {
+        let gate = TestGate {
             arrived: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
         };
@@ -3418,7 +3385,7 @@ mod tests {
         // Arm the disconnect seam and run the disconnect: it atomically
         // latches closed and drains the entry, then parks before it would
         // latch the drained entry's cancel-before-id.
-        let gate = DisconnectGate {
+        let gate = TestGate {
             arrived: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
         };
@@ -3560,7 +3527,7 @@ mod tests {
         // Arm the cancel-drain seam and run the explicit cancel: it removes
         // the pending entry under the connection lock, then parks before it
         // would latch the removed entry's cancel-before-id.
-        let gate = CancelDrainGate {
+        let gate = TestGate {
             arrived: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
         };
@@ -3678,7 +3645,7 @@ mod tests {
         // Arm the insertion gate: the spawned prompt parks immediately before
         // it touches the connection state, so the disconnect below can run
         // while the prompt is still queued.
-        let gate = InsertionGate {
+        let gate = TestGate {
             arrived: Arc::new(tokio::sync::Notify::new()),
             release: Arc::new(tokio::sync::Notify::new()),
         };
