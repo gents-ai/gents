@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gents::{
     backend_registry::list_enabled_backends, list_agent_behaviors, load_agent_behavior,
-    AgentBehaviorDocument, InferenceBackend,
+    AgentBehaviorDocument, ConfigReferences, InferenceBackend,
 };
 use gents_codex_protocol as codex;
 use gents_protocol::row::{
@@ -276,6 +276,19 @@ async fn apply_model_to_bound_behavior(
     let mut behavior = load_bound_behavior(state).await?;
     behavior.backend_id = Some(selection.backend_id.clone());
     behavior.model_name = Some(selection.model_name.clone());
+    // Single owner (#1331): confirm the backend still exists and still
+    // advertises this model through the same validator every other write
+    // door calls, rather than trusting `resolve_model_selection`'s own
+    // backend/model match alone. `resolve_model_selection` picks a
+    // candidate from the readiness-filtered "available" set for product
+    // reasons (don't offer a disabled/unready backend); this is the
+    // unconditional correctness gate right before the write.
+    let refs = ConfigReferences::load(state.node.as_ref(), state.agent_did.as_ref())
+        .await
+        .context("loading config references to validate the selected model")?;
+    behavior
+        .validate_references(&refs)
+        .context("selected backend/model failed reference validation")?;
     let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
     write_agent_behavior_document(&access, &behavior)
         .await
@@ -286,11 +299,21 @@ async fn apply_model_to_bound_behavior(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::codex_shim::CodexSidecar;
+    use gents::config_client::{
+        write_inference_backend_document, ConfigAccess as LocalConfigAccess,
+        InferenceBackendUpsertDocument,
+    };
+    use gents::{defra_node::EmbeddedNode, upsert_agent_behavior, BackendProviderKind};
     use gents_protocol::row::{
         AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
         BehaviorReadinessSnapshot, BehaviorReadinessState, BehaviorReadinessUnavailableReason,
         BEHAVIOR_READINESS_FORMAT_VERSION,
     };
+    use std::sync::atomic::AtomicU64;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tokio::sync::Mutex;
 
     fn behavior(behavior_id: &str, backend_id: &str) -> AgentBehaviorDocument {
         AgentBehaviorDocument {
@@ -443,5 +466,140 @@ mod tests {
             agent_did,
             observed_at
         ));
+    }
+
+    async fn shim_state_for(
+        node: &Arc<EmbeddedNode>,
+        agent_did: &str,
+        behavior_id: &str,
+    ) -> ShimState {
+        ShimState {
+            codex_home: std::env::temp_dir(),
+            trace_path: std::env::temp_dir().join("codex-shim-model-test-trace.jsonl"),
+            cwd: std::env::temp_dir(),
+            fs_root: None,
+            node: node.clone(),
+            background_execution_registry: gents::BackgroundExecutionRegistry::default(),
+            // Never dialed: `apply_model_to_bound_behavior` validates
+            // references before it ever reaches the write, so a rejected
+            // selection never touches this endpoint.
+            graphql: Arc::from("http://127.0.0.1:0/graphql"),
+            agent_did: Arc::from(agent_did),
+            behavior_id: Arc::from(behavior_id),
+            id_counter: Arc::new(AtomicU64::new(1)),
+            timeout: Duration::from_secs(5),
+            poll_interval: Duration::from_millis(10),
+            sidecar: Arc::new(Mutex::new(CodexSidecar::default())),
+            auth_token: None,
+        }
+    }
+
+    /// Single owner (#1331): `apply_model_to_bound_behavior` must reject a
+    /// backend/model pair the backend doesn't advertise through
+    /// `AgentBehavior::validate_references`, the same validator every other
+    /// config write door calls — not just trust `resolve_model_selection`'s
+    /// own match.
+    #[tokio::test]
+    async fn apply_model_to_bound_behavior_rejects_an_unadvertised_model() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+
+        let local_access = LocalConfigAccess::Local(node.clone());
+        write_inference_backend_document(
+            &local_access,
+            &InferenceBackendUpsertDocument {
+                backend_id: "backend-a".to_string(),
+                name: "Backend A".to_string(),
+                provider_kind: BackendProviderKind::OpenAiCompatible,
+                openai_wire_api: None,
+                endpoint: "http://127.0.0.1:11434/v1".to_string(),
+                api_key: None,
+                api_key_env_var: None,
+                max_concurrent: 4,
+                max_queue_depth: 100,
+                enabled: true,
+                models_on_add: vec!["model-x".to_string()],
+                models_on_update: None,
+                probe_status: "healthy".to_string(),
+            },
+        )
+        .await
+        .expect("seed backend");
+
+        let agent_did = "did:test:codex-shim";
+        let mut default_behavior = behavior("default", "backend-a");
+        default_behavior.model_name = Some("model-x".to_string());
+        upsert_agent_behavior(&node, &default_behavior)
+            .await
+            .expect("seed behavior");
+
+        let state = shim_state_for(&node, agent_did, "default").await;
+        let selection = ModelSelection {
+            backend_id: "backend-a".to_string(),
+            model_name: "not-advertised".to_string(),
+        };
+
+        let error = apply_model_to_bound_behavior(&state, &selection)
+            .await
+            .expect_err("an unadvertised model must be rejected");
+        // `{:#}` (anyhow's alternate Display) walks the full context chain;
+        // `{}` would only show this call's own wrapping context.
+        assert!(
+            format!("{error:#}").contains("does not advertise"),
+            "{error:#}"
+        );
+    }
+
+    /// The mirror-image happy path: a genuinely-advertised model commits.
+    #[tokio::test]
+    async fn apply_model_to_bound_behavior_accepts_an_advertised_model() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+
+        let local_access = LocalConfigAccess::Local(node.clone());
+        write_inference_backend_document(
+            &local_access,
+            &InferenceBackendUpsertDocument {
+                backend_id: "backend-a".to_string(),
+                name: "Backend A".to_string(),
+                provider_kind: BackendProviderKind::OpenAiCompatible,
+                openai_wire_api: None,
+                endpoint: "http://127.0.0.1:11434/v1".to_string(),
+                api_key: None,
+                api_key_env_var: None,
+                max_concurrent: 4,
+                max_queue_depth: 100,
+                enabled: true,
+                models_on_add: vec!["model-x".to_string(), "model-y".to_string()],
+                models_on_update: None,
+                probe_status: "healthy".to_string(),
+            },
+        )
+        .await
+        .expect("seed backend");
+
+        let agent_did = "did:test:codex-shim";
+        let mut default_behavior = behavior("default", "backend-a");
+        default_behavior.model_name = Some("model-x".to_string());
+        upsert_agent_behavior(&node, &default_behavior)
+            .await
+            .expect("seed behavior");
+
+        let state = shim_state_for(&node, agent_did, "default").await;
+        let selection = ModelSelection {
+            backend_id: "backend-a".to_string(),
+            model_name: "model-y".to_string(),
+        };
+
+        // The write itself dials the dummy `graphql` endpoint and will fail
+        // to connect — that failure, distinct from a validation rejection,
+        // is exactly the signal that validation passed.
+        let error = apply_model_to_bound_behavior(&state, &selection)
+            .await
+            .expect_err("the dummy graphql endpoint is unreachable");
+        assert!(
+            !format!("{error:#}").contains("does not advertise"),
+            "an advertised model must clear validation: {error:#}"
+        );
     }
 }

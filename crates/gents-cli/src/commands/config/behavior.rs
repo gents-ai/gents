@@ -6,7 +6,7 @@ use gents::agent::persona_presets::{self, PresetFields};
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior, AgentIdentity,
-    Collection,
+    Collection, ConfigReferences,
 };
 use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use serde::Deserialize;
@@ -54,6 +54,12 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         skill_excludes: Vec::new(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
+    // `write_agent_behavior_document` writes exactly what it's given — this
+    // is a raw field edit, deliberately outside persona admission (see the
+    // module doc on `gents::agent::persona_ops`). It's this call site's job
+    // to validate references first, against the single owner (#1331).
+    let refs = ConfigReferences::load_via_access(&access, &args.agent_did).await?;
+    behavior.validate_references(&refs)?;
     let doc_id = write_agent_behavior_document(&access, &behavior).await?;
     let output = json!({
         "doc_id": doc_id,

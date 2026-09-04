@@ -8,6 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::graphql::graphql_rows_from_response;
+use serde_json::Value;
+
+use crate::config_client::ConfigAccess;
+use crate::graphql::escape_graphql_string;
 
 use super::inference_profile::list_inference_profile_records;
 use super::skill::list_skill_records;
@@ -54,6 +59,88 @@ impl ConfigReferences {
             skills,
         })
     }
+
+    /// Load the reference sets for `agent_did` via [`ConfigAccess`] (HTTP
+    /// GraphQL or local node) — the counterpart to [`Self::load`] for
+    /// callers that only hold a `ConfigAccess`, not an `&EmbeddedNode` (the
+    /// CLI's raw-write commands: `config agent-behavior set`, the codex-shim
+    /// model switch). Fetches only the id columns (+ `models`, for backends)
+    /// a referential-existence check needs — not a full document decode —
+    /// reusing the same shape of query as [`Self::load`].
+    pub async fn load_via_access(access: &ConfigAccess, agent_did: &str) -> Result<Self> {
+        let escaped_agent_did = escape_graphql_string(agent_did);
+
+        let backend_rows = query_rows(
+            access,
+            "InferenceBackend",
+            "{ InferenceBackend { backend_id models } }",
+        )
+        .await?;
+        let backends = backend_rows
+            .into_iter()
+            .filter_map(|row| {
+                let backend_id = row.get("backend_id")?.as_str()?.to_string();
+                let models = row
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .map(|models| {
+                        models
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some((backend_id, models))
+            })
+            .collect();
+
+        let tool_selection_rows = query_rows(
+            access,
+            "ToolSelection",
+            &format!(
+                r#"{{ ToolSelection(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{ selection_id }} }}"#
+            ),
+        )
+        .await?;
+        let tool_selections = string_field_set(&tool_selection_rows, "selection_id");
+
+        let profile_rows = query_rows(
+            access,
+            "InferenceProfile",
+            "{ InferenceProfile { profile_id } }",
+        )
+        .await?;
+        let profiles = string_field_set(&profile_rows, "profile_id");
+
+        let skill_rows = query_rows(
+            access,
+            "Skill",
+            &format!(
+                r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{ skill_id }} }}"#
+            ),
+        )
+        .await?;
+        let skills = string_field_set(&skill_rows, "skill_id");
+
+        Ok(Self {
+            backends,
+            tool_selections,
+            profiles,
+            skills,
+        })
+    }
+}
+
+async fn query_rows(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<Value>> {
+    let response = access.execute(query).await?;
+    Ok(graphql_rows_from_response(&response, collection))
+}
+
+fn string_field_set(rows: &[Value], field: &str) -> BTreeSet<String> {
+    rows.iter()
+        .filter_map(|row| row.get(field)?.as_str().map(str::to_string))
+        .collect()
 }
 
 /// `backend_id` -> advertised `models`, read directly rather than through

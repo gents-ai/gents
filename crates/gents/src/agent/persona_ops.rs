@@ -22,6 +22,21 @@
 //!   `request_key` after a successful create returns the prior outcome
 //!   (`repaired: true`) instead of minting a duplicate behavior.
 //!
+//! Not every `AgentBehavior` write goes through this module, and that's by
+//! design, not drift: the "gents CLI" above means the persona-request
+//! subcommands (`config behavior create|clone|disable`), which submit a
+//! `PersonaConfigRequest` row like the reconciler and the self-config tool
+//! do. `config agent-behavior set` (a raw field edit — display name,
+//! backend/model, tool selection, profile, prompt, compaction knobs — with
+//! no catalog/preset semantics) and the codex-shim model switch are
+//! deliberately outside persona admission: they write `AgentBehavior`
+//! directly via `config_client::write_agent_behavior_document` after
+//! validating references through `AgentBehavior::validate_references`
+//! (`document_config`, #1331) instead of through [`decide_persona_request`].
+//! The persona model owns catalog/preset-based persona operations
+//! (phone-authored); referential validity for a plain field edit is owned by
+//! `document_config`, not by this module.
+//!
 //! See `crate::agent::persona_presets` for why a "preset" name alone
 //! under-provisions a `ToolSelection` — this module is the place that closes
 //! that gap by copying the init-parity extras verbatim from

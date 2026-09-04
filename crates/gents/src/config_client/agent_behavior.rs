@@ -5,6 +5,19 @@ use anyhow::Result;
 use super::ConfigAccess;
 use gents_protocol::graphql::{graphql_bool_literal, optional_f64_field, optional_string_field};
 
+/// Raw upsert of one `AgentBehavior` document. This function does NOT
+/// validate references (backend/model/tool_selection/profile/skill) — it
+/// writes exactly what it's given. Every caller except first-run `init`
+/// (which writes before a catalog exists to check references against) MUST
+/// call [`crate::AgentBehaviorDocument::validate_references`] against a
+/// current [`crate::ConfigReferences`] snapshot first; see
+/// `gents-cli/src/commands/config/behavior.rs::behavior_set` and
+/// `gents-cli/src/commands/codex_shim/handlers/models.rs::apply_model_to_bound_behavior`
+/// for the validated call sites. `crate::agent::persona_ops` is the other
+/// writer of this document (catalog/preset-based persona operations); raw
+/// field edits from the CLI go through this function and
+/// `validate_references` instead, deliberately outside persona admission —
+/// see the module doc on `persona_ops` for why.
 pub async fn write_agent_behavior_document(
     access: &ConfigAccess,
     behavior: &AgentBehavior,
