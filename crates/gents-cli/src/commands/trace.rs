@@ -18,7 +18,7 @@ use gents::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -404,7 +404,7 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
 fn build_records(
     tool_calls: &[ToolCallRow],
     messages: &HashMap<(String, i64), MessageRow>,
-    requests: &[RequestRow],
+    requests: &[AgentRequestRow],
     responses: &[ResponseRow],
     sessions: &HashMap<String, SessionRow>,
     conversations: &HashMap<String, ConversationRow>,
@@ -596,7 +596,7 @@ async fn load_tool_calls(
     load_rows(access, "AgentToolCall", &query).await
 }
 
-async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<RequestRow> {
+async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<AgentRequestRow> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -619,7 +619,7 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
         }}"#,
         escape_graphql_string(request_id)
     );
-    let mut rows = load_rows::<RequestRow>(access, "AgentRequest", &query).await?;
+    let mut rows = load_rows::<AgentRequestRow>(access, "AgentRequest", &query).await?;
     match rows.len() {
         0 => Err(anyhow::anyhow!("request {request_id} not found")),
         1 => Ok(rows.remove(0)),
@@ -632,7 +632,7 @@ async fn load_request_by_id(access: &ConfigAccess, request_id: &str) -> Result<R
 async fn load_requests_for_sessions(
     access: &ConfigAccess,
     session_ids: &[String],
-) -> Result<Vec<RequestRow>> {
+) -> Result<Vec<AgentRequestRow>> {
     if session_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -783,7 +783,7 @@ async fn load_messages_for_tool_calls(
 
 async fn load_behaviors(
     access: &ConfigAccess,
-    requests: &[RequestRow],
+    requests: &[AgentRequestRow],
     sessions: &HashMap<String, SessionRow>,
     conversations: &HashMap<String, ConversationRow>,
 ) -> Result<HashMap<String, BehaviorRow>> {
@@ -855,9 +855,9 @@ where
 
 fn infer_request_for_tool_call<'a>(
     tool_call: &ToolCallRow,
-    requests: &[&'a RequestRow],
+    requests: &[&'a AgentRequestRow],
     responses: &[&ResponseRow],
-) -> Option<&'a RequestRow> {
+) -> Option<&'a AgentRequestRow> {
     if let Some(request_id) = tool_call
         .request_id
         .as_deref()
@@ -932,7 +932,7 @@ fn rows_by_session<T: HasSessionId>(rows: &[T]) -> HashMap<&str, Vec<&T>> {
 }
 
 fn combined_request_failure_text(
-    request: Option<&RequestRow>,
+    request: Option<&AgentRequestRow>,
     response: Option<&ResponseRow>,
 ) -> Option<String> {
     let mut parts = Vec::new();
@@ -948,7 +948,7 @@ fn combined_request_failure_text(
     (!parts.is_empty()).then(|| parts.join("\n"))
 }
 
-fn parse_request_metadata(request: &RequestRow) -> Option<Value> {
+fn parse_request_metadata(request: &AgentRequestRow) -> Option<Value> {
     let metadata = request.metadata.as_deref()?.trim();
     if metadata.is_empty() {
         return None;
@@ -1056,33 +1056,7 @@ struct ToolCallRow {
     completed_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    content: Option<String>,
-    #[serde(default)]
-    metadata: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    failure_reason: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    retry_count: Option<i64>,
-}
-
-impl HasSessionId for RequestRow {
+impl HasSessionId for AgentRequestRow {
     fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
     }
@@ -1158,7 +1132,7 @@ mod tests {
 
     #[test]
     fn request_metadata_hydrates_run_and_case_ids() {
-        let request = RequestRow {
+        let request = AgentRequestRow {
             request_id: "req-1".to_string(),
             metadata: Some(r#"{"run_id":"run-1","case_id":"case-1"}"#.to_string()),
             ..empty_request()
@@ -1178,12 +1152,12 @@ mod tests {
     #[test]
     fn infers_request_by_materialized_message_sequence() {
         let requests = vec![
-            RequestRow {
+            AgentRequestRow {
                 request_id: "req-1".to_string(),
                 session_id: Some("session-1".to_string()),
                 ..empty_request()
             },
-            RequestRow {
+            AgentRequestRow {
                 request_id: "req-2".to_string(),
                 session_id: Some("session-1".to_string()),
                 ..empty_request()
@@ -1233,20 +1207,9 @@ mod tests {
         }
     }
 
-    fn empty_request() -> RequestRow {
-        RequestRow {
-            request_id: String::new(),
-            agent_did: None,
-            behavior_id: None,
-            session_id: None,
-            content: None,
-            metadata: None,
-            lifecycle_state: None,
-            backend_id: None,
-            failure_reason: None,
-            created_at: None,
-            retry_count: None,
-        }
+    fn empty_request() -> AgentRequestRow {
+        serde_json::from_value(json!({ "request_id": "" }))
+            .expect("canonical AgentRequest test row")
     }
 
     fn empty_response() -> ResponseRow {

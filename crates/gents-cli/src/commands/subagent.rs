@@ -8,7 +8,8 @@ use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
 use gents_protocol::client_protocol::RequestLifecycleState;
-use serde::{Deserialize, Serialize};
+use gents_protocol::row::AgentRequestRow;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::cli::args::{SubagentCancelArgs, SubagentCommand, SubagentListArgs};
@@ -211,12 +212,12 @@ async fn cancel_parent_bridge_local(
     node: Arc<EmbeddedNode>,
     cause: CancelCause,
     agent_did: &str,
-    target: &RequestRow,
+    target: &AgentRequestRow,
 ) -> Result<()> {
-    let Some(parent_request_id) = target.parent_request_id.as_deref() else {
+    let Some(parent_request_id) = target.caused_by_parent_request_id.as_deref() else {
         return Ok(());
     };
-    let Some(parent_tool_call_id) = target.parent_tool_call_id.as_deref() else {
+    let Some(parent_tool_call_id) = target.caused_by_parent_tool_call_id.as_deref() else {
         return Ok(());
     };
     let parent = fetch_request_row_local(node.as_ref(), parent_request_id).await?;
@@ -335,10 +336,10 @@ async fn wait_for_terminal_graphql(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let snapshots = snapshot_requests_graphql(graphql, request_ids).await?;
-        if snapshots
-            .iter()
-            .all(|row| RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()))
-        {
+        if snapshots.iter().all(|row| {
+            row.lifecycle_state
+                .is_some_and(RequestLifecycleState::is_terminal)
+        }) {
             return Ok(snapshots);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -360,10 +361,10 @@ async fn wait_for_terminal_local(
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
         let snapshots = snapshot_requests_local(node, request_ids).await?;
-        if snapshots
-            .iter()
-            .all(|row| RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()))
-        {
+        if snapshots.iter().all(|row| {
+            row.lifecycle_state
+                .is_some_and(RequestLifecycleState::is_terminal)
+        }) {
             return Ok(snapshots);
         }
         if tokio::time::Instant::now() >= deadline {
@@ -384,7 +385,7 @@ async fn snapshot_requests_graphql(
     let mut rows = Vec::with_capacity(request_ids.len());
     for request_id in request_ids {
         let row = fetch_request_row_graphql(graphql, request_id).await?;
-        rows.push(row.into_snapshot());
+        rows.push(request_cancel_snapshot(row));
     }
     Ok(rows)
 }
@@ -396,7 +397,7 @@ async fn snapshot_requests_local(
     let mut rows = Vec::with_capacity(request_ids.len());
     for request_id in request_ids {
         let row = fetch_request_row_local(node, request_id).await?;
-        rows.push(row.into_snapshot());
+        rows.push(request_cancel_snapshot(row));
     }
     Ok(rows)
 }
@@ -408,20 +409,22 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
             format!(
                 "{}={}",
                 row.request_id,
-                row.lifecycle_state.as_deref().unwrap_or("missing")
+                row.lifecycle_state
+                    .map(RequestLifecycleState::as_str)
+                    .unwrap_or("missing")
             )
         })
         .collect::<Vec<_>>()
         .join(", ")
 }
 
-async fn fetch_request_row_graphql(graphql: &str, request_id: &str) -> Result<RequestRow> {
+async fn fetch_request_row_graphql(graphql: &str, request_id: &str) -> Result<AgentRequestRow> {
     let query = request_row_query(request_id);
     let response = post_graphql(graphql, &query).await?;
     request_row_from_response(&response, request_id)
 }
 
-async fn fetch_request_row_local(node: &EmbeddedNode, request_id: &str) -> Result<RequestRow> {
+async fn fetch_request_row_local(node: &EmbeddedNode, request_id: &str) -> Result<AgentRequestRow> {
     let query = request_row_query(request_id);
     let response = execute_node_json(node, &query).await?;
     request_row_from_response(&response, request_id)
@@ -447,22 +450,14 @@ fn request_row_query(request_id: &str) -> String {
     )
 }
 
-fn request_row_from_response(response: &Value, request_id: &str) -> Result<RequestRow> {
+fn request_row_from_response(response: &Value, request_id: &str) -> Result<AgentRequestRow> {
     let row = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    Ok(RequestRow {
-        request_id: string_field(row, "request_id").unwrap_or_else(|| request_id.to_string()),
-        agent_did: string_field(row, "agent_did"),
-        session_id: string_field(row, "session_id"),
-        lifecycle_state: string_field(row, "lifecycle_state")
-            .and_then(|value| RequestLifecycleState::parse(&value).ok()),
-        interrupt_requested_at: string_field(row, "interrupt_requested_at"),
-        parent_request_id: string_field(row, "caused_by_parent_request_id"),
-        parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
-    })
+    serde_json::from_value(row.clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 async fn running_subagent_bridges_graphql(
@@ -585,25 +580,12 @@ fn render_cancel_output(output: OutputFormat, render: SubagentCancelRender) -> R
     }
 }
 
-#[derive(Debug, Clone)]
-struct RequestRow {
-    request_id: String,
-    agent_did: Option<String>,
-    session_id: Option<String>,
-    lifecycle_state: Option<RequestLifecycleState>,
-    interrupt_requested_at: Option<String>,
-    parent_request_id: Option<String>,
-    parent_tool_call_id: Option<String>,
-}
-
-impl RequestRow {
-    fn into_snapshot(self) -> RequestCancelSnapshot {
-        RequestCancelSnapshot {
-            request_id: self.request_id,
-            agent_did: self.agent_did,
-            lifecycle_state: self.lifecycle_state.map(|state| state.as_str().to_string()),
-            interrupt_requested_at: self.interrupt_requested_at,
-        }
+fn request_cancel_snapshot(row: AgentRequestRow) -> RequestCancelSnapshot {
+    RequestCancelSnapshot {
+        request_id: row.request_id,
+        agent_did: row.agent_did,
+        lifecycle_state: row.lifecycle_state,
+        interrupt_requested_at: row.interrupt_requested_at,
     }
 }
 
@@ -634,7 +616,7 @@ struct RequestCancelSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     interrupt_requested_at: Option<String>,
 }
@@ -696,15 +678,15 @@ async fn load_rooted_lineage(
                 .or_default()
                 .push(LineageNode {
                     depth: edge.depth,
-                    row: AgentRequestLineageRow {
-                        request_id: edge.child_request_id,
-                        agent_did: edge.principal_did,
-                        behavior_id: edge.behavior_id,
-                        lifecycle_state: Some(edge.lifecycle_state),
-                        created_at: edge.created_at,
-                        claimed_at: None,
-                        caused_by_parent_request_id: Some(edge.immediate_parent_request_id),
-                    },
+                    row: serde_json::from_value(json!({
+                        "request_id": edge.child_request_id,
+                        "agent_did": edge.principal_did,
+                        "behavior_id": edge.behavior_id,
+                        "lifecycle_state": edge.lifecycle_state,
+                        "created_at": edge.created_at,
+                        "caused_by_parent_request_id": edge.immediate_parent_request_id,
+                    }))
+                    .context("decoding descendant edge as canonical AgentRequest row")?,
                 });
         }
         if !page.has_more {
@@ -749,7 +731,7 @@ async fn load_lineage_forest(
 
     for row in all_rows {
         let request_id = row.request_id.clone();
-        if let Some(parent_request_id) = row.parent_request_id() {
+        if let Some(parent_request_id) = request_parent_id(&row) {
             included_ids.insert(parent_request_id.clone());
             included_ids.insert(request_id.clone());
             children_by_parent
@@ -764,7 +746,7 @@ async fn load_lineage_forest(
         .iter()
         .filter_map(|request_id| {
             let row = rows_by_id.get(request_id)?;
-            let has_included_parent = row.parent_request_id().is_some_and(|parent| {
+            let has_included_parent = request_parent_id(row).is_some_and(|parent| {
                 included_ids.contains(&parent) && rows_by_id.contains_key(&parent)
             });
             (!has_included_parent).then(|| request_id.clone())
@@ -804,7 +786,7 @@ fn append_forest_node(
     request_id: &str,
     depth: usize,
     max_depth: usize,
-    rows_by_id: &BTreeMap<String, AgentRequestLineageRow>,
+    rows_by_id: &BTreeMap<String, AgentRequestRow>,
     children_by_parent: &BTreeMap<String, Vec<String>>,
     seen: &mut HashSet<String>,
     output: &mut Vec<LineageNode>,
@@ -837,18 +819,15 @@ fn append_forest_node(
     }
 }
 
-fn sort_request_ids(
-    request_ids: &mut [String],
-    rows_by_id: &BTreeMap<String, AgentRequestLineageRow>,
-) {
+fn sort_request_ids(request_ids: &mut [String], rows_by_id: &BTreeMap<String, AgentRequestRow>) {
     request_ids.sort_by(|left, right| {
         let left_key = rows_by_id
             .get(left)
-            .map(AgentRequestLineageRow::sort_key)
+            .map(request_sort_key)
             .unwrap_or(("", ""));
         let right_key = rows_by_id
             .get(right)
-            .map(AgentRequestLineageRow::sort_key)
+            .map(request_sort_key)
             .unwrap_or(("", ""));
         left_key.cmp(&right_key)
     });
@@ -857,7 +836,7 @@ fn sort_request_ids(
 async fn load_request_by_id(
     access: &ConfigAccess,
     request_id: &str,
-) -> Result<Option<AgentRequestLineageRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -873,7 +852,7 @@ async fn load_request_by_id(
     Ok(rows.pop())
 }
 
-async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestLineageRow>> {
+async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestRow>> {
     let query = format!(
         r#"{{
             AgentRequest(order: [{{ created_at: ASC }}, {{ request_id: ASC }}]) {{
@@ -884,10 +863,7 @@ async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestLine
     load_request_rows(access, &query).await
 }
 
-async fn load_request_rows(
-    access: &ConfigAccess,
-    query: &str,
-) -> Result<Vec<AgentRequestLineageRow>> {
+async fn load_request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<AgentRequestRow>> {
     graphql_rows(access, "AgentRequest", query)
         .await?
         .into_iter()
@@ -1057,44 +1033,25 @@ fn append_tree_node(
 
 #[derive(Debug, Clone)]
 struct LineageNode {
-    row: AgentRequestLineageRow,
+    row: AgentRequestRow,
     depth: usize,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct AgentRequestLineageRow {
-    request_id: String,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    claimed_at: Option<String>,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
+fn request_parent_id(row: &AgentRequestRow) -> Option<String> {
+    row.caused_by_parent_request_id
+        .as_deref()
+        .and_then(non_empty_str)
+        .map(ToOwned::to_owned)
 }
 
-impl AgentRequestLineageRow {
-    fn parent_request_id(&self) -> Option<String> {
-        self.caused_by_parent_request_id
+fn request_sort_key(row: &AgentRequestRow) -> (&str, &str) {
+    (
+        row.created_at
             .as_deref()
             .and_then(non_empty_str)
-            .map(ToOwned::to_owned)
-    }
-
-    fn sort_key(&self) -> (&str, &str) {
-        (
-            self.created_at
-                .as_deref()
-                .and_then(non_empty_str)
-                .unwrap_or_default(),
-            self.request_id.as_str(),
-        )
-    }
+            .unwrap_or_default(),
+        row.request_id.as_str(),
+    )
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1137,8 +1094,7 @@ impl LineageOutputRow {
         let state = node
             .row
             .lifecycle_state
-            .as_deref()
-            .and_then(non_empty_str)
+            .map(RequestLifecycleState::as_str)
             .unwrap_or("unknown")
             .to_string();
         let started_at = node
@@ -1153,7 +1109,7 @@ impl LineageOutputRow {
         Self {
             child_request_id: request_id.clone(),
             request_id,
-            parent_request_id: node.row.parent_request_id(),
+            parent_request_id: request_parent_id(&node.row),
             deployment,
             agent_did,
             behavior_id,
@@ -1181,16 +1137,16 @@ fn non_empty_str(value: &str) -> Option<&str> {
 mod tests {
     use super::*;
 
-    fn row(request_id: &str, parent: Option<&str>, created_at: &str) -> AgentRequestLineageRow {
-        AgentRequestLineageRow {
-            request_id: request_id.to_string(),
-            agent_did: Some("did:key:zTest".to_string()),
-            behavior_id: Some(request_id.to_string()),
-            lifecycle_state: Some("pending".to_string()),
-            created_at: Some(created_at.to_string()),
-            claimed_at: None,
-            caused_by_parent_request_id: parent.map(ToOwned::to_owned),
-        }
+    fn row(request_id: &str, parent: Option<&str>, created_at: &str) -> AgentRequestRow {
+        serde_json::from_value(json!({
+            "request_id": request_id,
+            "agent_did": "did:key:zTest",
+            "behavior_id": request_id,
+            "lifecycle_state": "pending",
+            "created_at": created_at,
+            "caused_by_parent_request_id": parent,
+        }))
+        .expect("canonical AgentRequest test row")
     }
 
     #[test]

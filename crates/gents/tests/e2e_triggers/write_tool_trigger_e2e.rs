@@ -7,7 +7,7 @@ use gents::document_config::{WriteToolDecl, WriteToolField};
 use gents::graphql::escape_graphql_string;
 use gents::llm::tool::Tool;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
-use serde::Deserialize;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
@@ -113,15 +113,6 @@ where
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct AgentRequestRow {
-    request_id: String,
-    content: String,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-    execution_origin: Option<String>,
-}
-
 async fn query_agent_requests_for_trigger(
     node: &EmbeddedNode,
     trigger_id: &str,
@@ -199,20 +190,30 @@ fn assert_multi_field_render(request: &AgentRequestRow, trigger_id: &str) {
     );
     let expected = format!("drift={DRIFT_SIG} summary={SUMMARY} paths={TARGET_PATHS}");
     assert_eq!(
-        request.content, expected,
+        request.content.as_deref(),
+        Some(expected.as_str()),
         "rendered prompt must substitute ALL of drift_sig/summary/target_paths from the \
          triggering doc: {request:?}"
     );
     assert!(
-        request.content.contains(DRIFT_SIG),
+        request
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains(DRIFT_SIG)),
         "render missing drift_sig: {request:?}"
     );
     assert!(
-        request.content.contains(SUMMARY),
+        request
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains(SUMMARY)),
         "render missing summary: {request:?}"
     );
     assert!(
-        request.content.contains(TARGET_PATHS),
+        request
+            .content
+            .as_deref()
+            .is_some_and(|content| content.contains(TARGET_PATHS)),
         "render missing target_paths: {request:?}"
     );
     assert!(

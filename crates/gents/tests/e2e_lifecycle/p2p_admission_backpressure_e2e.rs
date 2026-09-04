@@ -16,19 +16,14 @@ use std::time::{Duration, Instant};
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use serde::Deserialize;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::{test_p2p_db_with_admission, TestP2pAdmission};
 
 const OWNER_DID: &str = "did:test:admission-p2p-owner";
 const BEHAVIOR_ID: &str = "admission-p2p-behavior";
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    agent_did: String,
-    lifecycle_state: String,
-}
 
 async fn install_one_way_replicator(
     sender: &EmbeddedNode,
@@ -148,11 +143,12 @@ async fn terminalize_request(
     );
 }
 
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestRow> {
+async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                request_id
                 agent_did
                 lifecycle_state
             }}
@@ -174,15 +170,15 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestR
 async fn wait_for_request_lifecycle(
     node: &EmbeddedNode,
     request_id: &str,
-    expected_lifecycle: &str,
+    expected_lifecycle: RequestLifecycleState,
     timeout: Duration,
     label: &str,
-) -> RequestRow {
+) -> AgentRequestRow {
     let deadline = Instant::now() + timeout;
-    let mut last: Option<RequestRow> = None;
+    let mut last: Option<AgentRequestRow> = None;
     loop {
         if let Some(row) = fetch_request(node, request_id).await {
-            if row.lifecycle_state == expected_lifecycle {
+            if row.lifecycle_state == Some(expected_lifecycle) {
                 return row;
             }
             last = Some(row);
@@ -220,24 +216,24 @@ async fn single_push_worker_still_converges_agent_request_over_p2p() {
     let on_peer_processing = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "processing",
+        RequestLifecycleState::Processing,
         Duration::from_secs(45),
         "peer (intermediate, single push worker)",
     )
     .await;
-    assert_eq!(on_peer_processing.agent_did, OWNER_DID);
+    assert_eq!(on_peer_processing.agent_did.as_deref(), Some(OWNER_DID));
 
     terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
 
     let on_peer_terminal = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(45),
         "peer (terminal, single push worker)",
     )
     .await;
-    assert_eq!(on_peer_terminal.agent_did, OWNER_DID);
+    assert_eq!(on_peer_terminal.agent_did.as_deref(), Some(OWNER_DID));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -262,11 +258,11 @@ async fn single_push_worker_delivers_multi_wave_updates() {
         let on_peer = wait_for_request_lifecycle(
             peer.node.as_ref(),
             &request_id,
-            "completed",
+            RequestLifecycleState::Completed,
             Duration::from_secs(45),
             &format!("peer wave {idx}"),
         )
         .await;
-        assert_eq!(on_peer.agent_did, OWNER_DID);
+        assert_eq!(on_peer.agent_did.as_deref(), Some(OWNER_DID));
     }
 }

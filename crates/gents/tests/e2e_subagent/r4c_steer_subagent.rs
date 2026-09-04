@@ -8,6 +8,8 @@ use gents::{
     fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
     AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -16,20 +18,6 @@ use crate::support::test_db;
 
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
-
-#[derive(Debug, Deserialize)]
-struct RequestRow {
-    session_id: String,
-    behavior_id: Option<String>,
-    content: String,
-    lifecycle_state: Option<String>,
-    metadata: Option<String>,
-    subagent_depth: Option<u32>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-}
 
 #[derive(Debug, Deserialize)]
 struct MessageRow {
@@ -245,19 +233,17 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                 limit: 1
-            ) {{ session_id }}
+            ) {{ request_id session_id }}
         }}"#
     );
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         let response = node.execute(&query).await;
-        #[derive(serde::Deserialize)]
-        struct Row {
-            session_id: String,
-        }
-        if let Some(row) = crate::support::first_optional_row::<Row>(&response, "AgentRequest") {
-            if !row.session_id.is_empty() {
-                return row.session_id;
+        if let Some(row) =
+            crate::support::first_optional_row::<AgentRequestRow>(&response, "AgentRequest")
+        {
+            if let Some(session_id) = row.session_id.filter(|value| !value.is_empty()) {
+                return session_id;
             }
         }
         assert!(
@@ -287,11 +273,12 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
     serde_json::from_str(&reason).expect("skip reason should be JSON")
 }
 
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> RequestRow {
+async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                request_id
                 session_id
                 behavior_id
                 content
@@ -470,9 +457,12 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
         .is_empty());
 
     let queued = fetch_request(db.node.as_ref(), queued_request_id).await;
-    assert_eq!(queued.session_id, child_session_id);
+    assert_eq!(queued.session_id.as_deref(), Some(child_session_id));
     assert_eq!(queued.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
-    assert_eq!(queued.content, "also check the staging config");
+    assert_eq!(
+        queued.content.as_deref(),
+        Some("also check the staging config")
+    );
     assert_eq!(queued.subagent_depth, Some(1));
     let parent_request_doc_id =
         crate::support::exact_request_doc_id(db.node.as_ref(), child_request_id).await;
@@ -486,7 +476,7 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     );
     assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(queued.caused_by_parent_tool_call_doc_id.as_deref(), None);
-    assert_eq!(queued.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(queued.lifecycle_state, Some(RequestLifecycleState::Pending));
     let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
     assert_eq!(metadata["queue"]["source"], "steering");
     assert_eq!(metadata["queue"]["policy"], "append");
@@ -674,7 +664,10 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
         .iter()
         .any(|id| id.as_str() == Some(wake_request_id)));
     let wake = fetch_request(db.node.as_ref(), wake_request_id).await;
-    assert_eq!(wake.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        wake.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
 }
 
 #[tokio::test]

@@ -15,6 +15,8 @@ use gents::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
     ToolCeiling, ToolSelectionDocument, TOOL_POLICY_V1,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
@@ -156,30 +158,13 @@ async fn ensure_parent_subagent_authorization(
 }
 
 #[derive(Debug, Deserialize)]
-struct ChildRequestRow {
-    request_id: String,
-    agent_did: String,
-    requester_did: Option<String>,
-    behavior_id: String,
-    content: String,
-    lifecycle_state: Option<String>,
-    subagent_depth: Option<i64>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct ToolCallRow {
     lifecycle_state: Option<String>,
     result: Option<String>,
     tool_failure_class: Option<String>,
 }
 
-async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
+async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -206,7 +191,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<ChildRequestRow>(&response, "AgentRequest") {
+        if let Some(row) = first_optional_row::<AgentRequestRow>(&response, "AgentRequest") {
             return row;
         }
         if tokio::time::Instant::now() >= deadline {
@@ -267,7 +252,7 @@ async fn trusted_cross_deployment_path_uses_targeted_bridge_without_parent_repli
     .await;
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
-    assert_eq!(child.agent_did, local_did);
+    assert_eq!(child.agent_did.as_deref(), Some(local_did.as_str()));
     assert_eq!(child.requester_did.as_deref(), Some(local_did.as_str()));
     assert_eq!(child.subagent_depth, Some(2));
     assert_eq!(
@@ -459,9 +444,15 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.agent_did, running.booted.agent_did);
-    assert_eq!(child.behavior_id, running.behavior_id);
-    assert_eq!(child.content, "child prompt from source");
+    assert_eq!(
+        child.agent_did.as_deref(),
+        Some(running.booted.agent_did.as_str())
+    );
+    assert_eq!(
+        child.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str())
+    );
+    assert_eq!(child.content.as_deref(), Some("child prompt from source"));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
@@ -1382,8 +1373,8 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.agent_did, local_did);
-    assert_eq!(child.behavior_id, target_behavior_id);
+    assert_eq!(child.agent_did.as_deref(), Some(local_did.as_str()));
+    assert_eq!(child.behavior_id.as_deref(), Some(target_behavior_id));
 }
 
 #[tokio::test]
@@ -1939,9 +1930,12 @@ async fn recovery_materializes_orphan_child_request_for_running_subagent_tool() 
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.behavior_id, crate::support::AGENT_NAME);
-    assert_eq!(child.content, "orphan child prompt");
-    assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(
+        child.behavior_id.as_deref(),
+        Some(crate::support::AGENT_NAME)
+    );
+    assert_eq!(child.content.as_deref(), Some("orphan child prompt"));
+    assert_eq!(child.lifecycle_state, Some(RequestLifecycleState::Pending));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),

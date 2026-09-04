@@ -3,6 +3,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
@@ -21,12 +22,6 @@ struct StaleInferenceCallRow {
     call_id: String,
     request_id: String,
     call_state: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ParentRequestRow {
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 enum InferenceRecoveryOutcome {
@@ -113,7 +108,7 @@ async fn lookup_parent_request(
     node: &EmbeddedNode,
     agent_did: &str,
     request_id: &str,
-) -> Result<Option<ParentRequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
@@ -125,6 +120,7 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
+                request_id
                 lifecycle_state
             }}
         }}"#
@@ -138,18 +134,13 @@ async fn lookup_parent_request(
         );
     }
 
-    let rows: Vec<ParentRequestRow> = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())
 }
 
 fn recovery_outcome(
     row: &StaleInferenceCallRow,
-    parent: &ParentRequestRow,
+    parent: &AgentRequestRow,
 ) -> Option<InferenceRecoveryOutcome> {
     if request_is_interrupted(parent) {
         return Some(InferenceRecoveryOutcome::Cancelled);
@@ -195,11 +186,11 @@ async fn recover_inference_call_row(
     Ok(())
 }
 
-fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
+fn request_is_interrupted(parent: &AgentRequestRow) -> bool {
     parent.lifecycle_state == Some(RequestLifecycleState::Interrupted)
 }
 
-fn request_is_terminal(parent: &ParentRequestRow) -> bool {
+fn request_is_terminal(parent: &AgentRequestRow) -> bool {
     parent
         .lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)

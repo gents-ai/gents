@@ -3,6 +3,8 @@
 //! graph, and R4c background-work observable shapes.
 
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 const BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID: &str = "r6-background-theorem-parent";
 const BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID: &str = "r6-background-theorem-child";
@@ -43,78 +45,6 @@ struct BackgroundTheoremToolCallRow {
 #[derive(Debug, Deserialize)]
 struct BackgroundedRow {
     lifecycle_state: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BackgroundTheoremChildRequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    requester_did: Option<String>,
-    behavior_id: Option<String>,
-    session_id: String,
-    content: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
-    execution_origin: Option<String>,
-    created_at: String,
-    deadline: Option<String>,
-    subagent_depth: Option<u32>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-    lifecycle_state: Option<String>,
-}
-
-impl BackgroundTheoremChildRequestRow {
-    fn into_agent_request(self) -> gents::watcher::AgentRequest {
-        gents::watcher::AgentRequest {
-            doc_id: self.doc_id,
-            request_id: self.request_id,
-            agent_did: self.agent_did,
-            requester_did: self.requester_did,
-            behavior_id: self
-                .behavior_id
-                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
-            session_id: self.session_id,
-            content: self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata,
-            execution_origin: self
-                .execution_origin
-                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
-            created_at: self.created_at,
-            deadline: self
-                .deadline
-                .and_then(|value| (!value.trim().is_empty()).then_some(value)),
-            subagent_depth: self.subagent_depth.unwrap_or(0),
-            caused_by_parent_request_id: self.caused_by_parent_request_id,
-            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
-            caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
-            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
-        }
-    }
 }
 
 fn background_tool_registry(
@@ -455,7 +385,7 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 async fn fetch_background_theorem_child_request(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> BackgroundTheoremChildRequestRow {
+) -> AgentRequestRow {
     let child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -494,7 +424,7 @@ async fn fetch_background_theorem_child_request(
 async fn fetch_background_theorem_child_request_optional(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> Option<BackgroundTheoremChildRequestRow> {
+) -> Option<AgentRequestRow> {
     let child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -534,14 +464,16 @@ async fn wait_for_background_theorem_child_lifecycle_state(
     node: &EmbeddedNode,
     child_request_id: &str,
     expected_state: &str,
-) -> BackgroundTheoremChildRequestRow {
+) -> AgentRequestRow {
     let timeout_at = tokio::time::Instant::now() + Duration::from_secs(10);
 
     loop {
         if let Some(row) =
             fetch_background_theorem_child_request_optional(node, child_request_id).await
         {
-            if row.lifecycle_state.as_deref() == Some(expected_state) {
+            let expected_state = RequestLifecycleState::parse(expected_state)
+                .expect("Lean request lifecycle state must be valid");
+            if row.lifecycle_state == Some(expected_state) {
                 return row;
             }
 
@@ -840,14 +772,7 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct CompletionWakeRow {
-    request_id: String,
-    lifecycle_state: Option<String>,
-    metadata: Option<String>,
-}
-
-async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<CompletionWakeRow> {
+async fn fetch_completion_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<AgentRequestRow> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -988,7 +913,10 @@ async fn drive_r6_completion_continuation_case(case: &lean_vocab_test::LeanR6Bac
 
     let wakes = fetch_completion_wakes(db.node.as_ref(), &parent_session_id).await;
     assert_eq!(wakes.len(), 1, "one completion must enqueue one wake");
-    assert_eq!(wakes[0].lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(
+        wakes[0].lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
     let metadata: Value =
         serde_json::from_str(wakes[0].metadata.as_deref().expect("wake metadata"))
             .expect("wake metadata JSON");
@@ -1292,12 +1220,13 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         "pending",
     )
     .await;
-    assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(child.lifecycle_state, Some(RequestLifecycleState::Pending));
     let mut child_lifecycle = RequestLifecycle::new_with_execution_binding(
         db.node.clone(),
         BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
         &agent_did,
-        child.into_agent_request(),
+        gents::watcher::AgentRequest::try_from(child)
+            .expect("canonical child AgentRequest must satisfy runtime boundary"),
         DEADLINE_SECS,
         ExecutionOrigin::Interactive,
         BACKEND_ID,
@@ -1310,8 +1239,11 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     let child_pre =
         fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
     assert_eq!(
-        child_pre.lifecycle_state.as_deref(),
-        Some(witness.kind_field("child_pre_state"))
+        child_pre.lifecycle_state,
+        Some(
+            RequestLifecycleState::parse(witness.kind_field("child_pre_state"))
+                .expect("Lean request lifecycle state")
+        )
     );
 
     let mut lifecycle =
@@ -1357,8 +1289,11 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
     )
     .await;
     assert_eq!(
-        child_post.lifecycle_state.as_deref(),
-        Some(child_post_state_expected)
+        child_post.lifecycle_state,
+        Some(
+            RequestLifecycleState::parse(child_post_state_expected)
+                .expect("Lean request lifecycle state")
+        )
     );
     let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_post.request_id)
         .await

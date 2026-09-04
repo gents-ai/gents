@@ -158,6 +158,43 @@ pub struct TimelineRequestRow {
     pub retry_summary: RetrySummary,
 }
 
+impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
+    fn from(row: gents_protocol::row::AgentRequestRow) -> Self {
+        Self {
+            doc_id: row.doc_id,
+            request_id: row.request_id,
+            agent_did: row.agent_did,
+            behavior_id: row.behavior_id,
+            session_id: row.session_id,
+            content: row.content,
+            seed: row.seed,
+            max_total_tokens: row.max_total_tokens,
+            metadata: row.metadata,
+            lifecycle_state: row.lifecycle_state,
+            backend_id: row.backend_id,
+            failure_reason: row.failure_reason,
+            created_at: row.created_at,
+            retry_count: row.retry_count,
+            interrupt_requested_at: row.interrupt_requested_at,
+            caused_by_trigger_id: row.caused_by_trigger_id,
+            caused_by_trigger_kind: row.caused_by_trigger_kind,
+            caused_by_correlation: row.caused_by_correlation,
+            caused_by_trigger_context: row.caused_by_trigger_context,
+            caused_by_source_doc_id: row.caused_by_source_doc_id,
+            caused_by_parent_request_id: row.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,
+            caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id,
+            workspace_id: row.workspace_id,
+            workspace_authority: row.workspace_authority,
+            workspace_owner_deployment_id: row.workspace_owner_deployment_id,
+            workspace_seal_hash: row.workspace_seal_hash,
+            execution_origin: row.execution_origin,
+            retry_summary: RetrySummary::default(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RetrySummary {
     pub retry_count: u32,

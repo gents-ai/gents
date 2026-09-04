@@ -2,6 +2,12 @@ use super::*;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
+fn parsed_request_state(value: &str) -> RequestLifecycleState {
+    RequestLifecycleState::parse(value).unwrap_or_else(|error| {
+        panic!("invalid generated request lifecycle state {value:?}: {error}")
+    })
+}
+
 fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("workspaceBindingPending", "pending") => Some("bindWorkspace"),
@@ -82,7 +88,7 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
     // Leave the row persisted `claimed`, as a crashed executor would.
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "claimed");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Claimed);
 
     // The sweep only repairs a stuck request whose durable response already
     // reached a terminal outcome; without one it reports `awaiting_outcome`.
@@ -105,7 +111,7 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state, case.to,
+        snap.lifecycle_state, parsed_request_state(&case.to),
         "recovery-reachable Request transition {} expected {} -> {} via {:?}, got persisted lifecycle_state={}",
         case.name,
         case.from,
@@ -149,7 +155,8 @@ async fn ordinary_complete_also_takes_the_claimed_to_completed_edge() {
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state, "completed",
+        snap.lifecycle_state,
+        RequestLifecycleState::Completed,
         "complete() from a persisted claimed row should still complete it"
     );
     let session_id = escape_graphql_string(&session_id);
@@ -242,7 +249,7 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
         .unwrap();
 
     let request = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(request.lifecycle_state, "failed");
+    assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
     assert!(fetch_session_snapshot(&db.node, &session_id)
         .await
         .is_none());
@@ -332,7 +339,7 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         fetch_request_snapshot(&db.node, &first_doc_id)
             .await
             .lifecycle_state,
-        "completed"
+        RequestLifecycleState::Completed
     );
     assert_eq!(
         fetch_conversation_snapshot(&db.node, &session_id).await,
@@ -512,7 +519,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state, case.to,
+        snap.lifecycle_state, parsed_request_state(&case.to),
         "generated Request transition {} expected {} -> {} classified as {} via {:?}, got persisted lifecycle_state={}",
         case.name, case.from, case.to, case.classification, case.action, snap.lifecycle_state
     );
@@ -899,7 +906,8 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 .await
                 .lifecycle_state;
             assert_eq!(
-                before, start,
+                before,
+                parsed_request_state(start),
                 "fixture for {start}/{writer} did not reach the intended start state"
             );
 
@@ -957,7 +965,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 .await
                 .lifecycle_state;
             if after != before {
-                observed.insert((before, after));
+                observed.insert((before.as_str().to_string(), after.as_str().to_string()));
             }
         }
     }
@@ -1131,7 +1139,7 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
 
             let snap = fetch_request_snapshot(&db.node, &doc_id).await;
             assert_eq!(
-                snap.lifecycle_state, terminal,
+                snap.lifecycle_state, parsed_request_state(terminal),
                 "writer {writer} moved a persisted {terminal} request to {} — terminal states must be irreversible (S1)",
                 snap.lifecycle_state
             );
@@ -1169,7 +1177,7 @@ async fn interactive_claim_snapshot_matches_claimed_waiting() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "claimed".into(),
+            lifecycle_state: RequestLifecycleState::Claimed,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -1274,7 +1282,7 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "processing".into(),
+            lifecycle_state: RequestLifecycleState::Processing,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -1349,7 +1357,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "failed".into(),
+            lifecycle_state: RequestLifecycleState::Failed,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "interactive".into(),
@@ -1403,7 +1411,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &lifecycle.request().doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "claimed".into(),
+            lifecycle_state: RequestLifecycleState::Claimed,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
@@ -1579,7 +1587,10 @@ async fn serial_skip_does_not_create_request() {
     );
 
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(still_claimed.lifecycle_state, "claimed");
+    assert_eq!(
+        still_claimed.lifecycle_state,
+        RequestLifecycleState::Claimed
+    );
 }
 
 #[tokio::test]
@@ -1607,7 +1618,7 @@ async fn latest_only_transition_to_superseded() {
     .unwrap();
 
     let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(before.lifecycle_state, "claimed");
+    assert_eq!(before.lifecycle_state, RequestLifecycleState::Claimed);
 
     let supersede = r#"mutation {
             update_AgentRequest(
@@ -1644,7 +1655,7 @@ async fn latest_only_transition_to_superseded() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "superseded".into(),
+            lifecycle_state: RequestLifecycleState::Superseded,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),
@@ -1745,7 +1756,7 @@ async fn active_runtime_trigger_filters_ignore_input_required() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "superseded");
 
     let snap = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(snap.lifecycle_state, "inputRequired");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::InputRequired);
 }
 
 #[tokio::test]
@@ -1941,7 +1952,10 @@ async fn serial_skip_event_does_not_create_request() {
     );
 
     let still_claimed = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(still_claimed.lifecycle_state, "claimed");
+    assert_eq!(
+        still_claimed.lifecycle_state,
+        RequestLifecycleState::Claimed
+    );
 }
 
 #[tokio::test]
@@ -1969,7 +1983,7 @@ async fn latest_only_event_transition_to_superseded() {
     .unwrap();
 
     let before = fetch_request_snapshot(&db.node, &seeded.request().doc_id).await;
-    assert_eq!(before.lifecycle_state, "claimed");
+    assert_eq!(before.lifecycle_state, RequestLifecycleState::Claimed);
 
     let supersede = r#"mutation {
         update_AgentRequest(
@@ -2005,7 +2019,7 @@ async fn latest_only_event_transition_to_superseded() {
     assert_eq!(
         fetch_request_snapshot(&db.node, &seeded.request().doc_id).await,
         RequestSnapshot {
-            lifecycle_state: "superseded".into(),
+            lifecycle_state: RequestLifecycleState::Superseded,
             behavior_id: AGENT_NAME.into(),
             backend_id: BACKEND_ID.into(),
             execution_origin: "scheduled".into(),

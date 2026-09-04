@@ -12,7 +12,7 @@ use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use serde::Deserialize;
+use gents_protocol::row::AgentRequestRow;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
@@ -41,112 +41,6 @@ pub struct GoalSource {
     subscription: Option<events::Subscription>,
     cancel: CancellationToken,
     rescan_tick: tokio::time::Interval,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    #[serde(default)]
-    requester_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    session_id: String,
-    #[serde(default)]
-    content: String,
-    #[serde(default)]
-    temperature: Option<f64>,
-    #[serde(default)]
-    top_p: Option<f64>,
-    #[serde(default)]
-    top_k: Option<i64>,
-    #[serde(default)]
-    seed: Option<i64>,
-    #[serde(default)]
-    max_tokens: Option<i64>,
-    #[serde(default)]
-    max_total_tokens: Option<i64>,
-    #[serde(default)]
-    metadata: Option<String>,
-    #[serde(default)]
-    execution_origin: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    created_at: String,
-    #[serde(default)]
-    deadline: Option<String>,
-    #[serde(default)]
-    subagent_depth: Option<i64>,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_request_doc_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_doc_id: Option<String>,
-    #[serde(default)]
-    caused_by_correlation: Option<String>,
-    #[serde(default)]
-    caused_by_trigger_context: Option<String>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
-}
-
-impl RequestRow {
-    fn is_active(&self) -> bool {
-        self.lifecycle_state
-            .is_some_and(RequestLifecycleState::is_active_runtime)
-    }
-
-    fn terminal(&self) -> Option<RequestLifecycleState> {
-        self.lifecycle_state.filter(|state| state.is_terminal())
-    }
-
-    fn into_agent_request(self) -> AgentRequest {
-        AgentRequest {
-            doc_id: self.doc_id,
-            request_id: self.request_id,
-            agent_did: self.agent_did,
-            requester_did: self.requester_did,
-            behavior_id: self.behavior_id,
-            session_id: self.session_id,
-            content: self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata,
-            execution_origin: self.execution_origin,
-            created_at: self.created_at,
-            deadline: self.deadline,
-            subagent_depth: self.subagent_depth.unwrap_or_default().max(0) as u32,
-            caused_by_parent_request_id: self.caused_by_parent_request_id,
-            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id,
-            caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id,
-            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_source_doc_id: None,
-            caused_by_correlation: self.caused_by_correlation,
-            caused_by_trigger_context: self.caused_by_trigger_context,
-            workspace_id: self.workspace_id,
-            workspace_authority: self.workspace_authority,
-            workspace_owner_deployment_id: self.workspace_owner_deployment_id,
-            workspace_seal_hash: self.workspace_seal_hash,
-        }
-    }
 }
 
 impl GoalSource {
@@ -281,7 +175,8 @@ impl GoalSource {
         let Some(latest) = self.latest_request_when_session_idle(&goal).await? else {
             return Ok(None);
         };
-        let Some(terminal_state) = latest.terminal() else {
+        let Some(terminal_state) = latest.lifecycle_state.filter(|state| state.is_terminal())
+        else {
             return Ok(None);
         };
         let terminal_name = terminal_state.as_str().to_string();
@@ -579,7 +474,7 @@ impl GoalSource {
     async fn materialize_claimed_continuation(
         &self,
         mut goal: GoalDocument,
-        latest: RequestRow,
+        latest: AgentRequestRow,
         retry_prefix: Option<String>,
         wrapup: bool,
         authorized_phase: GoalContinuationPhase,
@@ -610,7 +505,8 @@ impl GoalSource {
 
         let sequence = goal.continuation_sequence();
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
-        let parent = latest.into_agent_request();
+        let parent = AgentRequest::try_from(latest)
+            .context("decode goal continuation parent AgentRequest")?;
         let child = enqueue_goal_continuation(
             &self.node,
             &parent,
@@ -679,7 +575,7 @@ impl GoalSource {
     async fn latest_request_when_session_idle(
         &self,
         goal: &GoalDocument,
-    ) -> Result<Option<RequestRow>> {
+    ) -> Result<Option<AgentRequestRow>> {
         let agent_did = escape_graphql_string(&goal.agent_did);
         let session_id = escape_graphql_string(&goal.session_id);
         let query = format!(
@@ -707,7 +603,7 @@ impl GoalSource {
                 response.errors
             );
         }
-        let rows: Vec<RequestRow> = serde_json::from_value(
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
                 .as_ref()
@@ -716,7 +612,10 @@ impl GoalSource {
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
         .context("decoding goal session requests")?;
-        if rows.iter().any(RequestRow::is_active) {
+        if rows.iter().any(|row| {
+            row.lifecycle_state
+                .is_some_and(RequestLifecycleState::is_active_runtime)
+        }) {
             return Ok(None);
         }
         Ok(rows.into_iter().next())
@@ -865,7 +764,7 @@ fn provider_reason_is_usage_limited(reason: &str) -> bool {
     .any(|needle| reason.contains(needle))
 }
 
-fn request_is_goal_wrapup(request: &RequestRow, goal_id: &str) -> bool {
+fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {
     request
         .metadata
         .as_deref()

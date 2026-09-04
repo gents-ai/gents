@@ -1,6 +1,8 @@
 use gents::lifecycle::ClaimOutcome;
 use gents::watcher::{AgentRequest, DefraWatcher};
 use gents::RequestLifecycle;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::support::{
@@ -9,20 +11,14 @@ use crate::support::{
     AGENT_NAME,
 };
 
-#[derive(Debug, Clone, Deserialize)]
-struct StatusRow {
-    lifecycle_state: Option<String>,
-}
+type StatusRow = AgentRequestRow;
 
 #[derive(Debug, Clone, Deserialize)]
 struct BehaviorRow {
     behavior_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct DeadlineRow {
-    deadline: String,
-}
+type DeadlineRow = AgentRequestRow;
 
 #[tokio::test]
 async fn claim_updates_every_duplicate_conversation_projection() {
@@ -222,12 +218,12 @@ async fn claim_queues_when_earlier_processing_request_exists() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
 }
 
 #[tokio::test]
@@ -302,12 +298,15 @@ async fn queued_request_interrupt_wins_before_queue_block() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-interrupted" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        row.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
 }
 
 #[tokio::test]
@@ -382,12 +381,12 @@ async fn queued_request_valid_until_wins_before_queue_block() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-expired" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state.as_deref(), Some("dead"));
+    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Dead));
 }
 
 #[tokio::test]
@@ -456,12 +455,12 @@ async fn earliest_pending_claim_leaves_later_same_session_pending() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-late" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
 }
 
 #[tokio::test]
@@ -630,12 +629,12 @@ async fn terminal_earlier_request_allows_later_same_session_claim() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-later-after-terminal" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     let row = first_row::<StatusRow>(&resp, "AgentRequest");
-    assert_eq!(row.lifecycle_state.as_deref(), Some("claimed"));
+    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Claimed));
 }
 
 #[tokio::test]
@@ -801,13 +800,17 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
         .execute(
             r#"{
                 AgentRequest(filter: { request_id: { _eq: "req-switch" } }) {
+                    request_id
                     lifecycle_state
                 }
             }"#,
         )
         .await;
     let request = first_row::<StatusRow>(&request, "AgentRequest");
-    assert_eq!(request.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(
+        request.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
 
     let sessions = db
         .node
@@ -902,11 +905,13 @@ async fn claim_preserves_explicit_request_deadline() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-explicit-deadline" } },
                     limit: 1
-                ) { deadline }
+                ) { request_id deadline }
             }"#,
         )
         .await;
-    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest").deadline;
+    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest")
+        .deadline
+        .expect("AgentRequest.deadline");
     assert_eq!(
         chrono::DateTime::parse_from_rfc3339(&persisted).unwrap(),
         chrono::DateTime::parse_from_rfc3339(&explicit_deadline).unwrap()
@@ -985,11 +990,13 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
                 AgentRequest(
                     filter: { request_id: { _eq: "req-invalid-deadline" } },
                     limit: 1
-                ) { deadline }
+                ) { request_id deadline }
             }"#,
         )
         .await;
-    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest").deadline;
+    let persisted = first_row::<DeadlineRow>(&resp, "AgentRequest")
+        .deadline
+        .expect("AgentRequest.deadline");
     assert_ne!(persisted, invalid_deadline);
 
     let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&persisted)

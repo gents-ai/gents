@@ -10,6 +10,7 @@ use gents::{
     RequestLifecycle, ToolSelectionDocument,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -1040,14 +1041,9 @@ async fn load_subagent_notifications(node: &HarnessNode) -> Result<Vec<String>> 
 }
 
 async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> {
-    let query =
-        r#"{ AgentRequest(filter: { execution_origin: { _eq: "scheduled" } }) { metadata } }"#;
+    let query = r#"{ AgentRequest(filter: { execution_origin: { _eq: "scheduled" } }) { request_id metadata } }"#;
     let response = node.db.node.execute(query).await;
-    #[derive(Deserialize)]
-    struct Row {
-        metadata: Option<String>,
-    }
-    let rows: Vec<Row> = response
+    let rows: Vec<AgentRequestRow> = response
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
@@ -1060,9 +1056,7 @@ async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> 
         .collect())
 }
 
-#[derive(Deserialize)]
-struct RequestRow {
-    #[serde(rename = "_docID")]
+struct HarnessRequest {
     doc_id: String,
     request_id: String,
     agent_did: String,
@@ -1072,19 +1066,36 @@ struct RequestRow {
     interrupt_requested_at: Option<String>,
 }
 
-impl RequestRow {
+impl From<AgentRequestRow> for HarnessRequest {
+    fn from(row: AgentRequestRow) -> Self {
+        Self {
+            doc_id: row.doc_id.expect("AgentRequest._docID"),
+            request_id: row.request_id,
+            agent_did: row.agent_did.expect("AgentRequest.agent_did"),
+            behavior_id: row.behavior_id.expect("AgentRequest.behavior_id"),
+            session_id: row.session_id.expect("AgentRequest.session_id"),
+            lifecycle_state: row.lifecycle_state.expect("AgentRequest.lifecycle_state"),
+            interrupt_requested_at: row.interrupt_requested_at,
+        }
+    }
+}
+
+impl HarnessRequest {
     fn is_terminal(&self) -> bool {
         self.lifecycle_state.is_terminal()
     }
 }
 
-async fn load_request(node: &HarnessNode, request_id: &str) -> Result<RequestRow> {
+async fn load_request(node: &HarnessNode, request_id: &str) -> Result<HarnessRequest> {
     load_request_optional(node, request_id)
         .await?
         .ok_or_else(|| anyhow::anyhow!("AgentRequest {request_id} not found"))
 }
 
-async fn load_request_optional(node: &HarnessNode, request_id: &str) -> Result<Option<RequestRow>> {
+async fn load_request_optional(
+    node: &HarnessNode,
+    request_id: &str,
+) -> Result<Option<HarnessRequest>> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
@@ -1094,7 +1105,7 @@ async fn load_request_optional(node: &HarnessNode, request_id: &str) -> Result<O
         escape_graphql_string(request_id)
     );
     let response = node.db.node.execute(&query).await;
-    Ok(first_optional_row(&response, "AgentRequest"))
+    Ok(first_optional_row::<AgentRequestRow>(&response, "AgentRequest").map(HarnessRequest::from))
 }
 
 #[derive(Deserialize)]

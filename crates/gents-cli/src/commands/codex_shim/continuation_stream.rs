@@ -6,7 +6,7 @@ use gents::graphql::escape_graphql_string;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::RequestLifecycleState;
-use serde::Deserialize;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 use tokio::sync::watch;
 
@@ -31,21 +31,6 @@ use super::turn::{
 use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
 use crate::SubmittedRequest;
-
-#[derive(Clone, Debug, Deserialize)]
-struct BackgroundContinuationRequest {
-    request_id: String,
-    session_id: String,
-    agent_did: String,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    metadata: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    created_at: Option<String>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChildLifecycleSignature {
@@ -269,9 +254,17 @@ async fn project_background_continuation(
     connection: &ConnectionState,
     state: &ShimState,
     watcher_id: &str,
-    request: BackgroundContinuationRequest,
+    request: AgentRequestRow,
     baseline_turn: Option<codex::Turn>,
 ) -> Result<()> {
+    let session_id = request
+        .session_id
+        .clone()
+        .context("background continuation AgentRequest missing session_id")?;
+    let agent_did = request
+        .agent_did
+        .clone()
+        .context("background continuation AgentRequest missing agent_did")?;
     let turn_id = request.request_id.clone();
     let started_at = request.created_at.as_deref().and_then(timestamp_seconds);
     if baseline_turn.is_none() {
@@ -279,7 +272,7 @@ async fn project_background_continuation(
             &connection.outbound,
             state,
             codex::ServerNotification::TurnStarted(codex::TurnStartedNotification {
-                thread_id: request.session_id.clone(),
+                thread_id: session_id.clone(),
                 turn: turn_value_with_timing(
                     &turn_id,
                     codex::TurnStatus::InProgress,
@@ -294,7 +287,7 @@ async fn project_background_continuation(
         send_thread_status_changed(
             &connection.outbound,
             state,
-            &request.session_id,
+            &session_id,
             codex::ThreadStatus::Active {
                 active_flags: Vec::new(),
             },
@@ -304,8 +297,8 @@ async fn project_background_continuation(
 
     let submitted = SubmittedRequest {
         request_id: request.request_id,
-        session_id: request.session_id.clone(),
-        agent_did: request.agent_did,
+        session_id: session_id.clone(),
+        agent_did,
         behavior_id: request.behavior_id,
         temperature: None,
         top_p: None,
@@ -316,16 +309,16 @@ async fn project_background_continuation(
         metadata: request.metadata,
         created_at: request.created_at,
     };
-    let cwd = state.thread_cwd(&request.session_id).await;
-    let mut projection = TurnProjection::new(state, &request.session_id, &turn_id, cwd, started_at);
+    let cwd = state.thread_cwd(&session_id).await;
+    let mut projection = TurnProjection::new(state, &session_id, &turn_id, cwd, started_at);
     let options = baseline_turn.map_or_else(
-        || TurnStreamOptions::fresh_background_completion(request.session_id.clone()),
-        |turn| TurnStreamOptions::resumed_background_completion(request.session_id.clone(), turn),
+        || TurnStreamOptions::fresh_background_completion(session_id.clone()),
+        |turn| TurnStreamOptions::resumed_background_completion(session_id.clone(), turn),
     );
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let stream_registration = install_stream_control(
         connection,
-        request.session_id.clone(),
+        session_id.clone(),
         turn_id.clone(),
         Some(watcher_id),
         cancel_tx,
@@ -364,7 +357,7 @@ async fn project_background_continuation(
             send_thread_status_changed(
                 &connection.outbound,
                 state,
-                &request.session_id,
+                &session_id,
                 codex::ThreadStatus::SystemError,
             )
             .await
@@ -375,7 +368,7 @@ async fn project_background_continuation(
 async fn load_background_continuation_requests(
     state: &ShimState,
     thread_id: &str,
-) -> Result<Vec<BackgroundContinuationRequest>> {
+) -> Result<Vec<AgentRequestRow>> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -406,9 +399,18 @@ async fn load_background_continuation_requests(
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(serde_json::from_value::<BackgroundContinuationRequest>)
-        .collect::<serde_json::Result<Vec<_>>>()
-        .context("decoding background completion AgentRequest rows")
+        .map(|value| {
+            let row = serde_json::from_value::<AgentRequestRow>(value)
+                .context("decoding background completion AgentRequest row")?;
+            row.session_id
+                .as_deref()
+                .context("background continuation AgentRequest missing session_id")?;
+            row.agent_did
+                .as_deref()
+                .context("background continuation AgentRequest missing agent_did")?;
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>>>()
         .map(|rows| {
             rows.into_iter()
                 .filter(|row| is_background_completion_metadata(row.metadata.as_deref()))

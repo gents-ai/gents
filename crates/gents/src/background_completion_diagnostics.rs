@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 
 use crate::config_client::ConfigAccess;
@@ -54,24 +55,6 @@ pub struct BackgroundCompletionEpochDiagnostic {
     pub claimed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminalized_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct WakeRow {
-    request_id: String,
-    session_id: String,
-    retry_root_request: Option<String>,
-    metadata: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    failure_reason: Option<String>,
-    created_at: Option<String>,
-    claimed_at: Option<String>,
-    terminalized_at: Option<String>,
-    retry_count: Option<i64>,
-    max_retries: Option<i64>,
-    background_completion_input_through_sequence: Option<i64>,
-    background_completion_notification_keys_json: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -143,12 +126,20 @@ pub async fn load_background_completion_diagnostics(
     let data = response
         .get("data")
         .context("background completion diagnostics has no data")?;
-    let wakes: Vec<WakeRow> = serde_json::from_value(
+    let wakes: Vec<AgentRequestRow> = serde_json::from_value(
         data.get("wakes")
             .cloned()
             .unwrap_or_else(|| serde_json::json!([])),
     )
     .context("decoding background completion wakes")?;
+    for wake in &wakes {
+        if wake.session_id.is_none() {
+            anyhow::bail!(
+                "background completion wake {} has no session_id",
+                wake.request_id
+            );
+        }
+    }
     let notifications: Vec<NotificationRow> = serde_json::from_value(
         data.get("notifications")
             .cloned()
@@ -165,7 +156,7 @@ pub async fn load_background_completion_diagnostics(
 }
 
 fn summarize(
-    wakes: Vec<WakeRow>,
+    wakes: Vec<AgentRequestRow>,
     notifications: Vec<NotificationRow>,
     conversations: Vec<ConversationRow>,
     now: DateTime<Utc>,
@@ -232,7 +223,7 @@ fn summarize(
         }
     }
 
-    let mut wakes_by_root = BTreeMap::<String, Vec<WakeRow>>::new();
+    let mut wakes_by_root = BTreeMap::<String, Vec<AgentRequestRow>>::new();
     for wake in wakes {
         wakes_by_root
             .entry(retry_root(&wake).to_string())
@@ -295,7 +286,7 @@ fn summarize(
         let max_retries = latest.max_retries.unwrap_or_default().max(0);
         let latest_failed = request_failed(latest);
         let retry_is_latest = latest_request_by_session
-            .get(&latest.session_id)
+            .get(latest.session_id.as_deref().expect("validated session_id"))
             .is_some_and(|request_id| request_id == &latest.request_id);
         let next_retry = (latest_failed && retry_count < max_retries && retry_is_latest)
             .then(|| {
@@ -341,7 +332,7 @@ fn summarize(
             .push(BackgroundCompletionEpochDiagnostic {
                 root_request_id: root_request_id.clone(),
                 active_request_id: latest.request_id.clone(),
-                session_id: latest.session_id.clone(),
+                session_id: latest.session_id.clone().expect("validated session_id"),
                 coalescing_key: parse_queue_hints(latest.metadata.as_deref())
                     .and_then(|hints| hints.key)
                     .unwrap_or_default(),
@@ -380,7 +371,7 @@ fn summarize(
     diagnostics
 }
 
-fn retry_root(wake: &WakeRow) -> &str {
+fn retry_root(wake: &AgentRequestRow) -> &str {
     wake.retry_root_request
         .as_deref()
         .map(str::trim)
@@ -388,16 +379,16 @@ fn retry_root(wake: &WakeRow) -> &str {
         .unwrap_or(&wake.request_id)
 }
 
-fn wake_identity(wake: &WakeRow) -> (String, String) {
+fn wake_identity(wake: &AgentRequestRow) -> (String, String) {
     (
-        wake.session_id.clone(),
+        wake.session_id.clone().expect("validated session_id"),
         parse_queue_hints(wake.metadata.as_deref())
             .and_then(|hints| hints.key)
             .unwrap_or_default(),
     )
 }
 
-fn snapshot_keys(wake: &WakeRow) -> BTreeSet<String> {
+fn snapshot_keys(wake: &AgentRequestRow) -> BTreeSet<String> {
     let Some(json) = wake.background_completion_notification_keys_json.as_deref() else {
         return BTreeSet::new();
     };
@@ -410,7 +401,7 @@ fn snapshot_keys(wake: &WakeRow) -> BTreeSet<String> {
         .collect()
 }
 
-fn wake_rank(wake: &WakeRow) -> (i64, &str, &str) {
+fn wake_rank(wake: &AgentRequestRow) -> (i64, &str, &str) {
     (
         wake.retry_count.unwrap_or_default(),
         wake.created_at.as_deref().unwrap_or(""),
@@ -418,23 +409,23 @@ fn wake_rank(wake: &WakeRow) -> (i64, &str, &str) {
     )
 }
 
-fn wake_lifecycle_state(wake: &WakeRow) -> Option<RequestLifecycleState> {
+fn wake_lifecycle_state(wake: &AgentRequestRow) -> Option<RequestLifecycleState> {
     wake.lifecycle_state
 }
 
-fn request_completed(wake: &WakeRow) -> bool {
+fn request_completed(wake: &AgentRequestRow) -> bool {
     wake_lifecycle_state(wake) == Some(RequestLifecycleState::Completed)
 }
 
-fn request_failed(wake: &WakeRow) -> bool {
+fn request_failed(wake: &AgentRequestRow) -> bool {
     wake_lifecycle_state(wake) == Some(RequestLifecycleState::Failed)
 }
 
-fn request_pending(wake: &WakeRow) -> bool {
+fn request_pending(wake: &AgentRequestRow) -> bool {
     wake_lifecycle_state(wake) == Some(RequestLifecycleState::Pending)
 }
 
-fn request_active(wake: &WakeRow) -> bool {
+fn request_active(wake: &AgentRequestRow) -> bool {
     matches!(
         wake_lifecycle_state(wake),
         Some(
@@ -467,10 +458,10 @@ mod tests {
         state: &str,
         retry_count: i64,
         max_retries: i64,
-    ) -> WakeRow {
-        WakeRow {
+    ) -> AgentRequestRow {
+        AgentRequestRow {
             request_id: request_id.to_string(),
-            session_id: "session-1".to_string(),
+            session_id: Some("session-1".to_string()),
             retry_root_request: root.map(ToOwned::to_owned),
             metadata: Some(METADATA.to_string()),
             lifecycle_state: Some(
@@ -486,6 +477,7 @@ mod tests {
             background_completion_notification_keys_json: Some(
                 r#"["background-completion-notification:child-1:subagent"]"#.to_string(),
             ),
+            ..Default::default()
         }
     }
 

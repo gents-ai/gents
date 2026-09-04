@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,7 +46,7 @@ struct SubagentDispatchQueryEnvelope {
     #[serde(rename = "AgentToolCall", default)]
     bridges: Vec<BridgeRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentBehavior", default)]
     behaviors: Vec<BehaviorRow>,
 }
@@ -64,22 +65,6 @@ struct BridgeRow {
     started_at: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    claimed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,4 +1,13 @@
 use super::*;
+use gents_protocol::row::AgentRequestRow;
+
+async fn load_request_rows(access: &ConfigAccess, query: &str) -> Result<Vec<TimelineRequestRow>> {
+    Ok(load_rows::<AgentRequestRow>(access, "AgentRequest", query)
+        .await?
+        .into_iter()
+        .map(TimelineRequestRow::from)
+        .collect())
+}
 
 pub(super) async fn load_timeline_request_by_id(
     access: &ConfigAccess,
@@ -44,7 +53,7 @@ pub(super) async fn load_timeline_request_by_id(
         }}"#,
         escape_graphql_string(request_id)
     );
-    let mut rows = load_rows::<TimelineRequestRow>(access, "AgentRequest", &query).await?;
+    let mut rows = load_request_rows(access, &query).await?;
     match rows.len() {
         0 => Err(anyhow::anyhow!("request {request_id} not found")),
         1 => Ok(rows.remove(0)),
@@ -97,7 +106,7 @@ pub(super) async fn load_timeline_requests_for_session(
         }}"#,
         escape_graphql_string(session_id)
     );
-    load_rows(access, "AgentRequest", &query).await
+    load_request_rows(access, &query).await
 }
 
 pub(super) async fn load_timeline_child_requests(
@@ -143,5 +152,5 @@ pub(super) async fn load_timeline_child_requests(
         }}"#,
         escape_graphql_string(parent_request_doc_id)
     );
-    load_rows(access, "AgentRequest", &query).await
+    load_request_rows(access, &query).await
 }

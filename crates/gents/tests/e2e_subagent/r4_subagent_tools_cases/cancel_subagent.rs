@@ -174,15 +174,21 @@ async fn cancel_subagent_cancels_bridge_active_descendants_and_owned_queue() {
     );
 
     let automated = fetch_child_request(db.node.as_ref(), automated_request_id).await;
-    assert_eq!(automated.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        automated.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     assert!(automated
         .failure_reason
         .as_deref()
         .is_some_and(|reason| reason.contains("parent no longer needs this work")));
     let steering = fetch_child_request(db.node.as_ref(), steering_request_id).await;
-    assert_eq!(steering.lifecycle_state.as_deref(), Some("interrupted"));
+    assert_eq!(
+        steering.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
     let user = fetch_child_request(db.node.as_ref(), user_request_id).await;
-    assert_eq!(user.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(user.lifecycle_state, Some(RequestLifecycleState::Pending));
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_subagent").await,
         0

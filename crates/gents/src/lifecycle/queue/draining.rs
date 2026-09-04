@@ -34,7 +34,7 @@ async fn drain_pending_session_requests_where(
     session_id: &str,
     agent_did: &str,
     reason: &str,
-    should_drain: impl Fn(&PendingQueueRow) -> bool,
+    should_drain: impl Fn(&AgentRequestRow) -> bool,
 ) -> Result<usize> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
@@ -48,6 +48,7 @@ async fn drain_pending_session_requests_where(
                 }}
             ) {{
                 _docID
+                request_id
                 execution_origin
                 metadata
             }}
@@ -62,18 +63,17 @@ async fn drain_pending_session_requests_where(
         );
     }
 
-    let rows: Vec<PendingQueueRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
 
     let escaped_reason = escape_graphql_string(reason);
     let mut drained = 0;
     for row in rows.into_iter().filter(should_drain) {
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let escaped_doc_id = escape_graphql_string(&row.doc_id);
+        let escaped_doc_id = escape_graphql_string(
+            row.doc_id
+                .as_deref()
+                .context("pending AgentRequest row is missing _docID")?,
+        );
         let mutation = format!(
             r#"mutation {{
                 update_AgentRequest(

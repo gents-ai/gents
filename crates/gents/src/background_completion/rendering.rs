@@ -74,6 +74,7 @@ pub(super) fn non_empty(value: Option<&str>) -> Option<&str> {
     })
 }
 
+#[cfg(test)]
 pub(super) fn first_row<T>(data: Option<&serde_json::Value>, collection: &str) -> Option<T>
 where
     T: for<'de> Deserialize<'de>,

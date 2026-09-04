@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -593,7 +594,7 @@ fn metadata_with_selected_skill_ids(
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct WaitProgressMarker {
-    request_lifecycle_state: Option<String>,
+    request_lifecycle_state: Option<RequestLifecycleState>,
     request_failure_len: Option<usize>,
     request_interrupt_requested_at: Option<String>,
     request_valid_until: Option<String>,
@@ -612,14 +613,17 @@ struct WaitProgressMarker {
 }
 
 fn wait_progress_marker(
-    request_row: Option<&serde_json::Value>,
+    request_row: Option<&AgentRequestRow>,
     response_row: Option<&serde_json::Value>,
 ) -> WaitProgressMarker {
     WaitProgressMarker {
-        request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
-        request_failure_len: string_len_marker(request_row, "failure_reason"),
-        request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
-        request_valid_until: scalar_marker(request_row, "valid_until"),
+        request_lifecycle_state: request_row.and_then(|row| row.lifecycle_state),
+        request_failure_len: request_row
+            .and_then(|row| row.failure_reason.as_deref())
+            .map(str::len),
+        request_interrupt_requested_at: request_row
+            .and_then(|row| row.interrupt_requested_at.clone()),
+        request_valid_until: request_row.and_then(|row| row.valid_until.clone()),
         response_doc_id: scalar_marker(response_row, "_docID"),
         response_status: scalar_marker(response_row, "status"),
         response_content_len: string_len_marker(response_row, "content"),
@@ -673,14 +677,22 @@ pub(crate) async fn wait_for_terminal_response(
     let mut last_progress_marker: Option<WaitProgressMarker> = None;
 
     loop {
-        let request_row = {
+        let (request_row, request_value) = {
             let query = request_terminal_query(request_id);
             let response = post_graphql(graphql, &query).await?;
-            response
+            let value = response
                 .pointer("/data/AgentRequest")
                 .and_then(|v| v.as_array())
                 .and_then(|rows| rows.first())
-                .cloned()
+                .cloned();
+            let row = value
+                .as_ref()
+                .map(|row| {
+                    serde_json::from_value::<AgentRequestRow>(row.clone())
+                        .context("decoding terminal-wait AgentRequest row")
+                })
+                .transpose()?;
+            (row, value)
         };
         let response_row = {
             let query = response_wait_progress_query(request_id);
@@ -698,17 +710,13 @@ pub(crate) async fn wait_for_terminal_response(
             last_progress_at = tokio::time::Instant::now();
         }
 
-        let lifecycle_state = request_row
-            .as_ref()
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let lifecycle_state = request_row.as_ref().and_then(|row| row.lifecycle_state);
         let response_status = response_row
             .as_ref()
             .and_then(|row| row.get("status"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let terminal_by_request = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
+        let terminal_by_request = lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
         let terminal_by_response = matches!(
             response_status,
             "complete" | "completed" | "error" | "failed" | "interrupted" // AgentResponse.status
@@ -750,7 +758,7 @@ pub(crate) async fn wait_for_terminal_response(
             if let Some(object) = envelope.as_object_mut() {
                 object.insert(
                     "request".to_string(),
-                    request_row.unwrap_or(serde_json::Value::Null),
+                    request_value.unwrap_or(serde_json::Value::Null),
                 );
             }
             return Ok(envelope);
@@ -912,28 +920,7 @@ pub(crate) fn parse_valid_until_flag(raw: Option<&str>) -> Result<Option<DateTim
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct StaleRequestView {
-    pub(crate) doc_id: String,
-    pub(crate) agent_did: String,
-    pub(crate) behavior_id: Option<String>,
-    pub(crate) content: String,
-    pub(crate) lifecycle_state: String,
-    pub(crate) failure_reason: String,
-    pub(crate) retry_root_request: Option<String>,
-    pub(crate) temperature: Option<f64>,
-    pub(crate) top_p: Option<f64>,
-    pub(crate) top_k: Option<i64>,
-    pub(crate) seed: Option<i64>,
-    pub(crate) max_tokens: Option<i64>,
-    pub(crate) max_total_tokens: Option<i64>,
-    pub(crate) metadata: Option<String>,
-}
-
-pub(crate) async fn fetch_request_view(
-    graphql: &str,
-    request_id: &str,
-) -> Result<StaleRequestView> {
+pub(crate) async fn fetch_request_view(graphql: &str, request_id: &str) -> Result<AgentRequestRow> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -941,6 +928,7 @@ pub(crate) async fn fetch_request_view(
                 limit: 2
             ) {{
                 _docID
+                request_id
                 agent_did
                 behavior_id
                 content
@@ -974,36 +962,7 @@ pub(crate) async fn fetch_request_view(
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    let as_string = |key: &str| {
-        row.get(key)
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-    let as_optional = |key: &str| {
-        row.get(key)
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-    };
-    let as_optional_f64 = |key: &str| row.get(key).and_then(|v| v.as_f64());
-    let as_optional_i64 = |key: &str| row.get(key).and_then(|v| v.as_i64());
-    Ok(StaleRequestView {
-        doc_id: as_string("_docID"),
-        agent_did: as_string("agent_did"),
-        behavior_id: as_optional("behavior_id"),
-        content: as_string("content"),
-        lifecycle_state: as_string("lifecycle_state"),
-        failure_reason: as_string("failure_reason"),
-        retry_root_request: as_optional("retry_root_request"),
-        temperature: as_optional_f64("temperature"),
-        top_p: as_optional_f64("top_p"),
-        top_k: as_optional_i64("top_k"),
-        seed: as_optional_i64("seed"),
-        max_tokens: as_optional_i64("max_tokens"),
-        max_total_tokens: as_optional_i64("max_total_tokens"),
-        metadata: as_optional("metadata"),
-    })
+    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 #[cfg(test)]

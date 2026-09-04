@@ -11,6 +11,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::background_completion::ensure_background_subagent_completion_side_effects;
 use crate::background_tools::{
@@ -143,35 +144,6 @@ struct TerminalBackgroundToolRow {
     cancel_cause: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ParentRequestRow {
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    subagent_depth: Option<i64>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChildRequestLivenessRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    #[serde(default)]
-    request_id: String,
-    agent_did: String,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    deadline: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,7 +305,7 @@ impl super::ToolCallLifecycle {
     ) -> Result<TerminalParentToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
         let mut report = TerminalParentToolReport::default();
-        let mut parent_cache: std::collections::HashMap<String, Option<ParentRequestRow>> =
+        let mut parent_cache: std::collections::HashMap<String, Option<AgentRequestRow>> =
             std::collections::HashMap::new();
 
         for row in rows {
@@ -710,7 +682,8 @@ mod tests {
 
     #[test]
     fn interrupted_parent_is_cancel_worthy_terminal_but_not_cleanly_completed() {
-        let interrupted = ParentRequestRow {
+        let interrupted = AgentRequestRow {
+            request_id: "parent".to_string(),
             lifecycle_state: Some(RequestLifecycleState::Interrupted),
             ..Default::default()
         };
@@ -721,7 +694,8 @@ mod tests {
 
     #[test]
     fn clean_completion_is_not_cancel_worthy_terminal() {
-        let clean = ParentRequestRow {
+        let clean = AgentRequestRow {
+            request_id: "parent".to_string(),
             lifecycle_state: Some(RequestLifecycleState::Completed),
             ..Default::default()
         };
@@ -1349,7 +1323,7 @@ async fn lookup_parent_request(
     node: &EmbeddedNode,
     agent_did: &str,
     request_id: &str,
-) -> Result<Option<ParentRequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
@@ -1361,6 +1335,7 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
+                request_id
                 lifecycle_state
                 subagent_depth
                 workspace_id
@@ -1379,24 +1354,14 @@ async fn lookup_parent_request(
         );
     }
 
-    let rows: Vec<ParentRequestRow> = resp
+    let value = resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+        .context("AgentRequest field missing from parent recovery query")?;
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+        .context("decode parent AgentRequest rows for tool-call recovery")?;
     Ok(rows.into_iter().next())
-}
-
-#[derive(Debug, Deserialize)]
-struct PendingDescendantRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_id: Option<String>,
 }
 
 /// Interrupt pending (queued) subagent child requests whose parent request is
@@ -1442,12 +1407,13 @@ async fn interrupt_queued_descendants_of_terminal_parents(
     if resp.has_errors() {
         anyhow::bail!("querying pending descendant requests: {:?}", resp.errors);
     }
-    let rows: Vec<PendingDescendantRow> = resp
+    let value = resp
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+        .context("AgentRequest field missing from pending descendant query")?;
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+        .context("decode pending descendant AgentRequest rows")?;
 
     let candidates = rows
         .iter()
@@ -1506,11 +1472,14 @@ async fn interrupt_queued_descendants_of_terminal_parents(
             continue;
         }
 
-        if interrupt_pending_descendant_row(node, &row.doc_id, agent_did, parent_request_id).await?
-        {
+        let doc_id = row
+            .doc_id
+            .as_deref()
+            .context("pending descendant AgentRequest is missing _docID")?;
+        if interrupt_pending_descendant_row(node, doc_id, agent_did, parent_request_id).await? {
             interrupted += 1;
             tracing::info!(
-                doc_id = %row.doc_id,
+                doc_id = %doc_id,
                 request_id = %row.request_id,
                 parent_request_id,
                 "interrupted queued subagent descendant of terminal parent"
@@ -1708,12 +1677,12 @@ async fn terminalize_expired_child_with_row(
     node: &EmbeddedNode,
     agent_did: &str,
     row: &RunningToolCallRow,
-    child: &ChildRequestLivenessRow,
+    child: &AgentRequestRow,
 ) -> Result<bool> {
     let Some(child_request_id) = child_request_id(row) else {
         return Ok(false);
     };
-    if child.agent_did != agent_did {
+    if child.agent_did.as_deref() != Some(agent_did) {
         return Ok(false);
     }
     if child
@@ -1752,7 +1721,7 @@ async fn terminalize_expired_child_with_row(
 async fn load_request_liveness_row(
     node: &EmbeddedNode,
     request_id: &str,
-) -> Result<Option<ChildRequestLivenessRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -1775,14 +1744,14 @@ async fn load_request_liveness_row(
             response.errors
         );
     }
-    Ok(response
+    let value = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| {
-            serde_json::from_value::<Vec<ChildRequestLivenessRow>>(value.clone()).ok()
-        })
-        .and_then(|mut rows| rows.pop()))
+        .context("AgentRequest field missing from request liveness query")?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(value.clone()).context("decode AgentRequest liveness rows")?;
+    Ok(rows.into_iter().next())
 }
 
 /// Batched form of `load_child_liveness_row`: one `_in` query for every
@@ -1790,7 +1759,7 @@ async fn load_request_liveness_row(
 async fn load_child_liveness_rows(
     node: &EmbeddedNode,
     child_request_ids: &[&str],
-) -> Result<std::collections::HashMap<String, ChildRequestLivenessRow>> {
+) -> Result<std::collections::HashMap<String, AgentRequestRow>> {
     if child_request_ids.is_empty() {
         return Ok(std::collections::HashMap::new());
     }
@@ -1819,12 +1788,13 @@ async fn load_child_liveness_rows(
             response.errors
         );
     }
-    let rows: Vec<ChildRequestLivenessRow> = response
+    let value = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+        .context("AgentRequest field missing from batched liveness query")?;
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+        .context("decode batched child AgentRequest liveness rows")?;
     Ok(rows
         .into_iter()
         .map(|row| (row.request_id.clone(), row))
@@ -1833,12 +1803,22 @@ async fn load_child_liveness_rows(
 
 async fn mark_child_request_dead(
     node: &EmbeddedNode,
-    child: &ChildRequestLivenessRow,
+    child: &AgentRequestRow,
     reason: &str,
 ) -> Result<bool> {
     let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
-    let escaped_doc_id = escape_graphql_string(&child.doc_id);
-    let escaped_agent_did = escape_graphql_string(&child.agent_did);
+    let escaped_doc_id = escape_graphql_string(
+        child
+            .doc_id
+            .as_deref()
+            .context("child AgentRequest liveness row is missing _docID")?,
+    );
+    let escaped_agent_did = escape_graphql_string(
+        child
+            .agent_did
+            .as_deref()
+            .context("child AgentRequest liveness row is missing agent_did")?,
+    );
     let escaped_reason = escape_graphql_string(reason);
     let terminalized_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
@@ -2181,7 +2161,7 @@ pub fn deadline_is_expired(now: DateTime<Utc>, deadline_at: Option<&str>) -> boo
 /// `restartDisposition` and `orphanedBackgroundToolCause`.
 fn classify_running_tool_recovery(
     row: &RunningToolCallRow,
-    parent: Option<&ParentRequestRow>,
+    parent: Option<&AgentRequestRow>,
     now: DateTime<Utc>,
 ) -> Option<RecoveryOutcome> {
     if deadline_is_expired(now, row.deadline_at.as_deref()) {
@@ -2211,7 +2191,7 @@ fn classify_running_tool_recovery(
 /// deadline sweep instead.
 fn classify_terminal_parent_tool_recovery(
     row: &RunningToolCallRow,
-    parent: &ParentRequestRow,
+    parent: &AgentRequestRow,
 ) -> Option<RecoveryOutcome> {
     if is_detached_subagent_tool(row) && request_is_interrupted(parent) {
         None
@@ -2245,23 +2225,23 @@ fn effective_deadline(
     }
 }
 
-fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
+fn request_is_interrupted(parent: &AgentRequestRow) -> bool {
     parent.lifecycle_state == Some(RequestLifecycleState::Interrupted)
 }
 
 /// Parent reached a successful terminal state — not a cancel signal for
 /// linked background/cascade children.
-fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
+fn request_is_cleanly_completed(parent: &AgentRequestRow) -> bool {
     parent.lifecycle_state == Some(RequestLifecycleState::Completed)
 }
 
 /// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
 /// supersede, …) — terminal but not a clean completion.
-fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
+fn request_is_cancel_worthy_terminal(parent: &AgentRequestRow) -> bool {
     request_is_terminal(parent) && !request_is_cleanly_completed(parent)
 }
 
-fn request_is_terminal(parent: &ParentRequestRow) -> bool {
+fn request_is_terminal(parent: &AgentRequestRow) -> bool {
     parent
         .lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)

@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -193,21 +194,6 @@ impl DescendantGraphAccess<'_> {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: Option<String>,
-    requester_did: Option<String>,
-    behavior_id: Option<String>,
-    session_id: String,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct BridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
@@ -269,7 +255,7 @@ struct BridgeArgs {
 
 #[derive(Debug, Clone)]
 struct ParentNode {
-    row: RequestRow,
+    row: AgentRequestRow,
     depth: usize,
 }
 
@@ -282,10 +268,10 @@ struct RootContext {
 }
 
 impl RootContext {
-    fn from_request(row: &RequestRow) -> Self {
+    fn from_request(row: &AgentRequestRow) -> Self {
         Self {
             request_id: row.request_id.clone(),
-            doc_id: row.doc_id.clone(),
+            doc_id: request_doc_id(row).to_string(),
             agent_did: clean(row.agent_did.as_deref()),
             requester_did: clean(row.requester_did.as_deref()),
         }
@@ -294,7 +280,7 @@ impl RootContext {
 
 struct ProjectedEdge {
     edge: DescendantEdge,
-    child: Option<RequestRow>,
+    child: Option<AgentRequestRow>,
 }
 
 pub async fn resolve_descendant_graph(
@@ -320,7 +306,7 @@ pub async fn resolve_descendant_graph(
         let mut level = Vec::new();
         while let Some(parent) = frontier.pop_front() {
             if parent.depth >= MAX_DESCENDANT_DEPTH
-                || !visited_parents.insert(parent.row.doc_id.clone())
+                || !visited_parents.insert(request_doc_id(&parent.row).to_string())
             {
                 continue;
             }
@@ -342,7 +328,7 @@ pub async fn resolve_descendant_graph(
             .into_iter()
             .collect::<Vec<_>>();
         let children = load_requests(&access, &child_ids).await?;
-        let mut children_by_id = BTreeMap::<String, Vec<RequestRow>>::new();
+        let mut children_by_id = BTreeMap::<String, Vec<AgentRequestRow>>::new();
         for child in children {
             children_by_id
                 .entry(child.request_id.clone())
@@ -439,7 +425,7 @@ fn project_descendant_edge(
     root: &RootContext,
     parent: &ParentNode,
     bridge: &BridgeRow,
-    candidate_rows: &[RequestRow],
+    candidate_rows: &[AgentRequestRow],
 ) -> Result<Option<ProjectedEdge>> {
     if !bridge_corroborates_parent(parent, bridge) {
         return Ok(None);
@@ -486,7 +472,7 @@ fn project_descendant_edge(
     };
     let direct = depth == 1;
     let parent_principal_matches_root = clean(parent.row.agent_did.as_deref()) == root.agent_did
-        && (parent.row.doc_id == root.doc_id
+        && (request_doc_id(&parent.row) == root.doc_id
             || clean(parent.row.requester_did.as_deref()) == root.requester_did);
     let control_authority = match authorization_state {
         DescendantAuthorizationState::Authorized if direct && parent_principal_matches_root => {
@@ -545,10 +531,12 @@ fn project_descendant_edge(
             cursor,
             root_request_id: root.request_id.clone(),
             immediate_parent_request_id: bridge.request_id.clone(),
-            immediate_parent_session_id: parent.row.session_id.clone(),
+            immediate_parent_session_id: request_session_id(&parent.row).to_string(),
             immediate_parent_tool_call_id: bridge.tool_call_id.clone(),
             child_request_id,
-            child_session_id: child.as_ref().map(|row| row.session_id.clone()),
+            child_session_id: child
+                .as_ref()
+                .map(|row| request_session_id(row).to_string()),
             principal_did: principal_did.clone(),
             behavior_id,
             deployment_id: principal_did,
@@ -635,18 +623,18 @@ pub async fn resolve_descendant_edge(
 /// O(depth), independent of fan-out size and page count.
 async fn trace_parent_to_root(
     access: &DescendantGraphAccess<'_>,
-    root: &RequestRow,
-    candidate_parent: &RequestRow,
+    root: &AgentRequestRow,
+    candidate_parent: &AgentRequestRow,
 ) -> Result<Option<usize>> {
     let mut current = candidate_parent.clone();
     let mut depth = 0usize;
     let mut seen = BTreeSet::new();
 
     loop {
-        if current.doc_id == root.doc_id {
+        if request_doc_id(&current) == request_doc_id(root) {
             return Ok((current.request_id == root.request_id).then_some(depth));
         }
-        if depth >= MAX_DESCENDANT_DEPTH || !seen.insert(current.doc_id.clone()) {
+        if depth >= MAX_DESCENDANT_DEPTH || !seen.insert(request_doc_id(&current).to_string()) {
             return Ok(None);
         }
         let (
@@ -666,7 +654,7 @@ async fn trace_parent_to_root(
         let Some(parent) = load_unique_request(access, &parent_request_id).await? else {
             return Ok(None);
         };
-        if parent.doc_id != parent_request_doc_id {
+        if request_doc_id(&parent) != parent_request_doc_id {
             return Ok(None);
         }
         let Some(parent_bridge) =
@@ -700,7 +688,7 @@ pub async fn resolve_descendant_root_request_id(
     let mut current = load_unique_request(&access, caller_request_id)
         .await?
         .with_context(|| format!("caller AgentRequest {caller_request_id} not found"))?;
-    let mut seen = BTreeSet::from([current.doc_id.clone()]);
+    let mut seen = BTreeSet::from([request_doc_id(&current).to_string()]);
     loop {
         let parent_request_id = clean(current.caused_by_parent_request_id.as_deref());
         let parent_request_doc_id = clean(current.caused_by_parent_request_doc_id.as_deref());
@@ -722,8 +710,8 @@ pub async fn resolve_descendant_root_request_id(
                     current.request_id
                 )
             })?;
-        if parent.doc_id != parent_request_doc_id
-            || parent.session_id != current.session_id
+        if request_doc_id(&parent) != parent_request_doc_id
+            || request_session_id(&parent) != request_session_id(&current)
             || clean(parent.agent_did.as_deref()) != clean(current.agent_did.as_deref())
             || clean(parent.requester_did.as_deref()) != clean(current.requester_did.as_deref())
         {
@@ -732,18 +720,18 @@ pub async fn resolve_descendant_root_request_id(
                 current.request_id
             );
         }
-        if !seen.insert(parent.doc_id.clone()) {
+        if !seen.insert(request_doc_id(&parent).to_string()) {
             anyhow::bail!("request-only continuation lineage contains a cycle");
         }
         current = parent;
     }
 }
 
-fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &RequestRow) -> bool {
+fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &AgentRequestRow) -> bool {
     clean(child.caused_by_parent_request_id.as_deref()).as_deref()
         == Some(parent.row.request_id.as_str())
         && clean(child.caused_by_parent_request_doc_id.as_deref()).as_deref()
-            == Some(parent.row.doc_id.as_str())
+            == Some(request_doc_id(&parent.row))
         && clean(child.caused_by_parent_tool_call_id.as_deref()).as_deref()
             == Some(bridge.tool_call_id.as_str())
         && clean(child.caused_by_parent_tool_call_doc_id.as_deref()).as_deref()
@@ -752,8 +740,8 @@ fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &RequestRo
 }
 
 fn bridge_corroborates_parent(parent: &ParentNode, bridge: &BridgeRow) -> bool {
-    clean(bridge.request_doc_id.as_deref()).as_deref() == Some(parent.row.doc_id.as_str())
-        && clean(bridge.session_id.as_deref()).as_deref() == Some(parent.row.session_id.as_str())
+    clean(bridge.request_doc_id.as_deref()).as_deref() == Some(request_doc_id(&parent.row))
+        && clean(bridge.session_id.as_deref()).as_deref() == Some(request_session_id(&parent.row))
         && clean(bridge.agent_did.as_deref()) == clean(parent.row.agent_did.as_deref())
         && clean(bridge.requester_did.as_deref()) == clean(parent.row.requester_did.as_deref())
 }
@@ -761,7 +749,7 @@ fn bridge_corroborates_parent(parent: &ParentNode, bridge: &BridgeRow) -> bool {
 async fn load_unique_request(
     access: &DescendantGraphAccess<'_>,
     request_id: &str,
-) -> Result<Option<RequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let rows = load_requests(access, &[request_id.to_string()]).await?;
     match rows.len() {
         0 => Ok(None),
@@ -775,7 +763,7 @@ async fn load_unique_request(
 async fn load_requests(
     access: &DescendantGraphAccess<'_>,
     request_ids: &[String],
-) -> Result<Vec<RequestRow>> {
+) -> Result<Vec<AgentRequestRow>> {
     if request_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -799,7 +787,32 @@ async fn load_requests(
             }}
         }}"#
     );
-    load_rows(access, "AgentRequest", &query).await
+    let rows: Vec<AgentRequestRow> = load_rows(access, "AgentRequest", &query).await?;
+    for row in &rows {
+        anyhow::ensure!(
+            row.doc_id.is_some(),
+            "AgentRequest {} is missing _docID",
+            row.request_id
+        );
+        anyhow::ensure!(
+            row.session_id.is_some(),
+            "AgentRequest {} is missing session_id",
+            row.request_id
+        );
+    }
+    Ok(rows)
+}
+
+fn request_doc_id(row: &AgentRequestRow) -> &str {
+    row.doc_id
+        .as_deref()
+        .expect("AgentRequest _docID validated at query boundary")
+}
+
+fn request_session_id(row: &AgentRequestRow) -> &str {
+    row.session_id
+        .as_deref()
+        .expect("AgentRequest session_id validated at query boundary")
 }
 
 async fn load_bridges(

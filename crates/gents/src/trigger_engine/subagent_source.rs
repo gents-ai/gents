@@ -4,10 +4,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context as _;
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
@@ -118,29 +120,7 @@ impl ToolCallRow {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ParentRequestRow {
-    request_id: String,
-    agent_did: String,
-    #[serde(default)]
-    subagent_depth: Option<i64>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ParentTerminalRow {
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-}
-
-fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
+fn parent_reached_cancel_worthy_terminal(row: &AgentRequestRow) -> bool {
     row.lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)
         && row.lifecycle_state != Some(RequestLifecycleState::Completed)
@@ -330,7 +310,7 @@ impl SubagentSource {
     async fn load_parent_request(
         &self,
         request_doc_id: &str,
-    ) -> anyhow::Result<Option<ParentRequestRow>> {
+    ) -> anyhow::Result<Option<AgentRequestRow>> {
         let escaped_request_doc_id = escape_graphql_string(request_doc_id);
         let query = format!(
             r#"{{
@@ -355,19 +335,27 @@ impl SubagentSource {
                 response.errors
             );
         }
-        let rows: Vec<ParentRequestRow> = response
+        let value = response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentRequest"))
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default();
+            .context("AgentRequest field missing from parent request query")?;
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+            .context("decode parent AgentRequest rows for SubagentSource")?;
+        for row in &rows {
+            anyhow::ensure!(
+                row.agent_did.is_some(),
+                "parent AgentRequest {} has no agent_did",
+                row.request_id
+            );
+        }
         Ok(rows.into_iter().next())
     }
 
     async fn load_parent_terminal(
         &self,
         request_doc_id: &str,
-    ) -> anyhow::Result<Option<ParentTerminalRow>> {
+    ) -> anyhow::Result<Option<AgentRequestRow>> {
         let escaped_request_doc_id = escape_graphql_string(request_doc_id);
         let query = format!(
             r#"{{
@@ -375,6 +363,7 @@ impl SubagentSource {
                     filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                     limit: 1
                 ) {{
+                    request_id
                     lifecycle_state
                 }}
             }}"#
@@ -386,12 +375,13 @@ impl SubagentSource {
                 response.errors
             );
         }
-        let rows: Vec<ParentTerminalRow> = response
+        let value = response
             .data
             .as_ref()
             .and_then(|data| data.get("AgentRequest"))
-            .and_then(|value| serde_json::from_value(value.clone()).ok())
-            .unwrap_or_default();
+            .context("AgentRequest field missing from parent terminal query")?;
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+            .context("decode parent terminal AgentRequest rows")?;
         Ok(rows.into_iter().next())
     }
 
@@ -615,16 +605,19 @@ impl SubagentSource {
         let parent_authoring_did = match parent.as_ref() {
             Some(parent)
                 if parent.request_id == parent_request_id
-                    && bridge_authoring_did == parent.agent_did =>
+                    && Some(bridge_authoring_did) == parent.agent_did.as_deref() =>
             {
-                parent.agent_did.clone()
+                parent
+                    .agent_did
+                    .clone()
+                    .expect("parent request agent_did validated at query boundary")
             }
             Some(_) => anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent),
             None => bridge_authoring_did.to_string(),
         };
         let parent_is_local = parent.as_ref().is_some_and(|parent| {
             !snapshot.local_did.trim().is_empty()
-                && parent.agent_did.trim() == snapshot.local_did.trim()
+                && parent.agent_did.as_deref().map(str::trim) == Some(snapshot.local_did.trim())
         });
         let trusted_paired_peer = if parent_is_local {
             false

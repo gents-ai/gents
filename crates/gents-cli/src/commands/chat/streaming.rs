@@ -2,9 +2,10 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
 use crate::{
@@ -31,7 +32,7 @@ pub(super) struct ToolCallProgress {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChatProgressMarker {
-    request_lifecycle_state: Option<String>,
+    request_lifecycle_state: Option<RequestLifecycleState>,
     request_failure_len: Option<usize>,
     request_interrupt_requested_at: Option<String>,
     request_valid_until: Option<String>,
@@ -165,6 +166,13 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
+        let request = request_row
+            .as_ref()
+            .map(|row| {
+                serde_json::from_value::<AgentRequestRow>(row.clone())
+                    .context("decoding chat progress AgentRequest row")
+            })
+            .transpose()?;
 
         let tool_rows = response
             .pointer("/data/AgentToolCall")
@@ -194,7 +202,7 @@ pub(super) async fn stream_turn_progress(
             .and_then(Value::as_array)
             .and_then(|rows| rows.first())
             .cloned();
-        let marker = chat_progress_marker(request_row.as_ref(), response_row.as_ref(), &tool_rows);
+        let marker = chat_progress_marker(request.as_ref(), response_row.as_ref(), &tool_rows);
         if latest_progress_marker.as_ref() != Some(&marker) {
             latest_progress_marker = Some(marker);
             last_progress_at = tokio::time::Instant::now();
@@ -213,21 +221,16 @@ pub(super) async fn stream_turn_progress(
             }
         }
 
-        let lifecycle_state = request_row
+        let lifecycle_state = request.as_ref().and_then(|row| row.lifecycle_state);
+        let failure_reason = request
             .as_ref()
-            .and_then(|row| row.get("lifecycle_state"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let failure_reason = request_row
-            .as_ref()
-            .and_then(|row| row.get("failure_reason"))
-            .and_then(Value::as_str)
+            .and_then(|row| row.failure_reason.as_deref())
             .unwrap_or("");
         let response_status = progress
             .as_ref()
             .map(|progress| progress.status.as_str())
             .unwrap_or("");
-        let terminal_by_request = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
+        let terminal_by_request = lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
         let terminal_by_response = matches!(
             response_status,
             "complete" | "completed" | "error" | "failed" | "interrupted" // AgentResponse.status
@@ -287,7 +290,7 @@ pub(super) async fn stream_turn_progress(
                 .filter(|value| !value.is_empty())
                 .or_else(|| {
                     matches!(
-                        RequestLifecycleState::parse_opt(Some(lifecycle_state)),
+                        lifecycle_state,
                         Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
                     )
                     .then_some(failure_reason.trim())
@@ -301,7 +304,7 @@ pub(super) async fn stream_turn_progress(
                 }
             } else if response_status == "error"
                 || matches!(
-                    RequestLifecycleState::parse_opt(Some(lifecycle_state)),
+                    lifecycle_state,
                     Some(RequestLifecycleState::Failed | RequestLifecycleState::Dead)
                 )
             {
@@ -342,15 +345,18 @@ pub(super) fn decode_chat_turn_progress(row: &Value) -> Option<ChatTurnProgress>
 }
 
 fn chat_progress_marker(
-    request_row: Option<&Value>,
+    request_row: Option<&AgentRequestRow>,
     response_row: Option<&Value>,
     tool_rows: &[Value],
 ) -> ChatProgressMarker {
     ChatProgressMarker {
-        request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
-        request_failure_len: string_len_marker(request_row, "failure_reason"),
-        request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
-        request_valid_until: scalar_marker(request_row, "valid_until"),
+        request_lifecycle_state: request_row.and_then(|row| row.lifecycle_state),
+        request_failure_len: request_row
+            .and_then(|row| row.failure_reason.as_deref())
+            .map(str::len),
+        request_interrupt_requested_at: request_row
+            .and_then(|row| row.interrupt_requested_at.clone()),
+        request_valid_until: request_row.and_then(|row| row.valid_until.clone()),
         response_status: scalar_marker(response_row, "status"),
         response_content_len: string_len_marker(response_row, "content"),
         response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),

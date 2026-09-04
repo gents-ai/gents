@@ -9,6 +9,7 @@ use gents::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraSessionHook,
     DocumentRuntimeOptions, FailurePolicy, Gents, ToolCeiling, ToolSelectionDocument,
 };
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -37,18 +38,6 @@ struct ToolCallRow {
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
     unclaimed_deadline_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentRequestRow {
-    request_id: String,
-    agent_did: String,
-    requester_did: Option<String>,
-    behavior_id: String,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
 }
 
 pub(super) async fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
@@ -149,7 +138,8 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     assert_child_matches_case(case, &child, &child_request_id);
     let child_agent_did = child_agent.booted.agent_did.clone();
     assert_eq!(
-        child.agent_did, child_agent_did,
+        child.agent_did.as_deref(),
+        Some(child_agent_did.as_str()),
         "{}: cross-deployment child must be locally owned by B",
         case.name
     );
@@ -201,8 +191,8 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
     let child = wait_for_child_request(parent_db.node.as_ref(), &child_request_id).await;
     assert_child_matches_case(case, &child, &child_request_id);
     assert_eq!(
-        child.agent_did,
-        parent_db.node_identity.did(),
+        child.agent_did.as_deref(),
+        Some(parent_db.node_identity.did()),
         "{}: same-deployment fallback should keep child ownership local",
         case.name
     );
@@ -751,7 +741,8 @@ fn assert_child_matches_case(
     assert!(case.child_materialized, "{}", case.name);
     assert_eq!(child.request_id, child_request_id, "{}", case.name);
     assert_eq!(
-        child.behavior_id, case.target_behavior_id,
+        child.behavior_id.as_deref(),
+        Some(case.target_behavior_id.as_str()),
         "{}: child target behavior",
         case.name
     );

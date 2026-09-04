@@ -76,10 +76,13 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
 
     let child = fetch_child_request(db.node.as_ref(), &child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.session_id, child_session_id);
-    assert_eq!(child.behavior_id, CHILD_BEHAVIOR_ID);
-    assert_eq!(child.content, "child prompt from spawn tool");
-    assert_eq!(child.lifecycle_state.as_deref(), Some("pending"));
+    assert_eq!(child.session_id.as_deref(), Some(child_session_id.as_str()));
+    assert_eq!(child.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
+    assert_eq!(
+        child.content.as_deref(),
+        Some("child prompt from spawn tool")
+    );
+    assert_eq!(child.lifecycle_state, Some(RequestLifecycleState::Pending));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
         child.deadline, None,

@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
@@ -136,7 +137,7 @@ async fn pending_interrupted_via_interrupt_before_claim() {
     assert_lean_transition_is_legal("Request", "pending", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
 
 #[tokio::test]
@@ -176,7 +177,7 @@ async fn pending_dead_stale_via_expire() {
     assert_lean_transition_is_legal("Request", "pending", "dead");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "dead");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
     assert_eq!(snap.failure_reason, "Stale");
 }
 
@@ -216,7 +217,7 @@ async fn transition_to_interrupted_from_claimed() {
     assert_lean_transition_is_legal("Request", "claimed", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
 
 #[tokio::test]
@@ -271,7 +272,7 @@ async fn processing_interrupted_preserves_partial_response() {
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 
     let content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(
@@ -327,7 +328,7 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "inputRequired");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::InputRequired);
 
     let complete_err = lifecycle
         .complete()
@@ -350,7 +351,7 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "failed");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "inputRequired");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::InputRequired);
 }
 
 #[tokio::test]
@@ -392,7 +393,7 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     assert_lean_transition_is_legal("Request", "pending", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
 
 #[tokio::test]
@@ -429,7 +430,7 @@ async fn transition_to_interrupted_from_processing() {
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
 
 #[tokio::test]
@@ -465,7 +466,7 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
     lifecycle.fail().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "interrupted");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
     assert_lean_transition_is_illegal("Request", "interrupted", "failed");
 }
@@ -545,7 +546,7 @@ async fn interrupt_on_already_terminal_is_noop() {
     lifecycle.complete().await.unwrap();
 
     let before = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(before.lifecycle_state, "completed");
+    assert_eq!(before.lifecycle_state, RequestLifecycleState::Completed);
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
@@ -553,7 +554,8 @@ async fn interrupt_on_already_terminal_is_noop() {
 
     let after = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        after.lifecycle_state, "completed",
+        after.lifecycle_state,
+        RequestLifecycleState::Completed,
         "terminal lifecycle_state must not regress"
     );
 }
@@ -783,7 +785,7 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     lifecycle.transition_to_interrupted().await.unwrap();
 
     let snap0 = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap0.lifecycle_state, "interrupted");
+    assert_eq!(snap0.lifecycle_state, RequestLifecycleState::Interrupted);
     assert_lean_transition_is_illegal("Request", "interrupted", "completed");
     assert_lean_transition_is_illegal("Request", "interrupted", "failed");
     assert_lean_transition_is_illegal("Request", "interrupted", "processing");
@@ -791,21 +793,24 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     lifecycle.transition_to_interrupted().await.unwrap();
     let snap1 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap1.lifecycle_state, "interrupted",
+        snap1.lifecycle_state,
+        RequestLifecycleState::Interrupted,
         "S1: repeated transition_to_interrupted must stay interrupted"
     );
 
     let _complete_result = lifecycle.complete().await;
     let snap2 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap2.lifecycle_state, "interrupted",
+        snap2.lifecycle_state,
+        RequestLifecycleState::Interrupted,
         "S1: complete() on interrupted must not reverse the terminal"
     );
 
     let _fail_result = lifecycle.fail().await;
     let snap3 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap3.lifecycle_state, "interrupted",
+        snap3.lifecycle_state,
+        RequestLifecycleState::Interrupted,
         "S1: fail() on interrupted must not reverse the terminal"
     );
 }
@@ -871,7 +876,10 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
 
     let response_interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
     let request_snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(request_snap.lifecycle_state, "interrupted");
+    assert_eq!(
+        request_snap.lifecycle_state,
+        RequestLifecycleState::Interrupted
+    );
     assert_eq!(
         response_interrupted_at.as_deref(),
         Some(intent_at.as_str()),
@@ -949,7 +957,7 @@ async fn manual_run_materializes_pending_request() {
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state, "pending",
+        snap.lifecycle_state, RequestLifecycleState::Pending,
         "manual run must persist lifecycle_state=pending for the intake watcher to claim (not claimed)"
     );
     assert!(
@@ -1004,7 +1012,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         fetch_request_snapshot(&db.node, &doc_id)
             .await
             .lifecycle_state,
-        "pending"
+        RequestLifecycleState::Pending
     );
 
     let escaped_doc_id = escape_graphql_string(&doc_id);
@@ -1074,7 +1082,7 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
     assert_lean_transition_is_legal("Request", "pending", "claimed");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, "claimed");
+    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Claimed);
     assert!(snap.claimed_at_present, "claim must stamp claimed_at");
     assert!(snap.deadline_present, "claim must stamp deadline");
     assert_eq!(

@@ -763,26 +763,33 @@ pub async fn resend_request(
     admission: AgentRequestAdmissionRecord,
 ) -> Result<SubmittedRequest> {
     let stale = fetch_request_view(node, stale_request_id, agent_did, requester_did).await?;
-    if RequestLifecycleState::parse_opt(Some(stale.lifecycle_state.as_str()))
-        != Some(RequestLifecycleState::Dead)
-        || stale.failure_reason != "Stale"
+    if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
+        || stale.failure_reason.as_deref() != Some("Stale")
     {
         anyhow::bail!(
             "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
-            stale.lifecycle_state,
-            stale.failure_reason
+            stale.lifecycle_state.map_or("<missing>", RequestLifecycleState::as_str),
+            stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
+    let stale_agent_did = stale
+        .agent_did
+        .as_deref()
+        .context("stale request has no agent_did")?;
+    let stale_content = stale
+        .content
+        .as_deref()
+        .context("stale request has no content")?;
     let retry_session_id = Uuid::new_v4().to_string();
     submit_request(
         node,
         store,
         &retry_session_id,
-        &stale.agent_did,
+        stale_agent_did,
         requester_did,
         signer,
         admission,
-        &stale.content,
+        stale_content,
         stale.behavior_id.as_deref(),
         SubmitRequestOptions {
             valid_until: Some(Utc::now() + chrono::Duration::minutes(5)),
@@ -802,29 +809,12 @@ pub async fn resend_request(
     .await
 }
 
-/// Minimal projection of an AgentRequest used by resend to copy over inputs.
-/// Carries sampling overrides + metadata so resend preserves submitter intent.
-struct StaleRequestView {
-    agent_did: String,
-    behavior_id: Option<String>,
-    content: String,
-    lifecycle_state: String,
-    failure_reason: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
-}
-
 async fn fetch_request_view(
     node: &EmbeddedNode,
     request_id: &str,
     agent_did: &str,
     requester_did: &str,
-) -> Result<StaleRequestView> {
+) -> Result<AgentRequestRow> {
     let escaped = escape_graphql_string(request_id);
     let agent_did = escape_graphql_string(agent_did);
     let requester_did = escape_graphql_string(requester_did);
@@ -838,6 +828,7 @@ async fn fetch_request_view(
                 }},
                 limit: 1
             ) {{
+                request_id
                 agent_did
                 behavior_id
                 content
@@ -864,44 +855,8 @@ async fn fetch_request_view(
         .and_then(|v| v.as_array())
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
-    Ok(StaleRequestView {
-        agent_did: row
-            .get("agent_did")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        behavior_id: row
-            .get("behavior_id")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from),
-        content: row
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        lifecycle_state: row
-            .get("lifecycle_state")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        failure_reason: row
-            .get("failure_reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        temperature: row.get("temperature").and_then(|v| v.as_f64()),
-        top_p: row.get("top_p").and_then(|v| v.as_f64()),
-        top_k: row.get("top_k").and_then(|v| v.as_i64()),
-        seed: row.get("seed").and_then(|v| v.as_i64()),
-        max_tokens: row.get("max_tokens").and_then(|v| v.as_i64()),
-        max_total_tokens: row.get("max_total_tokens").and_then(|v| v.as_i64()),
-        metadata: row
-            .get("metadata")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(String::from),
-    })
+    serde_json::from_value(row.clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 struct RetryLineage {

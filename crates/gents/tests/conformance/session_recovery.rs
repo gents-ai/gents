@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
 fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
@@ -175,14 +176,14 @@ struct SessionRecoveryDbPre {
     pre_latest_request_id: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RecoveryRequestRow {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecoveryRequest {
     request_id: String,
     agent_did: String,
     behavior_id: String,
     session_id: String,
     content: String,
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
     backend_id: String,
     execution_origin: String,
     retry_parent_request: String,
@@ -190,6 +191,26 @@ struct RecoveryRequestRow {
     retry_count: i64,
     max_retries: i64,
     deadline: Option<String>,
+}
+
+impl From<gents_protocol::row::AgentRequestRow> for RecoveryRequest {
+    fn from(row: gents_protocol::row::AgentRequestRow) -> Self {
+        Self {
+            request_id: row.request_id,
+            agent_did: row.agent_did.expect("AgentRequest.agent_did"),
+            behavior_id: row.behavior_id.expect("AgentRequest.behavior_id"),
+            session_id: row.session_id.expect("AgentRequest.session_id"),
+            content: row.content.expect("AgentRequest.content"),
+            lifecycle_state: row.lifecycle_state.expect("AgentRequest.lifecycle_state"),
+            backend_id: row.backend_id.expect("AgentRequest.backend_id"),
+            execution_origin: row.execution_origin.expect("AgentRequest.execution_origin"),
+            retry_parent_request: row.retry_parent_request.unwrap_or_default(),
+            retry_root_request: row.retry_root_request.unwrap_or_default(),
+            retry_count: row.retry_count.unwrap_or_default(),
+            max_retries: row.max_retries.unwrap_or_default(),
+            deadline: row.deadline,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -340,7 +361,7 @@ async fn reissue_failed_request_for_contract(
             pre.failed_request_id
         ));
     };
-    if parent.lifecycle_state != "failed" {
+    if parent.lifecycle_state != RequestLifecycleState::Failed {
         return Err(format!(
             "retry parent request must be failed, got lifecycle_state={}",
             parent.lifecycle_state
@@ -439,7 +460,10 @@ async fn assert_legal_reissue_postconditions(
     assert_eq!(new_request.session_id, pre.session_id);
     assert_eq!(new_request.agent_did, AGENT_DID);
     assert_eq!(new_request.behavior_id, AGENT_NAME);
-    assert_eq!(new_request.lifecycle_state, case.post_new_state);
+    assert_eq!(
+        new_request.lifecycle_state,
+        RequestLifecycleState::parse(&case.post_new_state).expect("Lean request lifecycle state")
+    );
     assert_eq!(new_request.retry_parent_request, pre.failed_request_id);
     assert_eq!(new_request.retry_root_request, pre.failed_request_id);
     assert_eq!(new_request.retry_count, case.post_retry_count as i64);
@@ -452,7 +476,11 @@ async fn assert_legal_reissue_postconditions(
     let failed_request = fetch_recovery_request(node, &pre.failed_request_id)
         .await
         .expect("legal reissue must retain source request");
-    assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
+    assert_eq!(
+        failed_request.lifecycle_state,
+        RequestLifecycleState::parse(&case.post_failed_state)
+            .expect("Lean request lifecycle state")
+    );
     assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
     assert_eq!(failed_request.max_retries, case.max_retries as i64);
     assert_eq!(failed_request.backend_id, case.pre_backend);
@@ -467,10 +495,7 @@ async fn assert_legal_reissue_postconditions(
     );
 }
 
-async fn fetch_recovery_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Option<RecoveryRequestRow> {
+async fn fetch_recovery_request(node: &EmbeddedNode, request_id: &str) -> Option<RecoveryRequest> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -495,7 +520,8 @@ async fn fetch_recovery_request(
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_optional_row::<RecoveryRequestRow>(&resp, "AgentRequest")
+    first_optional_row::<gents_protocol::row::AgentRequestRow>(&resp, "AgentRequest")
+        .map(RecoveryRequest::from)
 }
 
 async fn latest_request_id_for_session(node: &EmbeddedNode, session_id: &str) -> String {

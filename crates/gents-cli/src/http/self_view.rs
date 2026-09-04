@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -56,7 +57,7 @@ struct SelfViewEnvelope {
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -99,12 +100,6 @@ struct ProfileRow {
     profile_id: String,
     #[serde(default)]
     context_window: Option<i64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -164,6 +159,7 @@ fn self_view_query(agent_did: &str) -> String {
             context_window
         }}
         AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+            request_id
             session_id
         }}
     }}"#
@@ -255,7 +251,7 @@ fn build_behaviors(
         .collect()
 }
 
-fn distinct_session_ids(requests: &[RequestRow]) -> Vec<String> {
+fn distinct_session_ids(requests: &[AgentRequestRow]) -> Vec<String> {
     requests
         .iter()
         .filter_map(|request| {
@@ -380,13 +376,27 @@ mod tests {
     #[test]
     fn distinct_session_ids_dedupes_and_drops_empty() {
         let ids = distinct_session_ids(&rows(json!([
-            { "session_id": "s-a" },
-            { "session_id": "s-a" },
-            { "session_id": "s-b" },
-            { "session_id": "" },
-            { "session_id": null }
+            { "request_id": "r-1", "session_id": "s-a" },
+            { "request_id": "r-2", "session_id": "s-a" },
+            { "request_id": "r-3", "session_id": "s-b" },
+            { "request_id": "r-4", "session_id": "" },
+            { "request_id": "r-5", "session_id": null }
         ])));
         assert_eq!(ids, vec!["s-a".to_string(), "s-b".to_string()]);
+    }
+
+    #[test]
+    fn self_view_rejects_request_without_request_id() {
+        let error = decode::<SelfViewEnvelope>(
+            json!({ "data": { "AgentRequest": [{ "session_id": "s-a" }] } }),
+            "self view",
+        )
+        .unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains("missing field `request_id`"),
+            "{error:#}"
+        );
     }
 
     #[test]

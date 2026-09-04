@@ -7,25 +7,11 @@ use gents_desktop_core::client::{
     initialize_local_standard_peer, ClientCore, ClientCoreOptions, DesktopPaths,
     SubmitRequestOptions,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio::time::{sleep, Instant};
 use uuid::Uuid;
-
-#[derive(Debug, Deserialize)]
-struct RequestRow {
-    request_id: String,
-    agent_did: String,
-    behavior_id: String,
-    session_id: String,
-    content: String,
-    lifecycle_state: String,
-    backend_id: Option<String>,
-    execution_origin: String,
-    retry_root_request: String,
-    retry_parent_request: Option<String>,
-    retry_count: i64,
-    max_retries: i64,
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn submit_request_does_not_create_runtime_projections() -> Result<()> {
@@ -79,7 +65,7 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
         )
         .await?;
 
-    let request: RequestRow = query_single(
+    let request: AgentRequestRow = query_single(
         core.node(),
         &format!(
             r#"{{
@@ -104,17 +90,26 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     )
     .await?;
     assert_eq!(request.request_id, submitted.request_id);
-    assert_eq!(request.agent_did, agent_did);
-    assert_eq!(request.behavior_id, format!("{agent_did}:default"));
-    assert_eq!(request.session_id, session_id);
-    assert_eq!(request.content, "hello   there\noperator");
-    assert_eq!(request.lifecycle_state, "pending");
+    assert_eq!(request.agent_did.as_deref(), Some(agent_did.as_str()));
+    assert_eq!(
+        request.behavior_id.as_deref(),
+        Some(format!("{agent_did}:default").as_str())
+    );
+    assert_eq!(request.session_id.as_deref(), Some(session_id.as_str()));
+    assert_eq!(request.content.as_deref(), Some("hello   there\noperator"));
+    assert_eq!(
+        request.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
     assert!(request.backend_id.is_none());
-    assert_eq!(request.execution_origin, "interactive");
-    assert_eq!(request.retry_root_request, submitted.request_id);
+    assert_eq!(request.execution_origin.as_deref(), Some("interactive"));
+    assert_eq!(
+        request.retry_root_request.as_deref(),
+        Some(submitted.request_id.as_str())
+    );
     assert!(request.retry_parent_request.is_none());
-    assert_eq!(request.retry_count, 0);
-    assert_eq!(request.max_retries, 3);
+    assert_eq!(request.retry_count, Some(0));
+    assert_eq!(request.max_retries, Some(3));
 
     assert_eq!(
         core.store().focused_request_id(),
@@ -172,7 +167,7 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
 
     let resent = core.resend_request(&original.request_id).await?;
 
-    let new_row: RequestWithOverridesRow = query_single(
+    let new_row: AgentRequestRow = query_single(
         core.node(),
         &format!(
             r#"{{
@@ -195,10 +190,22 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     )
     .await?;
     assert_eq!(new_row.request_id, resent.request_id);
-    assert_eq!(new_row.session_id, resent.session_id);
-    assert_ne!(new_row.session_id, original.session_id);
-    assert_eq!(new_row.retry_parent_request, original.request_id);
-    assert_eq!(new_row.retry_root_request, original.request_id);
+    assert_eq!(
+        new_row.session_id.as_deref(),
+        Some(resent.session_id.as_str())
+    );
+    assert_ne!(
+        new_row.session_id.as_deref(),
+        Some(original.session_id.as_str())
+    );
+    assert_eq!(
+        new_row.retry_parent_request.as_deref(),
+        Some(original.request_id.as_str())
+    );
+    assert_eq!(
+        new_row.retry_root_request.as_deref(),
+        Some(original.request_id.as_str())
+    );
     assert_eq!(new_row.temperature, Some(0.7));
     assert_eq!(new_row.top_p, Some(0.95));
     assert_eq!(new_row.top_k, Some(40));
@@ -209,20 +216,6 @@ async fn resend_preserves_request_overrides_and_metadata() -> Result<()> {
     core.shutdown().await?;
     runtime.shutdown().await?;
     Ok(())
-}
-
-#[derive(Debug, Deserialize)]
-struct RequestWithOverridesRow {
-    request_id: String,
-    session_id: String,
-    retry_parent_request: String,
-    retry_root_request: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
 }
 
 async fn start_core_with_local_route(root: &Path) -> Result<(ClientCore, ClientCore, String)> {

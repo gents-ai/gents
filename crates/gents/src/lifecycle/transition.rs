@@ -6,10 +6,11 @@
 use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::rows::{RequestStatusTransition, RequestViewRow};
+use super::rows::RequestStatusTransition;
 use super::*;
+use gents_protocol::row::AgentRequestRow;
 
-fn request_view_is_terminal(view: &RequestViewRow) -> bool {
+fn request_view_is_terminal(view: &AgentRequestRow) -> bool {
     view.lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)
 }

@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::template::{render_template, task_node_ctx, TemplateScope};
+use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -177,7 +178,11 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                     "goal-backed task retry_key conflicts with request_id {}",
                     request.request_id
                 );
-                Some(request.created_at)
+                Some(
+                    request
+                        .created_at
+                        .context("goal-backed task request is missing created_at")?,
+                )
             }
             None => None,
         }
@@ -269,7 +274,12 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 .as_str(),
         )
             .await?
-            .map(|request| request.doc_id)
+            .map(|request| {
+                request
+                    .doc_id
+                    .context("goal-backed task request is missing _docID")
+            })
+            .transpose()?
             .ok_or_else(|| {
                 anyhow!(
                     "goal-backed AgentRequest for task {} committed but lookup by retry_key returned nothing",
@@ -334,16 +344,10 @@ fn resolve_task_goal_identity(
     )))
 }
 
-struct GoalTaskRequestRow {
-    doc_id: String,
-    request_id: String,
-    created_at: String,
-}
-
 async fn lookup_request_by_retry_key(
     access: &ConfigAccess,
     retry_key: &str,
-) -> Result<Option<GoalTaskRequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let query = format!(
         r#"query {{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{key}" }} }}, limit: 2) {{
@@ -370,27 +374,10 @@ async fn lookup_request_by_retry_key(
         anyhow::bail!("goal-backed task retry_key resolved to multiple AgentRequest rows");
     }
     rows.first()
+        .cloned()
         .map(|row| {
-            let doc_id = row
-                .get("_docID")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .context("goal-backed task request is missing _docID")?;
-            let request_id = row
-                .get("request_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .context("goal-backed task request is missing request_id")?;
-            let created_at = row
-                .get("created_at")
-                .and_then(Value::as_str)
-                .filter(|value| !value.is_empty())
-                .context("goal-backed task request is missing created_at")?;
-            Ok(GoalTaskRequestRow {
-                doc_id: doc_id.to_string(),
-                request_id: request_id.to_string(),
-                created_at: created_at.to_string(),
-            })
+            serde_json::from_value(row)
+                .context("decoding goal-backed task canonical AgentRequest row")
         })
         .transpose()
 }

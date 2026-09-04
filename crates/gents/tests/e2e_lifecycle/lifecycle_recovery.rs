@@ -3,6 +3,8 @@ use gents::{
     tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle},
     RequestLifecycle,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::support::snapshots::{
@@ -14,10 +16,7 @@ use crate::support::{
     upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
 };
 
-#[derive(Debug, Clone, Deserialize)]
-struct StatusRow {
-    lifecycle_state: String,
-}
+type StatusRow = AgentRequestRow;
 
 #[derive(Debug, Clone, Deserialize)]
 struct ResponseStatusRow {
@@ -28,21 +27,6 @@ struct ResponseStatusRow {
 #[derive(Debug, Clone, Deserialize)]
 struct NotificationDeliveryRow {
     completion_notification_delivered_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BackgroundWakeRetryRow {
-    request_id: String,
-    content: String,
-    lifecycle_state: String,
-    execution_origin: String,
-    retry_parent_request: String,
-    retry_root_request: String,
-    retry_count: i64,
-    max_retries: i64,
-    metadata: String,
-    deadline: Option<String>,
-    valid_until: Option<String>,
 }
 
 #[tokio::test]
@@ -121,17 +105,23 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         .iter()
         .find(|row| row.request_id != "failed-wake")
         .expect("retry successor");
-    assert_eq!(successor.lifecycle_state, "pending");
-    assert_eq!(successor.execution_origin, "scheduled");
-    assert_eq!(successor.retry_parent_request, "failed-wake");
-    assert_eq!(successor.retry_root_request, "failed-wake");
     assert_eq!(
-        successor.content,
-        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT
+        successor.lifecycle_state,
+        Some(RequestLifecycleState::Pending)
     );
-    assert_eq!(successor.retry_count, 2);
-    assert_eq!(successor.max_retries, 3);
-    assert_eq!(successor.metadata, metadata);
+    assert_eq!(successor.execution_origin.as_deref(), Some("scheduled"));
+    assert_eq!(
+        successor.retry_parent_request.as_deref(),
+        Some("failed-wake")
+    );
+    assert_eq!(successor.retry_root_request.as_deref(), Some("failed-wake"));
+    assert_eq!(
+        successor.content.as_deref(),
+        Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT)
+    );
+    assert_eq!(successor.retry_count, Some(2));
+    assert_eq!(successor.max_retries, Some(3));
+    assert_eq!(successor.metadata.as_deref(), Some(metadata.as_str()));
     assert_eq!(successor.deadline, None);
     assert_eq!(successor.valid_until, None);
 
@@ -256,7 +246,7 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
 async fn background_wake_retry_rows(
     node: &gents::defra_node::EmbeddedNode,
     session_id: &str,
-) -> Vec<BackgroundWakeRetryRow> {
+) -> Vec<AgentRequestRow> {
     let session_id = gents::graphql::escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
@@ -332,13 +322,13 @@ async fn recover_all_marks_requests_as_error() {
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-1" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     assert_eq!(
         first_row::<StatusRow>(&resp, "AgentRequest").lifecycle_state,
-        "failed"
+        Some(RequestLifecycleState::Failed)
     );
 }
 
@@ -374,13 +364,13 @@ async fn recover_all_preserves_completed_response() {
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-complete" } },
                     limit: 1
-                ) { lifecycle_state }
+                ) { request_id lifecycle_state }
             }"#,
         )
         .await;
     assert_eq!(
         first_row::<StatusRow>(&request_resp, "AgentRequest").lifecycle_state,
-        "completed"
+        Some(RequestLifecycleState::Completed)
     );
 }
 

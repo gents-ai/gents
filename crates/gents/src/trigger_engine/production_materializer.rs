@@ -25,6 +25,7 @@ use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
@@ -91,19 +92,6 @@ impl ProductionMaterializer {
     }
 }
 
-#[derive(serde::Deserialize)]
-struct StagedWorkspaceRequest {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    workspace_id: String,
-    workspace_authority: String,
-    workspace_owner_deployment_id: String,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
-}
-
 pub(crate) async fn recover_workspace_binding_pending_requests(
     node: &EmbeddedNode,
     local_deployment_id: &str,
@@ -132,32 +120,51 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
         "load workspace-binding-pending AgentRequest rows",
     )
     .await?;
-    let staged = rows::<StagedWorkspaceRequest>(&response, "AgentRequest")?;
+    let staged = rows::<AgentRequestRow>(&response, "AgentRequest")?;
     let mut recovered = 0;
     for request in staged {
+        let request_doc_id = request
+            .doc_id
+            .as_deref()
+            .context("workspace-binding-pending AgentRequest is missing _docID")?;
+        let agent_did = request
+            .agent_did
+            .as_deref()
+            .context("workspace-binding-pending AgentRequest is missing agent_did")?;
         let lineage = WorkspaceLineage {
-            workspace_id: Some(request.workspace_id),
-            workspace_authority: Some(request.workspace_authority),
-            workspace_owner_deployment_id: Some(request.workspace_owner_deployment_id),
-            workspace_seal_hash: request.workspace_seal_hash,
+            workspace_id: Some(
+                request
+                    .workspace_id
+                    .clone()
+                    .context("workspace-binding-pending AgentRequest is missing workspace_id")?,
+            ),
+            workspace_authority: Some(request.workspace_authority.clone().context(
+                "workspace-binding-pending AgentRequest is missing workspace_authority",
+            )?),
+            workspace_owner_deployment_id: Some(
+                request.workspace_owner_deployment_id.clone().context(
+                    "workspace-binding-pending AgentRequest is missing workspace_owner_deployment_id",
+                )?,
+            ),
+            workspace_seal_hash: request.workspace_seal_hash.clone(),
         };
         match crate::workspace::materialize_workspace_binding(
             node,
             &request.request_id,
-            &request.doc_id,
-            &request.agent_did,
+            request_doc_id,
+            agent_did,
             &lineage,
             Some(local_deployment_id),
         )
         .await
         {
             Ok(()) => {
-                crate::lifecycle::activate_workspace_bound_request(node, &request.doc_id).await?;
+                crate::lifecycle::activate_workspace_bound_request(node, request_doc_id).await?;
                 recovered += 1;
             }
             Err(error) => tracing::warn!(
                 request_id = %request.request_id,
-                request_doc_id = %request.doc_id,
+                request_doc_id = %request_doc_id,
                 %error,
                 "workspace binding recovery remains pending"
             ),
@@ -175,11 +182,8 @@ pub(crate) fn execution_origin_for_trigger_kind(trigger_kind: TriggerKind) -> Ex
 
 const EXPIRED_CLAIM_GRACE_SECS: i64 = 60;
 
-fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::Utc>) -> bool {
-    let state = row
-        .get("lifecycle_state")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|value| RequestLifecycleState::parse(value).ok());
+fn row_gates_serial_fire(row: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>) -> bool {
+    let state = row.lifecycle_state;
     if !matches!(
         state,
         Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
@@ -187,8 +191,8 @@ fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::
         return true;
     }
     let Some(deadline) = row
-        .get("deadline")
-        .and_then(serde_json::Value::as_str)
+        .deadline
+        .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
@@ -438,7 +442,7 @@ impl MaterializerHandle for ProductionMaterializer {
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }}
-                    ) {{ _docID lifecycle_state deadline }}
+                    ) {{ _docID request_id lifecycle_state deadline }}
                 }}"#,
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
@@ -454,13 +458,8 @@ impl MaterializerHandle for ProductionMaterializer {
                 );
             }
             let now = chrono::Utc::now();
-            let found = resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentRequest"))
-                .and_then(|rows| rows.as_array())
-                .map(|rows| rows.iter().any(|row| row_gates_serial_fire(row, now)))
-                .unwrap_or(false);
+            let rows = rows::<AgentRequestRow>(&resp, "AgentRequest")?;
+            let found = rows.iter().any(|row| row_gates_serial_fire(row, now));
             Ok(found)
         })
     }

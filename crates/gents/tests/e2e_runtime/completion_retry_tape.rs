@@ -64,7 +64,7 @@ async fn backend_restart_cluster_recovers() {
 
     for (doc_id, request_id, marker) in &request_doc_ids {
         let terminal_state = wait_for_request_terminal_state(db.node.as_ref(), doc_id).await;
-        if terminal_state != "completed" {
+        if terminal_state != RequestLifecycleState::Completed {
             let snapshot = fetch_request_snapshot(db.node.as_ref(), doc_id).await;
             let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
             let all_calls = fetch_call_diagnostics(db.node.as_ref(), request_id).await;
@@ -327,7 +327,8 @@ async fn deterministic_400_tape() {
     let response_doc_id = wait_for_response_doc_id(db.node.as_ref(), request_id).await;
     let error_message = fetch_response_error_message(db.node.as_ref(), &response_doc_id).await;
     assert_eq!(
-        terminal_state, "completed",
+        terminal_state,
+        RequestLifecycleState::Completed,
         "deterministic parse-400 should recover; calls={calls:?}; error={error_message:?}"
     );
     assert_retry_recovered(&calls, 2);
@@ -506,14 +507,14 @@ async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> Timeli
     first_row::<TimelineRequestRow>(&response, "AgentRequest")
 }
 
-async fn wait_for_request_terminal_state(node: &EmbeddedNode, request_doc_id: &str) -> String {
+async fn wait_for_request_terminal_state(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> RequestLifecycleState {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if matches!(
-            snapshot.lifecycle_state.as_str(),
-            "completed" | "failed" | "interrupted" | "superseded" | "dead"
-        ) {
+        if snapshot.lifecycle_state.is_terminal() {
             return snapshot.lifecycle_state;
         }
         assert!(

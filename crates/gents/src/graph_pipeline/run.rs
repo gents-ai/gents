@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::graphql::{graphql_input_literal, graphql_string_list_literal};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use identity::Did;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -280,41 +281,29 @@ async fn load_requests(
     let mut requests = rows(&response, "AgentRequest")
         .iter()
         .map(|row| {
-            let lifecycle_state = row
-                .get("lifecycle_state")
-                .and_then(Value::as_str)
-                .and_then(|value| RequestLifecycleState::parse(value).ok());
-            let behavior_id = row
-                .get("behavior_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let caused_by_trigger_id = row.get("caused_by_trigger_id").and_then(Value::as_str);
-            GraphRunRequestView {
-                request_id: row
-                    .get("request_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned(),
+            let row = serde_json::from_value::<AgentRequestRow>((*row).clone())
+                .context("decoding graph-run AgentRequest row")?;
+            let lifecycle_state = row.lifecycle_state;
+            Ok(GraphRunRequestView {
+                request_id: row.request_id,
                 session_id: row
-                    .get("session_id")
-                    .and_then(Value::as_str)
+                    .session_id
+                    .as_deref()
                     .filter(|value| !value.trim().is_empty())
                     .map(ToOwned::to_owned),
-                node_id: caused_by_trigger_id
+                node_id: row
+                    .caused_by_trigger_id
+                    .as_deref()
                     .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
                     .cloned(),
-                behavior_id,
+                behavior_id: row.behavior_id.unwrap_or_default(),
                 terminal: lifecycle_state.is_some_and(RequestLifecycleState::is_terminal),
                 succeeded: lifecycle_state == Some(RequestLifecycleState::Completed),
                 lifecycle_state: lifecycle_state.map(|state| state.as_str().to_string()),
-                failure_reason: row
-                    .get("failure_reason")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-            }
+                failure_reason: row.failure_reason,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
     Ok(requests)
 }

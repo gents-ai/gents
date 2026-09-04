@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
+use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
@@ -30,13 +31,17 @@ impl NextSteeringRequest {
 }
 
 #[derive(Clone, Debug)]
-struct RequestRow {
-    request_id: String,
-    lifecycle_state: Option<RequestLifecycleState>,
-    superseded_by_request: Option<String>,
+struct RequestWithResponseStatus {
+    request: AgentRequestRow,
     response_status: Option<String>,
-    metadata: Option<String>,
-    created_at: String,
+}
+
+impl std::ops::Deref for RequestWithResponseStatus {
+    type Target = AgentRequestRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.request
+    }
 }
 
 pub(in crate::commands::codex_shim) async fn install_stream_control(
@@ -182,7 +187,7 @@ pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
 }
 
 fn next_steering_request_after_from_rows(
-    rows: &[RequestRow],
+    rows: &[RequestWithResponseStatus],
     queued_after_request_id: &str,
 ) -> Option<NextSteeringRequest> {
     rows.iter()
@@ -194,7 +199,10 @@ fn next_steering_request_after_from_rows(
         })
         .map(|row| NextSteeringRequest {
             request_id: row.request_id.clone(),
-            created_at: row.created_at.clone(),
+            created_at: row
+                .created_at
+                .clone()
+                .expect("request row decoder requires created_at"),
             lifecycle_state: row.lifecycle_state.clone(),
         })
 }
@@ -371,7 +379,10 @@ fn stream_key(thread_id: &str, turn_id: &str) -> String {
     format!("{thread_id}:{turn_id}")
 }
 
-async fn load_thread_request_rows(state: &ShimState, thread_id: &str) -> Result<Vec<RequestRow>> {
+async fn load_thread_request_rows(
+    state: &ShimState,
+    thread_id: &str,
+) -> Result<Vec<RequestWithResponseStatus>> {
     let thread_id = escape_graphql_string(thread_id);
     let agent_did = escape_graphql_string(state.agent_did.as_ref());
     let query = format!(
@@ -447,43 +458,22 @@ async fn load_thread_request_rows(state: &ShimState, thread_id: &str) -> Result<
     Ok(rows)
 }
 
-fn decode_request_row(row: Value) -> Result<RequestRow> {
-    let request_id = row
-        .get("request_id")
-        .and_then(Value::as_str)
-        .context("AgentRequest row missing request_id")?
-        .to_string();
-    let lifecycle_state = row
-        .get("lifecycle_state")
-        .and_then(Value::as_str)
-        .and_then(|value| RequestLifecycleState::parse(value).ok());
-    let superseded_by_request = row
-        .get("superseded_by_request")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let metadata = row
-        .get("metadata")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let created_at = row
-        .get("created_at")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    Ok(RequestRow {
-        request_id,
-        lifecycle_state,
-        superseded_by_request,
+fn decode_request_row(row: Value) -> Result<RequestWithResponseStatus> {
+    let request: AgentRequestRow =
+        serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
+    request
+        .created_at
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("AgentRequest row missing created_at")?;
+    Ok(RequestWithResponseStatus {
+        request,
         response_status: None,
-        metadata,
-        created_at,
     })
 }
 
 fn active_codex_turn_from_rows(
-    rows: &[RequestRow],
+    rows: &[RequestWithResponseStatus],
     expected_turn_id: Option<&str>,
 ) -> Result<Option<ActiveCodexTurn>> {
     let by_id = rows
@@ -495,7 +485,7 @@ fn active_codex_turn_from_rows(
         .filter(|row| row.is_effectively_active())
         .collect::<Vec<_>>();
 
-    let mut candidates = Vec::<(&RequestRow, String, usize)>::new();
+    let mut candidates = Vec::<(&RequestWithResponseStatus, String, usize)>::new();
     for row in active_rows {
         let (root, depth) = codex_turn_root_and_depth(row, &by_id)?;
         if expected_turn_id.is_none_or(|expected| root == expected) {
@@ -531,8 +521,8 @@ fn active_codex_turn_from_rows(
 }
 
 fn codex_turn_root_and_depth<'a>(
-    row: &'a RequestRow,
-    by_id: &BTreeMap<&'a str, &'a RequestRow>,
+    row: &'a RequestWithResponseStatus,
+    by_id: &BTreeMap<&'a str, &'a RequestWithResponseStatus>,
 ) -> Result<(String, usize)> {
     let mut current = row;
     let mut seen = BTreeSet::<String>::new();
@@ -556,7 +546,7 @@ fn codex_turn_root_and_depth<'a>(
     }
 }
 
-fn steering_parent_id(row: &RequestRow) -> Option<String> {
+fn steering_parent_id(row: &RequestWithResponseStatus) -> Option<String> {
     let metadata = row.metadata.as_deref()?.trim();
     if metadata.is_empty() {
         return None;
@@ -575,7 +565,7 @@ fn steering_parent_id(row: &RequestRow) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-impl RequestRow {
+impl RequestWithResponseStatus {
     fn is_effectively_active(&self) -> bool {
         project_persisted_attempt(
             self.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
@@ -590,7 +580,11 @@ impl RequestRow {
 mod tests {
     use super::*;
 
-    fn row(request_id: &str, lifecycle_state: &str, queued_after: Option<&str>) -> RequestRow {
+    fn row(
+        request_id: &str,
+        lifecycle_state: &str,
+        queued_after: Option<&str>,
+    ) -> RequestWithResponseStatus {
         let metadata = queued_after.map(|parent| {
             serde_json::json!({
                 "queue": {
@@ -602,13 +596,15 @@ mod tests {
             })
             .to_string()
         });
-        RequestRow {
-            request_id: request_id.to_string(),
-            lifecycle_state: RequestLifecycleState::parse(lifecycle_state).ok(),
-            superseded_by_request: None,
+        RequestWithResponseStatus {
+            request: serde_json::from_value(json!({
+                "request_id": request_id,
+                "lifecycle_state": lifecycle_state,
+                "metadata": metadata,
+                "created_at": request_id,
+            }))
+            .expect("canonical AgentRequest test row"),
             response_status: None,
-            metadata,
-            created_at: request_id.to_string(),
         }
     }
 

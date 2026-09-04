@@ -15,6 +15,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::config_client::ConfigAccess;
@@ -82,29 +83,7 @@ pub struct SubagentTree {
 #[derive(Debug, Deserialize)]
 struct RootRequestEnvelope {
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    #[serde(default)]
-    subagent_depth: Option<i64>,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_id: Option<String>,
-    #[serde(default)]
-    backend_id: Option<String>,
+    requests: Vec<AgentRequestRow>,
 }
 
 /// Build the tree from a single local embedded node — the common case for a
@@ -280,7 +259,7 @@ fn record_dead_access(
     }
 }
 
-fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
+fn request_row_into_node(row: AgentRequestRow) -> SubagentTreeNode {
     SubagentTreeNode {
         request_id: clean_string(&row.request_id),
         resolved_via: None,
@@ -302,7 +281,7 @@ fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
 async fn fetch_root_request(
     access: &ConfigAccess,
     root_request_id: &str,
-) -> Result<Option<RequestRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let escaped = escape_graphql_string(root_request_id);
     let query = format!(
         r#"{{

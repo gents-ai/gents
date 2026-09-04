@@ -7,6 +7,7 @@ use std::sync::RwLock;
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::graphql::{
@@ -488,13 +489,14 @@ async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> 
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
+                request_id
                 lifecycle_state
             }}
         }}"#
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load AgentRequest liveness").await?;
-    let Some(row) = first_row::<RequestLivenessRow>(&response, "AgentRequest")? else {
+    let Some(row) = first_row::<AgentRequestRow>(&response, "AgentRequest")? else {
         return Ok(false);
     };
     Ok(request_lifecycle_is_live(row.lifecycle_state))
@@ -586,12 +588,6 @@ pub(super) async fn persist_workspace_binding_docs(
             )
         })?;
     Ok(())
-}
-
-#[derive(Deserialize)]
-struct RequestLivenessRow {
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 #[derive(Deserialize)]

@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context as _;
 
 #[derive(Debug, Deserialize)]
 struct UnclaimedBridgeRow {
@@ -22,13 +23,6 @@ struct CancelPendingBridgeRow {
     child_request_id: String,
     cancel_cascade_intent_at: Option<String>,
     stuck_since: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChildAckProbeRow {
-    #[serde(default)]
-    lifecycle_state: Option<RequestLifecycleState>,
-    interrupt_requested_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -244,7 +238,7 @@ async fn clear_unclaimed_deadline_at(node: &EmbeddedNode, doc_id: &str) -> Resul
 async fn load_child_ack_probe(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> Result<Option<ChildAckProbeRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let Some(child_request_doc_id) =
         crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
     else {
@@ -257,6 +251,7 @@ async fn load_child_ack_probe(
                 filter: {{ _docID: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
+                request_id
                 lifecycle_state
                 interrupt_requested_at
             }}
@@ -266,16 +261,17 @@ async fn load_child_ack_probe(
     if response.has_errors() {
         anyhow::bail!("child ack probe failed: {:?}", response.errors);
     }
-    let rows: Vec<ChildAckProbeRow> = response
+    let value = response
         .data
         .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+        .and_then(|data| data.get("AgentRequest"))
+        .context("AgentRequest field missing from child ack probe")?;
+    let rows: Vec<AgentRequestRow> =
+        serde_json::from_value(value.clone()).context("decode child ack AgentRequest rows")?;
     Ok(rows.into_iter().next())
 }
 
-fn request_terminal_or_interrupted(row: &ChildAckProbeRow) -> bool {
+fn request_terminal_or_interrupted(row: &AgentRequestRow) -> bool {
     row.lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)
         || row.interrupt_requested_at.is_some()

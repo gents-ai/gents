@@ -1,23 +1,7 @@
 use chrono::{DateTime, Utc};
 use gents::tool_call_lifecycle::deadline_at_is_expired;
+pub(crate) use gents_protocol::row::AgentRequestRow as LivenessRequestRow;
 use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct LivenessRequestRow {
-    pub(crate) request_id: String,
-    #[serde(default)]
-    pub(crate) agent_did: String,
-    #[serde(default)]
-    pub(crate) claimed_at: Option<String>,
-    #[serde(default)]
-    pub(crate) deadline: Option<String>,
-    #[serde(default)]
-    pub(crate) subagent_depth: Option<i64>,
-    #[serde(default)]
-    pub(crate) caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    pub(crate) caused_by_trigger_kind: Option<String>,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct LivenessToolCallRow {
@@ -80,7 +64,12 @@ pub(crate) fn compute_request_liveness_summary(
     let local_agent_did = local_agent_did.trim();
     let local_request_count = requests
         .iter()
-        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
+        .filter(|row| {
+            owns_liveness_row(
+                local_agent_did,
+                row.agent_did.as_deref().unwrap_or_default(),
+            )
+        })
         .count();
     let ignored_foreign_processing_count =
         requests.len().saturating_sub(local_request_count) as i64;
@@ -116,10 +105,12 @@ pub(crate) fn compute_request_liveness_summary(
     let mut request_views = Vec::with_capacity(local_request_count);
     let mut expired_processing_count = 0i64;
 
-    for row in requests
-        .iter()
-        .filter(|row| owns_liveness_row(local_agent_did, &row.agent_did))
-    {
+    for row in requests.iter().filter(|row| {
+        owns_liveness_row(
+            local_agent_did,
+            row.agent_did.as_deref().unwrap_or_default(),
+        )
+    }) {
         active_request_ids.push(row.request_id.clone());
         let claimed_at = parse_optional_rfc3339(row.claimed_at.as_deref());
         let deadline = parse_optional_rfc3339(row.deadline.as_deref());
@@ -214,15 +205,13 @@ mod tests {
         claimed_offset_secs: i64,
         deadline_offset_secs: i64,
     ) -> LivenessRequestRow {
-        LivenessRequestRow {
-            request_id: request_id.to_string(),
-            agent_did: "did:test:local".to_string(),
-            claimed_at: Some(iso(claimed_offset_secs)),
-            deadline: Some(iso(deadline_offset_secs)),
-            subagent_depth: None,
-            caused_by_parent_request_id: None,
-            caused_by_trigger_kind: None,
-        }
+        serde_json::from_value(serde_json::json!({
+            "request_id": request_id,
+            "agent_did": "did:test:local",
+            "claimed_at": iso(claimed_offset_secs),
+            "deadline": iso(deadline_offset_secs),
+        }))
+        .expect("canonical AgentRequest liveness row")
     }
 
     fn tool_call(
@@ -353,7 +342,7 @@ mod tests {
     #[test]
     fn foreign_processing_requests_do_not_count_as_active_or_expired() {
         let mut foreign = request("req-foreign", -120, -30);
-        foreign.agent_did = "did:test:foreign".to_string();
+        foreign.agent_did = Some("did:test:foreign".to_string());
         let requests = vec![request("req-local", -120, -30), foreign];
 
         let snapshot =
