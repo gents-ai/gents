@@ -51,7 +51,7 @@ pub async fn desktop_peer_enroll_status(
     }
     let status = fetch_runtime_connection_payload(address)
         .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+        .map_err(|error| BridgeError::classify_transport_error(error.to_string()))?;
     let server_label = status
         .get("agent_name")
         .and_then(serde_json::Value::as_str)

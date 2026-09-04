@@ -248,4 +248,31 @@ mod tests {
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
     }
+
+    /// `tauri_commands::peers::desktop_peer_enroll_status` and
+    /// `desktop_peer_status_fetch` both map a `fetch_runtime_connection_payload`
+    /// failure through `classify_transport_error(error.to_string())` — the
+    /// exact message shapes `gents_desktop_core::local_runtime::http_get_json`
+    /// produces for a connection-refused failure and a JSON decode failure
+    /// against the status-enrollment server address (#1339 review round 2).
+    #[test]
+    fn classify_transport_error_covers_enroll_status_connection_and_json_failures() {
+        let connection_refused = BridgeError::classify_transport_error(
+            "no gents server found at http://198.51.100.7:9191/status. Start one first with              `gents server` or `gents demo`. Remote runtimes must be added through              authenticated status enrollment in the desktop app.",
+        );
+        assert_eq!(
+            connection_refused.code,
+            BridgeErrorCode::EndpointUnreachable
+        );
+        assert_eq!(
+            connection_refused.endpoint.as_deref(),
+            Some("http://198.51.100.7:9191")
+        );
+
+        let json_failure = BridgeError::classify_transport_error(
+            "decoding JSON response from http://198.51.100.7:9191/status",
+        );
+        assert_eq!(json_failure.code, BridgeErrorCode::Unknown);
+        assert_eq!(json_failure.endpoint, None);
+    }
 }
