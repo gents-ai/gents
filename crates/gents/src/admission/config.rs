@@ -56,10 +56,46 @@ impl BackendAdmissionConfig {
 
     /// Effective availability: operator/bootstrap intent from the shared
     /// document AND the local measurement not vetoing — mirrors
-    /// `Proofs.BackendHealth.effectiveAvailable` (B6).
-    pub(crate) fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS && !self.measured_unhealthy
+    /// `Proofs.BackendHealth.effectiveAvailable` (B6). Names the failing
+    /// term so callers can report *why* without recomputing the comparison
+    /// — this is the single owner of that comparison in the codebase.
+    pub(crate) fn availability(&self) -> BackendAvailability {
+        if !self.enabled {
+            BackendAvailability::Disabled
+        } else if self.probe_status != HEALTHY_PROBE_STATUS {
+            BackendAvailability::ProbeNotHealthy
+        } else if self.measured_unhealthy {
+            BackendAvailability::MeasuredUnhealthy
+        } else {
+            BackendAvailability::Available
+        }
     }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.availability() == BackendAvailability::Available
+    }
+}
+
+/// The term of [`BackendAdmissionConfig::availability`] that failed, so
+/// callers that need to explain *why* a backend is unavailable don't
+/// recompute `enabled`/`probe_status`/`measured_unhealthy` themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackendAvailability {
+    Available,
+    Disabled,
+    ProbeNotHealthy,
+    MeasuredUnhealthy,
+}
+
+/// Document-only availability from raw `(enabled, probe_status)` fields —
+/// `BackendAdmissionConfig::availability` without a `measured_unhealthy`
+/// term, for the few callers outside the `gents` crate that only ever see a
+/// document (never this runtime's live `BackendHealthMap`): the codex
+/// shim's model list and `gents diagnose`, which work from a partially
+/// parsed config blob rather than a full `InferenceBackend`. This file
+/// stays the single owner of the `enabled`/`probe_status` comparison.
+pub fn document_available_from_fields(enabled: bool, probe_status: &str) -> bool {
+    enabled && probe_status == HEALTHY_PROBE_STATUS
 }
 
 pub(crate) fn backend_admission_configs_from_backends<'a>(
@@ -75,4 +111,59 @@ pub(crate) fn backend_admission_configs_from_backends<'a>(
         );
     }
     Ok(configs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(
+        enabled: bool,
+        probe_status: &str,
+        measured_unhealthy: bool,
+    ) -> BackendAdmissionConfig {
+        BackendAdmissionConfig {
+            backend_id: "test".to_string(),
+            max_concurrent: 1,
+            max_queue_depth: 0,
+            enabled,
+            probe_status: probe_status.to_string(),
+            measured_unhealthy,
+            config_fingerprint: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn availability_requires_enabled_healthy_and_unvetoed() {
+        assert_eq!(
+            config(true, HEALTHY_PROBE_STATUS, false).availability(),
+            BackendAvailability::Available
+        );
+        assert!(config(true, HEALTHY_PROBE_STATUS, false).is_available());
+
+        assert_eq!(
+            config(false, HEALTHY_PROBE_STATUS, false).availability(),
+            BackendAvailability::Disabled
+        );
+        assert!(!config(false, HEALTHY_PROBE_STATUS, false).is_available());
+
+        assert_eq!(
+            config(true, "unhealthy", false).availability(),
+            BackendAvailability::ProbeNotHealthy
+        );
+        assert!(!config(true, "unhealthy", false).is_available());
+
+        assert_eq!(
+            config(true, HEALTHY_PROBE_STATUS, true).availability(),
+            BackendAvailability::MeasuredUnhealthy
+        );
+        assert!(!config(true, HEALTHY_PROBE_STATUS, true).is_available());
+
+        // enabled=false wins over a bad probe_status: the disabled term is
+        // checked first.
+        assert_eq!(
+            config(false, "unhealthy", true).availability(),
+            BackendAvailability::Disabled
+        );
+    }
 }

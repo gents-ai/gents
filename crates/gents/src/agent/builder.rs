@@ -47,6 +47,12 @@ pub struct GentsBuilder {
     rendered_request_capture_factory:
         Option<crate::rendered_request::RenderedRequestCaptureFactory>,
     behaviors: Vec<PendingAgentBehavior>,
+    /// This runtime's measured probe health (#640), consulted alongside the
+    /// document when admitting a behavior's backend. Empty by default —
+    /// build paths that run before the prober has an opinion (startup,
+    /// tests) never veto on measured health, matching
+    /// `BackendAdmissionConfig::measured_unhealthy`'s own default.
+    backend_health: crate::backend_health::BackendHealthMap,
 }
 
 impl GentsBuilder {
@@ -61,6 +67,18 @@ impl GentsBuilder {
 
     pub fn identity(mut self, identity: Arc<dyn AgentIdentity>) -> Self {
         self.identity = Some(identity);
+        self
+    }
+
+    /// Test-only: seed the measured probe health this build should veto on,
+    /// exercising the same `BackendAdmissionConfig` path the runtime
+    /// consults after startup.
+    #[cfg(test)]
+    pub(crate) fn backend_health(
+        mut self,
+        backend_health: crate::backend_health::BackendHealthMap,
+    ) -> Self {
+        self.backend_health = backend_health;
         self
     }
 
@@ -187,7 +205,7 @@ impl GentsBuilder {
         > = Vec::with_capacity(self.behaviors.len());
         for behavior in self.behaviors {
             let factory = behavior
-                .into_factory(node.as_ref(), &self.tool_ceiling)
+                .into_factory(node.as_ref(), &self.tool_ceiling, &self.backend_health)
                 .await?;
             behavior_factories.push(factory);
         }
@@ -236,7 +254,7 @@ impl GentsBuilder {
             background_execution_registry: BackgroundExecutionRegistry::default(),
             health_checker_options: self.health_checker_options,
             backend_prober_options: crate::backend_health::BackendProberOptions::default(),
-            backend_health: crate::backend_health::BackendHealthMap::new(),
+            backend_health: self.backend_health,
             process_state_observer: self.process_state_observer,
             runtime_snapshot_observer: None,
             startup_build_failure_observer: None,
@@ -499,6 +517,7 @@ impl PendingAgentBehavior {
         self,
         node: &EmbeddedNode,
         tool_ceiling: &ToolCeiling,
+        backend_health: &crate::backend_health::BackendHealthMap,
     ) -> Result<
         Box<
             dyn FnOnce(
@@ -519,16 +538,22 @@ impl PendingAgentBehavior {
                 backend_id
             )
         })?;
-        if !backend.is_available() {
+        // `BackendAdmissionConfig::is_available` is the single owner of the
+        // enabled/probe_status/measured_unhealthy comparison (#1332); apply
+        // this builder's measured health the same way the reconciler does
+        // before gating on it.
+        let admission_config = BackendAdmissionConfig::from_backend(&backend)?
+            .with_measured_unhealthy(backend_health.measured_blocks_routing(&backend_id).await);
+        if !admission_config.is_available() {
             anyhow::bail!(
-                "behavior '{}' backend {} is unavailable (enabled={} probe_status={})",
+                "behavior '{}' backend {} is unavailable (enabled={} probe_status={} measured_unhealthy={})",
                 self.name,
                 backend_id,
                 backend.enabled,
-                backend.probe_status
+                backend.probe_status,
+                admission_config.measured_unhealthy,
             );
         }
-        BackendAdmissionConfig::from_backend(&backend)?;
 
         let behavior_name = self.name.clone();
         let resolved_backend_id = Some(backend.backend_id);

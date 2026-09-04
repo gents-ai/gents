@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gents::{
-    backend_registry::list_enabled_backends, load_agent_behavior, AgentBehaviorDocument,
-    InferenceBackend,
+    backend_registry::list_enabled_backends, document_configured_available, load_agent_behavior,
+    AgentBehaviorDocument, InferenceBackend,
 };
 use gents_codex_protocol as codex;
 use serde_json::{json, Value};
@@ -77,7 +77,7 @@ pub(super) async fn load_bound_behavior(state: &ShimState) -> Result<AgentBehavi
 
 pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<InferenceBackend>> {
     let mut backends = list_enabled_backends(state.node.as_ref()).await?;
-    backends.retain(|backend| backend.is_available());
+    backends.retain(document_configured_available);
     backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
     Ok(backends)
 }

@@ -15,7 +15,8 @@ pub(crate) use client::{
     terminal_failure_reason_observer, AdmissionCallContext, AdmittedCompletionClient, CallKind,
 };
 pub(crate) use config::backend_admission_configs_from_backends;
-pub use config::BackendAdmissionConfig;
+pub(crate) use config::BackendAvailability;
+pub use config::{document_available_from_fields, BackendAdmissionConfig};
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
 

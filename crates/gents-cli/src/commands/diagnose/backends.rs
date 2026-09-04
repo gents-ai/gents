@@ -120,7 +120,7 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let mut ok = enabled && probe_status == "healthy";
+    let mut ok = gents::document_available_from_fields(enabled, &probe_status);
     let mut error = None::<String>;
     let mut discovered_models = Vec::<String>::new();
 

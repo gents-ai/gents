@@ -151,7 +151,7 @@ pub use adapter_projection::{
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
 pub use admission::BackendAdmissionConfig;
-pub use admission::{InferenceCall, InferenceCallRecoveryReport};
+pub use admission::{document_available_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
@@ -161,7 +161,9 @@ pub use backend_health::{
     BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
 };
 pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
-pub use backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
+pub use backend_registry::{
+    document_configured_available, InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS,
+};
 pub use background_completion_diagnostics::{
     load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
     BackgroundCompletionEpochDiagnostic,

@@ -96,10 +96,6 @@ impl InferenceBackend {
         })
     }
 
-    pub fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
-    }
-
     pub fn resolved_api_key(&self) -> Option<String> {
         if let Some(key) = self.api_key.as_ref() {
             return Some(key.clone());
@@ -133,6 +129,19 @@ pub fn derive_display_state(enabled: bool, probe_status: &str) -> &'static str {
         "unknown" => "unknown",
         _ => "unknown",
     }
+}
+
+/// Document-only backend availability: `BackendAdmissionConfig`'s predicate
+/// evaluated with `measured_unhealthy = false`, since callers here only ever
+/// have a document read, never this runtime's live `BackendHealthMap` (used
+/// for #640 routing decisions). `BackendAdmissionConfig` stays the single
+/// owner of the `enabled`/`probe_status` comparison; this delegates to it
+/// rather than re-deriving the fields, for the handful of callers outside
+/// the `gents` crate (the codex shim's model list, `gents diagnose`) that
+/// aren't in-process admission and so can't consult the readiness
+/// projection either.
+pub fn document_configured_available(backend: &InferenceBackend) -> bool {
+    crate::admission::document_available_from_fields(backend.enabled, &backend.probe_status)
 }
 
 pub async fn lookup_backend(

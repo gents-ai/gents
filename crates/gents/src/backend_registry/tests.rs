@@ -59,7 +59,7 @@ fn inference_backend_from_value_requires_provider_kind() {
 }
 
 #[test]
-fn is_available_requires_enabled_and_healthy() {
+fn document_configured_available_requires_enabled_and_healthy() {
     let healthy = InferenceBackend {
         backend_id: "test".into(),
         name: "Test".into(),
@@ -74,19 +74,19 @@ fn is_available_requires_enabled_and_healthy() {
         models: Vec::new(),
         probe_status: "healthy".into(),
     };
-    assert!(healthy.is_available());
+    assert!(document_configured_available(&healthy));
 
     let disabled = InferenceBackend {
         enabled: false,
         ..healthy.clone()
     };
-    assert!(!disabled.is_available());
+    assert!(!document_configured_available(&disabled));
 
     let unhealthy = InferenceBackend {
         probe_status: "unhealthy".into(),
         ..healthy.clone()
     };
-    assert!(!unhealthy.is_available());
+    assert!(!document_configured_available(&unhealthy));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             BackendAdmissionConfig::from_backend(&backend).expect("valid backend config");
 
         assert_eq!(
-            backend.is_available(),
+            document_configured_available(&backend),
             case.expected_available,
             "{} registry availability drifted from Lean case",
             case.name
