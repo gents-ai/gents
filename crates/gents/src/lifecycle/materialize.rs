@@ -258,28 +258,24 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
             "runtime trigger requester provenance remains in signed trigger context"
         );
     }
+    let identity = RequestIdentity {
+        request_id: request_id.to_string(),
+        agent_did: agent_did.to_string(),
+        requester_did: None,
+        behavior_id: behavior_id.to_string(),
+        session_id: session_id.to_string(),
+        content: content.to_string(),
+        execution_origin,
+        created_at: now,
+    };
     let spec = RequestSpec {
-        identity: RequestIdentity {
-            request_id: request_id.to_string(),
-            agent_did: agent_did.to_string(),
-            requester_did: None,
-            behavior_id: behavior_id.to_string(),
-            session_id: session_id.to_string(),
-            content: content.to_string(),
-            execution_origin,
-            created_at: now,
-        },
-        admission,
         initial_lifecycle_state,
         trigger_lineage,
         trigger_doc_id: trigger_doc_id.map(str::to_owned),
         workspace: workspace_lineage.cloned(),
-        subagent: None,
-        retry: None,
-        sampling: None,
         metadata: (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string()),
         retry_key: retry_key.map(str::to_owned),
-        valid_until: None,
+        ..RequestSpec::new(identity, admission)
     };
     build_signed_request(spec, RequestSigner::RegisteredTarget).await
 }
@@ -299,6 +295,7 @@ pub(crate) struct RequestIdentity {
 
 /// Subagent parent linkage: the logical and physical identifiers of the
 /// tool call and request that spawned this child, plus its resulting depth.
+#[derive(Default)]
 pub(crate) struct SubagentLink {
     pub depth: u32,
     pub parent_request_id: String,
@@ -319,6 +316,7 @@ pub(crate) struct RetryLink {
 
 /// Sampling parameters and backend carried over from a prior request (used
 /// by background-wake redrive; unset for a fresh request).
+#[derive(Default)]
 pub(crate) struct SamplingCarryover {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -352,6 +350,34 @@ pub(crate) struct RequestSpec {
     pub metadata: Option<String>,
     pub retry_key: Option<String>,
     pub valid_until: Option<String>,
+}
+
+impl RequestSpec {
+    /// A `RequestSpec` with only identity and admission decided; every
+    /// other field takes the default a writer wants when it isn't a
+    /// trigger-lineage-carrying, workspace-bound, subagent-linked, retried,
+    /// or sampling-carried-over request. Callers set only what they need
+    /// via struct-update syntax:
+    /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(identity, admission) }`.
+    pub(crate) fn new(
+        identity: RequestIdentity,
+        admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
+    ) -> Self {
+        Self {
+            identity,
+            admission,
+            initial_lifecycle_state: RequestLifecycleState::Pending,
+            trigger_lineage: TriggerLineage::default(),
+            trigger_doc_id: None,
+            workspace: None,
+            subagent: None,
+            retry: None,
+            sampling: None,
+            metadata: None,
+            retry_key: None,
+            valid_until: None,
+        }
+    }
 }
 
 /// How the built `AgentRequestCreate` is signed: as the already-registered
@@ -629,36 +655,23 @@ impl RequestLifecycle {
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
+        let request_identity = RequestIdentity {
+            request_id: request_id.clone(),
+            agent_did: agent_did.clone(),
+            requester_did: None,
+            behavior_id: behavior_id.clone(),
+            session_id: session_id.clone(),
+            content: content.to_string(),
+            execution_origin,
+            created_at: created_at.clone(),
+        };
         let spec = RequestSpec {
-            identity: RequestIdentity {
-                request_id: request_id.clone(),
-                agent_did: agent_did.clone(),
-                requester_did: None,
-                behavior_id: behavior_id.clone(),
-                session_id: session_id.clone(),
-                content: content.to_string(),
-                execution_origin,
-                created_at: created_at.clone(),
-            },
-            admission,
-            initial_lifecycle_state: RequestLifecycleState::Pending,
             trigger_lineage,
-            trigger_doc_id: None,
-            workspace: None,
-            subagent: None,
-            retry: None,
             sampling: Some(SamplingCarryover {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
                 backend_id: (!backend_id.is_empty()).then(|| backend_id.clone()),
+                ..Default::default()
             }),
-            metadata: None,
-            retry_key: None,
-            valid_until: None,
+            ..RequestSpec::new(request_identity, admission)
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;

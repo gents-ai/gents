@@ -17,7 +17,6 @@ use crate::lifecycle::materialize::{
 };
 use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 use crate::session::execute_mutation_with_retry;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::IllegalToolCallTransition;
 
@@ -336,29 +335,26 @@ async fn create_subagent_request_inner(
             )
         }
     };
+    let identity = RequestIdentity {
+        request_id: request_id.clone(),
+        agent_did: agent_did.clone(),
+        requester_did: None,
+        behavior_id,
+        session_id: new_session_id,
+        content: prompt,
+        execution_origin: ExecutionOrigin::Interactive,
+        created_at: now,
+    };
     let spec = RequestSpec {
-        identity: RequestIdentity {
-            request_id: request_id.clone(),
-            agent_did: agent_did.clone(),
-            requester_did: None,
-            behavior_id,
-            session_id: new_session_id,
-            content: prompt,
-            execution_origin: ExecutionOrigin::Interactive,
-            created_at: now,
-        },
-        admission,
-        initial_lifecycle_state: RequestLifecycleState::Pending,
         trigger_lineage: TriggerLineage {
             trigger_id: Some(parent_tool_call_id.clone()),
             trigger_kind: Some("subagent".to_string()),
-            source_doc_id: None,
             correlation: runtime_context
                 .as_ref()
                 .and_then(|context| context.correlation.clone()),
             trigger_context: inherited_context_json,
+            ..Default::default()
         },
-        trigger_doc_id: None,
         workspace,
         subagent: Some(SubagentLink {
             depth: new_subagent_depth,
@@ -367,11 +363,9 @@ async fn create_subagent_request_inner(
             parent_tool_call_id: Some(parent_tool_call_id.clone()),
             parent_tool_call_doc_id: Some(parent_doc_ids.1.clone()),
         }),
-        retry: None,
-        sampling: None,
         metadata,
-        retry_key: None,
         valid_until: deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        ..RequestSpec::new(identity, admission)
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;

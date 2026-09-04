@@ -3,8 +3,7 @@ use super::*;
 use crate::lifecycle::materialize::{
     build_request, sign_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
 };
-use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
 pub(crate) async fn enqueue_goal_continuation(
     node: &EmbeddedNode,
@@ -51,27 +50,24 @@ pub(crate) async fn enqueue_goal_continuation(
             &parent.agent_did,
             &parent.request_id,
         );
+    let identity = RequestIdentity {
+        request_id: request_id.clone(),
+        agent_did: parent.agent_did.clone(),
+        requester_did: None,
+        behavior_id,
+        session_id: parent.session_id.clone(),
+        content: content.to_string(),
+        execution_origin: ExecutionOrigin::Scheduled,
+        created_at: now,
+    };
     let spec = RequestSpec {
-        identity: RequestIdentity {
-            request_id: request_id.clone(),
-            agent_did: parent.agent_did.clone(),
-            requester_did: None,
-            behavior_id,
-            session_id: parent.session_id.clone(),
-            content: content.to_string(),
-            execution_origin: ExecutionOrigin::Scheduled,
-            created_at: now,
-        },
-        admission,
-        initial_lifecycle_state: RequestLifecycleState::Pending,
         trigger_lineage: TriggerLineage {
             trigger_id: Some(goal_id.to_string()),
             trigger_kind: Some("goal".to_string()),
-            source_doc_id: None,
             correlation: parent.caused_by_correlation.clone(),
             trigger_context: parent.caused_by_trigger_context.clone(),
+            ..Default::default()
         },
-        trigger_doc_id: None,
         workspace: Some(WorkspaceLineage {
             workspace_id: parent.workspace_id.clone(),
             workspace_authority: parent.workspace_authority.clone(),
@@ -82,14 +78,11 @@ pub(crate) async fn enqueue_goal_continuation(
             depth: parent.subagent_depth,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
-            parent_tool_call_id: None,
-            parent_tool_call_doc_id: None,
+            ..Default::default()
         }),
-        retry: None,
-        sampling: None,
         metadata: Some(metadata),
         retry_key: Some(retry_key.clone()),
-        valid_until: None,
+        ..RequestSpec::new(identity, admission)
     };
     // Peek at the unsigned DTO before paying for a signature: the dedupe
     // lookup below only needs a fingerprint of the pre-signature fields.

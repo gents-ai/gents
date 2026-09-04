@@ -11,8 +11,7 @@ use crate::lifecycle::materialize::{
     build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
     SamplingCarryover, SubagentLink,
 };
-use crate::lifecycle::{ExecutionOrigin, TriggerLineage};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
+use crate::lifecycle::ExecutionOrigin;
 
 use super::queue::{parse_queue_hints, QueuePolicy, QueueSource};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
@@ -405,32 +404,24 @@ async fn redrive_mutation(
             &candidate.agent_did,
             &candidate.request_id,
         );
-    // Reused for both subagent_depth/parent linkage: a redrive successor is
-    // not a subagent, but it carries the same "linked to one parent request,
-    // at some depth" shape `SubagentLink` was built for.
+    // Not a subagent, but the same "one parent request, at some depth" shape.
     let parent_link = SubagentLink {
         depth: candidate.subagent_depth.unwrap_or_default(),
         parent_request_id: candidate.request_id.clone(),
         parent_request_doc_id: candidate.doc_id.clone(),
-        parent_tool_call_id: None,
-        parent_tool_call_doc_id: None,
+        ..Default::default()
+    };
+    let identity = RequestIdentity {
+        request_id: request_id.to_string(),
+        agent_did: candidate.agent_did.clone(),
+        requester_did: None,
+        behavior_id: candidate.behavior_id.clone(),
+        session_id: candidate.session_id.clone(),
+        content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
+        execution_origin: ExecutionOrigin::Scheduled,
+        created_at: now.clone(),
     };
     let spec = RequestSpec {
-        identity: RequestIdentity {
-            request_id: request_id.to_string(),
-            agent_did: candidate.agent_did.clone(),
-            requester_did: None,
-            behavior_id: candidate.behavior_id.clone(),
-            session_id: candidate.session_id.clone(),
-            content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
-            execution_origin: ExecutionOrigin::Scheduled,
-            created_at: now.clone(),
-        },
-        admission,
-        initial_lifecycle_state: RequestLifecycleState::Pending,
-        trigger_lineage: TriggerLineage::default(),
-        trigger_doc_id: None,
-        workspace: None,
         subagent: Some(parent_link),
         retry: Some(RetryLink {
             parent_request_id: candidate.request_id.clone(),
@@ -446,11 +437,8 @@ async fn redrive_mutation(
             seed: candidate.seed,
             max_tokens: candidate.max_tokens,
             max_total_tokens: candidate.max_total_tokens,
-            // `backend_id` is normally never persisted as `Some("")` (the
-            // only production writer that sets it, materialize.rs's
-            // `materialize_claimed_with_execution_binding`, guards the same
-            // way), but this is a durable read of whatever is on the failed
-            // row, so normalize defensively rather than assume.
+            // Durable read of a possibly-legacy row; normalize Some("")
+            // the same way materialize.rs's writer does.
             backend_id: candidate
                 .backend_id
                 .clone()
@@ -458,7 +446,7 @@ async fn redrive_mutation(
         }),
         metadata: candidate.metadata.clone(),
         retry_key: Some(retry_key.to_string()),
-        valid_until: None,
+        ..RequestSpec::new(identity, admission)
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
