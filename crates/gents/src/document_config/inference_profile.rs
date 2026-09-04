@@ -41,13 +41,11 @@ pub struct InferenceProfile {
 
 impl InferenceProfile {
     /// Validate this profile's bounds — the single owner every write path
-    /// (CLI desired state, self-config, `upsert_inference_profile`) calls.
-    /// Mirrors the historical `gents-cli` desired-state rules exactly so no
-    /// case is lost by the move (#1331).
-    /// Validate this profile's bounds. Reports every violated rule at once
-    /// (not just the first) — cheap here, and it means a `config apply`
-    /// user who broke two fields at once sees both in one round trip
-    /// instead of fixing them one at a time.
+    /// (CLI desired state, self-config, `profile set`,
+    /// `upsert_inference_profile`) calls. Mirrors the historical `gents-cli`
+    /// desired-state rules exactly so no case is lost by the move (#1331),
+    /// and reports every violated rule at once so a `config apply` user who
+    /// broke two fields sees both in one round trip.
     pub fn validate(&self) -> Result<()> {
         let profile_id = self.profile_id.trim();
         let mut violations: Vec<String> = Vec::new();
