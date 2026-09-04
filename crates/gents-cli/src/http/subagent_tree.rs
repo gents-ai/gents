@@ -78,8 +78,7 @@ pub(crate) async fn subagent_tree_handler(
         }
     };
     let include_terminal = query.include_terminal.unwrap_or(false);
-    let max_depth =
-        effective_subagent_tree_max_depth(query.max_depth.map(|value| value as u32));
+    let max_depth = effective_subagent_tree_max_depth(query.max_depth.map(|value| value as u32));
 
     match load_subagent_tree_snapshot(
         &state.graphql,
@@ -115,8 +114,7 @@ pub(crate) async fn load_subagent_tree_snapshot(
         label: None,
         access: ConfigAccess::Graphql(graphql.to_string()),
     }];
-    let tree = build_subagent_tree(&accesses, root_request_id, include_terminal, max_depth)
-        .await?;
+    let tree = build_subagent_tree(&accesses, root_request_id, include_terminal, max_depth).await?;
     if !tree.partial_errors.is_empty() {
         anyhow::bail!(tree.partial_errors.join("; "));
     }

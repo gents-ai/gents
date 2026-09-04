@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use gents::tool_call_lifecycle::deadline_at_is_expired;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -97,7 +98,7 @@ pub(crate) fn compute_request_liveness_summary(
             let running_age_ms = started_at
                 .map(|started| millis_between(started, now).max(0))
                 .unwrap_or(0);
-            let deadline_expired = deadline_at.is_some_and(|deadline| now > deadline);
+            let deadline_expired = deadline_at_is_expired(now, deadline_at);
             ActiveToolCall {
                 request_id: row.request_id.clone(),
                 tool_call_id: row.tool_call_id.clone(),
@@ -122,7 +123,7 @@ pub(crate) fn compute_request_liveness_summary(
         active_request_ids.push(row.request_id.clone());
         let claimed_at = parse_optional_rfc3339(row.claimed_at.as_deref());
         let deadline = parse_optional_rfc3339(row.deadline.as_deref());
-        let deadline_expired = deadline.is_some_and(|deadline| now > deadline);
+        let deadline_expired = deadline_at_is_expired(now, deadline);
         if deadline_expired {
             expired_processing_count += 1;
         }

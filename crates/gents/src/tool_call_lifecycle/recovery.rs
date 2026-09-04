@@ -630,6 +630,44 @@ mod tests {
         assert_eq!(RecoveryOutcome::Cancelled.failure_class(), None);
     }
 
+    /// The one deadline-expiry predicate (#1334), shared by tool-call
+    /// recovery here and by `gents-cli`'s fleet-slot and liveness
+    /// snapshots. Past deadlines (including exactly `now`) are expired;
+    /// future, missing, and malformed deadlines are documented as not
+    /// expired.
+    #[test]
+    fn deadline_is_expired_covers_past_future_missing_and_malformed() {
+        let now = DateTime::parse_from_rfc3339("2026-09-03T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let past = "2026-09-03T11:59:59Z";
+        let exactly_now = "2026-09-03T12:00:00Z";
+        let future = "2026-09-03T12:00:01Z";
+
+        assert!(deadline_is_expired(now, Some(past)), "past deadline");
+        assert!(
+            deadline_is_expired(now, Some(exactly_now)),
+            "a deadline reached exactly now has expired"
+        );
+        assert!(!deadline_is_expired(now, Some(future)), "future deadline");
+        assert!(!deadline_is_expired(now, None), "missing deadline");
+        assert!(
+            !deadline_is_expired(now, Some("not-a-timestamp")),
+            "malformed deadline"
+        );
+        assert!(
+            !deadline_is_expired(now, Some("   ")),
+            "blank deadline is documented as missing, not malformed"
+        );
+
+        // The typed variant agrees with the string-form convenience.
+        assert_eq!(
+            deadline_at_is_expired(now, parse_datetime(Some(past))),
+            deadline_is_expired(now, Some(past)),
+        );
+        assert!(!deadline_at_is_expired(now, None));
+    }
+
     #[test]
     fn background_completion_reason_comes_from_cursor_not_tool_text() {
         let row = TerminalBackgroundToolRow {
@@ -1686,7 +1724,7 @@ async fn terminalize_expired_child_with_row(
     let Some(deadline_at) = parse_datetime(child.deadline.as_deref()) else {
         return Ok(false);
     };
-    if Utc::now() < deadline_at {
+    if !deadline_at_is_expired(Utc::now(), Some(deadline_at)) {
         return Ok(false);
     }
 
@@ -2123,6 +2161,21 @@ fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|datetime| datetime.with_timezone(&Utc))
 }
 
+/// Whether an already-parsed deadline has been reached or passed as of
+/// `now`. A missing deadline never expires (#1334 — the one deadline-expiry
+/// predicate; also used by `gents-cli`'s fleet-slot and liveness snapshots).
+pub fn deadline_at_is_expired(now: DateTime<Utc>, deadline_at: Option<DateTime<Utc>>) -> bool {
+    deadline_at.is_some_and(|deadline| now >= deadline)
+}
+
+/// String-form convenience over [`deadline_at_is_expired`]: parses an
+/// RFC3339 `deadline_at` and reports whether it has expired as of `now`. A
+/// missing or malformed deadline is documented as *not* expired — there is
+/// no evidence to expire the row on.
+pub fn deadline_is_expired(now: DateTime<Utc>, deadline_at: Option<&str>) -> bool {
+    deadline_at_is_expired(now, parse_datetime(deadline_at))
+}
+
 /// Shared startup/periodic classifier. Branch order is Lean-fenced by
 /// `restartDisposition` and `orphanedBackgroundToolCause`.
 fn classify_running_tool_recovery(
@@ -2130,11 +2183,9 @@ fn classify_running_tool_recovery(
     parent: Option<&ParentRequestRow>,
     now: DateTime<Utc>,
 ) -> Option<RecoveryOutcome> {
-    if parse_datetime(row.deadline_at.as_deref()).is_some_and(|deadline| now >= deadline) {
+    if deadline_is_expired(now, row.deadline_at.as_deref()) {
         Some(RecoveryOutcome::TimedOut)
-    } else if parse_datetime(row.unclaimed_deadline_at.as_deref())
-        .is_some_and(|deadline| now >= deadline)
-    {
+    } else if deadline_is_expired(now, row.unclaimed_deadline_at.as_deref()) {
         Some(RecoveryOutcome::UnclaimedCrossDeploymentSpawn)
     } else if is_background_tool_row(row)
         && parent.is_some_and(|parent| !request_is_terminal(parent))

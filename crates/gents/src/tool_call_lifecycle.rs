@@ -272,8 +272,9 @@ pub(crate) mod subagent_workspace;
 mod transition;
 
 pub use recovery::{
-    BackgroundCompletionSideEffectReport, OrphanedBackgroundToolReport, SubagentLivenessReport,
-    TerminalParentToolReport, ToolCallRecoveryReport,
+    deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
+    OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
+    ToolCallRecoveryReport,
 };
 pub use runtime::ToolOutcome;
 pub use subagent_request::{

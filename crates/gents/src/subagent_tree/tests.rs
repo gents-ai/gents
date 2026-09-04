@@ -14,7 +14,10 @@ struct MockGraphqlState {
     responses: Arc<Mutex<Vec<Value>>>,
 }
 
-async fn mock_graphql(State(state): State<MockGraphqlState>, Json(_body): Json<Value>) -> Json<Value> {
+async fn mock_graphql(
+    State(state): State<MockGraphqlState>,
+    Json(_body): Json<Value>,
+) -> Json<Value> {
     let mut responses = state.responses.lock().unwrap();
     let response = if responses.len() == 1 {
         responses[0].clone()
@@ -257,7 +260,10 @@ async fn tree_walks_cross_deployment_bridge_and_carries_metadata() -> anyhow::Re
         .find(|node| node.request_id == "req-child")
         .expect("child node");
     assert_eq!(child.agent_did.as_deref(), Some("deployment-b"));
-    assert_eq!(child.caused_by_parent_request_id.as_deref(), Some("req-root"));
+    assert_eq!(
+        child.caused_by_parent_request_id.as_deref(),
+        Some("req-root")
+    );
     assert_eq!(
         child.caused_by_parent_tool_call_id.as_deref(),
         Some("tc-bridge")
@@ -561,13 +567,8 @@ async fn build_local_subagent_tree_resolves_the_root_from_the_embedded_node() ->
     )
     .await;
 
-    let tree = build_local_subagent_tree(
-        node,
-        "req-root",
-        true,
-        DEFAULT_SUBAGENT_TREE_MAX_DEPTH,
-    )
-    .await?;
+    let tree =
+        build_local_subagent_tree(node, "req-root", true, DEFAULT_SUBAGENT_TREE_MAX_DEPTH).await?;
 
     assert_eq!(tree.root_request_id, "req-root");
     assert!(tree.partial_errors.is_empty());

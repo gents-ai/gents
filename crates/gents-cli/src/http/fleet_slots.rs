@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents::tool_call_lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
 use gents_protocol::row::{
     project_behavior_readiness_summary, AgentBehaviorReadinessRow, BehaviorReadinessState,
@@ -449,15 +450,6 @@ fn apply_call_state(call_state: &str, counts: &mut SlotCounts) {
     } else if call_state == "queued" {
         counts.queued += 1;
     }
-}
-
-fn deadline_is_expired(now: DateTime<Utc>, deadline: Option<&str>) -> bool {
-    let Some(deadline) = deadline.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    DateTime::parse_from_rfc3339(deadline)
-        .map(|deadline| deadline.with_timezone(&Utc) < now)
-        .unwrap_or(false)
 }
 
 fn clean_optional_string(value: Option<&str>) -> String {
