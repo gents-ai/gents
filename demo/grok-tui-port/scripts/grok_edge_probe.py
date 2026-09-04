@@ -2567,12 +2567,7 @@ def probe_subagent(
             f"child AgentRequest behavior_id must be port-live-worker; got "
             f"{child_row.get('behavior_id')!r}",
         )
-        spawn_calls = [
-            row
-            for row in documents.get("spawn_tool_calls", [])
-            if row.get("tool_name") in ("spawn_subagent", "task", "Task")
-            and row.get("child_request_id") == child_row.get("request_id")
-        ]
+        spawn_calls = matching_spawn_calls(documents, child_row)
         require(
             spawn_calls,
             f"no durable spawn AgentToolCall links parent request {parent_request_id!r} to "
@@ -2593,32 +2588,162 @@ def probe_subagent(
     return result
 
 
-def query_subagent_documents(endpoint: str, session_id: str) -> dict[str, Any]:
+def matching_spawn_calls(
+    documents: dict[str, Any], child_row: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return spawn rows proving the child's exact durable parent edge."""
+    return [
+        row
+        for row in documents.get("spawn_tool_calls", [])
+        if isinstance(row, dict)
+        and row.get("tool_name") in ("spawn_subagent", "task", "Task")
+        and row.get("request_id") == child_row.get("caused_by_parent_request_id")
+        and row.get("child_request_id") == child_row.get("request_id")
+    ]
+
+
+def query_subagent_documents(
+    endpoint: str,
+    session_id: str,
+    query_fn: Callable[..., dict[str, Any]] = graphql_query,
+) -> dict[str, Any]:
     """Query the durable child/spawn rows correlated with one probe session."""
     escaped = graphql_escape(session_id)
     query = f"""{{
-      ChildRequests: AgentRequest(filter: {{caused_by_parent_request_id: {{_ne: null}}}}) {{
-        request_id session_id behavior_id lifecycle_state caused_by_parent_request_id
-      }}
-      SpawnToolCalls: AgentToolCall(filter: {{session_id: {{_eq: \"{escaped}\"}}}}, order: {{message_sequence: ASC}}) {{
-        request_id tool_call_id tool_name child_request_id args
+      SpawnToolCalls: AgentToolCall(filter: {{session_id: {{_eq: \"{escaped}\"}}}}, order: {{message_sequence: ASC}}, limit: 65) {{
+        request_id tool_call_id tool_name child_request_id
       }}
     }}"""
-    data = graphql_query(endpoint, query, timeout=10)
-    # Scope the child rows to children of THIS session's requests: the
-    # spawn tool calls of this session name the child request ids we accept.
+    data = query_fn(endpoint, query, timeout=10)
     spawn_rows = data.get("SpawnToolCalls", [])
-    child_ids = {
-        row.get("child_request_id")
-        for row in spawn_rows
-        if isinstance(row.get("child_request_id"), str) and row["child_request_id"]
-    }
-    children = [
-        row
-        for row in data.get("ChildRequests", [])
-        if row.get("request_id") in child_ids
-    ]
+    require(isinstance(spawn_rows, list), "SpawnToolCalls query did not return a list")
+    # Fetch one sentinel row beyond the accepted bound so exactly 64 calls is
+    # distinguishable from a silently truncated result.
+    require(len(spawn_rows) <= 64, "probe session exceeded the bounded tool-call query")
+    child_ids = sorted(
+        {
+            row.get("child_request_id")
+            for row in spawn_rows
+            if isinstance(row, dict)
+            and isinstance(row.get("child_request_id"), str)
+            and row["child_request_id"]
+        }
+    )
+    if not child_ids:
+        return {"child_requests": [], "spawn_tool_calls": spawn_rows}
+
+    child_literals = ", ".join(f'"{graphql_escape(child_id)}"' for child_id in child_ids)
+    child_data = query_fn(
+        endpoint,
+        f'''{{ AgentRequest(filter: {{request_id: {{_in: [{child_literals}]}}}}, limit: 65) {{
+          request_id session_id behavior_id lifecycle_state caused_by_parent_request_id
+        }} }}''',
+        timeout=10,
+    )
+    child_rows = child_data.get("AgentRequest")
+    require(isinstance(child_rows, list), "AgentRequest query did not return a list")
+    require(len(child_rows) <= 64, "child AgentRequest query exceeded its bounded result set")
+    children = [row for row in child_rows if isinstance(row, dict)]
+    returned_ids = [row.get("request_id") for row in children]
+    require(
+        all(isinstance(request_id, str) and request_id in child_ids for request_id in returned_ids),
+        f"child AgentRequest query returned an unrequested id: {returned_ids}",
+    )
+    require(len(set(returned_ids)) == len(returned_ids), "duplicate child AgentRequest rows")
+    require(set(returned_ids) == set(child_ids), "child AgentRequest query omitted a spawn child")
     return {"child_requests": children, "spawn_tool_calls": spawn_rows}
+
+
+def self_test_subagent_document_query() -> dict[str, int]:
+    """Exercise the bounded query and exact durable-parent correlation."""
+    accepted = 0
+    rejected = 0
+
+    def expect_reject(run: Callable[[], Any]) -> None:
+        nonlocal rejected
+        try:
+            run()
+        except AssertionError:
+            rejected += 1
+        else:
+            raise AssertionError("invalid subagent document query fixture was accepted")
+
+    def spawn_row(index: int, child_id: str | None = None) -> dict[str, Any]:
+        return {
+            "request_id": f"parent-{index}",
+            "tool_call_id": f"tool-{index}",
+            "tool_name": "task",
+            "child_request_id": child_id or f"child-{index}",
+        }
+
+    def child_row(index: int, request_id: str | None = None) -> dict[str, Any]:
+        return {
+            "request_id": request_id or f"child-{index}",
+            "session_id": f"child-session-{index}",
+            "behavior_id": "port-live-worker",
+            "lifecycle_state": "completed",
+            "caused_by_parent_request_id": f"parent-{index}",
+        }
+
+    def run_fixture(
+        spawn_rows: list[dict[str, Any]],
+        child_rows: list[dict[str, Any]],
+        session_id: str = "session",
+    ) -> tuple[dict[str, Any], list[str]]:
+        calls: list[str] = []
+
+        def query(_endpoint: str, document: str, *, timeout: float) -> dict[str, Any]:
+            require(timeout == 10, "subagent query timeout drifted")
+            calls.append(document)
+            if "SpawnToolCalls" in document:
+                require(graphql_escape(session_id) in document, "session id was not escaped")
+                return {"SpawnToolCalls": spawn_rows}
+            require("_in:" in document, "child requests must use one batched exact-id query")
+            return {"AgentRequest": child_rows}
+
+        return query_subagent_documents("fixture", session_id, query), calls
+
+    escaped_child = 'child-"-\\'
+    escaped_result, escaped_calls = run_fixture(
+        [spawn_row(1, escaped_child), dict(spawn_row(1, escaped_child), tool_call_id="tool-2")],
+        [child_row(1, escaped_child)],
+        'session-"-\\',
+    )
+    require(len(escaped_calls) == 2, "deduplicated children must use one batched query")
+    require(graphql_escape(escaped_child) in escaped_calls[1], "child id was not escaped")
+    require(len(escaped_result["child_requests"]) == 1, "deduplicated child lookup drifted")
+    accepted += 1
+
+    rows_64 = [spawn_row(index) for index in range(64)]
+    result_64, _ = run_fixture(rows_64, [child_row(index) for index in range(64)])
+    require(len(result_64["child_requests"]) == 64, "64-child boundary must be accepted")
+    accepted += 1
+
+    expect_reject(
+        lambda: query_subagent_documents(
+            "fixture",
+            "session",
+            lambda _endpoint, _query, **_kwargs: {"SpawnToolCalls": rows_64 + [spawn_row(64)]},
+        )
+    )
+    expect_reject(lambda: run_fixture([spawn_row(0)], [child_row(0), child_row(0)]))
+    expect_reject(
+        lambda: run_fixture([spawn_row(0)], [child_row(0, "unrequested-child")])
+    )
+
+    child = child_row(0)
+    require(
+        not matching_spawn_calls(
+            {"spawn_tool_calls": [dict(spawn_row(0), request_id="wrong-parent")]}, child
+        ),
+        "a spawn from a different parent request must not prove the child edge",
+    )
+    require(
+        matching_spawn_calls({"spawn_tool_calls": [spawn_row(0)]}, child),
+        "the exact durable parent/tool/child edge must be accepted",
+    )
+    accepted += 1
+    return {"accepted": accepted, "rejected": rejected}
 
 
 def query_documents(endpoint: str, session_id: str) -> dict[str, Any]:
@@ -2701,6 +2826,7 @@ def main() -> int:
         print(json.dumps({
             "edge": "offline",
             "validator_self_test": self_test_subagent_lifecycle_validators(),
+            "subagent_document_query_self_test": self_test_subagent_document_query(),
         }, indent=2, sort_keys=True))
         return 0
     require(args.socket, "--socket is required unless --edge offline is selected")
