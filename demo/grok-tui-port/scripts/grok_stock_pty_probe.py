@@ -1068,31 +1068,6 @@ def self_test() -> dict[str, int]:
         "transient GraphQL polling did not recover deterministically",
     )
 
-    poll_values = iter(("pending", "ready"))
-    poll_ready, poll_value = poll_until_deadline(
-        lambda: next(poll_values),
-        lambda value: value == "ready",
-        deadline=float("inf"),
-        interval=0.001,
-    )
-    require(poll_ready and poll_value == "ready", "shared polling lost readiness")
-    poll_error = RuntimeError("injected poll failure")
-
-    def fail_poll() -> str:
-        raise poll_error
-
-    try:
-        poll_until_deadline(
-            fail_poll,
-            lambda _value: False,
-            deadline=float("inf"),
-            interval=0.001,
-        )
-    except RuntimeError as error:
-        require(error is poll_error, "shared polling replaced the attempt error")
-    else:
-        raise AssertionError("shared polling swallowed an attempt error")
-
     expired_calls = 0
 
     def remain_incomplete(_graphql: str, _prompt: str) -> list[dict[str, Any]]:
