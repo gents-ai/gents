@@ -161,6 +161,19 @@ async fn upsert_helpers_roundtrip_behavior_and_profile() {
     let agent_did = "did:test:roundtrip";
     let behavior_id = default_behavior_id_for_agent(agent_did);
 
+    let backend = db
+        .node
+        .execute(
+            r#"mutation { create_InferenceBackend(input: {
+                backend_id: "backend-local", name: "Local",
+                provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:1/v1",
+                max_concurrent: 1, max_queue_depth: 1, enabled: true,
+                models: ["gpt-local"]
+            }) { _docID } }"#,
+        )
+        .await;
+    assert!(!backend.has_errors(), "{:?}", backend.errors);
+
     upsert_inference_profile(
         db.node.as_ref(),
         &InferenceProfile {

@@ -131,9 +131,7 @@ pub(super) fn validate_backends(
         // checks each behavior's model against its backend's advertised list
         // in `validate_behaviors`, so the no-lockout conjunct never fires
         // here.
-        if let Err(error) = to_document_backend(backend).validate(None) {
-            errors.push(error.to_string());
-        }
+        errors.extend(to_document_backend(backend).validation_violations(None));
     }
     (backend_ids, backend_models)
 }
@@ -160,12 +158,10 @@ pub(super) fn validate_profiles(
             ));
         }
 
-        // Document rules (empty profile_id, timeout/deadline bounds and
-        // relationship, seed, reasoning_effort vocabulary) are owned by
+        // Document rules (timeout/deadline bounds and relationship, seed,
+        // reasoning_effort vocabulary) are owned by
         // `InferenceProfile::validate`.
-        if let Err(error) = to_document_profile(profile).validate() {
-            errors.push(error.to_string());
-        }
+        errors.extend(to_document_profile(profile).validation_violations());
     }
     profile_ids
 }
@@ -220,9 +216,9 @@ pub(super) fn validate_behaviors(
 ) -> BTreeSet<String> {
     // Document rule: reference existence (backend, model advertised by the
     // backend, tool selection, profile, skill refs/excludes) is owned by
-    // `AgentBehavior::validate_references`. `backend_ids` names every backend
-    // that validated cleanly in `validate_backends`, so this snapshot only
-    // needs the id -> models map for the ones actually referenceable.
+    // `AgentBehavior::validate_references`. `backend_ids` names every
+    // non-empty manifest backend id; document-shape violations for those
+    // backends are reported independently by `validate_backends`.
     let refs = ConfigReferences {
         backends: backend_ids
             .iter()
@@ -261,9 +257,10 @@ pub(super) fn validate_behaviors(
             ));
         }
 
-        if let Err(error) = to_document_behavior(behavior).validate_references(&refs) {
-            errors.push(error.to_string());
-        }
+        // Each violation becomes its own error-list entry (not one joined
+        // string) — `reference_violations` is the Vec-returning variant of
+        // `AgentBehavior::validate_references` for exactly this reason.
+        errors.extend(to_document_behavior(behavior).reference_violations(&refs));
 
         if let Some(system_prompt) = behavior.system_prompt.as_deref() {
             validate_behavior_system_template(&behavior.behavior_id, system_prompt, errors);

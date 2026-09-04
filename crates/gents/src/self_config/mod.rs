@@ -157,13 +157,11 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
 fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let behavior_id = core.behavior_id().to_string();
     let agent_did = core.agent_did().to_string();
-    let node = core.node().clone();
     let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
     request.resolve_unique = Box::new(move |_| Ok(behavior_id.clone()));
     request.validate = Box::new(move |txn, _anchor, _stored, merged| {
         let merged = merged.clone();
         let agent_did = agent_did.clone();
-        let node = node.clone();
         Box::pin(async move {
             let behavior: crate::AgentBehaviorDocument = decode_merged("AgentBehavior", &merged)?;
 
@@ -204,7 +202,8 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
             // reference field untouched (e.g. skill_refs when only
             // system_prompt changes), so this needs the full current
             // reference snapshot, not just the fields the patch touches.
-            let refs = crate::document_config::ConfigReferences::load(&node, &agent_did).await?;
+            let refs =
+                crate::document_config::ConfigReferences::load_in_txn(txn, &agent_did).await?;
             behavior.validate_references(&refs)?;
             Ok(())
         })
@@ -282,14 +281,16 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
             .ref_id("backend_id")
             .ok_or_else(|| anyhow!("behavior has no backend_id; bind one via configure_behavior"))
     });
-    request.validate = Box::new(|_txn, _anchor, _stored, merged| {
+    request.validate = Box::new(|txn, _anchor, _stored, merged| {
         let merged = merged.clone();
         Box::pin(async move {
             let backend = crate::InferenceBackend::from_value(&Value::Object(merged))?;
+            let stored_api_key_is_present =
+                backend_has_stored_api_key(txn, &backend.backend_id).await?;
             // `current_model=None`: the no-lockout conjunct is opt-in policy
             // (`self_config_no_lockout`), enforced below in `guard` only when
             // the operator has turned it on.
-            backend.validate(None)
+            backend.validate_with_api_key_presence(None, stored_api_key_is_present)
         })
     });
     request.guard = Box::new(|anchor, merged| {
@@ -311,6 +312,32 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
         backend.validate(current_model)
     });
     request
+}
+
+async fn backend_has_stored_api_key(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    backend_id: &str,
+) -> Result<bool> {
+    let backend_id = crate::graphql::escape_graphql_string(backend_id);
+    let query = format!(
+        r#"{{
+            InferenceBackend(
+                filter: {{
+                    _and: [
+                        {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                        {{ api_key: {{ _ne: "" }} }}
+                    ]
+                }},
+                limit: 1
+            ) {{ backend_id }}
+        }}"#
+    );
+    let response = txn.execute(&query).await?;
+    Ok(response
+        .get("data")
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()))
 }
 
 fn mcp_service_request(service_id: String, patch: SelfConfigPatch) -> ApplyRequest<'static> {

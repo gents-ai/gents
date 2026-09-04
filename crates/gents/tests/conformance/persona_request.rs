@@ -95,6 +95,34 @@ async fn build_node(tempdir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
     ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas register");
+    let response = node
+        .execute(
+            r#"mutation {
+                create_InferenceBackend(input: {
+                    backend_id: "openai"
+                    name: "OpenAI"
+                    provider_kind: "OpenAiCompatible"
+                    max_concurrent: 1
+                    max_queue_depth: 1
+                    enabled: true
+                    models: ["gpt-5"]
+                }) { _docID }
+                create_InferenceProfile(input: {
+                    profile_id: "profile-1"
+                    display_name: "Profile 1"
+                }) { _docID }
+                create_ToolSelection(input: {
+                    selection_id: "sel-disable"
+                    agent_did: "did:key:disable-agent"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "persona validation references seed: {:?}",
+        response.errors
+    );
     Arc::new(node)
 }
 

@@ -7,7 +7,7 @@ use super::serde_helpers;
 use crate::config_client::mint_recreate_identity_timestamp;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::document_config::SubagentTarget;
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::tool_surface::TOOL_POLICY_V1;
 use crate::toolset::{
@@ -706,30 +706,37 @@ impl ToolSelectionDocument {
         preset
     }
 
-    pub fn validate(&self) -> Result<()> {
+    pub fn validation_violations(&self) -> Vec<String> {
+        let mut violations = Vec::new();
+
         if let Some(targets) = &self.subagent_targets {
             for (i, target) in targets.iter().enumerate() {
                 if target.is_empty() {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "subagent_targets[{}] is empty; each entry must be a valid SubagentTarget JSON object",
                         i
                     ));
+                    continue;
                 }
                 // Every non-empty entry must be parseable as a SubagentTarget JSON
                 // object AND pass structural validation (all fields non-empty).
                 // Bare behavior-id strings are not valid — the runtime silently
                 // drops them, which entrenches a silent misconfiguration. Reject
                 // them here with a clear diagnostic.
-                let parsed = SubagentTarget::parse(target).map_err(|e| {
-                    anyhow::anyhow!(
-                        "subagent_targets[{i}] is not a valid SubagentTarget JSON object \
-                         (got {target:?}): {e}; \
+                let parsed = match SubagentTarget::parse(target) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        violations.push(format!(
+                            "subagent_targets[{i}] is not a valid SubagentTarget JSON object \
+                         (got {target:?}): {error}; \
                          use subagent_target_entry(name, agent_did, behavior_id, description) \
                          to build a valid entry"
-                    )
-                })?;
+                        ));
+                        continue;
+                    }
+                };
                 if !parsed.is_structurally_valid() {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "subagent_targets[{i}] parsed as SubagentTarget but is not structurally \
                          valid (name, agent_did, and behavior_id must all be non-empty): {target:?}"
                     ));
@@ -739,7 +746,7 @@ impl ToolSelectionDocument {
         if let Some(tool_names) = &self.backgroundable_tool_names {
             for (i, tool_name) in tool_names.iter().enumerate() {
                 if tool_name.is_empty() {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "backgroundable_tool_names[{}] is empty; tool names must be non-empty strings",
                         i
                     ));
@@ -748,29 +755,31 @@ impl ToolSelectionDocument {
         }
         if let Some(service_ids) = &self.required_mcp_service_ids {
             if !service_ids.is_empty() && !self.enable_meta_tools.unwrap_or(false) {
-                anyhow::bail!(
+                violations.push(
                     "required_mcp_service_ids needs enable_meta_tools=true so the required services are callable"
+                        .to_string(),
                 );
             }
             let allowed = self.allowed_mcp_service_ids.as_deref().unwrap_or_default();
             for (i, service_id) in service_ids.iter().enumerate() {
                 let service_id = service_id.trim();
                 if service_id.is_empty() {
-                    anyhow::bail!(
+                    violations.push(format!(
                         "required_mcp_service_ids[{i}] is empty; service ids must be non-empty strings"
-                    );
+                    ));
+                    continue;
                 }
                 if !allowed.iter().any(|allowed| allowed.trim() == service_id) {
-                    anyhow::bail!(
+                    violations.push(format!(
                         "required MCP service {service_id:?} is not permitted by allowed_mcp_service_ids"
-                    );
+                    ));
                 }
             }
         }
         if let Some(tool_names) = &self.approval_required_tools {
             for (i, tool_name) in tool_names.iter().enumerate() {
                 if tool_name.is_empty() {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "approval_required_tools[{}] is empty; tool names must be non-empty strings",
                         i
                     ));
@@ -781,7 +790,7 @@ impl ToolSelectionDocument {
             for (i, category) in categories.iter().enumerate() {
                 if !crate::config_client::patch::SELF_CONFIG_CATEGORIES.contains(&category.as_str())
                 {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "self_config_categories[{i}] is {category:?}; valid categories: {}",
                         crate::config_client::patch::SELF_CONFIG_CATEGORIES.join(", ")
                     ));
@@ -798,25 +807,37 @@ impl ToolSelectionDocument {
                 "foreground" => {}
                 "background" if self.subagent_background_enabled.unwrap_or(false) => {}
                 "background" => {
-                    return Err(anyhow::anyhow!(
+                    violations.push(
                         "subagent_default_await_mode cannot be background unless subagent_background_enabled is true"
-                    ));
+                            .to_string(),
+                    );
                 }
                 other => {
-                    return Err(anyhow::anyhow!(
+                    violations.push(format!(
                         "subagent_default_await_mode must be foreground or background, got {other:?}"
                     ));
                 }
             }
         }
         if let Some(decls) = &self.write_tools {
-            validate_write_tool_declarations(
+            if let Err(error) = validate_write_tool_declarations(
                 decls,
                 self.cli_tool_names.as_deref().unwrap_or_default(),
                 &[],
-            )?;
+            ) {
+                violations.push(error.to_string());
+            }
         }
-        Ok(())
+        violations
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let violations = self.validation_violations();
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(violations.join("; "))
+        }
     }
 }
 
@@ -1108,6 +1129,22 @@ pub async fn upsert_tool_selection(
     node: &EmbeddedNode,
     selection: &ToolSelectionDocument,
 ) -> Result<()> {
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    let validation = async {
+        crate::config_client::effective_tool_selection(
+            &txn,
+            selection,
+            &[],
+            &["file_tool_root", "subagent_default_await_mode"],
+        )
+        .await?
+        .validate()
+    }
+    .await;
+    if let Err(error) = validation {
+        let _ = txn.discard().await;
+        return Err(error);
+    }
     let escaped_selection_id = escape_graphql_string(&selection.selection_id);
     let escaped_agent_did = escape_graphql_string(&selection.agent_did);
 
@@ -1201,10 +1238,10 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
-        graphql_fields::graphql_string_field(
+        Some(graphql_fields::graphql_nullable_string_field(
             "subagent_default_await_mode",
             selection.subagent_default_await_mode.as_deref(),
-        ),
+        )),
         graphql_fields::graphql_optional_bool_field(
             "subagent_allow_cross_deployment",
             selection.subagent_allow_cross_deployment,
@@ -1357,10 +1394,10 @@ pub async fn upsert_tool_selection(
             "subagent_background_enabled",
             selection.subagent_background_enabled,
         ),
-        graphql_fields::graphql_string_field(
+        Some(graphql_fields::graphql_nullable_string_field(
             "subagent_default_await_mode",
             selection.subagent_default_await_mode.as_deref(),
-        ),
+        )),
         graphql_fields::graphql_optional_bool_field(
             "subagent_allow_cross_deployment",
             selection.subagent_allow_cross_deployment,
@@ -1432,6 +1469,11 @@ pub async fn upsert_tool_selection(
         }}"#
     );
 
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert ToolSelection").await?;
-    Ok(())
+    match txn.execute(&mutation).await {
+        Ok(_) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
 }

@@ -8,8 +8,8 @@ use gents::graphql::escape_graphql_string;
 use gents::{
     ensure_agent_principal, ensure_runtime_schemas, upsert_agent_behavior,
     upsert_inference_profile, upsert_tool_selection, AgentBehaviorDocument, AgentIdentity,
-    DocumentRuntimeOptions, Gents, InferenceProfile, KeyIdentity, McpPool, ToolCeiling,
-    ToolSelectionDocument, DEFAULT_MAX_TURNS,
+    BackendProviderKind, DocumentRuntimeOptions, Gents, InferenceBackend, InferenceProfile,
+    KeyIdentity, McpPool, ToolCeiling, ToolSelectionDocument, DEFAULT_MAX_TURNS,
 };
 use tokio::sync::watch;
 
@@ -215,6 +215,46 @@ async fn seed_demo_documents(
 }
 
 async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &str) -> Result<()> {
+    let txn = gents::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    let existing = match gents::config_client::load_inference_backend_in_txn(&txn, backend_id).await
+    {
+        Ok(existing) => existing,
+        Err(error) => {
+            let _ = txn.discard().await;
+            return Err(error);
+        }
+    };
+    let candidate = match existing {
+        Some(mut existing) => {
+            // The update clause below deliberately preserves provider,
+            // credential, queue, and model fields.
+            existing.name = backend_id.to_string();
+            existing.endpoint = endpoint.to_string();
+            existing.max_concurrent = 2;
+            existing.enabled = true;
+            existing.probe_status = "healthy".to_string();
+            existing
+        }
+        None => InferenceBackend {
+            backend_id: backend_id.to_string(),
+            name: backend_id.to_string(),
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: None,
+            endpoint: endpoint.to_string(),
+            api_key: None,
+            api_key_env_var: None,
+            max_concurrent: 2,
+            max_queue_depth: 100,
+            enabled: true,
+            models: vec!["default".to_string()],
+            probe_status: "healthy".to_string(),
+        },
+    };
+    if let Err(error) = candidate.validate(None) {
+        let _ = txn.discard().await;
+        return Err(error);
+    }
+
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
@@ -222,8 +262,10 @@ async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &s
                 add: {{
                     backend_id: "{backend_id}",
                     name: "{backend_id}",
+                    provider_kind: "OpenAiCompatible",
                     endpoint: "{endpoint}",
                     max_concurrent: 2,
+                    max_queue_depth: 100,
                     enabled: true,
                     models: ["default"],
                     probe_status: "healthy"
@@ -240,9 +282,11 @@ async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &s
         backend_id = escape_graphql_string(backend_id),
         endpoint = escape_graphql_string(endpoint),
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!("upsert demo backend failed: {:?}", response.errors);
+    match txn.execute(&mutation).await {
+        Ok(_) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
     }
-    Ok(())
 }

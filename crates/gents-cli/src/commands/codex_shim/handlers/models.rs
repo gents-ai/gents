@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gents::{
     backend_registry::list_enabled_backends, list_agent_behaviors, load_agent_behavior,
-    AgentBehaviorDocument, ConfigReferences, InferenceBackend,
+    AgentBehaviorDocument, InferenceBackend,
 };
 use gents_codex_protocol as codex;
 use gents_protocol::row::{
@@ -276,19 +276,6 @@ async fn apply_model_to_bound_behavior(
     let mut behavior = load_bound_behavior(state).await?;
     behavior.backend_id = Some(selection.backend_id.clone());
     behavior.model_name = Some(selection.model_name.clone());
-    // Single owner (#1331): confirm the backend still exists and still
-    // advertises this model through the same validator every other write
-    // door calls, rather than trusting `resolve_model_selection`'s own
-    // backend/model match alone. `resolve_model_selection` picks a
-    // candidate from the readiness-filtered "available" set for product
-    // reasons (don't offer a disabled/unready backend); this is the
-    // unconditional correctness gate right before the write.
-    let refs = ConfigReferences::load(&state.node, state.agent_did.as_ref())
-        .await
-        .context("loading config references to validate the selected model")?;
-    behavior
-        .validate_references(&refs)
-        .context("selected backend/model failed reference validation")?;
     let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
     write_agent_behavior_document(&access, &behavior)
         .await

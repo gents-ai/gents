@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use defra_node::EmbeddedNode;
+use gents::InferenceBackend;
 use gents_protocol::row::InferenceBackendRow;
 use serde_json::Value;
 
@@ -13,6 +14,10 @@ pub async fn upsert_inference_backend(
     node: &EmbeddedNode,
     row: &InferenceBackendRow,
 ) -> Result<()> {
+    validate_inference_backend(row)?;
+    // Keep the desktop encoder: it owns last_probe and preserves its existing
+    // full-row null/list behavior, neither of which the config-client backend
+    // writer represents exactly.
     let backend_id = normalize_required("backend_id", &row.backend_id)?;
 
     let add_fields = [
@@ -107,6 +112,43 @@ pub async fn upsert_inference_backend(
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_inference_backend").await
+}
+
+fn validate_inference_backend(row: &InferenceBackendRow) -> Result<()> {
+    let value = serde_json::to_value(row)?;
+    let mut backend = InferenceBackend::from_value(&value)?;
+    // `from_value` normalizes blank credentials for runtime consumption. Keep
+    // the submitted values for write-boundary validation, where an explicitly
+    // blank credential is an invalid document rather than an absent one.
+    backend.api_key = row.api_key.clone();
+    backend.api_key_env_var = row.api_key_env_var.clone();
+    backend.validate(None)
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::validate_inference_backend;
+    use gents_protocol::row::InferenceBackendRow;
+
+    #[test]
+    fn rejects_a_row_that_sets_both_credential_sources() {
+        let row: InferenceBackendRow = serde_json::from_value(serde_json::json!({
+            "backend_id": "backend",
+            "name": "Backend",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "https://example.test/v1",
+            "api_key": "secret",
+            "api_key_env_var": "BACKEND_API_KEY",
+            "max_concurrent": 1,
+            "enabled": true
+        }))
+        .expect("backend row");
+
+        let error = validate_inference_backend(&row).expect_err("invalid backend");
+        assert!(error
+            .to_string()
+            .contains("must not set both api_key and api_key_env_var"));
+    }
 }
 
 pub async fn delete_inference_backend(node: &EmbeddedNode, backend_id: &str) -> Result<usize> {

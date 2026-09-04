@@ -23,6 +23,34 @@ fn validate_rejects_empty_string_in_subagent_targets() {
 }
 
 #[test]
+fn validate_reports_each_tool_selection_violation_separately() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut selection = sample_tool_selection("invalid-tools");
+    selection.agent_did = "did:test:test".to_string();
+    selection.subagent_targets = vec![String::new()];
+    selection.backgroundable_tool_names = vec![String::new()];
+    selection.subagent_background_enabled = false;
+    selection.subagent_default_await_mode = Some("background".to_string());
+    manifest.tool_selections.push(selection);
+
+    let errors = validation_errors(&manifest);
+    let owned_errors = errors
+        .iter()
+        .filter(|error| error.starts_with("tool selection invalid-tools:"))
+        .collect::<Vec<_>>();
+    assert_eq!(owned_errors.len(), 3, "{errors:?}");
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("subagent_targets[0]")));
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("backgroundable_tool_names[0]")));
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("subagent_default_await_mode")));
+}
+
+#[test]
 fn validate_rejects_subagent_spawn_enabled_without_targets() {
     let mut manifest = manifest_with_default_behavior();
     let mut sel = sample_tool_selection("agent-tools");

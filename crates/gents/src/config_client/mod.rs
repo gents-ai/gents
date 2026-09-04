@@ -27,6 +27,7 @@ mod common;
 mod desired_state;
 mod event_trigger;
 mod inference_backend;
+mod inference_profile;
 mod schedule;
 mod schema_contract;
 mod task;
@@ -34,6 +35,7 @@ mod txn;
 
 pub mod patch;
 
+pub(crate) use agent_behavior::load_agent_behavior_in_txn;
 pub use agent_behavior::write_agent_behavior_document;
 pub use approval::{list_held_tool_calls, write_tool_approval, HeldToolCall, ToolApprovalVerdict};
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
@@ -46,10 +48,15 @@ pub(crate) use desired_state::{
     verify_existing_desired_state_plan,
 };
 pub use event_trigger::write_event_trigger_document;
-pub use inference_backend::{write_inference_backend_document, InferenceBackendUpsertDocument};
+pub use inference_backend::{
+    load_inference_backend_in_txn, write_inference_backend_document, InferenceBackendUpsertDocument,
+};
+pub(crate) use inference_profile::effective_inference_profile;
+pub use inference_profile::write_inference_profile_document;
 pub use schedule::write_schedule_document;
 pub(crate) use schema_contract::collection_schema_contract_digest;
 pub use task::write_task_document;
+pub(crate) use tool_selection::effective_tool_selection;
 pub use tool_selection::{
     write_tool_selection_document, write_tool_selection_document_with_clear_fields,
 };

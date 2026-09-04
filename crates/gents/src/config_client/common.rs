@@ -1,8 +1,53 @@
 use anyhow::Result;
+use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::ExistingDocumentRef;
+
+/// Project a sparse document onto an existing row using the config-client
+/// convention: non-null fields replace stored values, ignored fields remain
+/// stored, and explicit clears become null.
+pub(super) fn merge_sparse_document<T>(
+    existing: Option<T>,
+    patch: &T,
+    ignored_fields: &[&str],
+    clear_fields: &[&str],
+) -> Result<T>
+where
+    T: Clone + Serialize + DeserializeOwned,
+{
+    let Some(existing) = existing else {
+        let mut candidate = serde_json::to_value(patch)?;
+        let candidate = candidate
+            .as_object_mut()
+            .ok_or_else(|| anyhow::anyhow!("serialized config patch was not an object"))?;
+        // Ignored fields are not emitted by the writer on either branch. A
+        // create therefore persists their schema defaults, not the values in
+        // the caller's wider document type.
+        for field in ignored_fields {
+            candidate.remove(*field);
+        }
+        return serde_json::from_value(Value::Object(candidate.clone())).map_err(Into::into);
+    };
+    let mut effective = serde_json::to_value(existing)?;
+    let effective = effective
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("serialized config document was not an object"))?;
+    let patch = serde_json::to_value(patch)?;
+    let patch = patch
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("serialized config patch was not an object"))?;
+    for (field, value) in patch {
+        if !ignored_fields.contains(&field.as_str()) && !value.is_null() {
+            effective.insert(field.clone(), value.clone());
+        }
+    }
+    for field in clear_fields {
+        effective.insert((*field).to_string(), Value::Null);
+    }
+    serde_json::from_value(Value::Object(effective.clone())).map_err(Into::into)
+}
 
 pub(super) async fn query_documents_by_unique_value(
     txn: &super::ConfigApplyTxn<'_>,

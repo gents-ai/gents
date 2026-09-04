@@ -860,6 +860,48 @@ async fn apply_disable(
 }
 
 #[cfg(test)]
+pub(crate) async fn seed_persona_validation_references(node: &EmbeddedNode) -> Result<()> {
+    let response = node
+        .execute(
+            r#"mutation {
+                openai: create_InferenceBackend(input: {
+                    backend_id: "openai"
+                    name: "OpenAI"
+                    provider_kind: "OpenAiCompatible"
+                    max_concurrent: 1
+                    max_queue_depth: 1
+                    enabled: true
+                    models: ["gpt-5"]
+                }) { _docID }
+                anthropic: create_InferenceBackend(input: {
+                    backend_id: "anthropic"
+                    name: "Anthropic"
+                    provider_kind: "Anthropic"
+                    max_concurrent: 1
+                    max_queue_depth: 1
+                    enabled: true
+                    models: ["claude"]
+                }) { _docID }
+                profile1: create_InferenceProfile(input: {
+                    profile_id: "profile-1"
+                    display_name: "Profile 1"
+                }) { _docID }
+                profile2: create_InferenceProfile(input: {
+                    profile_id: "profile-2"
+                    display_name: "Profile 2"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "seed persona validation references: {:?}",
+        response.errors
+    );
+    Ok(())
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1358,6 +1400,9 @@ mod tests {
         crate::ensure_runtime_schemas(&node)
             .await
             .expect("runtime schemas register");
+        seed_persona_validation_references(&node)
+            .await
+            .expect("persona validation references seed");
         Arc::new(node)
     }
 
@@ -1756,6 +1801,16 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let node = build_node(&tempdir).await;
         let access = ConfigAccess::Local(node.clone());
+
+        write_tool_selection_document(
+            &access,
+            &ToolSelectionDocument {
+                selection_id: "sel-disable".to_string(),
+                agent_did: "did:key:disable-agent".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         let behavior = AgentBehaviorDocument {
             behavior_id: "disable-behavior".to_string(),

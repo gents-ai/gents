@@ -9,7 +9,7 @@ use crate::config::{
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::config_client::mint_recreate_identity_timestamp;
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
@@ -46,7 +46,7 @@ impl InferenceProfile {
     /// desired-state rules exactly so no case is lost by the move (#1331),
     /// and reports every violated rule at once so a `config apply` user who
     /// broke two fields sees both in one round trip.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validation_violations(&self) -> Vec<String> {
         let profile_id = self.profile_id.trim();
         let mut violations: Vec<String> = Vec::new();
 
@@ -144,6 +144,11 @@ impl InferenceProfile {
             ));
         }
 
+        violations
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let violations = self.validation_violations();
         if violations.is_empty() {
             Ok(())
         } else {
@@ -350,11 +355,23 @@ pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     profile: &InferenceProfile,
 ) -> Result<()> {
-    profile.validate()?;
-    let mutation = upsert_inference_profile_mutation(profile);
-
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert InferenceProfile").await?;
-    Ok(())
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    let result = async {
+        crate::config_client::effective_inference_profile(&txn, profile)
+            .await?
+            .validate()?;
+        txn.execute(&upsert_inference_profile_mutation(profile))
+            .await?;
+        Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
 }
 
 pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> String {

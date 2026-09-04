@@ -1,18 +1,15 @@
 //! The id/model sets a config document's reference fields are checked
-//! against (#1331). One loader, built from the current node state, feeds
+//! against (#1331). One transactional loader feeds
 //! every referential validator: `AgentBehavior::validate_references` is the
 //! only consumer today, but the shape generalizes to any document that
 //! points at a backend, tool selection, profile, or skill.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
-
 use anyhow::Result;
-use defra_node::EmbeddedNode;
 use gents_protocol::graphql::graphql_rows_from_response;
 use serde_json::Value;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 
 /// Snapshot of the config documents a referencing document (today, only
@@ -31,25 +28,35 @@ pub struct ConfigReferences {
 }
 
 impl ConfigReferences {
-    /// Load the reference sets for `agent_did` from the current node state.
-    /// A thin wrapper over [`Self::load_via_access`] — every query this
-    /// needs already runs the same way over `ConfigAccess::Local` as over
-    /// HTTP, so there is exactly one query path for both, not two to keep
-    /// in sync.
-    pub async fn load(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<Self> {
-        Self::load_via_access(&ConfigAccess::Local(Arc::clone(node)), agent_did).await
+    /// Load the same reference snapshot through an already-open config
+    /// transaction. Behavior validation must share the transaction's read set
+    /// with its eventual write so a concurrent delete cannot make a previously
+    /// validated reference dangle at commit time.
+    pub async fn load_in_txn(txn: &ConfigApplyTxn<'_>, agent_did: &str) -> Result<Self> {
+        Self::from_row_sets(
+            query_rows_in_txn(
+                txn,
+                "InferenceBackend",
+                "{ InferenceBackend { backend_id models } }",
+            )
+            .await?,
+            query_rows_in_txn(txn, "ToolSelection", &tool_selection_query(agent_did)).await?,
+            query_rows_in_txn(
+                txn,
+                "InferenceProfile",
+                "{ InferenceProfile { profile_id } }",
+            )
+            .await?,
+            query_rows_in_txn(txn, "Skill", &skill_query(agent_did)).await?,
+        )
     }
 
-    /// Load the reference sets for `agent_did` via [`ConfigAccess`] (HTTP
-    /// GraphQL or local node) — the CLI's raw-write commands (`config
-    /// behavior set`, the codex-shim model switch) hold a `ConfigAccess`,
-    /// not an `Arc<EmbeddedNode>`, but [`Self::load`] delegates here too so
-    /// there is one implementation regardless of caller. Fetches only the
-    /// id columns (+ `models`, for backends) a referential-existence check
-    /// needs — not a full document decode.
-    pub async fn load_via_access(access: &ConfigAccess, agent_did: &str) -> Result<Self> {
-        let escaped_agent_did = escape_graphql_string(agent_did);
-
+    fn from_row_sets(
+        backend_rows: Vec<Value>,
+        tool_selection_rows: Vec<Value>,
+        profile_rows: Vec<Value>,
+        skill_rows: Vec<Value>,
+    ) -> Result<Self> {
         // Read directly rather than through
         // `crate::backend_registry::InferenceBackend::from_value`: that
         // parser requires every column (`max_concurrent`, `enabled`, …) an
@@ -57,12 +64,6 @@ impl ConfigReferences {
         // check has no business failing every principal's config
         // validation over one malformed row elsewhere in the collection. A
         // row with no usable `backend_id` is skipped, not fatal.
-        let backend_rows = query_rows(
-            access,
-            "InferenceBackend",
-            "{ InferenceBackend { backend_id models } }",
-        )
-        .await?;
         let backends = backend_rows
             .into_iter()
             .filter_map(|row| {
@@ -82,32 +83,8 @@ impl ConfigReferences {
             })
             .collect();
 
-        let tool_selection_rows = query_rows(
-            access,
-            "ToolSelection",
-            &format!(
-                r#"{{ ToolSelection(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{ selection_id }} }}"#
-            ),
-        )
-        .await?;
         let tool_selections = string_field_set(&tool_selection_rows, "selection_id");
-
-        let profile_rows = query_rows(
-            access,
-            "InferenceProfile",
-            "{ InferenceProfile { profile_id } }",
-        )
-        .await?;
         let profiles = string_field_set(&profile_rows, "profile_id");
-
-        let skill_rows = query_rows(
-            access,
-            "Skill",
-            &format!(
-                r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{ skill_id }} }}"#
-            ),
-        )
-        .await?;
         let skills = string_field_set(&skill_rows, "skill_id");
 
         Ok(Self {
@@ -119,9 +96,25 @@ impl ConfigReferences {
     }
 }
 
-async fn query_rows(access: &ConfigAccess, collection: &str, query: &str) -> Result<Vec<Value>> {
-    let response = access.execute(query).await?;
+async fn query_rows_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    collection: &str,
+    query: &str,
+) -> Result<Vec<Value>> {
+    let response = txn.execute(query).await?;
     Ok(graphql_rows_from_response(&response, collection))
+}
+
+fn tool_selection_query(agent_did: &str) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    format!(
+        r#"{{ ToolSelection(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ selection_id }} }}"#
+    )
+}
+
+fn skill_query(agent_did: &str) -> String {
+    let agent_did = escape_graphql_string(agent_did);
+    format!(r#"{{ Skill(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{ skill_id }} }}"#)
 }
 
 fn string_field_set(rows: &[Value], field: &str) -> BTreeSet<String> {

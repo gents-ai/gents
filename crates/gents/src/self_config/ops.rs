@@ -96,13 +96,6 @@ impl SelfConfigCore {
         &self.behavior_id
     }
 
-    /// The node handle — used by category `validate` closures that need a
-    /// full reference snapshot (e.g. `behavior_request`'s
-    /// `ConfigReferences::load`) rather than a single txn-scoped read.
-    pub(crate) fn node(&self) -> &Arc<EmbeddedNode> {
-        &self.node
-    }
-
     pub(crate) fn identity(&self) -> Result<Did> {
         Did::new(self.agent_did.clone())
             .map_err(|error| anyhow!("agent DID is not ACP-addressable: {error}"))

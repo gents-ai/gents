@@ -248,9 +248,12 @@ pub(super) fn validate_tool_selections(
         // needing enable_meta_tools and staying inside
         // allowed_mcp_service_ids, self_config_categories vocabulary) are
         // owned by `ToolSelectionDocument::validate`.
-        if let Err(error) = to_document_tool_selection(selection).validate() {
-            errors.push(error.to_string());
-        }
+        errors.extend(
+            to_document_tool_selection(selection)
+                .validation_violations()
+                .into_iter()
+                .map(|error| format!("tool selection {}: {error}", selection.selection_id)),
+        );
 
         // Manifest-shape: command_execution_policy/command_network_mode
         // parsing and the two argv-prefix JSON shape checks have no document
@@ -296,10 +299,9 @@ pub(super) fn validate_tool_selections(
         );
         // Manifest-shape: duplicate subagent target names and the
         // cross-deployment permission gate have no document equivalent
-        // (`ToolSelectionDocument::validate` only checks each entry's own
-        // structural validity, which this also re-checks — a SubagentTarget
-        // parse failure or structural gap surfaces from both, redundantly
-        // but not incorrectly).
+        // (`ToolSelectionDocument::validate` checks each entry's own
+        // structural validity; this pass skips malformed entries and handles
+        // only the cross-entry/cross-document rules below).
         validate_subagent_targets(
             &selection.selection_id,
             selection.agent_did.trim(),

@@ -1,9 +1,11 @@
 use crate::graphql::escape_graphql_string;
 use crate::ToolSelectionDocument;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use super::{mint_recreate_identity_timestamp, ConfigAccess};
-use gents_protocol::graphql::{optional_bool_field, optional_string_field, string_list_field};
+use super::{mint_recreate_identity_timestamp, ConfigAccess, ConfigApplyTxn};
+use gents_protocol::graphql::{
+    graphql_rows_from_response, optional_bool_field, optional_string_field, string_list_field,
+};
 
 pub async fn write_tool_selection_document(
     access: &ConfigAccess,
@@ -17,6 +19,42 @@ pub async fn write_tool_selection_document_with_clear_fields(
     selection: &ToolSelectionDocument,
     clear_update_fields: &[&str],
 ) -> Result<String> {
+    const CLEARABLE_FIELDS: &[&str] = &[
+        "bash_mode",
+        "command_execution_policy",
+        "command_network_mode",
+        "cross_deployment_spawn_timeout_seconds",
+        "display_name",
+        "file_tool_root",
+        "file_tools_mode",
+    ];
+    for field in clear_update_fields {
+        if !CLEARABLE_FIELDS.contains(field) {
+            anyhow::bail!("unsupported ToolSelection clear field {field:?}");
+        }
+    }
+    let txn = access.begin_apply_txn().await?;
+    let result = write_tool_selection_in_txn(&txn, selection, clear_update_fields).await;
+    match result {
+        Ok(doc_id) => {
+            txn.commit().await?;
+            Ok(doc_id)
+        }
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+async fn write_tool_selection_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    selection: &ToolSelectionDocument,
+    clear_update_fields: &[&str],
+) -> Result<String> {
+    effective_tool_selection(txn, selection, &["write_tools"], clear_update_fields)
+        .await?
+        .validate()?;
     let add_fields = format!(
         "{},\n                    updated_at: \"{}\"",
         tool_selection_fields(selection, true),
@@ -51,18 +89,106 @@ pub async fn write_tool_selection_document_with_clear_fields(
         add_fields = add_fields,
         update_fields = update_fields,
     );
-    let response = access
-        .execute_mutation(&mutation, "upsert ToolSelection")
-        .await?;
+    let response = txn.execute(&mutation).await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "ToolSelection")
+}
+
+pub(crate) async fn effective_tool_selection(
+    txn: &ConfigApplyTxn<'_>,
+    patch: &ToolSelectionDocument,
+    ignored_fields: &[&str],
+    clear_fields: &[&str],
+) -> Result<ToolSelectionDocument> {
+    let existing = load_tool_selection_in_txn(txn, &patch.selection_id).await?;
+    super::common::merge_sparse_document(existing, patch, ignored_fields, clear_fields)
+}
+
+pub(crate) async fn load_tool_selection_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    selection_id: &str,
+) -> Result<Option<ToolSelectionDocument>> {
+    let selection_id = escape_graphql_string(selection_id);
+    let query = format!(
+        r#"{{
+            ToolSelection(
+                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }},
+                limit: 1
+            ) {{
+                selection_id agent_did display_name tool_policy_version enable_file_tools
+                file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy
+                command_allowed_argv_prefixes command_forbidden_argv_prefixes
+                read_only_command_allowlist command_network_mode cli_tool_names enable_meta_tools
+                enable_goal_tools enable_goal_creation allowed_mcp_service_ids
+                required_mcp_service_ids backgroundable_tool_names approval_required_tools
+                enable_memory enable_session_history_tool enable_context_budget enable_defra_query
+                defra_query_collections subagent_targets subagent_spawn_enabled
+                subagent_steering_enabled subagent_background_enabled subagent_default_await_mode
+                subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds
+                write_tools datastore_tool_surface_ids eth_tool_ids enable_self_config
+                self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config
+            }}
+        }}"#
+    );
+    let response = txn.execute(&query).await?;
+    graphql_rows_from_response(&response, "ToolSelection")
+        .into_iter()
+        .next()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding existing ToolSelection")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ensure_runtime_schemas, load_tool_selection};
+    use crate::{ensure_runtime_schemas, load_tool_selection, WriteToolDecl};
     use anyhow::Result;
     use defra_node::{EmbeddedNode, StorageBackend};
+
+    #[tokio::test]
+    async fn create_validates_the_write_tools_the_writer_actually_persists() -> Result<()> {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await?);
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        let selection = ToolSelectionDocument {
+            selection_id: "imperative-create".to_string(),
+            agent_did: "did:test:owner".to_string(),
+            write_tools: Some(vec![WriteToolDecl {
+                tool_name: "".to_string(),
+                collection: "Invalid collection".to_string(),
+                description: String::new(),
+                fields: Vec::new(),
+                output_obligation: None,
+            }]),
+            ..Default::default()
+        };
+
+        write_tool_selection_document(&access, &selection).await?;
+        let stored = load_tool_selection(&node, &selection.selection_id)
+            .await?
+            .expect("created selection");
+        assert!(stored.write_tools.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn clear_fields_reject_unknown_graphql_names_before_access() {
+        let access = ConfigAccess::Graphql("not-an-endpoint".to_string());
+        let selection = ToolSelectionDocument {
+            selection_id: "selection".to_string(),
+            agent_did: "did:test:owner".to_string(),
+            ..Default::default()
+        };
+        let error = write_tool_selection_document_with_clear_fields(
+            &access,
+            &selection,
+            &["display_name } mutation { delete_AgentRequest"],
+        )
+        .await
+        .expect_err("unknown clear field must be rejected")
+        .to_string();
+        assert!(error.contains("unsupported ToolSelection clear field"));
+    }
 
     /// Round-trip test: write a `ToolSelectionDocument` with subagent
     /// enablement fields set, then read it back and assert every field persisted.
@@ -379,6 +505,87 @@ mod tests {
             .is_empty());
         assert_eq!(loaded.cross_deployment_spawn_timeout_seconds, None);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sparse_meta_tools_change_validates_preserved_required_services() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::Regolith)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(std::sync::Arc::new(node));
+
+        let initial = ToolSelectionDocument {
+            selection_id: "required-services".to_string(),
+            agent_did: "did:test:required-services".to_string(),
+            enable_meta_tools: Some(true),
+            allowed_mcp_service_ids: Some(vec!["required".to_string()]),
+            required_mcp_service_ids: Some(vec!["required".to_string()]),
+            ..Default::default()
+        };
+        write_tool_selection_document(&access, &initial).await?;
+
+        let patch = ToolSelectionDocument {
+            selection_id: initial.selection_id.clone(),
+            agent_did: initial.agent_did.clone(),
+            enable_meta_tools: Some(false),
+            ..Default::default()
+        };
+        let error = write_tool_selection_document(&access, &patch)
+            .await
+            .expect_err("preserved required services must keep meta tools enabled")
+            .to_string();
+        assert!(error.contains("needs enable_meta_tools=true"), "{error}");
+
+        let node = match &access {
+            ConfigAccess::Local(node) => node,
+            ConfigAccess::Graphql(_) => unreachable!(),
+        };
+        let stored = load_tool_selection(node, &initial.selection_id)
+            .await?
+            .expect("stored selection");
+        assert_eq!(stored.enable_meta_tools, Some(true));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn document_upsert_validates_preserved_required_services() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = EmbeddedNode::builder()
+            .data_path(tempdir.path().join("data"))
+            .with_storage_backend(StorageBackend::Regolith)
+            .build()
+            .await?;
+        ensure_runtime_schemas(&node).await?;
+        let initial = ToolSelectionDocument {
+            selection_id: "direct-required-services".to_string(),
+            agent_did: "did:test:direct-required-services".to_string(),
+            enable_meta_tools: Some(true),
+            allowed_mcp_service_ids: Some(vec!["required".to_string()]),
+            required_mcp_service_ids: Some(vec!["required".to_string()]),
+            ..Default::default()
+        };
+        crate::upsert_tool_selection(&node, &initial).await?;
+
+        let patch = ToolSelectionDocument {
+            selection_id: initial.selection_id.clone(),
+            agent_did: initial.agent_did.clone(),
+            enable_meta_tools: Some(false),
+            ..Default::default()
+        };
+        let error = crate::upsert_tool_selection(&node, &patch)
+            .await
+            .expect_err("direct upsert must validate preserved required services")
+            .to_string();
+        assert!(error.contains("needs enable_meta_tools=true"), "{error}");
+        let stored = load_tool_selection(&node, &initial.selection_id)
+            .await?
+            .expect("stored selection");
+        assert_eq!(stored.enable_meta_tools, Some(true));
         Ok(())
     }
 }

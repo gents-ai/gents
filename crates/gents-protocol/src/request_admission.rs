@@ -743,6 +743,11 @@ pub struct AgentRequestCreate {
 }
 
 impl AgentRequestCreate {
+    // This is the one required-field constructor for request creation
+    // (#1336). Bundling these independent identity/admission fields into a
+    // second parameter object would recreate another owner for the wire
+    // contract just to satisfy an argument-count heuristic.
+    #[allow(clippy::too_many_arguments)]
     pub fn base(
         request_id: impl Into<String>,
         agent_did: impl Into<String>,

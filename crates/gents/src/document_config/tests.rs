@@ -889,6 +889,7 @@ async fn inference_profile_completion_retry_fields_round_trip() {
 #[tokio::test]
 async fn inference_profile_upsert_rejects_negative_seed() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
     let profile = InferenceProfile {
         profile_id: "negative-seed-profile".to_string(),
         seed: Some(-1),
@@ -1038,6 +1039,31 @@ fn validate_rejects_background_default_when_background_disabled() {
         format!("{}", result.unwrap_err()).contains("subagent_default_await_mode"),
         "error message must mention subagent_default_await_mode"
     );
+}
+
+#[test]
+fn tool_selection_validation_reports_every_violation() {
+    let doc = ToolSelectionDocument {
+        selection_id: "invalid-tools".to_string(),
+        agent_did: "did:test:test".to_string(),
+        subagent_targets: Some(vec![String::new()]),
+        backgroundable_tool_names: Some(vec![String::new()]),
+        subagent_background_enabled: Some(false),
+        subagent_default_await_mode: Some("background".to_string()),
+        ..Default::default()
+    };
+
+    let violations = doc.validation_violations();
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("subagent_targets[0]")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("backgroundable_tool_names[0]")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("subagent_default_await_mode")));
 }
 
 #[test]
@@ -1495,6 +1521,51 @@ fn agent_behavior_validate_references_accepts_known_skills() {
     assert!(behavior.validate_references(&refs).is_ok());
 }
 
+#[test]
+fn agent_behavior_reference_violations_reports_every_missing_reference_at_once() {
+    // Regression (#1331 fix round 2): a behavior dangling on backend, tool
+    // selection, AND profile simultaneously must surface all three, not
+    // just the first-checked one — this is what desired state's
+    // `config validate` renders as separate error-list entries.
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("missing-backend".to_string());
+    behavior.tool_selection_id = Some("missing-tools".to_string());
+    behavior.inference_profile_id = Some("missing-profile".to_string());
+    let refs = ConfigReferences::default();
+
+    let violations = behavior.reference_violations(&refs);
+    assert_eq!(
+        violations.len(),
+        3,
+        "expected 3 violations, got {violations:?}"
+    );
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing backend_id missing-backend")));
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing tool_selection_id missing-tools")));
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing inference_profile_id missing-profile")));
+
+    // validate_references (the Result wrapper) joins them into one error —
+    // still all three, just not as separate Vec entries.
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("missing backend_id missing-backend"),
+        "{error}"
+    );
+    assert!(
+        error.contains("missing tool_selection_id missing-tools"),
+        "{error}"
+    );
+    assert!(
+        error.contains("missing inference_profile_id missing-profile"),
+        "{error}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // ConfigReferences::load — lenient backend parsing (#1331, fix round 1)
 // ---------------------------------------------------------------------------
@@ -1545,9 +1616,13 @@ async fn config_references_load_tolerates_a_malformed_backend_row_beside_a_good_
         .await;
     assert!(!good.has_errors(), "{:?}", good.errors);
 
-    let refs = ConfigReferences::load(&node, "did:test:whatever")
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .expect("begin reference-load transaction");
+    let refs = ConfigReferences::load_in_txn(&txn, "did:test:whatever")
         .await
         .expect("load must tolerate a malformed unrelated backend row");
+    txn.discard().await.expect("discard read-only transaction");
 
     assert_eq!(
         refs.backends.get("good-backend").map(Vec::as_slice),

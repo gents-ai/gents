@@ -9,7 +9,7 @@ use gents::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
     subagent_target_entry, upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents,
-    KeyIdentity, ToolCeiling,
+    InferenceBackend, KeyIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{
@@ -308,6 +308,18 @@ async fn upsert_inference_backend(
     backend_id: &str,
     backend: &AgentBackendConfig,
 ) -> Result<()> {
+    let txn = gents::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    let validation = async {
+        let existing =
+            gents::config_client::load_inference_backend_in_txn(&txn, backend_id).await?;
+        live_backend_candidate(existing, backend_id, backend).validate(None)
+    }
+    .await;
+    if let Err(error) = validation {
+        let _ = txn.discard().await;
+        return Err(error);
+    }
+
     let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_endpoint = escape_graphql_string(&backend.endpoint);
     let escaped_provider_kind = escape_graphql_string(backend.provider_kind.as_str());
@@ -347,11 +359,47 @@ async fn upsert_inference_backend(
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        anyhow::bail!("upsert inference backend failed: {:?}", response.errors);
+    match txn.execute(&mutation).await {
+        Ok(_) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
     }
-    Ok(())
+}
+
+fn live_backend_candidate(
+    existing: Option<InferenceBackend>,
+    backend_id: &str,
+    backend: &AgentBackendConfig,
+) -> InferenceBackend {
+    let existing_openai_wire_api = existing
+        .as_ref()
+        .and_then(|backend| backend.openai_wire_api);
+    let existing_api_key = existing
+        .as_ref()
+        .and_then(|backend| backend.api_key.clone());
+    let existing_api_key_env_var = existing
+        .as_ref()
+        .and_then(|backend| backend.api_key_env_var.clone());
+
+    InferenceBackend {
+        backend_id: backend_id.to_string(),
+        name: backend_id.to_string(),
+        provider_kind: backend.provider_kind,
+        openai_wire_api: existing_openai_wire_api,
+        endpoint: backend.endpoint.clone(),
+        // The fixture mutation intentionally preserves an existing credential
+        // when the corresponding override is absent. Validate that effective
+        // document so switching credential modes cannot leave both populated.
+        api_key: backend.api_key.clone().or(existing_api_key),
+        api_key_env_var: backend.api_key_env_var.clone().or(existing_api_key_env_var),
+        max_concurrent: 2,
+        max_queue_depth: 100,
+        enabled: true,
+        models: vec![backend.model_name.clone()],
+        probe_status: "healthy".to_string(),
+    }
 }
 
 async fn bind_default_behavior_backend(
@@ -421,5 +469,44 @@ async fn wait_for_runtime_process_state(
             );
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents::BackendProviderKind;
+
+    #[test]
+    fn live_backend_candidate_validates_preserved_credentials() {
+        let existing = InferenceBackend {
+            backend_id: "backend".to_string(),
+            name: "backend".to_string(),
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            openai_wire_api: None,
+            endpoint: "http://old.example/v1".to_string(),
+            api_key: Some("stored-secret".to_string()),
+            api_key_env_var: None,
+            max_concurrent: 1,
+            max_queue_depth: 10,
+            enabled: true,
+            models: vec!["old-model".to_string()],
+            probe_status: "healthy".to_string(),
+        };
+        let requested = AgentBackendConfig {
+            endpoint: "http://new.example/v1".to_string(),
+            model_name: "new-model".to_string(),
+            provider_kind: BackendProviderKind::OpenAiCompatible,
+            api_key: None,
+            api_key_env_var: Some("BACKEND_API_KEY".to_string()),
+        };
+
+        let error = live_backend_candidate(Some(existing), "backend", &requested)
+            .validate(None)
+            .expect_err("the preserved raw key must conflict with the new env reference");
+
+        assert!(error
+            .to_string()
+            .contains("must not set both api_key and api_key_env_var"));
     }
 }

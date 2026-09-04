@@ -39,6 +39,7 @@ pub use inference_profile::{
 #[allow(unused_imports)]
 pub(crate) use inference_profile::{
     load_inference_profile_by_doc_id, load_inference_profile_record,
+    upsert_inference_profile_mutation,
 };
 
 pub use serde_helpers::deserialize_dual_shape;

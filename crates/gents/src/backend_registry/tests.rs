@@ -336,3 +336,40 @@ fn inference_backend_validate_no_lockout_is_skipped_without_a_current_model() {
     let backend = base_backend(); // models: ["d4f"]
     assert!(backend.validate(None).is_ok());
 }
+
+#[test]
+fn inference_backend_validation_reports_every_violation() {
+    let mut backend = base_backend();
+    backend.endpoint = "  ".to_string();
+    backend.max_concurrent = 0;
+    backend.max_queue_depth = -1;
+
+    let violations = backend.validation_violations(None);
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("endpoint must not be empty")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("max_concurrent must be positive")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("max_queue_depth must be positive")));
+}
+
+#[test]
+fn inference_backend_validation_honors_redacted_api_key_presence() {
+    let mut backend = base_backend();
+    backend.api_key = None;
+    backend.api_key_env_var = Some("BACKEND_API_KEY".to_string());
+
+    assert!(backend.validate(None).is_ok());
+    let error = backend
+        .validate_with_api_key_presence(None, true)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("must not set both api_key and api_key_env_var"),
+        "{error}"
+    );
+}
