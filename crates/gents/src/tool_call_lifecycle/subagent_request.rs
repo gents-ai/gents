@@ -12,8 +12,12 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::WorkspaceLineage;
+use crate::lifecycle::materialize::{
+    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+};
+use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 use crate::session::execute_mutation_with_retry;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::IllegalToolCallTransition;
 
@@ -332,20 +336,20 @@ async fn create_subagent_request_inner(
             )
         }
     };
-    let spec = crate::lifecycle::materialize::RequestSpec {
-        identity: crate::lifecycle::materialize::RequestIdentity {
+    let spec = RequestSpec {
+        identity: RequestIdentity {
             request_id: request_id.clone(),
             agent_did: agent_did.clone(),
             requester_did: None,
             behavior_id,
             session_id: new_session_id,
             content: prompt,
-            execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+            execution_origin: ExecutionOrigin::Interactive,
             created_at: now,
         },
         admission,
-        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        trigger_lineage: crate::lifecycle::TriggerLineage {
+        initial_lifecycle_state: RequestLifecycleState::Pending,
+        trigger_lineage: TriggerLineage {
             trigger_id: Some(parent_tool_call_id.clone()),
             trigger_kind: Some("subagent".to_string()),
             source_doc_id: None,
@@ -356,7 +360,7 @@ async fn create_subagent_request_inner(
         },
         trigger_doc_id: None,
         workspace,
-        subagent: Some(crate::lifecycle::materialize::SubagentLink {
+        subagent: Some(SubagentLink {
             depth: new_subagent_depth,
             parent_request_id: parent_request_id.clone(),
             parent_request_doc_id: parent_doc_ids.0.clone(),
@@ -369,11 +373,7 @@ async fn create_subagent_request_inner(
         retry_key: None,
         valid_until: deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
     };
-    let create = crate::lifecycle::materialize::build_signed_request(
-        spec,
-        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
-    )
-    .await?;
+    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
 
     execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;

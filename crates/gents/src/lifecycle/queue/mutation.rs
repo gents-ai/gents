@@ -1,5 +1,11 @@
 use super::*;
 
+use crate::lifecycle::materialize::{
+    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+};
+use crate::lifecycle::TriggerLineage;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
     behavior_id: &str,
@@ -19,8 +25,8 @@ pub(super) async fn session_request_create_mutation(
             &parent.agent_did,
             &parent.request_id,
         );
-    let spec = crate::lifecycle::materialize::RequestSpec {
-        identity: crate::lifecycle::materialize::RequestIdentity {
+    let spec = RequestSpec {
+        identity: RequestIdentity {
             request_id: request_id.to_string(),
             agent_did: parent.agent_did.clone(),
             requester_did: None,
@@ -31,8 +37,8 @@ pub(super) async fn session_request_create_mutation(
             created_at: created_at.to_string(),
         },
         admission,
-        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        trigger_lineage: crate::lifecycle::TriggerLineage {
+        initial_lifecycle_state: RequestLifecycleState::Pending,
+        trigger_lineage: TriggerLineage {
             trigger_id: None,
             trigger_kind: None,
             source_doc_id: None,
@@ -41,7 +47,7 @@ pub(super) async fn session_request_create_mutation(
         },
         trigger_doc_id: None,
         workspace: None,
-        subagent: Some(crate::lifecycle::materialize::SubagentLink {
+        subagent: Some(SubagentLink {
             depth: parent.subagent_depth,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
@@ -54,10 +60,6 @@ pub(super) async fn session_request_create_mutation(
         retry_key: retry_key.map(ToOwned::to_owned),
         valid_until: None,
     };
-    let create = crate::lifecycle::materialize::build_signed_request(
-        spec,
-        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
-    )
-    .await?;
+    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     create.graphql_mutation().map_err(anyhow::Error::msg)
 }

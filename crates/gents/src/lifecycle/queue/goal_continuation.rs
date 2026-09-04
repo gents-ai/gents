@@ -1,5 +1,11 @@
 use super::*;
 
+use crate::lifecycle::materialize::{
+    build_request, sign_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+};
+use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 pub(crate) async fn enqueue_goal_continuation(
     node: &EmbeddedNode,
     parent: &AgentRequest,
@@ -45,8 +51,8 @@ pub(crate) async fn enqueue_goal_continuation(
             &parent.agent_did,
             &parent.request_id,
         );
-    let spec = crate::lifecycle::materialize::RequestSpec {
-        identity: crate::lifecycle::materialize::RequestIdentity {
+    let spec = RequestSpec {
+        identity: RequestIdentity {
             request_id: request_id.clone(),
             agent_did: parent.agent_did.clone(),
             requester_did: None,
@@ -57,8 +63,8 @@ pub(crate) async fn enqueue_goal_continuation(
             created_at: now,
         },
         admission,
-        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        trigger_lineage: crate::lifecycle::TriggerLineage {
+        initial_lifecycle_state: RequestLifecycleState::Pending,
+        trigger_lineage: TriggerLineage {
             trigger_id: Some(goal_id.to_string()),
             trigger_kind: Some("goal".to_string()),
             source_doc_id: None,
@@ -66,13 +72,13 @@ pub(crate) async fn enqueue_goal_continuation(
             trigger_context: parent.caused_by_trigger_context.clone(),
         },
         trigger_doc_id: None,
-        workspace: Some(crate::lifecycle::WorkspaceLineage {
+        workspace: Some(WorkspaceLineage {
             workspace_id: parent.workspace_id.clone(),
             workspace_authority: parent.workspace_authority.clone(),
             workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
             workspace_seal_hash: parent.workspace_seal_hash.clone(),
         }),
-        subagent: Some(crate::lifecycle::materialize::SubagentLink {
+        subagent: Some(SubagentLink {
             depth: parent.subagent_depth,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),
@@ -85,18 +91,9 @@ pub(crate) async fn enqueue_goal_continuation(
         retry_key: Some(retry_key.clone()),
         valid_until: None,
     };
-    // Signing happens before the dedupe lookup below (unlike the prior
-    // hand-rolled version, which peeked at the unsigned DTO first): the
-    // fingerprint compares only pre-signature fields
-    // (`GoalBackedRequestFingerprint` explicitly excludes
-    // `admission_signature` and `created_at`), so this costs one extra local
-    // Ed25519 signature on the redundant-continuation path in exchange for
-    // going through the single signed-request constructor.
-    let create = crate::lifecycle::materialize::build_signed_request(
-        spec,
-        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
-    )
-    .await?;
+    // Peek at the unsigned DTO before paying for a signature: the dedupe
+    // lookup below only needs a fingerprint of the pre-signature fields.
+    let mut create = build_request(spec)?;
     let expected = crate::goal::GoalBackedRequestFingerprint::from_create(&create)?;
     if let Some(doc_id) = lookup_goal_continuation_by_retry_key(node, &retry_key, &expected).await?
     {
@@ -106,6 +103,7 @@ pub(crate) async fn enqueue_goal_continuation(
             session_id: parent.session_id.clone(),
         });
     }
+    sign_request(&mut create, RequestSigner::RegisteredTarget).await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let response =
         session::execute_mutation_with_retry(node, &mutation, "enqueue_goal_continuation").await;

@@ -362,14 +362,18 @@ pub(crate) enum RequestSigner<'a> {
     Identity(&'a dyn crate::identity::AgentIdentity),
 }
 
-/// Build, stamp, and sign one `AgentRequestCreate`. This is the sole owner
-/// of the mapping from a writer's decisions (`RequestSpec`) to the DTO's
-/// stamped columns; every production writer should build through it rather
-/// than hand-rolling `AgentRequestCreate::base(...)` and stamping fields
-/// itself.
-pub(crate) async fn build_signed_request(
+/// Build and stamp one `AgentRequestCreate`, unsigned. This is the sole
+/// owner of the mapping from a writer's decisions (`RequestSpec`) to the
+/// DTO's stamped columns; every production writer should build through it
+/// (or `build_signed_request`, below) rather than hand-rolling
+/// `AgentRequestCreate::base(...)` and stamping fields itself.
+///
+/// Split out from signing so a caller that needs to inspect the built DTO
+/// before deciding whether to persist it (e.g. a retry-key dedupe lookup
+/// keyed on a fingerprint of the pre-signature fields) does not pay for a
+/// signature it may discard.
+pub(crate) fn build_request(
     spec: RequestSpec,
-    signer: RequestSigner<'_>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let RequestSpec {
         identity,
@@ -457,15 +461,37 @@ pub(crate) async fn build_signed_request(
         create.backend_id = sampling.backend_id;
     }
 
+    Ok(create)
+}
+
+/// Sign an `AgentRequestCreate` built by `build_request`, either as the
+/// already-registered runtime principal named by `create.agent_did` or with
+/// an explicit caller-held identity.
+pub(crate) async fn sign_request(
+    create: &mut gents_protocol::request_admission::AgentRequestCreate,
+    signer: RequestSigner<'_>,
+) -> Result<()> {
     match signer {
         RequestSigner::RegisteredTarget => {
-            crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+            crate::sign_agent_request_create_as_registered_target(create).await?;
         }
         RequestSigner::Identity(identity) => {
-            crate::sign_agent_request_create(identity, &mut create).await?;
+            crate::sign_agent_request_create(identity, create).await?;
         }
     }
+    Ok(())
+}
 
+/// Build, stamp, and sign one `AgentRequestCreate` in one call. Equivalent
+/// to `build_request` followed by `sign_request`; use the two-step form
+/// directly when the built DTO must be inspected (e.g. fingerprinted for a
+/// dedupe lookup) before a signature is worth computing.
+pub(crate) async fn build_signed_request(
+    spec: RequestSpec,
+    signer: RequestSigner<'_>,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    let mut create = build_request(spec)?;
+    sign_request(&mut create, signer).await?;
     Ok(create)
 }
 
@@ -616,7 +642,7 @@ impl RequestLifecycle {
             },
             admission,
             initial_lifecycle_state: RequestLifecycleState::Pending,
-            trigger_lineage: trigger_lineage.clone(),
+            trigger_lineage,
             trigger_doc_id: None,
             workspace: None,
             subagent: None,
@@ -675,11 +701,11 @@ impl RequestLifecycle {
             caused_by_parent_request_doc_id: None,
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
-            caused_by_trigger_id: trigger_lineage.trigger_id,
-            caused_by_trigger_kind: trigger_lineage.trigger_kind,
-            caused_by_source_doc_id: trigger_lineage.source_doc_id,
-            caused_by_correlation: trigger_lineage.correlation,
-            caused_by_trigger_context: trigger_lineage.trigger_context,
+            caused_by_trigger_id: create.caused_by_trigger_id,
+            caused_by_trigger_kind: create.caused_by_trigger_kind,
+            caused_by_source_doc_id: create.caused_by_source_doc_id,
+            caused_by_correlation: create.caused_by_correlation,
+            caused_by_trigger_context: create.caused_by_trigger_context,
             workspace_id: None,
             workspace_authority: None,
             workspace_owner_deployment_id: None,

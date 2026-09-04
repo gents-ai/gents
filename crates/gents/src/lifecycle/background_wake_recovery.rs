@@ -7,6 +7,12 @@ use serde::Deserialize;
 use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
+use crate::lifecycle::materialize::{
+    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    SamplingCarryover, SubagentLink,
+};
+use crate::lifecycle::{ExecutionOrigin, TriggerLineage};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::queue::{parse_queue_hints, QueuePolicy, QueueSource};
 use super::{BackgroundWakeRedriveReport, RequestLifecycle};
@@ -402,38 +408,38 @@ async fn redrive_mutation(
     // Reused for both subagent_depth/parent linkage: a redrive successor is
     // not a subagent, but it carries the same "linked to one parent request,
     // at some depth" shape `SubagentLink` was built for.
-    let parent_link = crate::lifecycle::materialize::SubagentLink {
+    let parent_link = SubagentLink {
         depth: candidate.subagent_depth.unwrap_or_default(),
         parent_request_id: candidate.request_id.clone(),
         parent_request_doc_id: candidate.doc_id.clone(),
         parent_tool_call_id: None,
         parent_tool_call_doc_id: None,
     };
-    let spec = crate::lifecycle::materialize::RequestSpec {
-        identity: crate::lifecycle::materialize::RequestIdentity {
+    let spec = RequestSpec {
+        identity: RequestIdentity {
             request_id: request_id.to_string(),
             agent_did: candidate.agent_did.clone(),
             requester_did: None,
             behavior_id: candidate.behavior_id.clone(),
             session_id: candidate.session_id.clone(),
             content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
-            execution_origin: crate::lifecycle::ExecutionOrigin::Scheduled,
+            execution_origin: ExecutionOrigin::Scheduled,
             created_at: now.clone(),
         },
         admission,
-        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
-        trigger_lineage: crate::lifecycle::TriggerLineage::default(),
+        initial_lifecycle_state: RequestLifecycleState::Pending,
+        trigger_lineage: TriggerLineage::default(),
         trigger_doc_id: None,
         workspace: None,
         subagent: Some(parent_link),
-        retry: Some(crate::lifecycle::materialize::RetryLink {
+        retry: Some(RetryLink {
             parent_request_id: candidate.request_id.clone(),
             parent_request_doc_id: candidate.doc_id.clone(),
             root_request_id: retry_root.to_string(),
             retry_count: candidate.retry_count + 1,
             max_retries: candidate.max_retries,
         }),
-        sampling: Some(crate::lifecycle::materialize::SamplingCarryover {
+        sampling: Some(SamplingCarryover {
             temperature: candidate.temperature,
             top_p: candidate.top_p,
             top_k: candidate.top_k,
@@ -454,11 +460,7 @@ async fn redrive_mutation(
         retry_key: Some(retry_key.to_string()),
         valid_until: None,
     };
-    let create = crate::lifecycle::materialize::build_signed_request(
-        spec,
-        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
-    )
-    .await?;
+    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
     Ok(format!(
         r#"mutation {{
