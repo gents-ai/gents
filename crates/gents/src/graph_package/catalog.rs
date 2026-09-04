@@ -805,9 +805,9 @@ mod tests {
         assert_eq!(selection["enable_file_tools"], true, "{asset}");
         assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
         assert_eq!(selection["enable_bash"], true, "{asset}");
-        assert_eq!(selection["bash_mode"], "Unrestricted", "{asset}");
+        assert_eq!(selection["bash_mode"], "ReadOnly", "{asset}");
         assert_eq!(
-            selection["command_execution_policy"], "workspace_write",
+            selection["command_execution_policy"], "read_only",
             "{asset}"
         );
         assert_eq!(selection["command_network_mode"], "disabled", "{asset}");
