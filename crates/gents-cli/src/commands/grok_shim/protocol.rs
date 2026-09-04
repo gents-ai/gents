@@ -459,6 +459,72 @@ pub enum ServerEnvelope {
     Shutdown,
 }
 
+// ---------------------------------------------------------------------------
+// Internal agent ext-method routing
+// ---------------------------------------------------------------------------
+
+/// Agent (runtime → pager) methods that the wire names with a leading
+/// underscore so the Grok client's decoder routes them to its
+/// `ext_method`/`ext_notification` handlers instead of its ACP dispatcher.
+///
+/// This is codec-level knowledge: the route decision is made on the raw
+/// JSON-RPC method string before any ACP decoding, so [`super::acp`] never
+/// sees these names. Only the audited method set is listed; an unknown
+/// `_x.ai/internal/...` name is not silently granted the route.
+pub const INTERNAL_AGENT_METHODS: [&str; 8] = [
+    "_x.ai/internal/auth_cleared",
+    "_x.ai/internal/evict_sessions",
+    "_x.ai/internal/reload_all_mcp_servers",
+    "_x.ai/internal/reload_models",
+    "_x.ai/internal/reload_models_cache",
+    "_x.ai/internal/reload_project_mcp_servers",
+    "_x.ai/internal/reload_skills",
+    "_x.ai/internal/reload_workflows",
+];
+
+/// True when a raw JSON-RPC method string is an internal agent ext method
+/// (leading-underscore wire name) that must route to ext dispatch.
+pub fn is_internal_agent_method(method: &str) -> bool {
+    INTERNAL_AGENT_METHODS.contains(&method)
+}
+
+/// True when a raw JSON-RPC method string carries the internal-agent
+/// underscore wire prefix. The prefix marks the route; only names in
+/// [`INTERNAL_AGENT_METHODS`] are additionally recognized as audited.
+pub fn has_internal_agent_prefix(method: &str) -> bool {
+    method.starts_with("_x.ai/internal/")
+}
+
+/// An `Acp` envelope payload routed through [`is_internal_agent_method`].
+///
+/// The codec owns the route decision so the server's ACP pass-through can
+/// hand underscore-named agent methods to the ext dispatcher unchanged: the
+/// payload line itself is never rewritten, only classified.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutedAcp {
+    pub payload: String,
+    pub internal_agent_method: bool,
+}
+
+impl RoutedAcp {
+    /// Classify one raw ACP payload line.
+    pub fn from_payload(payload: impl Into<String>) -> Self {
+        let payload = payload.into();
+        let internal_agent_method = serde_json::from_str::<Value>(&payload)
+            .ok()
+            .and_then(|line| {
+                line.get("method")
+                    .and_then(Value::as_str)
+                    .map(is_internal_agent_method)
+            })
+            .unwrap_or(false);
+        Self {
+            payload,
+            internal_agent_method,
+        }
+    }
+}
+
 #[cfg(test)]
 impl ServerEnvelope {
     /// Build the `registered` answer for a client id and readiness flag,
@@ -911,5 +977,68 @@ mod tests {
         assert!(ProtocolError::from(json_error)
             .to_string()
             .contains("decodable"));
+    }
+
+    #[test]
+    fn internal_agent_methods_use_leading_underscore_wire_names() {
+        for method in INTERNAL_AGENT_METHODS {
+            assert!(
+                method.starts_with('_'),
+                "internal agent method {method:?} must be wire-named with a leading underscore"
+            );
+            assert!(is_internal_agent_method(method));
+            assert!(has_internal_agent_prefix(method));
+        }
+        // Every audited reload/evict surface from the wire contract is present.
+        assert!(INTERNAL_AGENT_METHODS.contains(&"_x.ai/internal/auth_cleared"));
+        assert!(INTERNAL_AGENT_METHODS.contains(&"_x.ai/internal/evict_sessions"));
+        assert!(INTERNAL_AGENT_METHODS.contains(&"_x.ai/internal/reload_models"));
+        assert!(INTERNAL_AGENT_METHODS.contains(&"_x.ai/internal/reload_skills"));
+        assert_eq!(INTERNAL_AGENT_METHODS.len(), 8);
+    }
+
+    #[test]
+    fn external_methods_are_not_internal_agent_methods() {
+        // ACP session methods and unknown names never take the ext route.
+        for method in [
+            "initialize",
+            "authenticate",
+            "session/new",
+            "session/prompt",
+            "session/cancel",
+            "x.ai/interject",
+            "x.ai/compact_conversation",
+            "_x.ai/internal/unknown_method",
+            "",
+        ] {
+            assert!(
+                !is_internal_agent_method(method),
+                "{method:?} must not route to ext dispatch"
+            );
+        }
+        // The prefix predicate stays honest about near-misses too.
+        assert!(!has_internal_agent_prefix("x.ai/internal/reload_models"));
+        assert!(!has_internal_agent_prefix("__x.ai/internal/reload_models"));
+    }
+
+    #[test]
+    fn routed_acp_classifies_payload_lines() {
+        let internal = RoutedAcp::from_payload(
+            r#"{"jsonrpc":"2.0","method":"_x.ai/internal/reload_models","params":{}}"#,
+        );
+        assert!(internal.internal_agent_method);
+        // The payload line is never rewritten, only classified.
+        assert!(internal.payload.contains("_x.ai/internal/reload_models"));
+
+        let standard = RoutedAcp::from_payload(
+            r#"{"jsonrpc":"2.0","id":1,"method":"session/prompt","params":{}}"#,
+        );
+        assert!(!standard.internal_agent_method);
+
+        // An undecodable line stays non-internal; the codec does not second
+        // guess what the ACP layer will reject with its own shaped error.
+        let garbage = RoutedAcp::from_payload("{not json");
+        assert!(!garbage.internal_agent_method);
+        assert_eq!(garbage.payload, "{not json");
     }
 }
