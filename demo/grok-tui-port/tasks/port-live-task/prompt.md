@@ -102,9 +102,10 @@ listener/port and socket to be absent. Then call
 `write_port_live_environment_proof` exactly once from the final structured
 JSON, with `final_review_head` set to the reviewed HEAD and all proof booleans
 true. Preserve the complete JSON under the datastore string ceiling by
-splitting the compact JSON verbatim between `proof_json` and
-`proof_json_continuation`, with each non-empty half at most 2,000 bytes;
-concatenation must reproduce the original JSON exactly. Write this singleton
+splitting the compact JSON verbatim into exactly two non-empty strings, each
+at most 2,000 UTF-8 bytes, stored in `proof_json` and
+`proof_json_continuation`; concatenation must reproduce the original JSON
+exactly. Write this singleton
 before any surface result so the grouped reviewer cannot start without it.
 
 Call `write_port_live_result` once per non-ignore surface (or one sentinel

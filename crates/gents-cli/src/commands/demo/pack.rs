@@ -5414,6 +5414,7 @@ mod tests {
                 assert!(live_prompt.contains("zero process exit"));
                 assert!(live_prompt.contains("connect(2)"));
                 assert!(live_prompt.contains("write_port_live_environment_proof"));
+                assert!(live_prompt.contains("exactly two non-empty strings"));
                 assert!(live_prompt
                     .find("write_port_live_environment_proof")
                     .zip(live_prompt.find("write_port_live_result"))

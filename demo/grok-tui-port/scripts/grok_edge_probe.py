@@ -2797,6 +2797,36 @@ def query_documents_until_turns(
         time.sleep(0.05)
 
 
+def is_persisted_subprocess_probe(call: dict[str, Any]) -> bool:
+    """Recognize the command marker only in the expected string columns."""
+    args = call.get("args")
+    result = call.get("result")
+    return (
+        isinstance(args, str)
+        and "gents-subprocess-probe" in args
+        and isinstance(result, str)
+        and "gents-subprocess-probe" in result
+    )
+
+
+def self_test_persisted_subprocess_probe() -> dict[str, int]:
+    marker = "gents-subprocess-probe"
+    require(
+        is_persisted_subprocess_probe({"args": marker, "result": marker}),
+        "valid subprocess document marker was rejected",
+    )
+    invalid = (
+        {"args": None, "result": marker},
+        {"args": marker, "result": None},
+        {"args": {"command": marker}, "result": [marker]},
+    )
+    require(
+        not any(is_persisted_subprocess_probe(call) for call in invalid),
+        "non-string subprocess document fields were accepted",
+    )
+    return {"accepted": 1, "rejected": len(invalid)}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--socket", help="Grok leader Unix socket (not needed for --edge offline)")
@@ -2827,6 +2857,7 @@ def main() -> int:
             "edge": "offline",
             "validator_self_test": self_test_subagent_lifecycle_validators(),
             "subagent_document_query_self_test": self_test_subagent_document_query(),
+            "subprocess_document_self_test": self_test_persisted_subprocess_probe(),
         }, indent=2, sort_keys=True))
         return 0
     require(args.socket, "--socket is required unless --edge offline is selected")
@@ -2897,8 +2928,7 @@ def main() -> int:
                 subprocess_calls = [
                     call
                     for call in documents.get("AgentToolCall", [])
-                    if "gents-subprocess-probe" in call.get("args", "")
-                    and "gents-subprocess-probe" in call.get("result", "")
+                    if is_persisted_subprocess_probe(call)
                 ]
                 require(
                     subprocess_calls,

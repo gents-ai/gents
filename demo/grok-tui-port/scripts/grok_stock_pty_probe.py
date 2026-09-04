@@ -46,10 +46,13 @@ class ProbeDeadlineExceeded(TimeoutError):
 
 
 class ClientGuard:
-    """Publish the isolated pager process to the hard-deadline handler."""
+    """Own every pager resource across deadline and cleanup boundaries."""
 
     def __init__(self) -> None:
         self.process: subprocess.Popen[bytes] | None = None
+        self.master_fd: int | None = None
+        self.slave_fd: int | None = None
+        self.pager_socket: PortableSocketPath | None = None
 
     def emergency_kill(self) -> None:
         """Kill without waiting so an asynchronous deadline cannot orphan the pager."""
@@ -60,6 +63,57 @@ class ClientGuard:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+    def cleanup(self) -> None:
+        """Release owned resources after the hard deadline is disarmed."""
+        slave_fd, self.slave_fd = self.slave_fd, None
+        master_fd, self.master_fd = self.master_fd, None
+        process, self.process = self.process, None
+        pager_socket, self.pager_socket = self.pager_socket, None
+        first_error: Exception | None = None
+
+        def attempt(operation: Callable[[], None]) -> None:
+            nonlocal first_error
+            try:
+                operation()
+            except Exception as error:
+                if first_error is None:
+                    first_error = error
+
+        def close_fd(fd: int) -> None:
+            try:
+                os.close(fd)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+
+        if slave_fd is not None:
+            attempt(lambda: close_fd(slave_fd))
+        if process is not None and master_fd is not None:
+            attempt(lambda: terminate_client(process, master_fd))
+        process_alive = False
+        if process is not None:
+            try:
+                process_alive = process.poll() is None
+            except Exception as error:
+                process_alive = True
+                if first_error is None:
+                    first_error = error
+        if process is not None and process_alive:
+            def kill() -> None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+            attempt(kill)
+            attempt(lambda: process.wait(timeout=3))
+        if pager_socket is not None:
+            attempt(pager_socket.cleanup)
+        if master_fd is not None:
+            attempt(lambda: close_fd(master_fd))
+        if first_error is not None:
+            raise first_error
 
 
 def raise_probe_deadline(timeout: float, emergency_kill: Callable[[], None]) -> None:
@@ -75,22 +129,6 @@ def blocked_signal(signum: signal.Signals) -> Iterator[None]:
         yield
     finally:
         signal.pthread_sigmask(signal.SIG_SETMASK, previous_mask)
-
-
-def disarm_pending_alarm() -> bool:
-    """Disarm SIGALRM and consume a deadline queued after active work completed.
-
-    The caller must block SIGALRM first.  Consuming the pending signal keeps it
-    from raising after deterministic resource cleanup has already succeeded.
-    """
-    current_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
-    require(signal.SIGALRM in current_mask, "SIGALRM must be blocked before disarm")
-    signal.setitimer(signal.ITIMER_REAL, 0)
-    if signal.SIGALRM not in signal.sigpending():
-        return False
-    received = signal.sigwait({signal.SIGALRM})
-    require(received == signal.SIGALRM, "consumed the wrong pending signal")
-    return True
 
 
 @contextlib.contextmanager
@@ -109,8 +147,23 @@ def hard_deadline(
     try:
         yield
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        try:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+        finally:
+            signal.signal(signal.SIGALRM, previous_handler)
+
+
+def run_with_deadline_cleanup(
+    timeout: float,
+    guard: ClientGuard,
+    work: Callable[[], dict[str, Any]],
+) -> dict[str, Any]:
+    """Run active work under the alarm, then clean only after it is disarmed."""
+    try:
+        with hard_deadline(timeout, guard.emergency_kill):
+            return work()
+    finally:
+        guard.cleanup()
 
 
 def validate_endpoint(
@@ -527,113 +580,91 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
     expected_bytes = expected.encode()
     idle_challenge, idle_expected, idle_prompt_bytes = challenge_prompt()
 
-    master_fd, slave_fd = pty.openpty()
+    with blocked_signal(signal.SIGALRM):
+        master_fd, slave_fd = pty.openpty()
+        client_guard.master_fd = master_fd
+        client_guard.slave_fd = slave_fd
     process: subprocess.Popen[bytes] | None = None
-    pager_socket: PortableSocketPath | None = None
-    slave_open = True
-    try:
-        with blocked_signal(signal.SIGALRM):
-            pager_socket = PortableSocketPath(args.socket)
-        set_pty_size(slave_fd)
-        env = os.environ.copy()
-        env.setdefault("TERM", "xterm-256color")
-        with blocked_signal(signal.SIGALRM):
-            process = subprocess.Popen(
-                [
-                    args.grok_bin,
-                    "--leader",
-                    "--leader-socket",
-                    pager_socket.connect_path,
-                    "--cwd",
-                    args.cwd,
-                    "--no-alt-screen",
-                    "--minimal",
-                ],
-                stdin=slave_fd,
-                stdout=slave_fd,
-                stderr=slave_fd,
-                cwd=args.cwd,
-                env=env,
-                start_new_session=True,
-            )
-            client_guard.process = process
-        os.close(slave_fd)
-        slave_open = False
-        pre_submit, ready_quiet = read_until_quiet(
-            master_fd,
-            deadline=bounded_deadline(overall_deadline, args.ready_timeout),
-            quiet_seconds=args.quiet_seconds,
+    with blocked_signal(signal.SIGALRM):
+        pager_socket = PortableSocketPath(args.socket)
+        client_guard.pager_socket = pager_socket
+    set_pty_size(slave_fd)
+    env = os.environ.copy()
+    env.setdefault("TERM", "xterm-256color")
+    with blocked_signal(signal.SIGALRM):
+        process = subprocess.Popen(
+            [
+                args.grok_bin,
+                "--leader",
+                "--leader-socket",
+                pager_socket.connect_path,
+                "--cwd",
+                args.cwd,
+                "--no-alt-screen",
+                "--minimal",
+            ],
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            cwd=args.cwd,
+            env=env,
+            start_new_session=True,
         )
-        require(ready_quiet and process.poll() is None, "stock pager did not become input-ready")
-        require(pre_submit, "stock pager produced no pre-submit UI")
-        require(expected_bytes not in pre_submit, "expected marker appeared before Enter")
-        os.write(master_fd, prompt_bytes)
-        time.sleep(0.15)
-        os.write(master_fd, b"\r")
-        first_request_id, stock_session_id = (
-            completed_request_for_prompt(
-                args.graphql,
-                prompt_bytes.decode(),
-                expected=expected,
-                expected_session=None,
-                deadline=bounded_deadline(overall_deadline, args.timeout),
-            )
-        )
-        _post_submit, first_quiet = read_until_quiet(
-            master_fd,
+        client_guard.process = process
+    os.close(slave_fd)
+    client_guard.slave_fd = None
+    pre_submit, ready_quiet = read_until_quiet(
+        master_fd,
+        deadline=bounded_deadline(overall_deadline, args.ready_timeout),
+        quiet_seconds=args.quiet_seconds,
+    )
+    require(ready_quiet and process.poll() is None, "stock pager did not become input-ready")
+    require(pre_submit, "stock pager produced no pre-submit UI")
+    require(expected_bytes not in pre_submit, "expected marker appeared before Enter")
+    os.write(master_fd, prompt_bytes)
+    time.sleep(0.15)
+    os.write(master_fd, b"\r")
+    first_request_id, stock_session_id = (
+        completed_request_for_prompt(
+            args.graphql,
+            prompt_bytes.decode(),
+            expected=expected,
+            expected_session=None,
             deadline=bounded_deadline(overall_deadline, args.timeout),
-            quiet_seconds=args.quiet_seconds,
         )
-        require(first_quiet and process.poll() is None, "first stock pager response did not settle")
-        read_available(master_fd, 0.5)
-        os.write(master_fd, idle_prompt_bytes)
-        time.sleep(0.15)
-        os.write(master_fd, b"\r")
-        second_request_id, second_session_id = (
-            completed_request_for_prompt(
-                args.graphql,
-                idle_prompt_bytes.decode(),
-                expected=idle_expected,
-                expected_session=stock_session_id,
-                deadline=bounded_deadline(overall_deadline, args.timeout),
-            )
-        )
-        _idle_output, second_quiet = read_until_quiet(
-            master_fd,
+    )
+    _post_submit, first_quiet = read_until_quiet(
+        master_fd,
+        deadline=bounded_deadline(overall_deadline, args.timeout),
+        quiet_seconds=args.quiet_seconds,
+    )
+    require(first_quiet and process.poll() is None, "first stock pager response did not settle")
+    read_available(master_fd, 0.5)
+    os.write(master_fd, idle_prompt_bytes)
+    time.sleep(0.15)
+    os.write(master_fd, b"\r")
+    second_request_id, second_session_id = (
+        completed_request_for_prompt(
+            args.graphql,
+            idle_prompt_bytes.decode(),
+            expected=idle_expected,
+            expected_session=stock_session_id,
             deadline=bounded_deadline(overall_deadline, args.timeout),
-            quiet_seconds=args.quiet_seconds,
         )
-        require(
-            second_quiet and process.poll() is None,
-            "input-ready proof response did not settle",
-        )
-        require(second_request_id != first_request_id, "input-ready proof reused the first request")
-        require(second_session_id == stock_session_id, "input-ready proof changed sessions")
-        idle_transition = process.poll() is None
-        require(idle_transition, "stock pager exited before completing the second turn")
-    finally:
-        # The hard wall bounds active probe work. Cleanup has its own bounded
-        # waits. Atomically block and disarm the alarm at the successful-body
-        # boundary; consume one signal queued after that boundary so it cannot
-        # discard the completed proof when the mask is restored.
-        with blocked_signal(signal.SIGALRM):
-            disarm_pending_alarm()
-            if slave_open:
-                try:
-                    os.close(slave_fd)
-                except OSError as error:
-                    if error.errno != errno.EBADF:
-                        raise
-            try:
-                if process is not None:
-                    terminate_client(process, master_fd)
-                    client_guard.process = None
-            finally:
-                try:
-                    if pager_socket is not None:
-                        pager_socket.cleanup()
-                finally:
-                    os.close(master_fd)
+    )
+    _idle_output, second_quiet = read_until_quiet(
+        master_fd,
+        deadline=bounded_deadline(overall_deadline, args.timeout),
+        quiet_seconds=args.quiet_seconds,
+    )
+    require(
+        second_quiet and process.poll() is None,
+        "input-ready proof response did not settle",
+    )
+    require(second_request_id != first_request_id, "input-ready proof reused the first request")
+    require(second_session_id == stock_session_id, "input-ready proof changed sessions")
+    idle_transition = process.poll() is None
+    require(idle_transition, "stock pager exited before completing the second turn")
 
     proof: dict[str, Any] = {
         "version": 1,
@@ -780,13 +811,32 @@ def self_test() -> dict[str, int]:
     guarded = ClientGuard()
     guarded.process = FakeProcess()  # type: ignore[assignment]
     killed: list[tuple[int, signal.Signals]] = []
+    cleaned: list[str] = []
+    prior_alarm_handler = signal.getsignal(signal.SIGALRM)
+
+    def record_deadline_cleanup() -> None:
+        require(
+            signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0),
+            "deadline remained armed during cleanup",
+        )
+        require(
+            signal.getsignal(signal.SIGALRM) == prior_alarm_handler,
+            "SIGALRM handler was not restored before cleanup",
+        )
+        cleaned.append("deadline")
+
+    guarded.cleanup = record_deadline_cleanup  # type: ignore[method-assign]
     original_killpg = os.killpg
     os.killpg = lambda pid, sig: killed.append((pid, sig))  # type: ignore[assignment]
     try:
         try:
-            with hard_deadline(0.03, guarded.emergency_kill):
+            def pending_deadline() -> dict[str, Any]:
                 with blocked_signal(signal.SIGALRM):
                     time.sleep(0.06)
+
+                return {}
+
+            run_with_deadline_cleanup(0.03, guarded, pending_deadline)
         except ProbeDeadlineExceeded:
             pass
         else:
@@ -797,23 +847,138 @@ def self_test() -> dict[str, int]:
         killed == [(4242, signal.SIGKILL)],
         "deadline did not kill the guarded pager before raising",
     )
+    require(cleaned == ["deadline"], "deadline cleanup did not run exactly once")
 
-    delivered_after_disarm: list[int] = []
-    previous_handler = signal.getsignal(signal.SIGALRM)
-    signal.signal(
-        signal.SIGALRM,
-        lambda signum, _frame: delivered_after_disarm.append(signum),
-    )
+    def ordinary_failure() -> dict[str, Any]:
+        raise AssertionError("ordinary failure")
+
+    for label, work in (("success", lambda: {}), ("error", ordinary_failure)):
+        cleanup_guard = ClientGuard()
+        cleanup_calls: list[str] = []
+        cleanup_guard.cleanup = lambda label=label: cleanup_calls.append(label)  # type: ignore[method-assign]
+        try:
+            run_with_deadline_cleanup(1.0, cleanup_guard, work)
+        except AssertionError:
+            require(label == "error", "successful deadline wrapper raised")
+        require(cleanup_calls == [label], f"{label} cleanup did not run exactly once")
+
+    class FaultProcess:
+        pid = 4343
+        alive = True
+
+        def poll(self) -> int | None:
+            return None if self.alive else -signal.SIGKILL
+
+        def wait(self, timeout: float) -> int:
+            del timeout
+            fault_events.append("wait")
+            return -signal.SIGKILL
+
+    class FaultSocket:
+        def cleanup(self) -> None:
+            fault_events.append("socket")
+            raise OSError(errno.ENOSPC, "injected socket cleanup failure")
+
+    fault_events: list[str] = []
+    fault_process = FaultProcess()
+    fault_guard = ClientGuard()
+    fault_guard.process = fault_process  # type: ignore[assignment]
+    fault_guard.master_fd = 12
+    fault_guard.slave_fd = 11
+    fault_guard.pager_socket = FaultSocket()  # type: ignore[assignment]
+    original_close = os.close
+    original_killpg = os.killpg
+    original_terminate_client = globals()["terminate_client"]
+    slave_error = OSError(errno.EIO, "injected slave close failure")
+
+    def fault_close(fd: int) -> None:
+        fault_events.append(f"close:{fd}")
+        if fd == 11:
+            raise slave_error
+        raise OSError(errno.EBADF, "injected master close failure")
+
+    def fault_terminate(_process: Any, _master_fd: int) -> None:
+        fault_events.append("terminate")
+        raise OSError(errno.EIO, "injected terminate failure")
+
+    def fault_killpg(pid: int, sig: signal.Signals) -> None:
+        require((pid, sig) == (4343, signal.SIGKILL), "fallback kill drifted")
+        fault_events.append("kill")
+        fault_process.alive = False
+
+    os.close = fault_close  # type: ignore[assignment]
+    os.killpg = fault_killpg  # type: ignore[assignment]
+    globals()["terminate_client"] = fault_terminate
     try:
-        with blocked_signal(signal.SIGALRM):
-            signal.setitimer(signal.ITIMER_REAL, 0.01)
-            time.sleep(0.03)
-            require(disarm_pending_alarm(), "queued cleanup alarm was not consumed")
-        time.sleep(0.01)
-        require(not delivered_after_disarm, "cleanup alarm fired after successful disarm")
+        try:
+            fault_guard.cleanup()
+        except OSError as error:
+            require(error is slave_error, "cleanup did not preserve its first error")
+        else:
+            raise AssertionError("injected cleanup failure was swallowed")
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        os.close = original_close  # type: ignore[assignment]
+        os.killpg = original_killpg  # type: ignore[assignment]
+        globals()["terminate_client"] = original_terminate_client
+    require(
+        fault_events
+        == ["close:11", "terminate", "kill", "wait", "socket", "close:12"],
+        f"cleanup did not release every owned resource: {fault_events}",
+    )
+
+    class FullyFaultingProcess:
+        pid = 4444
+
+        def poll(self) -> int | None:
+            full_fault_events.append("poll")
+            raise poll_error
+
+        def wait(self, timeout: float) -> int:
+            full_fault_events.append("wait")
+            raise subprocess.TimeoutExpired("pager", timeout)
+
+    class RecordingSocket:
+        def cleanup(self) -> None:
+            full_fault_events.append("socket")
+
+    full_fault_events: list[str] = []
+    poll_error = RuntimeError("injected poll failure")
+    full_fault_guard = ClientGuard()
+    full_fault_guard.process = FullyFaultingProcess()  # type: ignore[assignment]
+    full_fault_guard.master_fd = 14
+    full_fault_guard.pager_socket = RecordingSocket()  # type: ignore[assignment]
+    original_close = os.close
+    original_killpg = os.killpg
+    original_terminate_client = globals()["terminate_client"]
+
+    def full_fault_close(fd: int) -> None:
+        full_fault_events.append(f"close:{fd}")
+
+    def full_fault_terminate(_process: Any, _master_fd: int) -> None:
+        full_fault_events.append("terminate")
+
+    def full_fault_kill(_pid: int, _sig: signal.Signals) -> None:
+        full_fault_events.append("kill")
+        raise PermissionError("injected kill failure")
+
+    os.close = full_fault_close  # type: ignore[assignment]
+    os.killpg = full_fault_kill  # type: ignore[assignment]
+    globals()["terminate_client"] = full_fault_terminate
+    try:
+        try:
+            full_fault_guard.cleanup()
+        except Exception as error:
+            require(error is poll_error, "poll failure was not preserved as first error")
+        else:
+            raise AssertionError("fully faulting cleanup unexpectedly succeeded")
+    finally:
+        os.close = original_close  # type: ignore[assignment]
+        os.killpg = original_killpg  # type: ignore[assignment]
+        globals()["terminate_client"] = original_terminate_client
+    require(
+        full_fault_events == ["terminate", "poll", "kill", "wait", "socket", "close:14"],
+        f"cleanup stopped after a secondary failure: {full_fault_events}",
+    )
 
     transient_calls = 0
 
@@ -1095,8 +1260,11 @@ def main() -> int:
             write_json(preflight_probe(args), args.output)
         elif args.command == "run":
             client_guard = ClientGuard()
-            with hard_deadline(args.total_timeout, client_guard.emergency_kill):
-                proof = run_probe(args, client_guard)
+            proof = run_with_deadline_cleanup(
+                args.total_timeout,
+                client_guard,
+                lambda: run_probe(args, client_guard),
+            )
             write_json(proof, args.output)
         else:
             write_json(cleanup_probe(args), args.output)
