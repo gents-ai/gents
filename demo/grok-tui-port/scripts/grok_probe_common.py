@@ -12,7 +12,9 @@ from pathlib import Path
 PORTABLE_UNIX_PATH_BYTES = 100
 
 
-def _new_private_socket_directory(prefix: str, leaf_name: str) -> Path:
+def _new_private_socket_leaf(
+    prefix: str, leaf_name: str
+) -> tuple[tempfile.TemporaryDirectory, Path]:
     """Honor the configured temp directory, falling back when its path is too long."""
     configured = Path(tempfile.gettempdir())
     fallback = Path("/tmp")
@@ -20,22 +22,19 @@ def _new_private_socket_directory(prefix: str, leaf_name: str) -> Path:
     if configured.resolve() != fallback.resolve():
         parents.append(fallback)
 
-    last_error: OSError | None = None
     for parent in parents:
-        try:
-            directory = Path(tempfile.mkdtemp(prefix=prefix, dir=parent))
-        except OSError as error:
-            last_error = error
-            continue
+        owner = tempfile.TemporaryDirectory(prefix=prefix, dir=parent)
+        directory = Path(owner.name)
         mode = stat.S_IMODE(directory.stat().st_mode)
         if mode != 0o700:
-            directory.rmdir()
+            owner.cleanup()
             raise AssertionError(f"private socket directory has mode {mode:o}")
-        if len(os.fsencode(str(directory / leaf_name))) <= PORTABLE_UNIX_PATH_BYTES:
-            return directory
-        directory.rmdir()
+        leaf = directory / leaf_name
+        if len(os.fsencode(str(leaf))) <= PORTABLE_UNIX_PATH_BYTES:
+            return owner, leaf
+        owner.cleanup()
 
-    raise OSError("no temporary directory yields a portable Unix socket path") from last_error
+    raise OSError("no temporary directory yields a portable Unix socket path")
 
 
 class PortableSocketPath:
@@ -43,46 +42,45 @@ class PortableSocketPath:
 
     def __init__(self, path: str) -> None:
         self.identity = Path(path).resolve()
-        self.alias_dir: Path | None = None
+        self.alias_owner: tempfile.TemporaryDirectory | None = None
         self.alias_path: Path | None = None
         self.connect_path = str(self.identity)
         if len(os.fsencode(self.connect_path)) <= PORTABLE_UNIX_PATH_BYTES:
             return
 
-        alias_dir = _new_private_socket_directory(".gents-grok-client-", "s")
-        alias = alias_dir / "s"
+        alias_owner, alias = _new_private_socket_leaf(".gents-grok-client-", "s")
         try:
             alias.symlink_to(self.identity)
         except BaseException:
-            alias.unlink(missing_ok=True)
-            alias_dir.rmdir()
+            alias_owner.cleanup()
             raise
-        self.alias_dir = alias_dir
+        self.alias_owner = alias_owner
         self.alias_path = alias
         self.connect_path = str(alias)
 
     def cleanup(self) -> None:
-        if self.alias_dir is None:
+        if self.alias_owner is None:
             return
         if self.alias_path is None:
             raise AssertionError("socket-alias path is missing for its private directory")
-        self.alias_path.unlink(missing_ok=True)
-        self.alias_dir.rmdir()
+        self.alias_owner.cleanup()
         self.alias_path = None
-        self.alias_dir = None
+        self.alias_owner = None
 
 
 def self_test_portable_socket_path() -> None:
     """Prove an over-limit published socket works through the private alias."""
-    root = _new_private_socket_directory("gents-socket-test-", "b")
+    root_owner, staged = _new_private_socket_leaf("gents-socket-test-", "b")
+    root = Path(root_owner.name)
     long_dir = root / ("x" * 88)
-    staged = root / "b"
     published = long_dir / "leader.sock"
-    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener: socket.socket | None = None
+    client: socket.socket | None = None
     accepted: socket.socket | None = None
     bridge: PortableSocketPath | None = None
     try:
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         long_dir.mkdir()
         listener.bind(str(staged))
         listener.listen(1)
@@ -99,12 +97,12 @@ def self_test_portable_socket_path() -> None:
     finally:
         if accepted is not None:
             accepted.close()
-        client.close()
-        listener.close()
-        if bridge is not None:
-            bridge.cleanup()
-        published.unlink(missing_ok=True)
-        staged.unlink(missing_ok=True)
-        if long_dir.exists():
-            long_dir.rmdir()
-        root.rmdir()
+        if client is not None:
+            client.close()
+        if listener is not None:
+            listener.close()
+        try:
+            if bridge is not None:
+                bridge.cleanup()
+        finally:
+            root_owner.cleanup()
