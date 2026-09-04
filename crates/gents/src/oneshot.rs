@@ -264,22 +264,22 @@ where
     // Both entry points consume the owned stream through the same durable
     // processor, so text, reasoning and tool progress renew the same lease.
     let inference = async {
-        let stream = crate::agent::loop_stream::run_loop_stream(
+        let mut stream = Box::pin(crate::agent::loop_stream::run_loop_stream(
             model,
             Some(hook.clone()),
             Message::user(prompt),
             history,
             tools,
             config,
-        );
-        futures::pin_mut!(stream);
+        ));
         let mut processor =
             StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
         let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+        lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             let item = tokio::select! {
                 biased;
-                _ = lease_poll.tick() => { processor.validate_execution().await?; continue; },
+                _ = lease_poll.tick() => { processor.validate_execution().await?; lease_poll.reset(); continue; },
                 item = stream.next() => item,
             };
             let Some(item) = item else {
@@ -294,6 +294,7 @@ where
                         .context("one-shot final response missing text")
                 }
                 StreamAction::Error(error) => {
+                    drop(stream);
                     processor
                         .persist_partial_turn("persist failed one-shot assistant turn")
                         .await?;

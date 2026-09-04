@@ -460,41 +460,19 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             doc_id,
                         );
                         let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
+                        lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         let mut stream_error = None;
 
                         loop {
                             let item = match tokio::select! {
                                 biased;
-                                _ = lease_poll.tick() => {
-                                    if let Err(error) = processor.validate_execution().await {
-                                        let reason = format!("request execution lease: {error:#}");
-                                        admission::set_terminal_failure_reason(
-                                            &terminal_failure_reason,
-                                            reason.clone(),
-                                        );
-                                        if let Err(tool_error) = persistence_hook
-                                            .fail_in_flight_tool_calls(
-                                                &reason,
-                                                crate::tool_call_lifecycle::FailureClass::External,
-                                            )
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                %request_id,
-                                                error = %tool_error,
-                                                "failed to close in-flight tool calls after losing execution lease"
-                                            );
-                                        }
-                                        return Err(error);
-                                    }
-                                    continue;
-                                }
                                 _ = shutdown.changed() => {
                                     return Err(anyhow!("shutdown requested during inference stream"));
                                 }
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
                                     {
@@ -529,6 +507,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     }
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
+                                _ = lease_poll.tick() => {
+                                    if let Err(error) = processor.validate_execution().await {
+                                        let reason = format!("request execution lease: {error:#}");
+                                        admission::set_terminal_failure_reason(
+                                            &terminal_failure_reason,
+                                            reason.clone(),
+                                        );
+                                        drop(stream);
+                                        if let Err(tool_error) = persistence_hook
+                                            .fail_in_flight_tool_calls(
+                                                &reason,
+                                                crate::tool_call_lifecycle::FailureClass::External,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                %request_id,
+                                                error = %tool_error,
+                                                "failed to close in-flight tool calls after losing execution lease"
+                                            );
+                                        }
+                                        return Err(error);
+                                    }
+                                    lease_poll.reset();
+                                    continue;
+                                }
                                 result = await_with_request_deadline(
                                     request_deadline,
                                     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
@@ -547,6 +551,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     match result {
                                         Ok(item) => item,
                                         Err(error) => {
+                                            admission::set_terminal_failure_reason(
+                                                &terminal_failure_reason,
+                                                error.to_string(),
+                                            );
+                                            drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
                                             {
@@ -576,6 +585,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             }
                         }
 
+                        drop(stream);
                         if let Some(error) = stream_error {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
