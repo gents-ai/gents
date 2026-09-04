@@ -168,7 +168,9 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
     )
     .await
     .expect_err("dangling backend_id must be rejected");
-    assert!(error.contains("does not exist"), "{error}");
+    // `AgentBehavior::validate_references` (#1331, the single owner) phrases
+    // this as "references missing backend_id", not "does not exist".
+    assert!(error.contains("references missing backend_id"), "{error}");
     let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
         .await
         .expect("load behavior")

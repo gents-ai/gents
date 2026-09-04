@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use gents::{
     is_reserved_builtin_tool_name, CommandExecutionMode, CommandNetworkMode, SubagentTarget,
-    SurfaceToolDecl, WriteToolDecl, KEY_BACKEND_KEYRING,
+    SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, KEY_BACKEND_KEYRING,
 };
 
 use super::super::{
@@ -156,6 +156,63 @@ fn is_eth_address(value: &str) -> bool {
         && value[2..].bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Decode a manifest tool selection into the document type
+/// `ToolSelectionDocument::validate` owns. `write_tools` is deliberately left
+/// `None`: its field-level checks only make sense over the inline ∪
+/// surface-expanded list, which only `validate_tool_selection_surface_links`
+/// (a cross-document, manifest-only concern — `DatastoreToolSurface` doesn't
+/// exist as a concept inside one `ToolSelectionDocument`) can assemble.
+fn to_document_tool_selection(selection: &DesiredToolSelection) -> ToolSelectionDocument {
+    fn some(values: &[String]) -> Option<Vec<String>> {
+        Some(values.to_vec())
+    }
+    ToolSelectionDocument {
+        selection_id: selection.selection_id.clone(),
+        agent_did: selection.agent_did.clone(),
+        display_name: selection.display_name.clone(),
+        tool_policy_version: Some(selection.tool_policy_version.clone()),
+        enable_file_tools: Some(selection.enable_file_tools),
+        file_tools_mode: Some(selection.file_tools_mode.clone()),
+        file_tool_root: selection.file_tool_root.clone(),
+        enable_bash: Some(selection.enable_bash),
+        bash_mode: Some(selection.bash_mode.clone()),
+        command_execution_policy: selection.command_execution_policy.clone(),
+        command_allowed_argv_prefixes: some(&selection.command_allowed_argv_prefixes),
+        command_forbidden_argv_prefixes: some(&selection.command_forbidden_argv_prefixes),
+        read_only_command_allowlist: some(&selection.read_only_command_allowlist),
+        command_network_mode: selection.command_network_mode.clone(),
+        cli_tool_names: some(&selection.cli_tool_names),
+        enable_meta_tools: Some(selection.enable_meta_tools),
+        enable_goal_tools: selection.enable_goal_tools.flatten(),
+        enable_goal_creation: selection.enable_goal_creation.flatten(),
+        allowed_mcp_service_ids: some(&selection.allowed_mcp_service_ids),
+        required_mcp_service_ids: some(&selection.required_mcp_service_ids),
+        backgroundable_tool_names: some(&selection.backgroundable_tool_names),
+        approval_required_tools: None,
+        subagent_targets: some(&selection.subagent_targets),
+        subagent_spawn_enabled: Some(selection.subagent_spawn_enabled),
+        subagent_steering_enabled: Some(selection.subagent_steering_enabled),
+        subagent_background_enabled: Some(selection.subagent_background_enabled),
+        subagent_default_await_mode: selection.subagent_default_await_mode.clone(),
+        subagent_allow_cross_deployment: Some(selection.subagent_allow_cross_deployment),
+        cross_deployment_spawn_timeout_seconds: selection.cross_deployment_spawn_timeout_seconds,
+        enable_memory: Some(selection.enable_memory),
+        enable_session_history_tool: Some(selection.enable_session_history_tool),
+        enable_context_budget: Some(selection.enable_context_budget),
+        enable_defra_query: Some(selection.enable_defra_query),
+        defra_query_collections: some(&selection.defra_query_collections),
+        write_tools: None,
+        datastore_tool_surface_ids: some(&selection.datastore_tool_surface_ids),
+        eth_tool_ids: some(&selection.eth_tool_ids),
+        enable_self_config: Some(selection.enable_self_config),
+        self_config_categories: some(&selection.self_config_categories),
+        self_config_no_lockout: Some(selection.self_config_no_lockout),
+        self_config_dry_run: Some(selection.self_config_dry_run),
+        enable_lsp: Some(selection.enable_lsp),
+        lsp_config: selection.lsp_config.clone(),
+    }
+}
+
 pub(super) fn validate_tool_selections(
     manifest: &DesiredStateManifest,
     principal_agent_did: &str,
@@ -163,6 +220,9 @@ pub(super) fn validate_tool_selections(
 ) -> BTreeSet<String> {
     let mut tool_selection_ids = BTreeSet::new();
     for selection in &manifest.tool_selections {
+        // Manifest-shape: empty/duplicate selection_id and principal
+        // ownership have no document equivalent (a document validator sees
+        // one document at a time and doesn't know the current principal).
         let selection_id = selection.selection_id.trim();
         if selection_id.is_empty() {
             errors.push(
@@ -182,47 +242,24 @@ pub(super) fn validate_tool_selections(
             ));
         }
 
-        if let Some(mode) = selection
-            .subagent_default_await_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            match mode {
-                "foreground" => {}
-                "background" if selection.subagent_background_enabled => {}
-                "background" => errors.push(format!(
-                    "tool selection {} sets subagent_default_await_mode=background but subagent_background_enabled is false",
-                    selection.selection_id
-                )),
-                other => errors.push(format!(
-                    "tool selection {} has invalid subagent_default_await_mode {other:?}; expected foreground or background",
-                    selection.selection_id
-                )),
-            }
+        // Document rules (subagent_default_await_mode vs
+        // subagent_background_enabled, backgroundable_tool_names emptiness,
+        // subagent_targets structural validity, required_mcp_service_ids
+        // needing enable_meta_tools and staying inside
+        // allowed_mcp_service_ids, self_config_categories vocabulary) are
+        // owned by `ToolSelectionDocument::validate`.
+        if let Err(error) = to_document_tool_selection(selection).validate() {
+            errors.push(error.to_string());
         }
 
+        // Manifest-shape: command_execution_policy/command_network_mode
+        // parsing and the two argv-prefix JSON shape checks have no document
+        // equivalent (the document stores them as plain strings/lists; the
+        // richer enum/JSON-array shape is a manifest-authoring concern).
         if let Some(mode) = selection.command_execution_policy.as_deref() {
             if let Err(error) = CommandExecutionMode::parse(mode) {
                 errors.push(format!(
                     "tool selection {} has invalid command_execution_policy: {error}",
-                    selection.selection_id
-                ));
-            }
-        }
-
-        for (index, tool_name) in selection.backgroundable_tool_names.iter().enumerate() {
-            if tool_name.trim().is_empty() {
-                errors.push(format!(
-                    "tool selection {} has empty backgroundable_tool_names[{index}]",
-                    selection.selection_id
-                ));
-            }
-        }
-        for (index, target) in selection.subagent_targets.iter().enumerate() {
-            if target.trim().is_empty() {
-                errors.push(format!(
-                    "tool selection {} has empty subagent_targets[{index}]",
                     selection.selection_id
                 ));
             }
@@ -247,34 +284,22 @@ pub(super) fn validate_tool_selections(
             &selection.command_forbidden_argv_prefixes,
             errors,
         );
+        // Manifest-shape: `allowed_mcp_service_ids` entry emptiness has no
+        // document equivalent (`ToolSelectionDocument::validate` only checks
+        // `required_mcp_service_ids` entries, since only those are
+        // referenced by the no-lockout-adjacent callable-dependency rule).
         validate_tool_selection_non_empty_entries(
             &selection.selection_id,
             "allowed_mcp_service_ids",
             &selection.allowed_mcp_service_ids,
             errors,
         );
-        validate_tool_selection_non_empty_entries(
-            &selection.selection_id,
-            "required_mcp_service_ids",
-            &selection.required_mcp_service_ids,
-            errors,
-        );
-        if !selection.required_mcp_service_ids.is_empty() && !selection.enable_meta_tools {
-            errors.push(format!(
-                "tool selection {} requires MCP services but enable_meta_tools is false",
-                selection.selection_id
-            ));
-        }
-        if !selection.allowed_mcp_service_ids.is_empty() {
-            for service_id in &selection.required_mcp_service_ids {
-                if !selection.allowed_mcp_service_ids.contains(service_id) {
-                    errors.push(format!(
-                        "tool selection {} requires MCP service {} outside allowed_mcp_service_ids",
-                        selection.selection_id, service_id
-                    ));
-                }
-            }
-        }
+        // Manifest-shape: duplicate subagent target names and the
+        // cross-deployment permission gate have no document equivalent
+        // (`ToolSelectionDocument::validate` only checks each entry's own
+        // structural validity, which this also re-checks — a SubagentTarget
+        // parse failure or structural gap surfaces from both, redundantly
+        // but not incorrectly).
         validate_subagent_targets(
             &selection.selection_id,
             selection.agent_did.trim(),
@@ -287,13 +312,11 @@ pub(super) fn validate_tool_selections(
         // when no surfaces are linked).
         validate_tool_selection_surface_links(manifest, selection, errors);
         validate_eth_tool_links(manifest, selection, errors);
-        if selection.subagent_spawn_enabled {
-            if selection.subagent_targets.is_empty() {
-                errors.push(format!(
-                    "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
-                    selection.selection_id
-                ));
-            }
+        if selection.subagent_spawn_enabled && selection.subagent_targets.is_empty() {
+            errors.push(format!(
+                "tool selection {} sets subagent_spawn_enabled but has no subagent_targets; the tools would be inert",
+                selection.selection_id
+            ));
         }
     }
     tool_selection_ids

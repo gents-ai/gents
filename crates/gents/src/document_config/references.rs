@@ -9,8 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
-use crate::backend_registry::list_backend_records;
-
 use super::inference_profile::list_inference_profile_records;
 use super::skill::list_skill_records;
 use super::tool_selection::list_tool_selection_records;
@@ -33,11 +31,7 @@ pub struct ConfigReferences {
 impl ConfigReferences {
     /// Load the reference sets for `agent_did` from the current node state.
     pub async fn load(node: &EmbeddedNode, agent_did: &str) -> Result<Self> {
-        let backends = list_backend_records(node)
-            .await?
-            .into_iter()
-            .map(|(_, backend)| (backend.backend_id, backend.models))
-            .collect();
+        let backends = list_backend_id_models(node).await?;
         let tool_selections = list_tool_selection_records(node, agent_did)
             .await?
             .into_iter()
@@ -60,4 +54,49 @@ impl ConfigReferences {
             skills,
         })
     }
+}
+
+/// `backend_id` -> advertised `models`, read directly rather than through
+/// [`crate::backend_registry::InferenceBackend::from_value`]: that parser
+/// requires every column (`max_concurrent`, `enabled`, …) an unrelated
+/// backend may not have set, and a referential-existence check has no
+/// business failing every principal's config validation over one malformed
+/// row elsewhere in the collection. A row with no usable `backend_id` is
+/// skipped, not fatal.
+async fn list_backend_id_models(node: &EmbeddedNode) -> Result<BTreeMap<String, Vec<String>>> {
+    let query = r#"{
+            InferenceBackend(order: { backend_id: ASC }) {
+                backend_id
+                models
+            }
+        }"#;
+    let resp = node.execute(query).await;
+    if resp.has_errors() {
+        anyhow::bail!("list InferenceBackend (id/models) failed: {:?}", resp.errors);
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            let backend_id = row.get("backend_id")?.as_str()?.to_string();
+            let models = row
+                .get("models")
+                .and_then(serde_json::Value::as_array)
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((backend_id, models))
+        })
+        .collect())
 }
