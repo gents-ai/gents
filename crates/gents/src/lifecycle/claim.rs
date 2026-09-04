@@ -437,25 +437,27 @@ impl RequestLifecycle {
             return Ok(ClaimOutcome::Interrupted);
         }
 
-        let valid_until_at_claim = match valid_until.as_deref() {
-            Some(s) => {
-                let dt = chrono::DateTime::parse_from_rfc3339(s)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "invalid valid_until on request {}: {e}",
-                            self.request.doc_id
-                        )
-                    })?
-                    .with_timezone(&chrono::Utc);
-                if chrono::Utc::now() > dt {
+        let valid_until_at_claim =
+            match super::parse_valid_until(valid_until.as_deref(), chrono::Utc::now()) {
+                super::TtlOutcome::Malformed => {
+                    anyhow::bail!("invalid valid_until on request {}", self.request.doc_id);
+                }
+                super::TtlOutcome::Expired => {
                     self.transition_pending_to_dead_stale().await?;
                     self.state = LocalLifecycleState::Dead;
                     return Ok(ClaimOutcome::Expired);
                 }
-                Some(dt)
-            }
-            None => None,
-        };
+                super::TtlOutcome::NotSet => None,
+                super::TtlOutcome::Live => Some(
+                    chrono::DateTime::parse_from_rfc3339(
+                        valid_until
+                            .as_deref()
+                            .expect("TtlOutcome::Live implies valid_until is Some"),
+                    )
+                    .expect("TtlOutcome::Live implies valid_until already parsed")
+                    .with_timezone(&chrono::Utc),
+                ),
+            };
 
         let dedup = self.check_deduplication().await?;
         if !dedup.is_earliest {

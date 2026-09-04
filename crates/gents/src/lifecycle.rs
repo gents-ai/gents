@@ -38,6 +38,45 @@ pub use task_title::task_run_conversation_title;
 
 pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 
+/// Outcome of interpreting a persisted `valid_until` TTL against `now`.
+/// Single owner for the parse, shared by the claim path
+/// (`lifecycle::claim::claim_inner`, which errors the claim attempt on
+/// `Malformed`) and the watcher's pre-claim scans (`watcher::query`), which
+/// must fail closed on `Malformed` too — a request whose TTL cannot be
+/// interpreted is not evidence it is still live, so it must not be silently
+/// claimed as if `valid_until` were unset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TtlOutcome {
+    /// No `valid_until` was persisted (or it was empty/whitespace).
+    NotSet,
+    /// `valid_until` parsed and has not yet passed.
+    Live,
+    /// `valid_until` parsed and has passed.
+    Expired,
+    /// `valid_until` was present but did not parse as RFC3339.
+    Malformed,
+}
+
+/// Parse a persisted `valid_until` value against `now`. See [`TtlOutcome`].
+pub(crate) fn parse_valid_until(
+    value: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> TtlOutcome {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return TtlOutcome::NotSet;
+    };
+    match chrono::DateTime::parse_from_rfc3339(value) {
+        Ok(parsed) => {
+            if now > parsed.with_timezone(&chrono::Utc) {
+                TtlOutcome::Expired
+            } else {
+                TtlOutcome::Live
+            }
+        }
+        Err(_) => TtlOutcome::Malformed,
+    }
+}
+
 pub fn is_background_completion_request(metadata: Option<&str>) -> bool {
     queue::is_automated_wakeup(metadata)
 }
@@ -483,6 +522,24 @@ mod tests {
 
     fn materialization_identity() -> Arc<dyn crate::identity::AgentIdentity> {
         Arc::new(MaterializationTestIdentity)
+    }
+
+    #[test]
+    fn parse_valid_until_covers_not_set_live_expired_and_malformed() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-12T22:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let future = "2026-08-12T23:00:00Z";
+        let past = "2026-08-12T21:00:00Z";
+
+        assert_eq!(parse_valid_until(None, now), TtlOutcome::NotSet);
+        assert_eq!(parse_valid_until(Some("   "), now), TtlOutcome::NotSet);
+        assert_eq!(parse_valid_until(Some(future), now), TtlOutcome::Live);
+        assert_eq!(parse_valid_until(Some(past), now), TtlOutcome::Expired);
+        assert_eq!(
+            parse_valid_until(Some("not-a-timestamp"), now),
+            TtlOutcome::Malformed
+        );
     }
 
     #[test]

@@ -517,8 +517,10 @@ fn validate_rejects_duplicate_field_names_within_decl() {
 fn reserved_names_cover_native_and_meta_tools() {
     use crate::toolset::NativeTool;
 
-    // Every native tool name must be reserved (guards the hardcoded native
-    // literal list in `is_reserved_builtin_tool_name` against drift).
+    // Every constructible native tool's `tool_name()` must appear in the
+    // `NativeTool::ALL_NAMES` registry (guards it against drifting from
+    // `tool_name` as variants are added), and every registry entry must be
+    // reserved.
     let native = [
         NativeTool::ListFiles { max_entries: 1 },
         NativeTool::ReadFile { max_chars: 1 },
@@ -533,9 +535,20 @@ fn reserved_names_cover_native_and_meta_tools() {
     ];
     for tool in &native {
         assert!(
+            NativeTool::ALL_NAMES.contains(&tool.tool_name().as_str()),
+            "native tool {:?} missing from NativeTool::ALL_NAMES",
+            tool.tool_name()
+        );
+        assert!(
             is_reserved_builtin_tool_name(&tool.tool_name()),
             "native tool {:?} must be reserved",
             tool.tool_name()
+        );
+    }
+    for name in NativeTool::ALL_NAMES {
+        assert!(
+            is_reserved_builtin_tool_name(name),
+            "registry name {name:?} must be reserved"
         );
     }
     assert!(is_reserved_builtin_tool_name("bash"));

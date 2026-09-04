@@ -36,24 +36,6 @@ pub(super) fn render_tool_completion(
     )
 }
 
-pub(super) fn child_terminal_status(terminal: &ChildTerminal) -> &'static str {
-    match terminal {
-        ChildTerminal::Failed { .. } => "failed",
-        ChildTerminal::Dead => "dead",
-        ChildTerminal::Interrupted => "interrupted",
-        ChildTerminal::Superseded => "superseded",
-    }
-}
-
-pub(super) fn child_terminal_summary(terminal: &ChildTerminal) -> String {
-    match terminal {
-        ChildTerminal::Failed { reason, .. } => compact_summary(reason),
-        ChildTerminal::Dead => "child request reached the dead terminal state".to_string(),
-        ChildTerminal::Interrupted => "child request was interrupted".to_string(),
-        ChildTerminal::Superseded => "child request was superseded".to_string(),
-    }
-}
-
 pub(super) fn compact_summary(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     const LIMIT: usize = 4000;

@@ -407,20 +407,6 @@ pub(crate) fn validate_write_tool_declarations(
 pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
     let name = name.trim();
 
-    // Native tools have no shared name constants; these literals must stay in
-    // sync with `crate::toolset::NativeTool::tool_name`. The
-    // `reserved_names_cover_native_and_meta_tools` test guards against drift.
-    const NATIVE_TOOL_NAMES: &[&str] = &[
-        "list_files",
-        "read_file",
-        "glob",
-        "grep",
-        "write_file",
-        "edit_file",
-        "bash",
-        "bash_unrestricted",
-        "lsp",
-    ];
     const SUBAGENT_TOOL_NAMES: &[&str] = &[
         SPAWN_SUBAGENT_TOOL_NAME,
         WAIT_SUBAGENT_TOOL_NAME,
@@ -446,7 +432,8 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         "memory",
     ];
 
-    NATIVE_TOOL_NAMES.contains(&name)
+    crate::toolset::NativeTool::ALL_NAMES.contains(&name)
+        || name == crate::toolset::lsp::LSP_TOOL_NAME
         || META_TOOL_NAMES.contains(&name)
         || SUBAGENT_TOOL_NAMES.contains(&name)
         || SINGLETON_TOOL_NAMES.contains(&name)

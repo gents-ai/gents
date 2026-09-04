@@ -77,7 +77,8 @@ async fn project_background_subagent_completion_inner(
     } else {
         let terminal = terminal.expect("non-completed child terminal checked above");
         let status = child_terminal_status(&terminal).to_string();
-        let summary = child_terminal_summary(&terminal);
+        let (reason, _failure_class) = child_terminal_reason(&terminal);
+        let summary = compact_summary(&reason);
         (status, summary, None, Some(terminal))
     };
 

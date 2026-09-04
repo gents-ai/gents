@@ -339,6 +339,23 @@ pub enum NativeTool {
 }
 
 impl NativeTool {
+    /// Names of the non-parameterized native tool kinds, i.e. every variant
+    /// except `Cli` (whose name is config-defined). Single source of truth
+    /// for callers that need to reserve or enumerate the built-in native
+    /// tool surface without constructing an instance of each variant; kept
+    /// in sync with `tool_name` by the
+    /// `reserved_names_cover_native_and_meta_tools` test.
+    pub const ALL_NAMES: [&'static str; 8] = [
+        "list_files",
+        "read_file",
+        "glob",
+        "grep",
+        "write_file",
+        "edit_file",
+        "bash",
+        "bash_unrestricted",
+    ];
+
     pub fn tool_name(&self) -> String {
         match self {
             Self::ListFiles { .. } => "list_files".to_string(),

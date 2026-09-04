@@ -2173,6 +2173,41 @@ pub(crate) fn project_child_terminal(row: &ChildRequestTerminalRow) -> Option<Ch
     }
 }
 
+/// Persisted status word for a [`ChildTerminal`], shared by the background
+/// completion notification path and the subagent-bridge failure path.
+pub(crate) fn child_terminal_status(terminal: &ChildTerminal) -> &'static str {
+    match terminal {
+        ChildTerminal::Failed { .. } => "failed",
+        ChildTerminal::Dead => "dead",
+        ChildTerminal::Interrupted => "interrupted",
+        ChildTerminal::Superseded => "superseded",
+    }
+}
+
+/// Human-readable reason for a [`ChildTerminal`], shared by the notification
+/// summary and the bridge failure payload; the failure path additionally
+/// needs the [`FailureClass`] to persist alongside the reason.
+pub(crate) fn child_terminal_reason(terminal: &ChildTerminal) -> (String, FailureClass) {
+    match terminal {
+        ChildTerminal::Failed {
+            reason,
+            failure_class,
+        } => (reason.clone(), *failure_class),
+        ChildTerminal::Dead => (
+            "child request reached the dead terminal state".to_string(),
+            FailureClass::External,
+        ),
+        ChildTerminal::Interrupted => (
+            "child request was interrupted".to_string(),
+            FailureClass::External,
+        ),
+        ChildTerminal::Superseded => (
+            "child request was superseded".to_string(),
+            FailureClass::External,
+        ),
+    }
+}
+
 pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
     RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref())
         == Some(RequestLifecycleState::Completed)

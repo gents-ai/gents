@@ -487,8 +487,12 @@ impl ToolCallLifecycle {
         self.doc_id = doc_id;
     }
 
-    pub(crate) fn deadline_at(&self) -> chrono::DateTime<chrono::Utc> {
-        self.deadline_at
+    /// True once `deadline_at` has passed (inclusive) relative to `now`. Single
+    /// owner for the deadline-expiry check shared by the parent-deadline sweep
+    /// (`hook.rs::timeout_expired_tool_calls`) and the held-approval sweep
+    /// (`hook/persistence/approval.rs::drive_held_tool_call`).
+    pub(crate) fn is_deadline_expired(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
+        self.deadline_at <= now
     }
 
     pub(crate) fn is_subagent_bridge(&self) -> bool {

@@ -412,36 +412,6 @@ pub(super) fn json_envelope_with_bounded_result(
     json_string(envelope)
 }
 
-pub(super) fn child_terminal_status(terminal: &ChildTerminal) -> &'static str {
-    match terminal {
-        ChildTerminal::Failed { .. } => "failed",
-        ChildTerminal::Dead => "dead",
-        ChildTerminal::Interrupted => "interrupted",
-        ChildTerminal::Superseded => "superseded",
-    }
-}
-
-pub(super) fn child_terminal_error(terminal: &ChildTerminal) -> (String, FailureClass) {
-    match terminal {
-        ChildTerminal::Failed {
-            reason,
-            failure_class,
-        } => (reason.clone(), *failure_class),
-        ChildTerminal::Dead => (
-            "child request reached terminal state dead".to_string(),
-            FailureClass::External,
-        ),
-        ChildTerminal::Interrupted => (
-            "child request was interrupted".to_string(),
-            FailureClass::External,
-        ),
-        ChildTerminal::Superseded => (
-            "child request was superseded".to_string(),
-            FailureClass::External,
-        ),
-    }
-}
-
 pub(super) fn foreground_terminal_failure_payload(
     child_request_id: &str,
     child_session_id: &str,

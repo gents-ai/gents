@@ -18,9 +18,10 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::{
-    child_request_completed, fail_running_subagent_tool_call, load_authorized_child_edge,
-    load_child_final_response, load_child_terminal_row, load_parent_subagent_context,
-    project_child_terminal, subagent_tool_not_allowed_payload, ChildEdge,
+    child_request_completed, child_terminal_reason, child_terminal_status,
+    fail_running_subagent_tool_call, load_authorized_child_edge, load_child_final_response,
+    load_child_terminal_row, load_parent_subagent_context, project_child_terminal,
+    subagent_tool_not_allowed_payload, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{
@@ -29,7 +30,7 @@ use crate::lifecycle::queue::{
 };
 use crate::lifecycle::ExecutionOrigin;
 use crate::session;
-use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass, ToolCallLifecycle};
+use crate::tool_call_lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
 pub const BACKGROUND_COMPLETION_WAKE_PROMPT: &str =
@@ -115,8 +116,8 @@ use notification_delivery::SideEffects;
 use queries::{load_child_linkage, load_request_id_by_doc_id, load_terminal_child_request_ids};
 use reconciliation::request_is_locally_owned;
 use rendering::{
-    child_terminal_status, child_terminal_summary, compact_summary, first_row, non_empty,
-    render_notification, render_tool_completion, xml_escape_attr,
+    compact_summary, first_row, non_empty, render_notification, render_tool_completion,
+    xml_escape_attr,
 };
 use side_effects::{
     bound_background_wake_request, bridge_state_is_terminal, ensure_projection_side_effects,
