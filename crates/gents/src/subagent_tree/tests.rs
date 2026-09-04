@@ -9,6 +9,15 @@ use tokio::net::TcpListener;
 
 use super::*;
 
+// The end-to-end walk (cross-deployment bridge metadata, max-depth
+// truncation, terminal-subtree pruning) is golden-tested against this same
+// shared code path by `gents-cli`'s `http::subagent_tree` fixture tests,
+// which call `build_subagent_tree` through `load_subagent_tree_snapshot`.
+// This module covers what only the owner itself can exercise: the max-depth
+// clamp, multi-access aggregation with partial-failure reporting (the
+// bridge's cross-deployment case, which the CLI's single-access route never
+// exercises), and the local embedded-node access path.
+
 #[derive(Clone)]
 struct MockGraphqlState {
     responses: Arc<Mutex<Vec<Value>>>,
@@ -214,13 +223,6 @@ fn canonical_standard_walk_responses() -> Vec<Value> {
     ]
 }
 
-fn single_access(graphql: String) -> Vec<SubagentTreeAccess> {
-    vec![SubagentTreeAccess {
-        label: None,
-        access: ConfigAccess::Graphql(graphql),
-    }]
-}
-
 #[test]
 fn effective_subagent_tree_max_depth_defaults_and_clamps() {
     assert_eq!(
@@ -232,241 +234,6 @@ fn effective_subagent_tree_max_depth_defaults_and_clamps() {
         effective_subagent_tree_max_depth(Some(1_000)),
         HARD_SUBAGENT_TREE_MAX_DEPTH
     );
-}
-
-#[tokio::test]
-async fn tree_walks_cross_deployment_bridge_and_carries_metadata() -> anyhow::Result<()> {
-    let graphql = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
-    let tree = build_subagent_tree(&single_access(graphql), "req-root", false, 4).await?;
-
-    assert_eq!(tree.root_request_id, "req-root");
-    assert!(!tree.truncated, "shallow tree should not be truncated");
-    assert!(tree.partial_errors.is_empty());
-    assert_eq!(tree.nodes.len(), 2);
-    assert_eq!(tree.edges.len(), 1);
-
-    let root = tree
-        .nodes
-        .iter()
-        .find(|node| node.request_id == "req-root")
-        .expect("root node");
-    assert_eq!(root.agent_did.as_deref(), Some("deployment-a"));
-    assert_eq!(root.subagent_depth, Some(0));
-    assert_eq!(root.resolved_via, None);
-
-    let child = tree
-        .nodes
-        .iter()
-        .find(|node| node.request_id == "req-child")
-        .expect("child node");
-    assert_eq!(child.agent_did.as_deref(), Some("deployment-b"));
-    assert_eq!(
-        child.caused_by_parent_request_id.as_deref(),
-        Some("req-root")
-    );
-    assert_eq!(
-        child.caused_by_parent_tool_call_id.as_deref(),
-        Some("tc-bridge")
-    );
-
-    let edge = &tree.edges[0];
-    assert_eq!(edge.parent_request_id, "req-root");
-    assert_eq!(edge.child_request_id, "req-child");
-    assert_eq!(edge.tool_name.as_deref(), Some("spawn_subagent"));
-    assert_eq!(edge.await_mode.as_deref(), Some("background"));
-    assert_eq!(edge.cancel_policy.as_deref(), Some("cascade"));
-    assert_eq!(edge.lifecycle_state.as_deref(), Some("running"));
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn tree_respects_max_depth_and_sets_truncated_flag() -> anyhow::Result<()> {
-    let root = json!({
-        "data": {
-            "AgentRequest": [
-                {
-                    "request_id": "req-root",
-                    "agent_did": "deployment-a",
-                    "lifecycle_state": "Processing",
-                    "subagent_depth": 0
-                }
-            ]
-        }
-    });
-    let canonical_root = canonical_root_response(
-        "req-root",
-        "doc-root",
-        "sess-root",
-        "deployment-a",
-        "amy-general",
-        "processing",
-    );
-    let canonical_level_one = canonical_bridges_response(vec![canonical_bridge_row(
-        "doc-tc-a",
-        "req-root",
-        "doc-root",
-        "sess-root",
-        "deployment-a",
-        "tc-a",
-        "req-a",
-        "background",
-        "running",
-    )]);
-    let canonical_child_a = canonical_children_response(vec![canonical_child_row(
-        "doc-a",
-        "req-a",
-        "sess-a",
-        "deployment-a",
-        "amy-code",
-        "processing",
-        "req-root",
-        "doc-root",
-        "tc-a",
-        "doc-tc-a",
-    )]);
-    let canonical_level_two = canonical_bridges_response(vec![canonical_bridge_row(
-        "doc-tc-b",
-        "req-a",
-        "doc-a",
-        "sess-a",
-        "deployment-a",
-        "tc-b",
-        "req-b",
-        "foreground",
-        "running",
-    )]);
-    let canonical_child_b = canonical_children_response(vec![canonical_child_row(
-        "doc-b",
-        "req-b",
-        "sess-b",
-        "deployment-a",
-        "amy-review",
-        "processing",
-        "req-a",
-        "doc-a",
-        "tc-b",
-        "doc-tc-b",
-    )]);
-    let graphql = spawn_mock_graphql(vec![
-        root,
-        canonical_root,
-        canonical_level_one,
-        canonical_child_a,
-        canonical_level_two,
-        canonical_child_b,
-        canonical_bridges_response(Vec::new()),
-        canonical_messages_empty(),
-    ])
-    .await?;
-    let tree = build_subagent_tree(&single_access(graphql), "req-root", true, 1).await?;
-    assert!(tree.truncated, "max_depth=1 should set truncated");
-    assert_eq!(tree.nodes.len(), 2);
-    assert_eq!(tree.edges.len(), 1);
-    Ok(())
-}
-
-#[tokio::test]
-async fn tree_prunes_fully_terminal_subtrees_when_include_terminal_is_false() -> anyhow::Result<()>
-{
-    let root = json!({
-        "data": {
-            "AgentRequest": [
-                {
-                    "request_id": "req-root",
-                    "agent_did": "deployment-a",
-                    "lifecycle_state": "Processing",
-                    "subagent_depth": 0
-                }
-            ]
-        }
-    });
-    let canonical_root = canonical_root_response(
-        "req-root",
-        "doc-root",
-        "sess-root",
-        "deployment-a",
-        "amy-general",
-        "processing",
-    );
-    let bridges = canonical_bridges_response(vec![
-        canonical_bridge_row(
-            "doc-tc-live",
-            "req-root",
-            "doc-root",
-            "sess-root",
-            "deployment-a",
-            "tc-live",
-            "req-live",
-            "background",
-            "running",
-        ),
-        canonical_bridge_row(
-            "doc-tc-dead",
-            "req-root",
-            "doc-root",
-            "sess-root",
-            "deployment-a",
-            "tc-dead",
-            "req-dead",
-            "foreground",
-            "completed",
-        ),
-    ]);
-    let children = canonical_children_response(vec![
-        canonical_child_row(
-            "doc-live",
-            "req-live",
-            "sess-live",
-            "deployment-a",
-            "amy-code",
-            "processing",
-            "req-root",
-            "doc-root",
-            "tc-live",
-            "doc-tc-live",
-        ),
-        canonical_child_row(
-            "doc-dead",
-            "req-dead",
-            "sess-dead",
-            "deployment-a",
-            "amy-code",
-            "completed",
-            "req-root",
-            "doc-root",
-            "tc-dead",
-            "doc-tc-dead",
-        ),
-    ]);
-    let graphql = spawn_mock_graphql(vec![
-        root,
-        canonical_root,
-        bridges,
-        children,
-        canonical_bridges_response(Vec::new()),
-        canonical_messages_empty(),
-    ])
-    .await?;
-    let tree = build_subagent_tree(&single_access(graphql), "req-root", false, 4).await?;
-    let request_ids = tree
-        .nodes
-        .iter()
-        .map(|node| node.request_id.as_str())
-        .collect::<Vec<_>>();
-    assert!(request_ids.contains(&"req-root"));
-    assert!(request_ids.contains(&"req-live"));
-    assert!(
-        !request_ids.contains(&"req-dead"),
-        "terminal request without live descendants should be pruned"
-    );
-    assert!(
-        tree.edges
-            .iter()
-            .all(|edge| edge.child_request_id != "req-dead"),
-        "edges into a pruned node should also be dropped"
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -489,6 +256,10 @@ async fn tree_aggregates_labeled_accesses_and_records_partial_error_for_dead_pee
     let tree = build_subagent_tree(&accesses, "req-root", false, 4).await?;
 
     assert_eq!(tree.nodes.len(), 2, "the healthy access still resolves");
+    assert!(
+        !tree.truncated,
+        "the healthy access's shallow tree is not truncated"
+    );
     assert_eq!(
         tree.partial_errors.len(),
         1,
@@ -509,6 +280,12 @@ async fn tree_aggregates_labeled_accesses_and_records_partial_error_for_dead_pee
         root.resolved_via, None,
         "root resolved through the unlabeled local access"
     );
+    let child = tree
+        .nodes
+        .iter()
+        .find(|node| node.request_id == "req-child")
+        .expect("child node");
+    assert_eq!(child.agent_did.as_deref(), Some("deployment-b"));
 
     Ok(())
 }

@@ -263,8 +263,10 @@ pub async fn desktop_list_subagent_tree(
 }
 
 /// The bridge's TS-bound presentation shape, built from the owned
-/// `gents::subagent_tree` projection (#1334).
-fn subagent_tree_view_from_gents(tree: SubagentTree) -> SubagentTreeView {
+/// `gents::subagent_tree` projection (#1334). `pub` so the fixture-host's
+/// bridge_runner HTTP shim (a separate crate wrapping the same local-node
+/// query) shares the conversion rather than duplicating it.
+pub fn subagent_tree_view_from_gents(tree: SubagentTree) -> SubagentTreeView {
     SubagentTreeView {
         root_request_id: tree.root_request_id,
         nodes: tree
