@@ -32,6 +32,15 @@ pub enum Collection {
 /// a subset, but must preserve this order. Deletes intentionally have no
 /// equivalent runtime API: pruning is an operator CLI concern, never a package
 /// installation primitive.
+///
+/// This is a *linear refinement* of the Lean-proven rank,
+/// [`Collection::apply_order`] (`ApplyReconcile.Collection.applyOrder`):
+/// [`Collection::apply_order`] only orders collections whose ranks differ (a
+/// partial order — same-rank collections have no proven relative order), and
+/// this array totals that partial order into one concrete write sequence by
+/// picking one linear order among the choices the rank leaves open. Reordering
+/// entries *within* a rank is free; moving a collection across a rank
+/// boundary is not — see `linear_apply_order_refines_the_lean_rank` below.
 pub const DESIRED_STATE_APPLY_ORDER: [Collection; 14] = [
     Collection::InferenceBackend,
     Collection::InferenceProfile,
@@ -216,6 +225,41 @@ mod tests {
     fn all_collections_have_distinct_display_strings() {
         let names: BTreeSet<String> = Collection::ALL.iter().map(|c| c.to_string()).collect();
         assert_eq!(names.len(), Collection::ALL.len());
+    }
+
+    #[test]
+    fn linear_apply_order_refines_the_lean_rank() {
+        // DESIRED_STATE_APPLY_ORDER is a linear refinement of the Lean-proven
+        // partial order (Collection::apply_order): consecutive entries must
+        // never step DOWN in rank. Stepping up (including staying flat, for
+        // same-rank neighbors) is exactly what "refinement" allows.
+        let ranks: Vec<u8> = DESIRED_STATE_APPLY_ORDER
+            .iter()
+            .map(|c| c.apply_order())
+            .collect();
+        for window in ranks.windows(2) {
+            let (previous, next) = (window[0], window[1]);
+            assert!(
+                previous <= next,
+                "DESIRED_STATE_APPLY_ORDER places a higher-rank collection \
+                 before a lower-rank one: rank {previous} is immediately \
+                 followed by rank {next} in {DESIRED_STATE_APPLY_ORDER:?}"
+            );
+        }
+
+        // Every canonical variant appears in the array exactly once — the
+        // refinement is total, not a subset.
+        assert_eq!(DESIRED_STATE_APPLY_ORDER.len(), Collection::ALL.len());
+        for variant in Collection::ALL {
+            assert_eq!(
+                DESIRED_STATE_APPLY_ORDER
+                    .iter()
+                    .filter(|c| **c == variant)
+                    .count(),
+                1,
+                "DESIRED_STATE_APPLY_ORDER must list {variant:?} exactly once"
+            );
+        }
     }
 
     #[test]
