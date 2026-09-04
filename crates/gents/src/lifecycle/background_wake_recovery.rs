@@ -447,3 +447,117 @@ async fn redrive_mutation(
         conversation_doc_id = escape_graphql_string(&conversation.doc_id),
     ))
 }
+
+/// Pins today's `AgentRequestCreate::graphql_input_fields()` output for
+/// `redrive_mutation` (#1336 Task 1), before it is switched onto
+/// `build_signed_request` (#1336 Task 2).
+///
+/// `redrive_mutation` is private and returns one combined mutation string
+/// (the successor `create_AgentRequest` plus a conversation `update`), not
+/// the `AgentRequestCreate` it builds, and it stamps `created_at` from
+/// `Utc::now()` internally. This reproduces its DTO-construction statements
+/// verbatim (see `redrive_mutation` above) with a fixed `now` in place of
+/// `Utc::now()`, so — with a deterministic signing identity — the whole
+/// output, including the signature, is stable across runs.
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use crate::identity::AgentIdentity;
+
+    const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
+    const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+
+    fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
+        let key_bytes: Vec<u8> = (0..PIN_FIXED_KEY_HEX.len())
+            .step_by(2)
+            .map(|offset| u8::from_str_radix(&PIN_FIXED_KEY_HEX[offset..offset + 2], 16).unwrap())
+            .collect();
+        let path = dir.join("pinning.key");
+        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
+        assert_eq!(identity.did(), PIN_FIXED_DID);
+        identity
+    }
+
+    #[tokio::test]
+    async fn pin_redrive_mutation_dto_construction() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = pin_fixed_signing_identity(tempdir.path());
+
+        let candidate = FailedWakeRow {
+            doc_id: "failed-doc-1".to_string(),
+            request_id: "failed-request-1".to_string(),
+            agent_did: PIN_FIXED_DID.to_string(),
+            behavior_id: "behavior-1".to_string(),
+            session_id: "sess-redrive-1".to_string(),
+            retry_root_request: Some("root-request-1".to_string()),
+            temperature: Some(0.7),
+            top_p: Some(0.9),
+            top_k: Some(40),
+            seed: Some(7),
+            max_tokens: Some(1024),
+            max_total_tokens: Some(4096),
+            metadata: Some(r#"{"queue":{"source":"scheduled"}}"#.to_string()),
+            backend_id: Some("backend-1".to_string()),
+            subagent_depth: Some(1),
+            retry_count: 2,
+            max_retries: 5,
+            terminalized_at: Some("2029-12-31T23:59:59Z".to_string()),
+        };
+        let request_id = "redrive-request-1";
+        let retry_key = "redrive-retry-key-1";
+
+        // --- reproduces redrive_mutation's DTO construction, with a fixed
+        // `now` in place of `Utc::now()` ---
+        let now = "2030-01-01T00:00:00Z".to_string();
+        let retry_root = candidate
+            .retry_root_request
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(&candidate.request_id);
+        let admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
+                &candidate.agent_did,
+                &candidate.request_id,
+            );
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            request_id,
+            &candidate.agent_did,
+            &candidate.agent_did,
+            &candidate.behavior_id,
+            &candidate.session_id,
+            BACKGROUND_COMPLETION_WAKE_PROMPT,
+            "scheduled",
+            &now,
+            admission,
+        );
+        create.retry_parent_request = Some(candidate.request_id.clone());
+        create.retry_parent_request_doc_id = Some(candidate.doc_id.clone());
+        create.retry_root_request = Some(retry_root.to_string());
+        create.retry_key = Some(retry_key.to_string());
+        create.temperature = candidate.temperature;
+        create.top_p = candidate.top_p;
+        create.top_k = candidate.top_k;
+        create.seed = candidate.seed;
+        create.max_tokens = candidate.max_tokens;
+        create.max_total_tokens = candidate.max_total_tokens;
+        create.metadata = candidate.metadata.clone();
+        create.backend_id = candidate.backend_id.clone();
+        create.retry_count = candidate.retry_count + 1;
+        create.max_retries = candidate.max_retries;
+        create.subagent_depth = candidate.subagent_depth.unwrap_or_default();
+        create.caused_by_parent_request_id = Some(candidate.request_id.clone());
+        create.caused_by_parent_request_doc_id = Some(candidate.doc_id.clone());
+        crate::sign_agent_request_create_as_registered_target(&mut create)
+            .await
+            .expect("sign redrive request");
+
+        let fields = create.graphql_input_fields().expect("graphql_input_fields");
+        assert_eq!(
+            fields,
+            "request_id: \"redrive-request-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-redrive-1\", retry_parent_request: \"failed-request-1\", retry_parent_request_doc_id: \"failed-doc-1\", retry_root_request: \"root-request-1\", retry_key: \"redrive-retry-key-1\", content: \"Review the new background completion results and continue the task if needed.\", temperature: 0.7, top_p: 0.9, top_k: 40, seed: 7, max_tokens: 1024, max_total_tokens: 4096, metadata: \"{\\\"queue\\\":{\\\"source\\\":\\\"scheduled\\\"}}\", backend_id: \"backend-1\", execution_origin: \"scheduled\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 3, max_retries: 5, subagent_depth: 1, caused_by_parent_request_id: \"failed-request-1\", caused_by_parent_request_doc_id: \"failed-doc-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"5PhWwYmgF63HgneAud3fR5z7BZiqeyDmV4K8qLffUj1SADPSGJ2JQoYKbeNZH4zTZDfF6zg4XG6vERcyeJi1jXNY\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"failed-request-1\", runtime_source_kind: \"local-control\", lifecycle_state: \"pending\", failure_reason: \"\""
+        );
+    }
+}

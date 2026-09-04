@@ -697,3 +697,216 @@ pub(super) async fn apply_request_session_projection(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod pin_tests {
+    //! Pins today's `AgentRequestCreate::graphql_input_fields()` output for
+    //! each production writer, per fixed inputs, before the writers are
+    //! switched onto `build_signed_request` (#1336 Task 2). Every test here
+    //! uses a deterministic signing identity (a hardcoded raw Ed25519 key)
+    //! so the emitted `admission_signature` is stable across runs; the only
+    //! other source of nondeterminism in these writers is an internally
+    //! generated `created_at` (and, at the subagent site, an internally
+    //! generated `session_id`), which each test either normalizes out of
+    //! the comparison or avoids by reproducing the writer's pure
+    //! DTO-construction statements with a fixed timestamp in place of
+    //! `Utc::now()`.
+    //!
+    //! Sites that require a live node beyond signing (parent/tool-call
+    //! lookups, retry-key dedupe queries, claim) are exercised by
+    //! reproducing their DTO-construction statements verbatim rather than
+    //! by invoking the full function, since the field-stamping logic itself
+    //! has no node dependency; see the per-site comment at each test.
+
+    use super::*;
+    use crate::identity::AgentIdentity;
+
+    /// Raw 64-byte (seed || public key) Ed25519 identity material, captured
+    /// once so every pinning test signs with the same registered DID and
+    /// therefore produces the same signature bytes for the same payload.
+    const FIXED_TEST_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
+    const FIXED_TEST_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
+
+    fn fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
+        let key_bytes: Vec<u8> = (0..FIXED_TEST_KEY_HEX.len())
+            .step_by(2)
+            .map(|offset| u8::from_str_radix(&FIXED_TEST_KEY_HEX[offset..offset + 2], 16).unwrap())
+            .collect();
+        let path = dir.join("pinning.key");
+        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
+        assert_eq!(
+            identity.did(),
+            FIXED_TEST_DID,
+            "fixed pinning key derives a stable DID"
+        );
+        identity
+    }
+
+    /// Replace the internally generated `created_at` and `admission_signature`
+    /// field text with stable placeholders, so the rest of the field set can
+    /// still be pinned with a literal `assert_eq!` even though the writer
+    /// calls `Utc::now()` (and therefore signs a different payload) on every
+    /// invocation.
+    fn normalize_dynamic_fields(
+        create: &gents_protocol::request_admission::AgentRequestCreate,
+        fields: &str,
+    ) -> String {
+        let created_at_field = format!(
+            "created_at: \"{}\"",
+            escape_graphql_string(&create.created_at)
+        );
+        let signature_field = format!(
+            "admission_signature: \"{}\"",
+            bs58::encode(&create.admission.signature).into_string()
+        );
+        fields
+            .replacen(&created_at_field, "created_at: \"<CREATED_AT>\"", 1)
+            .replacen(&signature_field, "admission_signature: \"<SIGNATURE>\"", 1)
+    }
+
+    // --- Site 1: materialize.rs `build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title` ---
+    // Pure and public; called directly. `created_at`/`admission_signature`
+    // are internally generated (`Utc::now()`), so they are normalized out.
+
+    #[tokio::test]
+    async fn pin_materialize_pending_manual_trigger() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = fixed_signing_identity(tempdir.path());
+
+        let create =
+            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                FIXED_TEST_DID,
+                "behavior-1",
+                "hello agent",
+                ExecutionOrigin::Interactive,
+                TriggerLineage {
+                    trigger_id: None,
+                    trigger_kind: Some("manual".to_string()),
+                    source_doc_id: None,
+                    correlation: None,
+                    trigger_context: None,
+                },
+                Some("My Conversation"),
+                None,
+                "req-materialize-pending-manual",
+                "sess-materialize-pending-manual",
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("build signed pending manual request");
+
+        let fields = create.graphql_input_fields().expect("graphql_input_fields");
+        let normalized = normalize_dynamic_fields(&create, &fields);
+        assert_eq!(
+            normalized,
+            "request_id: \"req-materialize-pending-manual\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", metadata: \"{\\\"conversation_title\\\":\\\"My Conversation\\\"}\", execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
+        );
+    }
+
+    #[tokio::test]
+    async fn pin_materialize_pending_event_trigger_with_workspace() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let _identity = fixed_signing_identity(tempdir.path());
+
+        let trigger_lineage = TriggerLineage {
+            trigger_id: Some("trigger-1".to_string()),
+            trigger_kind: Some("event".to_string()),
+            source_doc_id: Some("source-doc-1".to_string()),
+            correlation: Some("corr-1".to_string()),
+            trigger_context: Some(r#"{"k":"v"}"#.to_string()),
+        };
+        let workspace_lineage = WorkspaceLineage {
+            workspace_id: Some("ws-1".to_string()),
+            workspace_authority: Some("readWrite".to_string()),
+            workspace_owner_deployment_id: Some("dep-1".to_string()),
+            workspace_seal_hash: Some("seal-1".to_string()),
+        };
+
+        let create =
+            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                FIXED_TEST_DID,
+                "behavior-1",
+                "hello agent",
+                ExecutionOrigin::Scheduled,
+                trigger_lineage,
+                Some("My Conversation"),
+                Some(&workspace_lineage),
+                "req-materialize-pending-event",
+                "sess-materialize-pending-event",
+                Some("retry-key-1"),
+                None,
+                Some("trigger-doc-1"),
+            )
+            .await
+            .expect("build signed pending event-triggered workspace-bound request");
+
+        let fields = create.graphql_input_fields().expect("graphql_input_fields");
+        let normalized = normalize_dynamic_fields(&create, &fields);
+        assert_eq!(
+            normalized,
+            "request_id: \"req-materialize-pending-event\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", metadata: \"{\\\"conversation_title\\\":\\\"My Conversation\\\"}\", execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_authority: \"readWrite\", workspace_owner_deployment_id: \"dep-1\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
+        );
+    }
+
+    // --- Site 2: materialize.rs `RequestLifecycle::materialize_claimed_with_execution_binding` ---
+    // This associate function claims the request against a live node in the
+    // same call, so it cannot be driven directly in a field-stamping test.
+    // The block below reproduces its DTO-construction statements verbatim
+    // (see the production function above), substituting a fixed
+    // `created_at` for `Utc::now()` so the whole output — including the
+    // signature — is stable.
+
+    #[tokio::test]
+    async fn pin_materialize_claimed_with_execution_binding() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let identity = fixed_signing_identity(tempdir.path());
+
+        let agent_did = identity.did().to_string();
+        let backend_id = "backend-1".to_string();
+        let behavior_id = "agent-name-1".to_string();
+        let request_id = "req-materialize-claimed".to_string();
+        let session_id = "sess-materialize-claimed".to_string();
+        let trigger_lineage = TriggerLineage {
+            trigger_id: Some("trigger-1".to_string()),
+            trigger_kind: Some("event".to_string()),
+            source_doc_id: Some("source-doc-1".to_string()),
+            correlation: Some("corr-1".to_string()),
+            trigger_context: Some(r#"{"k":"v"}"#.to_string()),
+        };
+        let content = "resume the run";
+        let execution_origin = ExecutionOrigin::Scheduled;
+        let created_at = "2030-01-01T00:00:00Z".to_string();
+
+        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            request_id.clone(),
+            &agent_did,
+            &agent_did,
+            behavior_id.clone(),
+            session_id.clone(),
+            content,
+            execution_origin.as_str(),
+            created_at.clone(),
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
+        );
+        create.backend_id = (!backend_id.is_empty()).then(|| backend_id.clone());
+        create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
+        create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
+        create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
+        create.caused_by_correlation = trigger_lineage.correlation.clone();
+        create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
+        create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .expect("sign claimed request");
+
+        let fields = create.graphql_input_fields().expect("graphql_input_fields");
+        assert_eq!(
+            fields,
+            "request_id: \"req-materialize-claimed\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"agent-name-1\", session_id: \"sess-materialize-claimed\", retry_root_request: \"req-materialize-claimed\", content: \"resume the run\", backend_id: \"backend-1\", execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"4DPGJDS77o4K6koAPWqJP5iQU55UV919NvMny273iJRN5uQYZZh3Tr76Jwh7FKQ2GDTirX8wWw5sZbHr9gd8QiqY\", lifecycle_state: \"pending\", failure_reason: \"\""
+        );
+    }
+}
