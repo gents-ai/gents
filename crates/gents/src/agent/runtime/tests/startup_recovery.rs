@@ -963,6 +963,23 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
 
     wait_for_request_state(node.as_ref(), &first_request_doc_id, "failed").await;
     wait_for_request_state(node.as_ref(), &queued_request_doc_id, "failed").await;
+    for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
+        let response = node.execute(&format!(
+            r#"{{ AgentResponse(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ status completed_at }} }}"#,
+            crate::graphql::escape_graphql_string(request_doc_id),
+        )).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let rows = response.data.as_ref().unwrap()["AgentResponse"]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "shutdown must commit one response per owned request"
+        );
+        assert_eq!(rows[0]["status"], "error");
+        assert!(rows[0]["completed_at"].as_str().is_some());
+    }
 }
 
 #[tokio::test]

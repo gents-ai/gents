@@ -240,6 +240,57 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         Some("deployment-owner")
     );
     assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
+    let child_identity = (
+        child.doc_id.clone(),
+        child.request_id.clone(),
+        child.retry_key.clone(),
+    );
+    let continuation_sequence = load_canonical_goal(db.node.as_ref(), did, SESSION)
+        .await
+        .unwrap()
+        .unwrap()
+        .continuation_sequence;
+    drop(source);
+    for _ in 0..2 {
+        let recovered = gents::RequestLifecycle::recover_all(db.node.as_ref(), did)
+            .await
+            .unwrap();
+        assert_eq!(recovered.requests_recovered, 0);
+        let (mut restarted, _restart_tx) = self::source(&db);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
+                .await
+                .is_err(),
+            "repeated maintenance and source reconciliation must not emit another continuation"
+        );
+        let children = goal_children(&db).await;
+        assert_eq!(children.len(), 1);
+        let child = &children[0];
+        assert_eq!(
+            (
+                child.doc_id.clone(),
+                child.request_id.clone(),
+                child.retry_key.clone()
+            ),
+            child_identity
+        );
+        assert_eq!(child.subagent_depth, Some(2));
+        assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
+        assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
+        assert_eq!(
+            child.workspace_owner_deployment_id.as_deref(),
+            Some("deployment-owner")
+        );
+        assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
+        assert_eq!(
+            load_canonical_goal(db.node.as_ref(), did, SESSION)
+                .await
+                .unwrap()
+                .unwrap()
+                .continuation_sequence,
+            continuation_sequence
+        );
+    }
 }
 
 #[tokio::test]
@@ -1182,6 +1233,63 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(true));
     assert_eq!(goal_children(&db).await.len(), 1);
+    let child_identity = (
+        children[0].doc_id.clone(),
+        children[0].request_id.clone(),
+        children[0].retry_key.clone(),
+    );
+    let continuation_sequence = goal.continuation_sequence;
+    assert_eq!(
+        session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .expect("session usage before repeated recovery"),
+        105,
+    );
+    drop(source);
+    for _ in 0..2 {
+        let recovered =
+            gents::RequestLifecycle::recover_all(db.node.as_ref(), db.node_identity.did())
+                .await
+                .expect("repeat lease recovery");
+        assert_eq!(recovered.requests_recovered, 0);
+        assert_eq!(recovered.responses_recovered, 0);
+        let (mut restarted, _restart_tx) = self::source(&db);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
+                .await
+                .is_err(),
+            "recovery and goal reconciliation must not emit a second wrapup",
+        );
+        let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
+        assert_eq!(
+            current.tokens_used,
+            Some(105),
+            "the same persisted inference usage must not be charged again"
+        );
+        assert_eq!(current.continuation_sequence, continuation_sequence);
+        assert_eq!(current.wrapup_completed, Some(true));
+        assert_eq!(
+            session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+                .await
+                .unwrap(),
+            105,
+            "recovery must preserve the session charge, including cached input exactly once",
+        );
+        let after = goal_children(&db).await;
+        assert_eq!(after.len(), 1);
+        assert_eq!(
+            (
+                after[0].doc_id.clone(),
+                after[0].request_id.clone(),
+                after[0].retry_key.clone()
+            ),
+            child_identity
+        );
+    }
 }
 
 #[tokio::test]

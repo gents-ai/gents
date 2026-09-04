@@ -484,7 +484,6 @@ impl MaterializerHandle for ProductionMaterializer {
             .map(escape_graphql_string)
             .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
-        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
             let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
             let mutation = format!(
@@ -494,7 +493,7 @@ impl MaterializerHandle for ProductionMaterializer {
                             agent_did: {{ _eq: "{agent_did}" }},
                             caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
                             caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
-                            lifecycle_state: {{ _in: {active_runtime_states} }}
+                            lifecycle_state: {{ _eq: "pending" }}
                         }},
                         input: {{
                             lifecycle_state: "superseded",
@@ -515,13 +514,62 @@ impl MaterializerHandle for ProductionMaterializer {
                 "supersede_active_runtime_requests_for_trigger",
             )
             .await?;
-            let count = resp
+            let mut count = resp
                 .data
                 .as_ref()
                 .and_then(|data| data.get("update_AgentRequest"))
                 .and_then(|rows| rows.as_array())
                 .map(|rows| rows.len())
                 .unwrap_or(0);
+            // Claims racing the pending CAS above are observed here. Every
+            // post-claim cancellation belongs to the execution lease owner.
+            let active = RequestLifecycleState::graphql_list([
+                RequestLifecycleState::Claimed,
+                RequestLifecycleState::Processing,
+            ]);
+            let query = format!(
+                r#"{{ AgentRequest(filter: {{
+                agent_did: {{ _eq: "{escaped_agent_did}" }},
+                caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
+                caused_by_trigger_kind: {{ _eq: "{trigger_kind_str}" }}{correlation_filter}{request_exclusion_filter},
+                lifecycle_state: {{ _in: {active} }}
+            }}) {{ _docID request_id agent_did requester_did behavior_id session_id lifecycle_state
+                execution_generation execution_lease_expires_at execution_progress_seq
+            }} }}"#
+            );
+            // A progressing executor may invalidate the observed tuple. Read
+            // again before allowing LatestOnly to dispatch its replacement.
+            let mut converged = false;
+            for _ in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
+                let result = node.execute(&query).await;
+                anyhow::ensure!(
+                    !result.has_errors(),
+                    "loading executions to supersede: {:?}",
+                    result.errors
+                );
+                let active_rows = rows::<AgentRequestRow>(&result, "AgentRequest")?;
+                if active_rows.is_empty() {
+                    converged = true;
+                    break;
+                }
+                for row in active_rows {
+                    if crate::lifecycle::revoke_execution_generation(
+                        node.as_ref(),
+                        &row,
+                        crate::lifecycle::RequestTerminalOutcome::Superseded,
+                        "superseded by a newer trigger fire",
+                    )
+                    .await?
+                        == crate::lifecycle::TerminalizeResult::Won
+                    {
+                        count += 1;
+                    }
+                }
+            }
+            anyhow::ensure!(
+                converged,
+                "execution progress raced LatestOnly revocation; retry trigger dispatch"
+            );
             if count > 0 {
                 tracing::info!(
                     agent_did = %escaped_agent_did,

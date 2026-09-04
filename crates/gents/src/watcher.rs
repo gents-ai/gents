@@ -39,6 +39,9 @@ pub struct AgentRequest {
     pub execution_origin: Option<String>,
     pub created_at: String,
     pub deadline: Option<String>,
+    pub execution_generation: Option<String>,
+    pub execution_lease_expires_at: Option<String>,
+    pub execution_progress_seq: u64,
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
@@ -103,6 +106,14 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
                 .created_at
                 .context("agent request is missing created_at")?,
             deadline: normalize_optional_string(row.deadline),
+            execution_generation: normalize_optional_string(row.execution_generation),
+            execution_lease_expires_at: normalize_optional_string(row.execution_lease_expires_at),
+            execution_progress_seq: row
+                .execution_progress_seq
+                .map(u64::try_from)
+                .transpose()
+                .context("agent request execution_progress_seq must fit in u64")?
+                .unwrap_or(0),
             subagent_depth,
             caused_by_parent_request_id: row.caused_by_parent_request_id,
             caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,

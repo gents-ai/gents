@@ -36,6 +36,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,
+    pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
+    pub(crate) request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
+    pub(crate) request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub(crate) trigger_group_case_count: usize,
@@ -786,6 +789,8 @@ mod prompt_assembly;
 mod reduction_engine;
 #[path = "rendered_capture.rs"]
 mod rendered_capture;
+#[path = "request_execution_lease.rs"]
+mod request_execution_lease;
 #[path = "rolling_compaction.rs"]
 mod rolling_compaction;
 #[path = "self_config.rs"]
@@ -808,6 +813,7 @@ pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
 pub(crate) use reduction_engine::*;
 pub(crate) use rendered_capture::*;
+pub(crate) use request_execution_lease::*;
 pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use slot_persistence_health::*;
@@ -874,6 +880,19 @@ pub(crate) fn lean_request_transition_cases() -> &'static [LeanLifecycleTransiti
 
 pub(crate) fn lean_process_transition_cases() -> &'static [LeanLifecycleTransitionCase] {
     &lean_contract_snapshot().process_transition_cases
+}
+
+pub(crate) fn lean_provider_eof_cases() -> &'static [LeanProviderEofCase] {
+    &lean_contract_snapshot().provider_eof_cases
+}
+
+pub(crate) fn lean_request_execution_lease_cases() -> &'static [LeanRequestExecutionLeaseCase] {
+    &lean_contract_snapshot().request_execution_lease_cases
+}
+
+pub(crate) fn lean_request_execution_lease_trace_cases(
+) -> &'static [LeanRequestExecutionLeaseTraceCase] {
+    &lean_contract_snapshot().request_execution_lease_trace_cases
 }
 
 pub(crate) fn lean_startup_readiness_cases() -> &'static [LeanStartupReadinessCase] {

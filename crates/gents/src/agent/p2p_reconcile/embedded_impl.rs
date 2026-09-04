@@ -950,14 +950,42 @@ mod tests {
         )
         .await
         .expect("create routed AgentMessage");
-        crate::streaming::DefraStreamWriter::new(
+        let response = node.execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        let request =
+            crate::watcher::agent_request_from_mutation_response(&response, "update_AgentRequest")
+                .expect("decode routed request")
+                .expect("routed request");
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+            Arc::clone(node),
+            "default",
+            agent_did,
+            request,
+            60,
+        );
+        assert_eq!(
+            lifecycle.claim().await.expect("claim routed request"),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = crate::streaming::DefraStreamWriter::new(
             Arc::clone(node),
             agent_did,
             Duration::from_secs(60),
-        )
-        .begin_with_requester_did(&session_id, &request_id, None, behavior_id, requester_did)
-        .await
-        .expect("create routed AgentResponse");
+        );
+        lifecycle
+            .begin_owned_execution(&writer)
+            .await
+            .expect("create routed AgentResponse");
+        lifecycle
+            .terminalize_owned(
+                &writer,
+                crate::lifecycle::RequestTerminalOutcome::Completed,
+                None,
+            )
+            .await
+            .expect("complete routed request");
     }
 
     async fn collection_values(

@@ -284,13 +284,18 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
         &db.node,
         &child_request_id,
         &child_session_id,
-        "processing",
+        "pending",
         RECOVERY_CREATED_AT,
     )
     .await;
-    if case.pre_state == "claimed" {
-        set_request_lifecycle_state(&db.node, &child_doc_id, "claimed").await;
-    }
+    let _child_owner = own_child_fixture(
+        &db.node,
+        &child_doc_id,
+        &child_request_id,
+        &child_session_id,
+        case.pre_state == "processing",
+    )
+    .await;
     set_request_deadline(
         &db.node,
         &child_doc_id,
@@ -466,11 +471,11 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
     let db = test_db("startup-recovery-order-1001").await;
     let request_id = "startup-order-1001-request";
     let session_id = "startup-order-1001-session";
-    create_request(
+    let request_doc_id = create_request(
         &db.node,
         request_id,
         session_id,
-        "processing",
+        "pending",
         RECOVERY_CREATED_AT,
     )
     .await;
@@ -486,6 +491,8 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         request_id,
     )
     .await;
+    let _owner = own_child_fixture(&db.node, &request_doc_id, request_id, session_id, true).await;
+    seed_expired_execution_tuple(&db.node, &request_doc_id).await;
     insert_inference_call(&db.node, request_id, "running").await;
 
     let outcome = gents::startup_recovery::run_startup_recovery(&db.node, AGENT_DID).await;
@@ -545,16 +552,27 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
     )
     .await;
 
+    let mut child_owners = Vec::new();
     for index in 1..=2 {
         let child_request_id = format!("convergence-465-child-{index}");
         let child_doc_id = create_request(
             &db.node,
             &child_request_id,
             &format!("{child_request_id}-session"),
-            "processing",
+            "pending",
             RECOVERY_CREATED_AT,
         )
         .await;
+        child_owners.push(
+            own_child_fixture(
+                &db.node,
+                &child_doc_id,
+                &child_request_id,
+                &format!("{child_request_id}-session"),
+                true,
+            )
+            .await,
+        );
         set_request_deadline(
             &db.node,
             &child_doc_id,
@@ -804,6 +822,7 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
         RECOVERY_CREATED_AT,
     )
     .await;
+    seed_expired_execution_tuple(&db.node, &doc_id).await;
     create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
     create_conversation_row(
         &db.node,
@@ -875,6 +894,26 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
     let db = test_db(&format!("recovery-sweep-{}", case.name)).await;
     let request_id = format!("{}-request", case.name);
     let session_id = format!("{}-session", case.name);
+    // Responses are recovered through their execution owner, never by a
+    // response-only sweep. Seed the stale request anchor before its stream.
+    let request_doc_id = create_request(
+        &db.node,
+        &request_id,
+        &session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    seed_expired_execution_tuple(&db.node, &request_doc_id).await;
+    create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
+    upsert_conversation(
+        &db.node,
+        &session_id,
+        &request_id,
+        "recovery response",
+        "processing",
+    )
+    .await;
     create_response_with_status(
         &db.node,
         &request_id,
@@ -893,6 +932,11 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
         case.name
     );
 
+    assert_eq!(
+        report.requests_recovered, 1,
+        "{}: response recovery must atomically terminalize its expired request owner",
+        case.name
+    );
     let row = fetch_response_recovery_row(&db.node, &request_id).await;
     assert_eq!(
         row.status.as_str(),
@@ -1964,4 +2008,47 @@ async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Op
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
     rows.into_iter().map(|row| row.metadata).collect()
+}
+
+async fn own_child_fixture(
+    node: &Arc<defra_node::EmbeddedNode>,
+    doc_id: &str,
+    request_id: &str,
+    session_id: &str,
+    processing: bool,
+) -> RequestLifecycle {
+    let request = build_request(
+        doc_id.to_owned(),
+        request_id.to_owned(),
+        session_id.to_owned(),
+        RECOVERY_CREATED_AT.to_owned(),
+    );
+    let mut owner = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        request,
+        DEADLINE_SECS,
+    );
+    assert_eq!(owner.claim().await.unwrap(), ClaimOutcome::Claimed);
+    if processing {
+        crate::support::begin_owned_execution(&mut owner, node)
+            .await
+            .unwrap();
+    }
+    owner
+}
+
+async fn seed_expired_execution_tuple(node: &EmbeddedNode, request_doc_id: &str) {
+    let response = node.execute(&format!(
+        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+            execution_generation: "{}", execution_lease_expires_at: "{RECOVERY_CREATED_AT}", execution_progress_seq: 0
+        }}) {{ _docID }} }}"#,
+        escape_graphql_string(request_doc_id), uuid::Uuid::new_v4(),
+    )).await;
+    assert!(
+        !response.has_errors(),
+        "seed expired execution tuple: {:?}",
+        response.errors
+    );
 }

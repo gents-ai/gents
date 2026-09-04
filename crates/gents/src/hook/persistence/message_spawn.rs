@@ -87,6 +87,17 @@ impl DefraSessionHook {
     }
 
     pub async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
+        self.persist_message_with_progress(message)
+            .await
+            .map(|(sequence, _)| sequence)
+    }
+
+    /// Carry the durable keyed-append winner through to execution progress.
+    /// Cached or persisted duplicates reuse their sequence without renewing.
+    pub(crate) async fn persist_message_with_progress(
+        &self,
+        message: &Message,
+    ) -> anyhow::Result<(u32, bool)> {
         let content = serde_json::to_string(message)?;
         let tool_result_aliases = persisted_tool_result_message_aliases(message);
         // #492: durably persist the assistant turn's chain-of-thought reasoning
@@ -136,7 +147,7 @@ impl DefraSessionHook {
         };
 
         if let Some(sequence) = existing_sequence {
-            return Ok(sequence);
+            return Ok((sequence, false));
         }
 
         // #497: durable request-scoped dedup for the turn-1 user prompt and the
@@ -155,7 +166,7 @@ impl DefraSessionHook {
                 )
                 .await?
                 {
-                    return Ok(sequence);
+                    return Ok((sequence, false));
                 }
             }
         }
@@ -168,7 +179,7 @@ impl DefraSessionHook {
             if !matches!(message, Message::User { .. }) {
                 anyhow::bail!("only user tool-result messages may carry a message key");
             }
-            let (sequence, _) = session::append_message_once_with_key_and_requester_did(
+            let (sequence, wrote) = session::append_message_once_with_key_and_requester_did(
                 &self.node,
                 &session_id,
                 &self.agent_did,
@@ -194,7 +205,7 @@ impl DefraSessionHook {
                         .insert(alias.clone(), sequence);
                 }
             }
-            return Ok(sequence);
+            return Ok((sequence, wrote));
         }
 
         let append_unreserved = matches!(turn_state, TranscriptTurnState::Idle)
@@ -232,7 +243,7 @@ impl DefraSessionHook {
                     Message::System { .. } => {}
                 }
             }
-            return Ok(sequence);
+            return Ok((sequence, true));
         }
 
         let (session_id, sequence, role) = {
@@ -272,7 +283,7 @@ impl DefraSessionHook {
             current_request_doc_id.as_deref(),
         )
         .await?;
-        Ok(sequence)
+        Ok((sequence, true))
     }
 
     pub async fn persist_stream_tool_result_message(
@@ -280,6 +291,16 @@ impl DefraSessionHook {
         tool_result: &ToolResult,
         internal_call_id: &str,
     ) -> anyhow::Result<()> {
+        self.persist_stream_tool_result_progress(tool_result, internal_call_id)
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn persist_stream_tool_result_progress(
+        &self,
+        tool_result: &ToolResult,
+        internal_call_id: &str,
+    ) -> anyhow::Result<bool> {
         let session_id = self
             .state
             .lock()
@@ -297,7 +318,7 @@ impl DefraSessionHook {
             )?
         };
         if !should_persist {
-            return Ok(());
+            return Ok(false);
         }
 
         let raw_stream_result = render_tool_result_text(tool_result);
@@ -350,8 +371,9 @@ impl DefraSessionHook {
         let message = Message::User {
             content: vec![UserContent::ToolResult(persisted_result)],
         };
-        self.persist_message(&message).await?;
-        Ok(())
+        self.persist_message_with_progress(&message)
+            .await
+            .map(|(_, wrote)| wrote)
     }
 
     /// Reconcile completed-but-unmessaged tool calls for the active request so

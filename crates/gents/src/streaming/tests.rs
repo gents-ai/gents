@@ -1,13 +1,13 @@
+use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use defra_node::EmbeddedNode;
 use serde_json::json;
 
 use super::queries::extract_mutation_doc_id;
-use super::queries::PersistedResponseState;
 use super::*;
 
 async fn build_test_node(name: &str) -> (Arc<EmbeddedNode>, PathBuf) {
@@ -63,18 +63,10 @@ async fn response_stores_exact_request_document_edge() {
     let (node, data_path) = build_test_node("request-doc-edge").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
-    let request_doc_id = create_processing_request(&node, &request_id, "session-edge").await;
+    let mut lifecycle = create_claimed_request(&node, &request_id, "session-edge").await;
 
-    let response_doc_id = writer
-        .begin_with_requester_did(
-            "session-edge",
-            &request_id,
-            Some(&request_doc_id),
-            "general",
-            None,
-        )
-        .await
-        .unwrap();
+    let request_doc_id = lifecycle.request().doc_id.clone();
+    let response_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
     let response = load_response(&node, &response_doc_id).await;
     assert_eq!(
@@ -87,11 +79,11 @@ async fn response_stores_exact_request_document_edge() {
     let _ = fs::remove_dir_all(&data_path);
 }
 
-async fn create_processing_request(
-    node: &EmbeddedNode,
+async fn create_claimed_request(
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
-) -> String {
+) -> RequestLifecycle {
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -104,7 +96,7 @@ async fn create_processing_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                lifecycle_state: "processing",
+                lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
                 failure_reason: "",
@@ -120,31 +112,26 @@ async fn create_processing_request(
         "create_AgentRequest failed: {:?}",
         resp.errors
     );
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-            }}
-        }}"#
+    let result = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            escape_graphql_string(request_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&result, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        "did:test:test",
+        row.try_into().unwrap(),
+        60,
     );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "AgentRequest lookup failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(|value| value.as_str())
-        .map(ToOwned::to_owned)
-        .expect("request _docID")
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle
 }
 
 async fn load_request(
@@ -173,13 +160,6 @@ async fn load_request(
         .and_then(|row| row.as_object())
         .cloned()
         .expect("request row")
-}
-
-#[test]
-fn stream_status_as_str() {
-    assert_eq!(StreamStatus::Streaming.as_str(), "streaming");
-    assert_eq!(StreamStatus::Complete.as_str(), "complete");
-    assert_eq!(StreamStatus::Error.as_str(), "error");
 }
 
 #[test]
@@ -243,277 +223,13 @@ fn extract_mutation_doc_id_accepts_upsert_create_and_add_shapes() {
     );
 }
 
-#[test]
-fn build_finalize_mutation_clears_tail_without_buffer() {
-    let mutation = build_finalize_mutation(
-        Some(&PersistedResponseState {
-            doc_id: "doc-1".to_string(),
-            request_id: "req-1".to_string(),
-            agent_did: None,
-            behavior_id: None,
-            session_id: None,
-            content: String::new(),
-            status: "streaming".to_string(),
-            error_message: Some("stale provider error".to_string()),
-            token_count: 0,
-            interrupted_at: None,
-        }),
-        "doc-1",
-        &StreamStatus::Complete,
-        "2026-03-24T00:00:00Z",
-        None,
-        None,
-        RequestFinalizeMode::UpdateRequest,
-        "did:test:test",
-        false,
-    );
-
-    assert!(mutation.contains(r#"status: "complete""#));
-    assert!(!mutation.contains("interrupted_at:"));
-    assert!(mutation.contains(r#"completed_at: "2026-03-24T00:00:00Z""#));
-    assert!(mutation.contains(r#"update_AgentRequest("#));
-    assert!(mutation.contains(r#"request_id: { _eq: "req-1" }"#));
-    assert!(mutation.contains(r#"lifecycle_state: "completed""#));
-    assert!(mutation.contains(r#"failure_reason: """#));
-    assert!(
-        !mutation.contains(r#"failure_reason: "stale provider error""#),
-        "complete finalization must not carry a stale response error into the request"
-    );
-    assert!(mutation.contains(r#"terminal_redrive_attempts: 0"#));
-    // content and reasoning are cleared to "" on finalize (issue #64 contract)
-    assert!(mutation.contains(r#"content: """#));
-    assert!(mutation.contains(r#"reasoning: """#));
-    // token_count is NOT present on the crash-recovery (None) path
-    assert!(!mutation.contains("token_count:"));
-}
-
-#[test]
-fn build_error_finalize_atomically_carries_response_and_request_reason() {
-    let mutation = build_finalize_mutation(
-        Some(&PersistedResponseState {
-            doc_id: "doc-1".to_string(),
-            request_id: "req-1".to_string(),
-            agent_did: None,
-            behavior_id: None,
-            session_id: None,
-            content: String::new(),
-            status: "streaming".to_string(),
-            error_message: None,
-            token_count: 0,
-            interrupted_at: None,
-        }),
-        "doc-1",
-        &StreamStatus::Error,
-        "2026-03-24T00:00:00Z",
-        None,
-        Some("provider failed"),
-        RequestFinalizeMode::UpdateRequest,
-        "did:test:test",
-        false,
-    );
-
-    assert!(mutation.contains(r#"status: "error""#));
-    assert!(mutation.contains(r#"error_message: "provider failed""#));
-    assert!(mutation.contains(r#"lifecycle_state: "failed""#));
-    assert!(mutation.contains(r#"failure_reason: "provider failed""#));
-    assert!(mutation.contains(r#"agent_did: { _eq: "did:test:test" }"#));
-    assert!(
-        !mutation.contains("interrupted_at:"),
-        "a plain error finalize must never stamp the interrupt marker"
-    );
-}
-
-#[tokio::test]
-async fn finalize_removes_buffer_after_successful_mutation() {
-    let (node, data_path) = build_test_node("finalize-success").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    writer.write_tokens(&doc_id, "tail content").await.unwrap();
-    let result = writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .unwrap();
-
-    // After finalize, content/reasoning are cleared in the DB (issue #64 contract).
-    // StreamResult.content reflects the post-finalize DB state (empty tail).
-    assert_eq!(result.content, "");
-    assert_eq!(result.token_count, 2);
-    assert!(!writer.buffers.lock().await.contains_key(&doc_id));
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("content").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("reasoning").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("complete")
-    );
-    assert_eq!(
-        row.get("token_count").and_then(|value| value.as_u64()),
-        Some(2)
-    );
-    assert!(row
-        .get("completed_at")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.is_empty()));
-
-    let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("completed")
-    );
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_treats_matching_terminal_observation_as_idempotent() {
-    let (node, data_path) = build_test_node("finalize-idempotent-terminal").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    writer.write_tokens(&doc_id, "final answer").await.unwrap();
-    let first = writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .unwrap();
-    // content is cleared on finalize (issue #64 contract)
-    assert_eq!(first.content, "");
-    assert!(!writer.buffers.lock().await.contains_key(&doc_id));
-
-    let second = writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .unwrap();
-
-    assert_eq!(second.status, StreamStatus::Complete);
-    assert_eq!(second.content, "");
-    assert_eq!(second.token_count, 2);
-    assert!(!writer.buffers.lock().await.contains_key(&doc_id));
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("content").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("complete")
-    );
-
-    let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("completed")
-    );
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_keeps_buffer_when_mutation_fails() {
-    let (node, data_path) = build_test_node("finalize-failure").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let invalid_doc_id = r#"doc"broken"#.to_string();
-
-    writer.buffers.lock().await.insert(
-        invalid_doc_id.clone(),
-        StreamBuffer {
-            content: "lost tail".to_string(),
-            reasoning: String::new(),
-            token_count: 2,
-            reasoning_progress_seq: 0,
-            last_flush_at: Instant::now(),
-        },
-    );
-
-    let error = writer
-        .finalize(&invalid_doc_id, StreamStatus::Error)
-        .await
-        .unwrap_err();
-    assert!(!error.to_string().is_empty());
-    assert!(writer.buffers.lock().await.contains_key(&invalid_doc_id));
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_without_buffer_uses_fallback_mutation() {
-    let (node, data_path) = build_test_node("finalize-fallback").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    writer.buffers.lock().await.remove(&doc_id);
-
-    let result = writer.finalize(&doc_id, StreamStatus::Error).await.unwrap();
-
-    assert_eq!(result.content, "");
-    assert_eq!(result.token_count, 0);
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("content").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("reasoning").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("error")
-    );
-    assert!(row
-        .get("completed_at")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.is_empty()));
-
-    let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("failed")
-    );
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
 #[tokio::test]
 async fn error_message_persists_on_error_response() {
     let (node, data_path) = build_test_node("error-message").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
+    let mut lifecycle = create_claimed_request(&node, &request_id, "session-1").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
     writer
         .set_error_message(
@@ -522,7 +238,6 @@ async fn error_message_persists_on_error_response() {
         )
         .await
         .unwrap();
-    writer.finalize(&doc_id, StreamStatus::Error).await.unwrap();
 
     let row = load_response(&node, &doc_id).await;
     assert_eq!(
@@ -540,62 +255,26 @@ async fn error_message_persists_on_error_response() {
 #[tokio::test]
 async fn write_tokens_fails_when_response_document_is_missing() {
     let (node, data_path) = build_test_node("missing-response-write").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
-    let missing_doc_id = "missing-response-doc".to_string();
-
-    writer.buffers.lock().await.insert(
-        missing_doc_id.clone(),
-        StreamBuffer {
-            content: String::new(),
-            reasoning: String::new(),
-            token_count: 0,
-            reasoning_progress_seq: 0,
-            last_flush_at: Instant::now() - Duration::from_secs(1),
-        },
-    );
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    let mut lifecycle = create_claimed_request(
+        &node,
+        "missing-response-request",
+        "missing-response-session",
+    )
+    .await;
+    let missing_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let deleted = node.execute(&format!(
+        r#"mutation {{ delete_AgentResponse(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+        escape_graphql_string(&missing_doc_id),
+    )).await;
+    assert!(!deleted.has_errors(), "{:?}", deleted.errors);
 
     let error = writer
         .write_tokens(&missing_doc_id, "partial")
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("missing"));
+    assert!(!error.to_string().is_empty());
     assert!(writer.buffers.lock().await.contains_key(&missing_doc_id));
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_rejects_conflicting_terminal_state() {
-    let (node, data_path) = build_test_node("finalize-conflict").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    writer.write_tokens(&doc_id, "final answer").await.unwrap();
-    writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .unwrap();
-
-    let error = writer
-        .finalize(&doc_id, StreamStatus::Error)
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("cannot finalize AgentResponse"));
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("complete")
-    );
-    assert_eq!(
-        row.get("reasoning").and_then(|value| value.as_str()),
-        Some("")
-    );
 
     let _ = fs::remove_dir_all(&data_path);
 }
@@ -605,26 +284,20 @@ async fn write_reasoning_persists_on_response() {
     let (node, data_path) = build_test_node("reasoning-write").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(1));
     let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
+    let mut lifecycle = create_claimed_request(&node, &request_id, "session-1").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
     writer
         .write_reasoning(&doc_id, "Need to inspect the repo structure first.")
         .await
         .unwrap();
-    writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .unwrap();
+    writer.flush_pending(&doc_id).await.unwrap();
 
-    // reasoning is cleared on finalize (issue #64 contract — tail is empty post-finalize)
+    // A successful flush durably persists the reasoning preview.
     let row = load_response(&node, &doc_id).await;
     assert_eq!(
         row.get("reasoning").and_then(|value| value.as_str()),
-        Some("")
+        Some("Need to inspect the repo structure first.")
     );
 
     let _ = fs::remove_dir_all(&data_path);
@@ -635,11 +308,8 @@ async fn write_reasoning_advances_progress_when_preview_is_unchanged() {
     let (node, data_path) = build_test_node("reasoning-progress-seq").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
     let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
+    let mut lifecycle = create_claimed_request(&node, &request_id, "session-1").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
     let saturated = "x".repeat(MAX_LIVE_REASONING_BYTES);
     writer.write_reasoning(&doc_id, &saturated).await.unwrap();
@@ -661,164 +331,11 @@ async fn begin_rejects_existing_response_document() {
     let (node, data_path) = build_test_node("begin-existing-response").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
+    let mut lifecycle = create_claimed_request(&node, &request_id, "session-1").await;
 
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-    writer.finalize(&doc_id, StreamStatus::Error).await.unwrap();
+    let _doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
-    let error = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap_err();
-    assert!(error.to_string().contains("already exists"));
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_existing_request_error_terminalizes_streaming_response_without_buffer() {
-    let (node, data_path) = build_test_node("finalize-existing-request-error").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    let recovery_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let finalized = recovery_writer
-        .finalize_existing_request_error(&request_id, "shutdown requested during inference stream")
-        .await
-        .unwrap();
-
-    assert!(finalized);
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("error")
-    );
-    assert_eq!(
-        row.get("error_message").and_then(|value| value.as_str()),
-        Some("shutdown requested during inference stream")
-    );
-
-    let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("failed")
-    );
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
-async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
-    let (node, data_path) = build_test_node("finalize-interrupted-response").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-
-    writer
-        .write_tokens(&doc_id, "partial response")
-        .await
-        .unwrap();
-    let interrupted_at = chrono::Utc::now().to_rfc3339();
-    assert!(writer
-        .write_interrupted_at(&doc_id, &interrupted_at)
-        .await
-        .unwrap());
-    assert!(
-        !writer
-            .write_interrupted_at(&doc_id, "2099-01-01T00:00:00Z")
-            .await
-            .unwrap(),
-        "interrupted_at must be monotonic once set"
-    );
-
-    let result = writer.finalize_interrupted_response(&doc_id).await.unwrap();
-    assert_eq!(result.status, StreamStatus::Error);
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("error")
-    );
-    assert_eq!(
-        row.get("content").and_then(|value| value.as_str()),
-        Some("")
-    );
-    assert_eq!(
-        row.get("error_message").and_then(|value| value.as_str()),
-        Some("interrupted"),
-        "the durable error text is user-visible in timeline projections and must stay human-readable"
-    );
-    assert_eq!(
-        row.get("interrupted_at").and_then(|value| value.as_str()),
-        Some(interrupted_at.as_str()),
-        "finalize must not overwrite the earlier, more accurate interrupt stamp"
-    );
-    assert!(row
-        .get("completed_at")
-        .and_then(|value| value.as_str())
-        .is_some_and(|value| !value.is_empty()));
-
-    let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row
-            .get("lifecycle_state")
-            .and_then(|value| value.as_str()),
-        Some("processing")
-    );
-
-    let _ = fs::remove_dir_all(&data_path);
-}
-
-/// The interrupt flow stamps `interrupted_at` before finalize, but that
-/// standalone write can be lost. The finalize mutation must then stamp
-/// `interrupted_at` itself — it is the durable marker startup/periodic repair
-/// uses to classify the owner request as interrupted rather than failed.
-#[tokio::test]
-async fn finalize_interrupted_response_stamps_missing_interrupted_at() {
-    let (node, data_path) = build_test_node("finalize-interrupted-stamp").await;
-    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
-    let request_id = uuid::Uuid::new_v4().to_string();
-    create_processing_request(&node, &request_id, "session-1").await;
-    let doc_id = writer
-        .begin("session-1", &request_id, "general")
-        .await
-        .unwrap();
-    writer
-        .write_tokens(&doc_id, "partial response")
-        .await
-        .unwrap();
-
-    let result = writer.finalize_interrupted_response(&doc_id).await.unwrap();
-    assert_eq!(result.status, StreamStatus::Error);
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(
-        row.get("error_message").and_then(|value| value.as_str()),
-        Some("interrupted")
-    );
-    assert!(
-        row.get("interrupted_at")
-            .and_then(|value| value.as_str())
-            .is_some_and(|value| !value.trim().is_empty()),
-        "finalize must stamp interrupted_at when the earlier standalone write was lost"
-    );
+    assert!(lifecycle.begin_owned_execution(&writer).await.is_err());
 
     let _ = fs::remove_dir_all(&data_path);
 }
@@ -828,12 +345,9 @@ async fn reset_tail_clears_response_content_and_reasoning() {
     let (node, data_path) = build_test_node("reset-tail").await;
     let writer =
         DefraStreamWriter::new(Arc::clone(&node), "did:test:test", Duration::from_millis(0));
-    let _request_doc = create_processing_request(&node, "req-reset", "session-reset").await;
+    let mut lifecycle = create_claimed_request(&node, "req-reset", "session-reset").await;
 
-    let doc_id = writer
-        .begin("session-reset", "req-reset", "general")
-        .await
-        .expect("begin");
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
     writer
         .write_tokens(&doc_id, "hello")
@@ -865,31 +379,6 @@ async fn reset_tail_clears_response_content_and_reasoning() {
 }
 
 #[tokio::test]
-async fn finalize_complete_clears_tail() {
-    let (node, data_path) = build_test_node("finalize-tail").await;
-    let writer =
-        DefraStreamWriter::new(Arc::clone(&node), "did:test:test", Duration::from_millis(0));
-    let _ = create_processing_request(&node, "req-fin", "session-fin").await;
-    let doc_id = writer
-        .begin("session-fin", "req-fin", "general")
-        .await
-        .expect("begin");
-    writer.write_tokens(&doc_id, "world").await.expect("write");
-    writer.flush_pending(&doc_id).await.expect("flush");
-    writer
-        .finalize(&doc_id, StreamStatus::Complete)
-        .await
-        .expect("finalize");
-
-    let row = load_response(&node, &doc_id).await;
-    assert_eq!(row["status"].as_str(), Some("complete"));
-    assert_eq!(row["content"].as_str(), Some(""));
-    assert_eq!(row["reasoning"].as_str(), Some(""));
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-#[tokio::test]
 async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
     const WRITER_COUNT: usize = 4;
     const STREAM_COUNT: usize = 24;
@@ -905,17 +394,16 @@ async fn parallel_stream_flushes_do_not_surface_transaction_conflicts() {
             ))
         })
         .collect::<Vec<_>>();
+    let mut owners = Vec::with_capacity(STREAM_COUNT);
     let mut streams = Vec::with_capacity(STREAM_COUNT);
     for index in 0..STREAM_COUNT {
         let writer = Arc::clone(&writers[index % WRITER_COUNT]);
         let session_id = format!("parallel-session-{index}");
         let request_id = format!("parallel-request-{index}");
-        create_processing_request(&node, &request_id, &session_id).await;
-        let doc_id = writer
-            .begin(&session_id, &request_id, "general")
-            .await
-            .expect("begin parallel stream");
+        let mut lifecycle = create_claimed_request(&node, &request_id, &session_id).await;
+        let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
         streams.push((writer, doc_id));
+        owners.push(lifecycle);
     }
 
     let barrier = Arc::new(tokio::sync::Barrier::new(STREAM_COUNT));
@@ -983,5 +471,114 @@ async fn load_response_state_escapes_hostile_doc_id() {
             .is_none(),
         "hostile doc_id matches nothing"
     );
+    let _ = fs::remove_dir_all(&data_path);
+}
+
+/// Streaming owns buffered previews; the request lease owns terminal persistence.
+#[tokio::test]
+async fn lease_owner_terminalizes_stream_and_preserves_durable_preview() {
+    use crate::lifecycle::{RequestTerminalOutcome, TerminalizeResult};
+
+    let (node, data_path) = build_test_node("lease-owned-terminals").await;
+    for (outcome, request_state, response_state, reason) in [
+        (
+            RequestTerminalOutcome::Completed,
+            "completed",
+            "complete",
+            None,
+        ),
+        (
+            RequestTerminalOutcome::Failed,
+            "failed",
+            "error",
+            Some("provider failed"),
+        ),
+        (
+            RequestTerminalOutcome::Interrupted,
+            "interrupted",
+            "error",
+            Some("interrupted"),
+        ),
+    ] {
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let mut lifecycle = create_claimed_request(&node, &request_id, &session_id).await;
+        let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+        let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+        writer
+            .write_tokens(&doc_id, "partial answer")
+            .await
+            .unwrap();
+        writer
+            .write_reasoning(&doc_id, "durable reasoning")
+            .await
+            .unwrap();
+
+        let interrupt_stamp = "2026-01-01T00:00:00Z";
+        if outcome == RequestTerminalOutcome::Interrupted {
+            assert!(writer
+                .write_interrupted_at(&doc_id, interrupt_stamp)
+                .await
+                .unwrap());
+            assert!(!writer
+                .write_interrupted_at(&doc_id, "2099-01-01T00:00:00Z")
+                .await
+                .unwrap());
+        }
+        assert_eq!(
+            lifecycle
+                .terminalize_owned(&writer, outcome, reason)
+                .await
+                .unwrap(),
+            TerminalizeResult::Won
+        );
+        assert!(!writer.buffers.lock().await.contains_key(&doc_id));
+        let row = load_response(&node, &doc_id).await;
+        assert_eq!(row["status"].as_str(), Some(response_state));
+        assert_eq!(row["content"].as_str(), Some("partial answer"));
+        assert_eq!(row["reasoning"].as_str(), Some("durable reasoning"));
+        assert_eq!(row["token_count"].as_u64(), Some(2));
+        assert_eq!(
+            row["error_message"].as_str(),
+            Some(reason.unwrap_or_default())
+        );
+        assert!(row["completed_at"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()));
+        if outcome == RequestTerminalOutcome::Interrupted {
+            assert_eq!(
+                row["interrupted_at"].as_str(),
+                Some(interrupt_stamp),
+                "terminalization preserves the first durable interrupt marker"
+            );
+        }
+        assert_eq!(
+            load_request(&node, &request_id).await["lifecycle_state"].as_str(),
+            Some(request_state)
+        );
+        assert_eq!(
+            lifecycle
+                .terminalize_owned(&writer, outcome, reason)
+                .await
+                .unwrap(),
+            TerminalizeResult::AlreadySame
+        );
+        let conflict = if outcome == RequestTerminalOutcome::Completed {
+            RequestTerminalOutcome::Failed
+        } else {
+            RequestTerminalOutcome::Completed
+        };
+        assert_eq!(
+            lifecycle
+                .terminalize_owned(&writer, conflict, None)
+                .await
+                .unwrap(),
+            TerminalizeResult::Lost
+        );
+        assert_eq!(
+            load_response(&node, &doc_id).await["status"].as_str(),
+            Some(response_state)
+        );
+    }
     let _ = fs::remove_dir_all(&data_path);
 }

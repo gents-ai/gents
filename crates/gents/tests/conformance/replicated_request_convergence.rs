@@ -116,6 +116,16 @@ async fn create_owned_request_with_times_and_requester(
     } else {
         String::new()
     };
+    // These fixtures model previously owned rows observed after an execution
+    // crashed. Recovery requires the exact expired generation tuple.
+    let execution_fields = if matches!(lifecycle_state, "claimed" | "processing") {
+        format!(
+            r#", execution_generation: "{}", execution_lease_expires_at: "{CONVERGENCE_CREATED_AT}", execution_progress_seq: 0"#,
+            uuid::Uuid::new_v4()
+        )
+    } else {
+        String::new()
+    };
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -135,6 +145,7 @@ async fn create_owned_request_with_times_and_requester(
                 retry_count: 0,
                 max_retries: {max_retries}
                 {terminal_fields}
+                {execution_fields}
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,

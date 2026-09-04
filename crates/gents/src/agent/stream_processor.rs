@@ -11,20 +11,20 @@ use crate::hook::DefraSessionHook;
 use crate::lifecycle::RequestLifecycle;
 use crate::streaming::{DefraStreamWriter, StreamWriter};
 
-pub(super) enum StreamAction {
+pub(crate) enum StreamAction {
     Continue,
     Done,
     Error(rig::agent::StreamingError),
 }
 
-pub(super) struct StreamProcessor<'a> {
+pub(crate) struct StreamProcessor<'a> {
     persistence_hook: &'a DefraSessionHook,
     stream_writer: &'a DefraStreamWriter,
     lifecycle: &'a mut RequestLifecycle,
     assistant_turn: AssistantTurnAccumulator,
-    pub(super) streamed_text: String,
+    pub(crate) streamed_text: String,
     committed_text_len: usize,
-    pub(super) final_text: Option<String>,
+    pub(crate) final_text: Option<String>,
     doc_id: &'a str,
 }
 
@@ -32,7 +32,7 @@ pub(super) struct StreamProcessor<'a> {
 mod tests;
 
 impl<'a> StreamProcessor<'a> {
-    pub(super) fn new(
+    pub(crate) fn new(
         persistence_hook: &'a DefraSessionHook,
         stream_writer: &'a DefraStreamWriter,
         lifecycle: &'a mut RequestLifecycle,
@@ -50,7 +50,11 @@ impl<'a> StreamProcessor<'a> {
         }
     }
 
-    pub(super) async fn process_item<R>(
+    pub(crate) async fn validate_execution(&self) -> Result<()> {
+        self.lifecycle.validate_owned_execution().await
+    }
+
+    pub(crate) async fn process_item<R>(
         &mut self,
         item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,
     ) -> Result<StreamAction> {
@@ -68,7 +72,6 @@ impl<'a> StreamProcessor<'a> {
                 let has_visible_text = !self.streamed_text.trim().is_empty();
                 if !had_visible_text && has_visible_text {
                     let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                    self.lifecycle.advance().await?;
                 }
                 Ok(StreamAction::Continue)
             }
@@ -105,7 +108,6 @@ impl<'a> StreamProcessor<'a> {
                 },
             ))) => {
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                self.lifecycle.advance().await?;
                 self.persistence_hook
                     .register_stream_tool_call_identity(
                         &internal_call_id,
@@ -116,13 +118,18 @@ impl<'a> StreamProcessor<'a> {
                 self.assistant_turn
                     .push_tool_call(crate::llm::rig_compat::from_rig_tool_call(&tool_call));
                 if let Some(message) = self.assistant_turn.message_snapshot() {
+                    let persisted = self
+                        .persistence_hook
+                        .persist_inflight_assistant_turn(&message)
+                        .await;
+                    let advanced = persisted.is_ok();
                     self.persistence_hook.apply_persistence_policy(
-                        self.persistence_hook
-                            .persist_inflight_assistant_turn(&message)
-                            .await
-                            .map(|_| ()),
+                        persisted.map(|_| ()),
                         "persist in-flight assistant tool-call turn",
                     )?;
+                    if advanced {
+                        self.lifecycle.advance().await?;
+                    }
                 }
                 Ok(StreamAction::Continue)
             }
@@ -133,7 +140,6 @@ impl<'a> StreamProcessor<'a> {
                 },
             ))) => {
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                self.lifecycle.advance().await?;
                 if let Some(message) = self.assistant_turn.take_message() {
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
@@ -144,24 +150,30 @@ impl<'a> StreamProcessor<'a> {
                     )?;
                 }
                 self.committed_text_len = self.streamed_text.len();
+                let persisted = self
+                    .persistence_hook
+                    .persist_stream_tool_result_progress(
+                        &crate::llm::rig_compat::from_rig_tool_result(&tool_result),
+                        &internal_call_id,
+                    )
+                    .await;
+                let advanced = matches!(persisted, Ok(true));
                 self.persistence_hook.apply_persistence_policy(
-                    self.persistence_hook
-                        .persist_stream_tool_result_message(
-                            &crate::llm::rig_compat::from_rig_tool_result(&tool_result),
-                            &internal_call_id,
-                        )
-                        .await,
+                    persisted.map(|_| ()),
                     "persist streamed tool result",
                 )?;
+                if advanced {
+                    self.lifecycle.advance().await?;
+                }
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
                 self.assistant_turn.reconcile_text(response.response());
                 let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                self.lifecycle.advance().await?;
                 if let Some(message) = self.assistant_turn.take_message() {
                     let sequence = self.persistence_hook.persist_message(&message).await?;
+                    self.lifecycle.advance().await?;
                     self.persistence_hook.apply_persistence_policy(
                         self.persistence_hook
                             .mark_current_response_materialized(sequence)
@@ -210,7 +222,7 @@ impl<'a> StreamProcessor<'a> {
     }
 
     #[cfg(test)]
-    pub(super) fn has_observable_activity(&self) -> bool {
+    pub(crate) fn has_observable_activity(&self) -> bool {
         self.assistant_turn.has_content()
             || !self.streamed_text.trim().is_empty()
             || self
@@ -219,7 +231,7 @@ impl<'a> StreamProcessor<'a> {
                 .is_some_and(|text| !text.trim().is_empty())
     }
 
-    pub(super) async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
+    pub(crate) async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
         let Some(message) = self.assistant_turn.take_message() else {
             return Ok(false);
         };

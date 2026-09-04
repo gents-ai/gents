@@ -13,6 +13,8 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
+- request execution leases with opaque generations, semantic-progress renewal,
+  atomic request/response terminalization, and recovery race exclusion (#1341)
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
@@ -91,7 +93,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers nineteen practical areas:
+The current proof suite covers twenty practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -132,6 +134,11 @@ The current proof suite covers nineteen practical areas:
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
     expiry, and proof that mailbox close states do not create graph edges
+20. Request execution leases (#1341): opaque fresh ownership generations,
+    claim deadlines, renewal only from persisted semantic response/tool/
+    transcript progress, expiry/drop recovery, matching-generation terminal
+    CAS, atomic request/response agreement, and at-most-one winner-owned goal
+    continuation/token-charge effect
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -190,6 +197,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
+| `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
@@ -239,6 +247,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.RequestExecutionLease` | `State`, `Transition`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
@@ -280,6 +289,14 @@ predicates, executable `step?` functions, and finite witness contexts. It
 currently covers:
 
 - `Request`
+- `RequestExecutionLease` one-step and recovery/race traces: 34 one-step cases
+  cover live authorization and exact-observation Dead/Superseded revocation.
+  `generated_request_execution_lease_cases_fence_production_policy` exercises
+  the production authorization seam for begin, progress, finalize, and revocation.
+  Two generated provider-EOF cases also fence the production requirement for an
+  explicit provider final event before successful turn completion.
+  Abstract claim/recovery and database race traces retain explicit coverage
+  follow-ups; no standalone Rust reference machine is counted as a consumer.
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`

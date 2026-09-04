@@ -172,7 +172,7 @@ async fn fetch_interrupt_and_ttl(
 }
 
 impl RequestLifecycle {
-    pub fn set_response_doc_id(&mut self, doc_id: &str) {
+    fn set_response_doc_id(&mut self, doc_id: &str) {
         self.ensure_state(
             &[LocalLifecycleState::Claimed, LocalLifecycleState::Streaming],
             "set_response_doc_id",
@@ -190,13 +190,27 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    pub async fn begin_execution(&mut self) -> Result<()> {
-        self.ensure_state(&[LocalLifecycleState::Claimed], "begin_execution")?;
-        self.transition_execution_view(
-            RequestLifecycleState::Claimed,
-            RequestLifecycleState::Processing,
-        )
-        .await
+    /// The durable request transition and response creation commit together.
+    /// Cancellation before commit leaves Claimed/absent for lease recovery.
+    pub async fn begin_owned_execution(
+        &mut self,
+        stream_writer: &crate::streaming::DefraStreamWriter,
+    ) -> Result<String> {
+        self.ensure_state(&[LocalLifecycleState::Claimed], "begin_owned_execution")?;
+        let generation = self.execution_generation()?.to_string();
+        let doc_id = stream_writer
+            .begin_owned_response(
+                &self.request.session_id,
+                &self.request.request_id,
+                &self.request.doc_id,
+                &self.behavior_id,
+                self.request.requester_did.as_deref(),
+                &generation,
+                self.execution_lease_duration_secs,
+            )
+            .await?;
+        self.set_response_doc_id(&doc_id);
+        Ok(doc_id)
     }
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
@@ -466,6 +480,9 @@ impl RequestLifecycle {
 
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
+        let execution_generation = uuid::Uuid::new_v4().to_string();
+        let execution_lease_expires_at =
+            now + chrono::Duration::seconds(self.execution_lease_duration_secs as i64);
         let synthesized_deadline_at =
             now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
         let deadline_at = self
@@ -478,6 +495,9 @@ impl RequestLifecycle {
         let doc_id = self.request.doc_id.clone();
         let escaped_doc_id = escape_graphql_string(&doc_id);
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
+        let escaped_execution_generation = escape_graphql_string(&execution_generation);
+        let escaped_execution_lease_expires_at =
+            escape_graphql_string(&execution_lease_expires_at.to_rfc3339());
         let escaped_deadline = escape_graphql_string(&deadline);
         let escaped_backend_id = escape_graphql_string(&self.backend_id);
         let execution_origin = self.execution_origin.as_str();
@@ -495,6 +515,9 @@ impl RequestLifecycle {
                         lifecycle_state: "{lifecycle_state}",
                         backend_id: "{escaped_backend_id}",
                         claimed_at: "{escaped_claimed_at}",
+                        execution_generation: "{escaped_execution_generation}",
+                        execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
+                        execution_progress_seq: 0,
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
                     }}
@@ -568,6 +591,7 @@ impl RequestLifecycle {
         self.background_completion_input_through_sequence =
             background_completion_input_through_sequence;
         self.valid_until_at_claim = valid_until_at_claim;
+        self.execution_lease = Some(RequestExecutionLease::new(execution_generation));
 
         Ok(ClaimOutcome::Claimed)
     }
@@ -674,6 +698,9 @@ mod tests {
             execution_origin: Some(execution_origin.to_string()),
             created_at: created_at.to_string(),
             deadline: None,
+            execution_generation: None,
+            execution_lease_expires_at: None,
+            execution_progress_seq: 0,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,

@@ -1,21 +1,31 @@
-use super::lookup::{lookup_response_status_by_request_id, lookup_terminal_response_by_request_id};
 use super::*;
 use anyhow::Context;
 use gents_protocol::row::AgentRequestRow;
 
+#[derive(Debug, serde::Deserialize)]
+struct RecoveryResponseRow {
+    status: String,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    interrupted_at: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct ActiveRequestRecoveryReport {
+    requests: TerminalRepairReport,
+    responses_recovered: usize,
+}
+
 impl RequestLifecycle {
     pub async fn recover_all(node: &EmbeddedNode, agent_did: &str) -> Result<RecoveryReport> {
-        let responses_recovered = recover_stuck_responses(node, agent_did).await?
-            + recover_missing_response_documents(node, agent_did).await?;
-        let requests_recovered = Self::repair_terminal_requests(node, agent_did)
-            .await?
-            .repaired;
+        let active = recover_active_requests(node, agent_did).await?;
         let background_wakes_redriven = Self::redrive_failed_background_wakeups(node, agent_did)
             .await?
             .redriven;
         Ok(RecoveryReport {
-            responses_recovered,
-            requests_recovered,
+            responses_recovered: active.responses_recovered,
+            requests_recovered: active.requests.repaired,
             background_wakes_redriven,
         })
     }
@@ -180,365 +190,246 @@ impl RequestLifecycle {
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<TerminalRepairReport> {
-        // Key the stale predicate on `lifecycle_state ∈ {claimed, processing}` to
-        // mirror the Lean `Recovery.requestRecoveryStale` model exactly.
-        let stale_states = RequestLifecycleState::graphql_list([
-            RequestLifecycleState::Claimed,
-            RequestLifecycleState::Processing,
-        ]);
-        let escaped_agent_did = escape_graphql_string(agent_did);
-        let query = format!(
-            r#"{{
+        Ok(recover_active_requests(node, agent_did).await?.requests)
+    }
+}
+
+async fn recover_active_requests(
+    node: &EmbeddedNode,
+    agent_did: &str,
+) -> Result<ActiveRequestRecoveryReport> {
+    let active_states = RequestLifecycleState::graphql_list([
+        RequestLifecycleState::Claimed,
+        RequestLifecycleState::Processing,
+    ]);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
             AgentRequest(
                 filter: {{
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _in: {stale_states} }}
+                    lifecycle_state: {{ _in: {active_states} }}
                 }}
             ) {{
                 _docID
                 request_id
+                agent_did
+                requester_did
                 behavior_id
                 session_id
-                retry_count
+                interrupt_requested_at
+                execution_generation
+                execution_lease_expires_at
+                execution_progress_seq
             }}
         }}"#
+    );
+    let response = node.execute(&query).await;
+    if response.has_errors() {
+        anyhow::bail!(
+            "querying active requests for recovery: {:?}",
+            response.errors
         );
-
-        let resp = node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("querying stuck requests: {:?}", resp.errors);
-        }
-
-        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
-
-        let mut report = TerminalRepairReport {
+    }
+    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
+    let now = chrono::Utc::now();
+    let mut report = ActiveRequestRecoveryReport {
+        requests: TerminalRepairReport {
             scanned: rows.len(),
             ..Default::default()
-        };
-        for row in &rows {
-            let doc_id = row
-                .doc_id
-                .as_deref()
-                .context("stuck AgentRequest is missing _docID")?;
-            let request_id = row.request_id.as_str();
-            let session_id = row
-                .session_id
-                .as_deref()
-                .context("stuck AgentRequest is missing session_id")?;
-            let retry_count = row.retry_count.unwrap_or(0);
-            let terminal_response =
-                lookup_terminal_response_by_request_id(node, agent_did, request_id).await?;
-            let Some(terminal_response) = terminal_response else {
-                report.awaiting_outcome += 1;
+        },
+        ..Default::default()
+    };
+
+    for row in &rows {
+        let request_doc_id = match row.doc_id.as_deref() {
+            Some(value) => value,
+            None => {
+                report.requests.failed += 1;
+                tracing::warn!(
+                    request_id = %row.request_id,
+                    "active AgentRequest is missing _docID"
+                );
                 continue;
-            };
-            let response_status = terminal_response.status;
-            let response_reason = terminal_response
-                .error_message
-                .as_deref()
-                .unwrap_or_default();
-            // `interrupted_at` is the sole durable interrupt marker: the
-            // interrupt flow stamps it standalone and again atomically inside
-            // the response finalize. The human-readable error text is never
-            // consulted, so a provider error whose message happens to be
-            // "interrupted" still repairs to failed.
-            let response_was_interrupted = terminal_response
-                .interrupted_at
-                .as_deref()
-                .is_some_and(|value| !value.trim().is_empty());
-            let next_lifecycle_state =
-                if matches!(response_status.as_str(), "complete" | "completed") {
-                    RequestLifecycleState::Completed
-                } else if response_was_interrupted {
-                    RequestLifecycleState::Interrupted
-                } else {
-                    RequestLifecycleState::Failed
-                };
-            let terminalized_at = chrono::Utc::now().to_rfc3339();
-            let escaped_terminalized_at = escape_graphql_string(&terminalized_at);
-            let escaped_doc_id = escape_graphql_string(doc_id);
-            let failure_reason = match next_lifecycle_state {
-                RequestLifecycleState::Completed => "",
-                RequestLifecycleState::Interrupted => "interrupted",
-                _ => response_reason,
-            };
-            let escaped_failure_reason = escape_graphql_string(failure_reason);
-            let escaped_agent_did = escape_graphql_string(agent_did);
-            let stale_states = RequestLifecycleState::graphql_list([
-                RequestLifecycleState::Claimed,
-                RequestLifecycleState::Processing,
-            ]);
-
-            let mutation = format!(
-                r#"mutation {{
-                update_AgentRequest(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        lifecycle_state: {{ _in: {stale_states} }}
-                    }},
-                    input: {{
-                        lifecycle_state: "{next_lifecycle_state}",
-                        failure_reason: "{escaped_failure_reason}",
-                        terminalized_at: "{escaped_terminalized_at}",
-                        terminal_redrive_attempts: 0
-                    }}
-                ) {{ _docID }}
-            }}"#,
-            );
-            let conversation_status = if next_lifecycle_state == RequestLifecycleState::Completed {
-                "completed"
-            } else {
-                "active"
-            };
-            let conversation_mutation = session::request_conversation_status_projection_mutation(
-                session_id,
-                request_id,
-                conversation_status,
-                &terminalized_at,
-            );
-
-            match super::transition::execute_request_projection_transaction(
-                node,
-                &mutation,
-                &conversation_mutation,
-                "repair_terminal_request",
-            )
-            .await
-            {
-                Err(error) => {
-                    tracing::warn!(
-                        doc_id = %doc_id,
-                        request_id = %request_id,
-                        session_id = %session_id,
-                        next_lifecycle_state = %next_lifecycle_state,
-                        response_status = %response_status,
-                        error = %error,
-                        "failed to recover stuck request"
-                    );
-                    report.failed += 1;
-                }
-                Ok(resp) => {
-                    let updated = resp
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(response_has_documents);
-                    if !updated {
-                        continue;
-                    }
-                    report.repaired += 1;
-                    tracing::info!(
-                        doc_id = %doc_id,
-                        request_id = %request_id,
-                        session_id = %session_id,
-                        retry_count = retry_count,
-                        response_status = %response_status,
-                        "recovered stuck request: processing → {next_lifecycle_state}"
-                    );
-                }
             }
+        };
+        let session_id = match row.session_id.as_deref() {
+            Some(value) => value,
+            None => {
+                report.requests.failed += 1;
+                tracing::warn!(
+                    request_doc_id,
+                    request_id = %row.request_id,
+                    "active AgentRequest is missing session_id"
+                );
+                continue;
+            }
+        };
+        let persisted_response = load_recovery_response(node, agent_did, request_doc_id).await?;
+
+        let Some(expected_generation) = row
+            .execution_generation
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            report.requests.failed += 1;
+            tracing::warn!(
+                request_doc_id,
+                request_id = %row.request_id,
+                "active AgentRequest is missing execution_generation"
+            );
+            continue;
+        };
+        let Some(expected_expiry) = row
+            .execution_lease_expires_at
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            report.requests.failed += 1;
+            tracing::warn!(
+                request_doc_id,
+                request_id = %row.request_id,
+                execution_generation = expected_generation,
+                "active AgentRequest is missing execution_lease_expires_at"
+            );
+            continue;
+        };
+        let expiry = match chrono::DateTime::parse_from_rfc3339(expected_expiry) {
+            Ok(value) => value.with_timezone(&chrono::Utc),
+            Err(error) => {
+                report.requests.failed += 1;
+                tracing::warn!(
+                    request_doc_id,
+                    request_id = %row.request_id,
+                    execution_generation = expected_generation,
+                    execution_lease_expires_at = expected_expiry,
+                    error = %error,
+                    "active AgentRequest has malformed execution_lease_expires_at"
+                );
+                continue;
+            }
+        };
+        let Some(expected_progress_seq) = row.execution_progress_seq.filter(|value| *value >= 0)
+        else {
+            report.requests.failed += 1;
+            tracing::warn!(
+                request_doc_id,
+                request_id = %row.request_id,
+                execution_generation = expected_generation,
+                "active AgentRequest has missing or negative execution_progress_seq"
+            );
+            continue;
+        };
+        if expiry > now {
+            report.requests.awaiting_outcome += 1;
+            continue;
         }
 
-        Ok(report)
+        let response_is_interrupted = persisted_response
+            .as_ref()
+            .and_then(|response| response.interrupted_at.as_deref())
+            .is_some_and(|value| !value.trim().is_empty());
+        let interrupt_was_requested = row
+            .interrupt_requested_at
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+        let outcome = match persisted_response
+            .as_ref()
+            .map(|response| response.status.as_str())
+        {
+            Some("complete") => RequestTerminalOutcome::Completed,
+            Some("error") if response_is_interrupted => RequestTerminalOutcome::Interrupted,
+            Some("error") => RequestTerminalOutcome::Failed,
+            _ if interrupt_was_requested => RequestTerminalOutcome::Interrupted,
+            _ => RequestTerminalOutcome::Failed,
+        };
+        let reason = match outcome {
+            RequestTerminalOutcome::Completed => "",
+            RequestTerminalOutcome::Interrupted => "interrupted",
+            RequestTerminalOutcome::Dead
+            | RequestTerminalOutcome::Superseded
+            | RequestTerminalOutcome::Failed => persisted_response
+                .as_ref()
+                .and_then(|response| response.error_message.as_deref())
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or_else(|| {
+                    if persisted_response.is_some() {
+                        "daemon restarted before response could be finalized"
+                    } else {
+                        "daemon restarted before response could be generated"
+                    }
+                }),
+        };
+        match recover_execution_generation(
+            node,
+            row,
+            expected_generation,
+            expected_expiry,
+            expected_progress_seq,
+            outcome,
+            reason,
+        )
+        .await
+        {
+            Ok(TerminalizeResult::Won) => {
+                report.requests.repaired += 1;
+                report.responses_recovered += 1;
+                tracing::info!(
+                    request_doc_id,
+                    request_id = %row.request_id,
+                    session_id,
+                    execution_generation = expected_generation,
+                    execution_progress_seq = expected_progress_seq,
+                    "recovered expired request execution lease"
+                );
+            }
+            Ok(TerminalizeResult::AlreadySame | TerminalizeResult::Lost) => {}
+            Err(error) => {
+                report.requests.failed += 1;
+                tracing::warn!(
+                    request_doc_id,
+                    request_id = %row.request_id,
+                    session_id,
+                    execution_generation = expected_generation,
+                    execution_progress_seq = expected_progress_seq,
+                    error = %error,
+                    "failed to recover expired request execution lease"
+                );
+            }
+        }
     }
+
+    Ok(report)
 }
 
-async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let escaped_agent_did = escape_graphql_string(agent_did);
+async fn load_recovery_response(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_doc_id: &str,
+) -> Result<Option<RecoveryResponseRow>> {
+    let agent_did = escape_graphql_string(agent_did);
+    let request_doc_id = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
             AgentResponse(
                 filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    status: {{ _eq: "streaming" }}
-                }}
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    request_doc_id: {{ _eq: "{request_doc_id}" }}
+                }},
+                limit: 1
             ) {{
-                _docID
-                request_id
-                content
+                status
+                error_message
+                interrupted_at
             }}
         }}"#
     );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("querying stuck responses: {:?}", resp.errors);
-    }
-
-    let rows: Vec<serde_json::Value> = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentResponse"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-
-    let mut count = 0;
-    for row in &rows {
-        let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
-        let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
-        let existing_content = row.get("content").and_then(|v| v.as_str()).unwrap_or("");
-        let error_suffix = if existing_content.trim().is_empty() {
-            "Error: daemon restarted before response could be generated"
-        } else {
-            "\n\n[Response interrupted — daemon restarted]"
-        };
-        let final_content = format!("{existing_content}{error_suffix}");
-        let escaped_content = escape_graphql_string(&final_content);
-        let escaped_error_message =
-            escape_graphql_string("daemon restarted before response could be finalized");
-        let escaped_doc_id = escape_graphql_string(doc_id);
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{
-                        content: "{escaped_content}",
-                        status: "error",
-                        error_message: "{escaped_error_message}",
-                        completed_at: "{now}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
-            node,
-            &mutation,
-            "recover_stuck_response",
-        )
-        .await;
-        if let Err(error) = resp {
-            tracing::warn!(
-                doc_id = %doc_id,
-                request_id = %request_id,
-                error = %error,
-                "failed to finalize stuck response"
-            );
-        } else {
-            count += 1;
-            tracing::info!(
-                doc_id = %doc_id,
-                request_id = %request_id,
-                "recovered stuck response: streaming → error"
-            );
-        }
-    }
-
-    Ok(count)
-}
-
-async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let claimed_or_processing = RequestLifecycleState::graphql_list([
-        RequestLifecycleState::Claimed,
-        RequestLifecycleState::Processing,
-    ]);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _in: {claimed_or_processing} }}
-                }}
-            ) {{
-                _docID
-                request_id
-                requester_did
-                behavior_id
-                session_id
-            }}
-        }}"#
-    );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
+    let response = node.execute(&query).await;
+    if response.has_errors() {
         anyhow::bail!(
-            "querying processing requests for missing responses: {:?}",
-            resp.errors
+            "querying response for request_doc_id={request_doc_id}: {:?}",
+            response.errors
         );
     }
-
-    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
-
-    let mut recovered = 0;
-    for row in rows {
-        let request_doc_id = row
-            .doc_id
-            .as_deref()
-            .context("processing AgentRequest is missing _docID")?;
-        let request_id = row.request_id.as_str();
-        let requester_did = row.requester_did.as_deref();
-        let behavior_id = row.behavior_id.as_deref().unwrap_or("");
-        let session_id = row
-            .session_id
-            .as_deref()
-            .context("processing AgentRequest is missing session_id")?;
-
-        if lookup_response_status_by_request_id(node, agent_did, request_id)
-            .await?
-            .is_some()
-        {
-            continue;
-        }
-
-        let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let error_reason = "daemon restarted before response could be generated";
-        let error_text = escape_graphql_string(&format!("Error: {error_reason}"));
-        let escaped_error_reason = escape_graphql_string(error_reason);
-        let escaped_request_id = escape_graphql_string(request_id);
-        let escaped_request_doc_id = escape_graphql_string(request_doc_id);
-        let escaped_agent_did = escape_graphql_string(agent_did);
-        let escaped_behavior_id = escape_graphql_string(behavior_id);
-        let escaped_session_id = escape_graphql_string(session_id);
-        let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentResponse(input: {{
-                    response_key: "{escaped_request_id}",
-                    request_id: "{escaped_request_id}",
-                    request_doc_id: "{escaped_request_doc_id}",
-                    agent_did: "{escaped_agent_did}",
-                    {requester_did_field}
-                    behavior_id: "{escaped_behavior_id}",
-                    session_id: "{escaped_session_id}",
-                    content: "{error_text}",
-                    status: "error",
-                    error_message: "{escaped_error_reason}",
-                    token_count: 0,
-                    progress_seq: 0,
-                    created_at: "{now}",
-                    completed_at: "{now}"
-                }}) {{ _docID }}
-            }}"#
-        );
-
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
-            node,
-            &mutation,
-            "recover_missing_response_document",
-        )
-        .await;
-        if let Err(error) = resp {
-            tracing::warn!(
-                request_id = %request_id,
-                session_id = %session_id,
-                error = %error,
-                "failed to create recovery error response for missing AgentResponse"
-            );
-            continue;
-        }
-
-        recovered += 1;
-        tracing::info!(
-            request_id = %request_id,
-            session_id = %session_id,
-            "created recovery error response for missing AgentResponse"
-        );
-    }
-
-    Ok(recovered)
+    crate::graphql::first_row(&response, "AgentResponse")
 }

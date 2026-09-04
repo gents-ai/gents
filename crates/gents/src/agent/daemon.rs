@@ -15,7 +15,7 @@ use super::runtime::StartupBarrier;
 use crate::compaction::{ProviderReductionEngine, ReductionOptions};
 use crate::config::AgentBehavior;
 use crate::hook::FailurePolicy;
-use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::prompt::LayeredPromptBuilder;
 use crate::runtime_trace::{
     record_current_claim_outcome, record_current_failure_class, record_current_request_outcome,
@@ -24,17 +24,49 @@ use crate::runtime_trace::{
 use crate::streaming::DefraStreamWriter;
 use crate::watcher::AgentRequest;
 
+/// Only the winning terminal CAS authorizes follow-up effects. A matching
+/// durable terminal row is an observation, not a second completion event.
+async fn terminalize_request(
+    lifecycle: &mut RequestLifecycle,
+    stream_writer: &DefraStreamWriter,
+    outcome: RequestTerminalOutcome,
+    reason: Option<&str>,
+) -> Result<bool> {
+    match lifecycle
+        .terminalize_owned(stream_writer, outcome, reason)
+        .await?
+    {
+        TerminalizeResult::Won => Ok(true),
+        TerminalizeResult::AlreadySame => Ok(false),
+        TerminalizeResult::Lost => anyhow::bail!(
+            "request {} lost its execution generation before terminalization",
+            lifecycle.request().request_id,
+        ),
+    }
+}
+
 async fn finalize_request_failure(
     lifecycle: &mut RequestLifecycle,
+    stream_writer: &DefraStreamWriter,
     reason: &str,
     request_id: &str,
-) {
-    if let Err(error) = lifecycle.fail_with_reason(reason).await {
-        tracing::error!(
-            request_id,
-            error = %error,
-            "failed to transition request to failed after bounded retries; durable repair remains pending"
-        );
+) -> bool {
+    match terminalize_request(
+        lifecycle,
+        stream_writer,
+        RequestTerminalOutcome::Failed,
+        Some(reason),
+    )
+    .await
+    {
+        Ok(won) => won,
+        Err(error) => {
+            record_current_request_outcome("terminalization_failed");
+            record_current_failure_class(&error);
+            tracing::error!(request_id, error = %error,
+                "failed to atomically terminalize request and response; durable lease recovery remains pending");
+            false
+        }
     }
 }
 
@@ -323,6 +355,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             execution_origin,
             self.behavior.backend_id.clone().unwrap_or_default(),
         );
+        lifecycle.set_execution_lease_duration(self.behavior.stream_liveness_timeout);
 
         let claim_result = lifecycle
             .claim_with_identity()
@@ -433,32 +466,34 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     requested_behavior_id = %requested_behavior_id,
                     "rejecting request for unroutable behavior"
                 );
-                let response_exists = lifecycle.response_exists().await.unwrap_or(false);
-                let response_written = if response_exists {
-                    self.stream_writer
-                        .finalize_existing_request_error(&request.request_id, &error.to_string())
-                        .await
-                } else {
-                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
-                        .await
-                        .map(|_| true)
-                };
-                if let Err(stream_error) = response_written {
-                    tracing::error!(
-                        behavior_id = %self.behavior.behavior_id,
-                        error = %stream_error,
-                        "failed to write behavior-mismatch response"
-                    );
-                }
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
+                finalize_request_failure(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    &error.to_string(),
+                    &request.request_id,
+                )
+                .await;
                 return;
             }
         }
 
         match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
             Ok(true) => {
+                if let Err(error) = lifecycle.begin_owned_execution(&self.stream_writer).await {
+                    finalize_request_failure(
+                        &mut lifecycle,
+                        &self.stream_writer,
+                        &error.to_string(),
+                        &request.request_id,
+                    )
+                    .await;
+                    return;
+                }
                 record_current_request_outcome("completed");
+                if let Err(error) = lifecycle.validate_owned_execution().await {
+                    tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
+                    return;
+                }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
                     self.node.as_ref(),
                     &request,
@@ -474,19 +509,25 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     finalize_request_failure(
                         &mut lifecycle,
+                        &self.stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
                     .await;
                     return;
                 }
-                if let Err(error) = lifecycle.complete().await {
+                if let Err(error) = terminalize_request(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    RequestTerminalOutcome::Completed,
+                    None,
+                )
+                .await
+                {
+                    record_current_request_outcome("terminalization_failed");
                     record_current_failure_class(&error);
-                    tracing::error!(
-                        request_id = %request.request_id,
-                        error = %error,
-                        "failed to persist completed request after bounded retries; durable repair remains pending"
-                    );
+                    tracing::error!(request_id = %request.request_id, error = %error,
+                        "failed to atomically terminalize completed request and response");
                 }
                 return;
             }
@@ -498,8 +539,13 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "failed to inspect writer workspace seal state"
                 );
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
+                finalize_request_failure(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    &error.to_string(),
+                    &request.request_id,
+                )
+                .await;
                 return;
             }
         }
@@ -521,6 +567,10 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         match result {
             Ok(HandleRequestOutcome::Completed) => {
                 record_current_request_outcome("completed");
+                if let Err(error) = lifecycle.validate_owned_execution().await {
+                    tracing::warn!(request_id = %request.request_id, %error, "stopping workspace completion after execution ownership loss");
+                    return;
+                }
                 if let Err(error) = crate::workspace::seal_on_writer_success(
                     self.node.as_ref(),
                     &request,
@@ -534,21 +584,29 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         error = %error,
                         "failed to seal workspace after writer success"
                     );
-                    if let Err(release_error) =
-                        crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
-                    {
-                        tracing::warn!(
-                            request_id = %request.request_id,
-                            error = %release_error,
-                            "failed to release writer workspace binding after seal failure"
-                        );
-                    }
-                    finalize_request_failure(
+                    if finalize_request_failure(
                         &mut lifecycle,
+                        &self.stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
-                    .await;
+                    .await
+                    {
+                        if let Err(release_error) =
+                            crate::workspace::release_writer_binding(self.node.as_ref(), &request)
+                                .await
+                        {
+                            tracing::warn!(
+                                request_id = %request.request_id,
+                                error = %release_error,
+                                "failed to release writer workspace binding after seal failure"
+                            );
+                        }
+                    }
+                    return;
+                }
+                if let Err(error) = lifecycle.validate_owned_execution().await {
+                    tracing::warn!(request_id = %request.request_id, %error, "stopping workspace integration after execution ownership loss");
                     return;
                 }
                 if let Err(error) = crate::workspace::integrate_on_integrator_success(
@@ -568,23 +626,47 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     // a pending commit-tree and write the durable receipt.
                     finalize_request_failure(
                         &mut lifecycle,
+                        &self.stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
                     .await;
                     return;
                 }
-                if let Err(error) = lifecycle.complete().await {
+                if let Err(error) = terminalize_request(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    RequestTerminalOutcome::Completed,
+                    None,
+                )
+                .await
+                {
+                    record_current_request_outcome("terminalization_failed");
                     record_current_failure_class(&error);
-                    tracing::error!(
-                        request_id = %request.request_id,
-                        error = %error,
-                        "failed to persist completed request after bounded retries; durable repair remains pending"
-                    );
+                    tracing::error!(request_id = %request.request_id, error = %error,
+                        "failed to atomically terminalize completed request and response");
                 }
             }
             Ok(HandleRequestOutcome::Interrupted) => {
                 record_current_request_outcome("interrupted");
+                match terminalize_request(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    RequestTerminalOutcome::Interrupted,
+                    Some("interrupted"),
+                )
+                .await
+                {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(error) => {
+                        record_current_request_outcome("terminalization_failed");
+                        record_current_failure_class(&error);
+                        tracing::error!(request_id = %request.request_id, error = %error,
+                            "failed to atomically terminalize interrupted request and response");
+                        return;
+                    }
+                }
                 if let Err(error) =
                     crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
                 {
@@ -601,6 +683,17 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     cancellation_source = "mid_flight",
                     "request interrupted mid-flight"
                 );
+                if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
+                    &self.node,
+                    &request.session_id,
+                    &request.agent_did,
+                    "automated wake-up drained because active request was interrupted",
+                )
+                .await
+                {
+                    tracing::warn!(request_id = %request.request_id, error = %error,
+                        "failed to drain automated wake-ups after request interrupt");
+                }
             }
             Ok(HandleRequestOutcome::FailedAfterResponse(error)) => {
                 record_current_request_outcome("failed_after_response");
@@ -611,17 +704,24 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "request failed after response started"
                 );
-                if let Err(release_error) =
-                    crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                if finalize_request_failure(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    &error.to_string(),
+                    &request.request_id,
+                )
+                .await
                 {
-                    tracing::warn!(
-                        request_id = %request.request_id,
-                        error = %release_error,
-                        "failed to release writer workspace binding after failure"
-                    );
+                    if let Err(release_error) =
+                        crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                    {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            error = %release_error,
+                            "failed to release writer workspace binding after failure"
+                        );
+                    }
                 }
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
             }
             Err(error) => {
                 record_current_request_outcome("failed");
@@ -632,34 +732,24 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     error = %error,
                     "request handling failed"
                 );
-                let response_exists = lifecycle.response_exists().await.unwrap_or(false);
-                let response_written = if response_exists {
-                    self.stream_writer
-                        .finalize_existing_request_error(&request.request_id, &error.to_string())
-                        .await
-                } else {
-                    self.write_error_response(&request, lifecycle.behavior_id(), &error)
-                        .await
-                        .map(|_| true)
-                };
-                if let Err(stream_error) = response_written {
-                    tracing::error!(
-                        behavior_id = %self.behavior.behavior_id,
-                        error = %stream_error,
-                        "failed to write error response"
-                    );
-                }
-                if let Err(release_error) =
-                    crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                if finalize_request_failure(
+                    &mut lifecycle,
+                    &self.stream_writer,
+                    &error.to_string(),
+                    &request.request_id,
+                )
+                .await
                 {
-                    tracing::warn!(
-                        request_id = %request.request_id,
-                        error = %release_error,
-                        "failed to release writer workspace binding after failure"
-                    );
+                    if let Err(release_error) =
+                        crate::workspace::release_writer_binding(self.node.as_ref(), &request).await
+                    {
+                        tracing::warn!(
+                            request_id = %request.request_id,
+                            error = %release_error,
+                            "failed to release writer workspace binding after failure"
+                        );
+                    }
                 }
-                finalize_request_failure(&mut lifecycle, &error.to_string(), &request.request_id)
-                    .await;
             }
         }
     }

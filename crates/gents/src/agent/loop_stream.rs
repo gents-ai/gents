@@ -730,6 +730,18 @@ where
                 unreachable!("Err(..)? above ends the stream");
             }
 
+            if crate::lifecycle::execution_policy::provider_eof_is_failure(saw_final_usage_event) {
+                for item in close_streaming_turn(
+                    &mut new_messages, &mut accumulator, stream.message_id.clone(), pending_results,
+                ) {
+                    yield item;
+                }
+                Err(StreamingError::Completion(CompletionError::ProviderError(
+                    "provider stream ended without an explicit terminal response".to_string(),
+                )))?;
+                unreachable!("terminal EOF failure ends the stream");
+            }
+
             let structured_output_error = if pending_results.is_empty() {
                 config
                     .structured_output

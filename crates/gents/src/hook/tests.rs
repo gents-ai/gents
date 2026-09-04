@@ -2400,6 +2400,15 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -2540,6 +2549,74 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
     assert_eq!(tool_call_keys.len(), 1);
     assert_eq!(tool_call_ids.len(), 1);
     assert_eq!(tool_call_ids.iter().next().copied(), Some(stored_call_id));
+
+    assert_eq!(
+        hook.persist_message_with_progress(&duplicate_tool_result_message)
+            .await
+            .unwrap(),
+        (first_result_sequence, false),
+        "the cached result is not new durable progress",
+    );
+    let resumed = DefraSessionHook::resume_with_identity_policy(
+        node.clone(),
+        &session_id,
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    // Reconstruct the already-persisted assistant turn with empty observation
+    // caches, as a fresh stream consumer would encounter a replayed tool result.
+    resumed.state.lock().await.transcript_turn = TranscriptTurnState::AssistantPersisted {
+        sequence: first_result_sequence - 1,
+    };
+    assert!(resumed
+        .state
+        .lock()
+        .await
+        .persisted_tool_result_message_sequences
+        .is_empty());
+    assert!(resumed
+        .state
+        .lock()
+        .await
+        .persisted_tool_result_keys
+        .is_empty());
+    let replay = ToolResult {
+        id: model_result_id.to_string(),
+        call_id: Some(model_result_id.to_string()),
+        content: vec![ToolResultContent::Text(Text {
+            text: tool_result_text.to_string(),
+        })],
+    };
+    assert!(
+        !resumed
+            .persist_stream_tool_result_progress(&replay, stored_call_id)
+            .await
+            .unwrap(),
+        "a durable keyed-append duplicate must not authorize lease renewal even with empty caches"
+    );
+    assert!(
+        !resumed
+            .persist_stream_tool_result_progress(&replay, stored_call_id)
+            .await
+            .unwrap(),
+        "subsequent cached observations must remain no-ops"
+    );
+    assert_eq!(
+        crate::session::max_sequence(&node, &session_id)
+            .await
+            .unwrap(),
+        first_result_sequence
+    );
+    assert_eq!(
+        crate::session::load_history(&node, &session_id)
+            .await
+            .unwrap()
+            .len(),
+        3
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }

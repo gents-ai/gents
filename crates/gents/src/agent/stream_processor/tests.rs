@@ -76,6 +76,9 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -105,10 +108,11 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         "did:test:test",
         Duration::from_secs(60),
     );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     // Begin a streaming response so reset_tail (called by persist_partial_turn)
     // has a live buffer to clear.
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
     let mut processor =
@@ -427,6 +431,9 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -456,11 +463,10 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
@@ -606,6 +612,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -633,11 +642,10 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -809,6 +817,9 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -836,11 +847,10 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -970,6 +980,9 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -997,11 +1010,10 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -1141,6 +1153,9 @@ async fn post_tool_resumed_resets_response_tail() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -1174,11 +1189,10 @@ async fn post_tool_resumed_resets_response_tail() {
     // Use 0 ms batch interval so write_tokens flushes immediately to DB.
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
@@ -1286,6 +1300,9 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -1314,11 +1331,10 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -1435,6 +1451,9 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         execution_origin: None,
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -1462,11 +1481,10 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = stream_writer
-        .begin(&session_id, &request_id, "general")
+    let response_doc_id = lifecycle
+        .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
-    lifecycle.set_response_doc_id(&response_doc_id);
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 

@@ -1,11 +1,11 @@
 use gents::lifecycle::ClaimOutcome;
+use gents::lifecycle::RequestTerminalOutcome;
 use gents::watcher::AgentRequest;
 use gents::RequestLifecycle;
 use serde::Deserialize;
 
 use crate::support::{
-    build_request, create_request, create_response, first_row, test_db, upsert_conversation,
-    AGENT_DID, AGENT_NAME,
+    build_request, create_request, first_row, test_db, upsert_conversation, AGENT_DID, AGENT_NAME,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -53,7 +53,13 @@ async fn missing_conversation_projection_does_not_block_terminal_request() {
         .await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    lifecycle.complete().await.unwrap();
+    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+        .await
+        .unwrap();
+    lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
 
     let response = db
         .node
@@ -99,6 +105,9 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -125,7 +134,13 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
 
     upsert_conversation(&db.node, session_id, "req-second", "second", "processing").await;
 
-    lifecycle.complete().await.unwrap();
+    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+        .await
+        .unwrap();
+    lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
 
     let conversation_resp = db
         .node
@@ -157,7 +172,6 @@ async fn advance_increments_progress_seq() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    let response_doc_id = create_response(&db.node, "resp-1").await;
     let request = AgentRequest {
         doc_id: request_doc_id,
         request_id: "req-1".into(),
@@ -176,6 +190,9 @@ async fn advance_increments_progress_seq() {
         execution_origin: None,
         created_at: "2026-03-23T00:00:00Z".into(),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -195,7 +212,9 @@ async fn advance_increments_progress_seq() {
     let mut lifecycle =
         RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle.set_response_doc_id(&response_doc_id);
+    let response_doc_id = crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+        .await
+        .unwrap();
     lifecycle.advance().await.unwrap();
     lifecycle.advance().await.unwrap();
     lifecycle.advance().await.unwrap();

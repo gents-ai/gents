@@ -450,18 +450,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 built.messages = reminders;
             }
 
-            lifecycle.begin_execution().await?;
-
             let response_behavior_id = lifecycle.behavior_id().to_string();
-            let doc_id = self
-                .stream_writer
-                .begin_with_requester_did(
-                    &request.session_id,
-                    &request.request_id,
-                    Some(&request.doc_id),
-                    lifecycle.behavior_id(),
-                    request.requester_did.as_deref(),
-                )
+            let doc_id = lifecycle
+                .begin_owned_execution(&self.stream_writer)
                 .instrument(tracing::info_span!(
                     "request.begin_response",
                     request_id = %request.request_id,
@@ -472,8 +463,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
-            lifecycle.set_response_doc_id(&doc_id);
-            lifecycle.advance().await?;
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
@@ -562,43 +551,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 async {
                     tokio::time::sleep(CANCELLATION_GRACE_PERIOD).await;
-                    if let Err(error) = self
-                        .stream_writer
-                        .write_interrupted_at(&doc_id, &interrupt_at)
-                        .await
-                    {
-                        tracing::warn!(
-                            behavior_id = %self.behavior.behavior_id,
-                            doc_id = %doc_id,
-                            error = %error,
-                            "failed to stamp interrupted_at on response; continuing to terminal transition"
-                        );
-                    }
-                    if let Err(error) = self.stream_writer.finalize_interrupted_response(&doc_id).await
-                    {
-                        tracing::warn!(
-                            behavior_id = %self.behavior.behavior_id,
-                            doc_id = %doc_id,
-                            error = %error,
-                            "failed to finalize interrupted response; continuing to terminal request transition"
-                        );
-                    }
-                    lifecycle.transition_to_interrupted().await?;
-                    if let Err(error) = crate::lifecycle::queue::drain_automated_wakeups(
-                        &self.node,
-                        &request.session_id,
-                        &request.agent_did,
-                        "automated wake-up drained because active request was interrupted",
-                    )
-                    .await
-                    {
-                        tracing::warn!(
-                            request_id = %request.request_id,
-                            session_id = %request.session_id,
-                            error = %error,
-                            "failed to drain automated wake-ups after request interrupt"
-                        );
-                    }
                     Ok::<_, anyhow::Error>(())
                 }
                 .instrument(flow_span)
@@ -606,24 +558,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 return Ok(HandleRequestOutcome::Interrupted);
             }
 
-            match result {
-                Ok(outcome) => Ok(outcome),
-                Err(error) => {
-                    if let Err(finalize_error) = self
-                        .stream_writer
-                        .finalize_error(&doc_id, &error.to_string())
-                        .await
-                    {
-                        tracing::error!(
-                            behavior_id = %self.behavior.behavior_id,
-                            doc_id = %doc_id,
-                            error = %finalize_error,
-                            "failed to finalize stream after error"
-                        );
-                    }
-                    Err(error)
-                }
-            }
+            result
         });
 
         match capture_scope {

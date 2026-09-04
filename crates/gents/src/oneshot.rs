@@ -7,13 +7,16 @@ use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
 
+use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
 use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
-use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
+use crate::lifecycle::TerminalizeResult;
+use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
-use crate::streaming::{DefraStreamWriter, StreamStatus, StreamWriter};
+use crate::streaming::DefraStreamWriter;
 use crate::tool_surface::{self, ToolRuntimeContext};
+use futures::StreamExt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OneshotRunResult {
@@ -147,8 +150,10 @@ async fn terminalize_oneshot_setup_failure(
 }
 
 async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str) -> Result<()> {
-    lifecycle.fail_with_reason(reason).await?;
-    lifecycle.ensure_error_response(reason).await
+    lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, Some(reason))
+        .await?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -166,7 +171,7 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
 where
     M::StreamingResponse: 'static,
 {
-    let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
         node.clone(),
         &behavior.behavior_id,
         behavior.principal_identity().clone(),
@@ -177,34 +182,26 @@ where
         TriggerLineage::default(),
     )
     .await?;
-    if let Err(error) = lifecycle.begin_execution().await {
-        return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
-    }
+    lifecycle.set_execution_lease_duration(behavior.stream_liveness_timeout);
+    anyhow::ensure!(
+        matches!(
+            lifecycle.claim_with_identity().await?,
+            crate::lifecycle::ClaimOutcome::Claimed
+        ),
+        "new one-shot request was not claimed"
+    );
     let request = lifecycle.request().clone();
     let stream_writer = DefraStreamWriter::new(
         node.clone(),
         behavior.agent_did(),
         std::time::Duration::ZERO,
     );
-    let response_doc_id = match stream_writer
-        .begin_with_requester_did(
-            &request.session_id,
-            &request.request_id,
-            Some(&request.doc_id),
-            lifecycle.behavior_id(),
-            request.requester_did.as_deref(),
-        )
-        .await
-    {
+    let response_doc_id = match lifecycle.begin_owned_execution(&stream_writer).await {
         Ok(doc_id) => doc_id,
         Err(error) => {
             return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
         }
     };
-    lifecycle.set_response_doc_id(&response_doc_id);
-    if let Err(error) = lifecycle.advance().await {
-        return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
-    }
     let request_commit_cid = match lifecycle.request_commit_cid() {
         Some(cid) => cid.to_string(),
         None => {
@@ -239,7 +236,7 @@ where
     };
 
     let hook = match DefraSessionHook::resume_with_identity_policy(
-        node,
+        node.clone(),
         &request.session_id,
         &behavior.behavior_id,
         behavior.agent_did(),
@@ -264,45 +261,69 @@ where
     )
     .await;
     hook.set_request_deadline_at(config.deadline).await;
-    let inference = crate::agent::loop_stream::run_loop_to_text(
-        model,
-        Some(hook.clone()),
-        Message::user(prompt),
-        history,
-        tools,
-        config,
-    );
+    // Both entry points consume the owned stream through the same durable
+    // processor, so text, reasoning and tool progress renew the same lease.
+    let inference = async {
+        let stream = crate::agent::loop_stream::run_loop_stream(
+            model,
+            Some(hook.clone()),
+            Message::user(prompt),
+            history,
+            tools,
+            config,
+        );
+        futures::pin_mut!(stream);
+        let mut processor =
+            StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+        let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            let item = tokio::select! {
+                biased;
+                _ = lease_poll.tick() => { processor.validate_execution().await?; continue; },
+                item = stream.next() => item,
+            };
+            let Some(item) = item else {
+                break;
+            };
+            match processor.process_item(item).await? {
+                StreamAction::Continue => {}
+                StreamAction::Done => {
+                    return processor
+                        .final_text
+                        .take()
+                        .context("one-shot final response missing text")
+                }
+                StreamAction::Error(error) => {
+                    processor
+                        .persist_partial_turn("persist failed one-shot assistant turn")
+                        .await?;
+                    return Err(anyhow!("one-shot inference failed: {error}"));
+                }
+            }
+        }
+        processor
+            .persist_partial_turn("persist truncated one-shot assistant turn")
+            .await?;
+        Err(anyhow!(
+            "provider stream ended without an explicit terminal response"
+        ))
+    };
     let response = match capture_scope {
         Some(scope) => crate::rendered_request::scope::scope_request(scope, inference).await,
         None => inference.await,
-    }
-    .map_err(|error| anyhow!("one-shot inference failed: {error}"));
-
-    let response = match response {
-        Ok(response_text) => {
-            let persisted = async {
-                stream_writer
-                    .write_tokens(&response_doc_id, &response_text)
-                    .await?;
-                stream_writer
-                    .finalize(&response_doc_id, StreamStatus::Complete)
-                    .await?;
-                Ok::<_, anyhow::Error>(())
-            }
-            .await;
-            match persisted {
-                Ok(()) => Ok(response_text),
-                Err(error) => Err(anyhow!("one-shot response persistence failed: {error}")),
-            }
-        }
-        Err(error) => Err(error),
     };
 
     let session_id = hook.session_id().await;
     match response {
         Ok(response_text) => {
-            let lifecycle_result = lifecycle.complete().await;
-            let close_result = hook.close().await;
+            let lifecycle_result = lifecycle
+                .terminalize_owned(&stream_writer, RequestTerminalOutcome::Completed, None)
+                .await;
+            let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
+                hook.close().await
+            } else {
+                Ok(())
+            };
             if let Some(id) = session_id.as_deref() {
                 lsp_pool.close_session(id).await;
             } else {
@@ -310,7 +331,10 @@ where
             }
 
             let session_id = session_id.context("one-shot run did not create a session")?;
-            lifecycle_result?;
+            anyhow::ensure!(
+                lifecycle_result? != TerminalizeResult::Lost,
+                "one-shot execution lost terminal ownership"
+            );
             close_result.with_context(|| format!("closing one-shot session {session_id}"))?;
 
             Ok(OneshotRunResult {
@@ -319,9 +343,26 @@ where
             })
         }
         Err(error) => {
-            let lifecycle_result =
-                persist_oneshot_failure(&mut lifecycle, &error.to_string()).await;
-            let close_result = hook.close().await;
+            let lifecycle_result = lifecycle
+                .terminalize_owned(
+                    &stream_writer,
+                    RequestTerminalOutcome::Failed,
+                    Some(&error.to_string()),
+                )
+                .await;
+            if !matches!(
+                lifecycle_result,
+                Ok(TerminalizeResult::Won | TerminalizeResult::AlreadySame)
+            ) {
+                // A one-shot process has no periodic daemon sweep. Reuse the
+                // recovery owner before returning an expired execution to its caller.
+                RequestLifecycle::recover_all(&node, behavior.agent_did()).await?;
+            }
+            let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
+                hook.close().await
+            } else {
+                Ok(())
+            };
             if let Some(id) = session_id.as_deref() {
                 lsp_pool.close_session(id).await;
             } else {
@@ -349,3 +390,6 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
