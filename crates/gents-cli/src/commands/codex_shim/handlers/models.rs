@@ -273,11 +273,19 @@ async fn apply_model_to_bound_behavior(
     state: &ShimState,
     selection: &ModelSelection,
 ) -> Result<()> {
+    let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
+    apply_model_to_bound_behavior_with_access(state, selection, &access).await
+}
+
+async fn apply_model_to_bound_behavior_with_access(
+    state: &ShimState,
+    selection: &ModelSelection,
+    access: &ConfigAccess,
+) -> Result<()> {
     let mut behavior = load_bound_behavior(state).await?;
     behavior.backend_id = Some(selection.backend_id.clone());
     behavior.model_name = Some(selection.model_name.clone());
-    let access = ConfigAccess::Graphql(state.graphql.as_ref().to_string());
-    write_agent_behavior_document(&access, &behavior)
+    write_agent_behavior_document(access, &behavior)
         .await
         .context("writing AgentBehavior with selected backend model")?;
     Ok(())
@@ -467,9 +475,6 @@ mod tests {
             fs_root: None,
             node: node.clone(),
             background_execution_registry: gents::BackgroundExecutionRegistry::default(),
-            // Never dialed: `apply_model_to_bound_behavior` validates
-            // references before it ever reaches the write, so a rejected
-            // selection never touches this endpoint.
             graphql: Arc::from("http://127.0.0.1:0/graphql"),
             agent_did: Arc::from(agent_did),
             behavior_id: Arc::from(behavior_id),
@@ -525,8 +530,9 @@ mod tests {
             backend_id: "backend-a".to_string(),
             model_name: "not-advertised".to_string(),
         };
+        let access = ConfigAccess::Local(node);
 
-        let error = apply_model_to_bound_behavior(&state, &selection)
+        let error = apply_model_to_bound_behavior_with_access(&state, &selection, &access)
             .await
             .expect_err("an unadvertised model must be rejected");
         // `{:#}` (anyhow's alternate Display) walks the full context chain;
@@ -577,16 +583,16 @@ mod tests {
             backend_id: "backend-a".to_string(),
             model_name: "model-y".to_string(),
         };
+        let access = ConfigAccess::Local(node.clone());
 
-        // The write itself dials the dummy `graphql` endpoint and will fail
-        // to connect — that failure, distinct from a validation rejection,
-        // is exactly the signal that validation passed.
-        let error = apply_model_to_bound_behavior(&state, &selection)
+        apply_model_to_bound_behavior_with_access(&state, &selection, &access)
             .await
-            .expect_err("the dummy graphql endpoint is unreachable");
-        assert!(
-            !format!("{error:#}").contains("does not advertise"),
-            "an advertised model must clear validation: {error:#}"
-        );
+            .expect("an advertised model must pass validation and commit");
+        let updated = load_agent_behavior(node.as_ref(), "default")
+            .await
+            .expect("reload behavior")
+            .expect("behavior remains present");
+        assert_eq!(updated.backend_id.as_deref(), Some("backend-a"));
+        assert_eq!(updated.model_name.as_deref(), Some("model-y"));
     }
 }
