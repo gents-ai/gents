@@ -7,12 +7,14 @@ import os
 import socket
 import stat
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 
 PORTABLE_UNIX_PATH_BYTES = 100
+T = TypeVar("T")
 
 
 def require(condition: bool, message: str) -> None:
@@ -41,6 +43,24 @@ def graphql_query(
     data = payload.get("data")
     require(isinstance(data, dict), "GraphQL response has no data object")
     return data
+
+
+def poll_until_deadline(
+    attempt: Callable[[], T],
+    ready: Callable[[T], bool],
+    *,
+    deadline: float,
+    interval: float,
+) -> tuple[bool, T]:
+    """Poll a caller-owned observation until ready or its latest deadline value."""
+    require(interval > 0, "poll interval must be positive")
+    while True:
+        latest = attempt()
+        if ready(latest):
+            return True, latest
+        if time.monotonic() >= deadline:
+            return False, latest
+        time.sleep(interval)
 
 
 def _new_private_socket_leaf(

@@ -18,6 +18,7 @@ from grok_probe_common import (
     PortableSocketPath,
     graphql_escape,
     graphql_query,
+    poll_until_deadline,
     require,
     self_test_portable_socket_path,
 )
@@ -2776,11 +2777,12 @@ def query_documents_until_turns(
     expected_turns: int,
     require_interrupted: bool = False,
     timeout_seconds: float = 5.0,
+    query_documents_fn: Callable[[str, str], dict[str, Any]] = query_documents,
 ) -> dict[str, Any]:
     """Wait for request and response materialization for a completed wire turn."""
     deadline = time.monotonic() + timeout_seconds
-    while True:
-        documents = query_documents(endpoint, session_id)
+
+    def ready(documents: dict[str, Any]) -> bool:
         cardinality_ready = (
             len(documents.get("AgentRequest", [])) == expected_turns
             and len(documents.get("AgentResponse", [])) == expected_turns
@@ -2790,11 +2792,36 @@ def query_documents_until_turns(
             and bool(documents["AgentRequest"][-1].get("interrupt_requested_at"))
             and bool(documents["AgentResponse"][-1].get("interrupted_at"))
         )
-        if cardinality_ready and interruption_ready:
-            return documents
-        if time.monotonic() >= deadline:
-            return documents
-        time.sleep(0.05)
+        return cardinality_ready and interruption_ready
+
+    _ready, documents = poll_until_deadline(
+        lambda: query_documents_fn(endpoint, session_id),
+        ready,
+        deadline=deadline,
+        interval=0.05,
+    )
+    return documents
+
+
+def self_test_document_polling() -> dict[str, int]:
+    calls = 0
+    incomplete = {"AgentRequest": [], "AgentResponse": []}
+
+    def query_once(_endpoint: str, _session_id: str) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        return incomplete
+
+    observed = query_documents_until_turns(
+        "http://unused.invalid/graphql",
+        "session",
+        expected_turns=1,
+        timeout_seconds=0,
+        query_documents_fn=query_once,
+    )
+    require(calls == 1, "edge deadline must retain its one final observation")
+    require(observed is incomplete, "edge deadline did not return its latest snapshot")
+    return {"accepted": 1, "rejected": 0}
 
 
 def is_persisted_subprocess_probe(call: dict[str, Any]) -> bool:
@@ -2858,6 +2885,7 @@ def main() -> int:
             "validator_self_test": self_test_subagent_lifecycle_validators(),
             "subagent_document_query_self_test": self_test_subagent_document_query(),
             "subprocess_document_self_test": self_test_persisted_subprocess_probe(),
+            "document_poll_self_test": self_test_document_polling(),
         }, indent=2, sort_keys=True))
         return 0
     require(args.socket, "--socket is required unless --edge offline is selected")

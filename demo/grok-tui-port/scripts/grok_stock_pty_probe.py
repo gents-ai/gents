@@ -36,6 +36,7 @@ from grok_probe_common import (
     PortableSocketPath,
     graphql_escape,
     graphql_query,
+    poll_until_deadline,
     require,
     self_test_portable_socket_path,
 )
@@ -328,7 +329,12 @@ def completed_request_for_prompt(
     query_rows: Callable[[str, str], list[dict[str, Any]]] = request_rows_for_prompt,
     query_messages: Callable[[str, str], list[dict[str, Any]]] = assistant_rows_for_request,
 ) -> tuple[str, str]:
-    while time.monotonic() < deadline:
+    if time.monotonic() >= deadline:
+        raise AssertionError("stock pager turn did not produce a completed AgentRequest")
+
+    def attempt() -> tuple[str, str] | None:
+        if time.monotonic() >= deadline:
+            return None
         try:
             rows = query_rows(graphql_url, prompt)
             if len(rows) == 1 and rows[0].get("lifecycle_state") == "completed":
@@ -355,10 +361,19 @@ def completed_request_for_prompt(
                 raise AssertionError(
                     "live GraphQL remained unavailable while correlating the PTY request"
                 ) from error
-            time.sleep(0.2)
-            continue
+            return None
         require(len(rows) <= 1, "duplicate AgentRequests exist for the random PTY prompt")
-        time.sleep(0.2)
+        return None
+
+    ready, result = poll_until_deadline(
+        attempt,
+        lambda candidate: candidate is not None,
+        deadline=deadline,
+        interval=0.2,
+    )
+    if ready:
+        require(result is not None, "ready PTY correlation has no request")
+        return result
     raise AssertionError("stock pager turn did not produce a completed AgentRequest")
 
 
@@ -1052,6 +1067,65 @@ def self_test() -> dict[str, int]:
         and transient_result == ("request-1", "session-1"),
         "transient GraphQL polling did not recover deterministically",
     )
+
+    poll_values = iter(("pending", "ready"))
+    poll_ready, poll_value = poll_until_deadline(
+        lambda: next(poll_values),
+        lambda value: value == "ready",
+        deadline=float("inf"),
+        interval=0.001,
+    )
+    require(poll_ready and poll_value == "ready", "shared polling lost readiness")
+    poll_error = RuntimeError("injected poll failure")
+
+    def fail_poll() -> str:
+        raise poll_error
+
+    try:
+        poll_until_deadline(
+            fail_poll,
+            lambda _value: False,
+            deadline=float("inf"),
+            interval=0.001,
+        )
+    except RuntimeError as error:
+        require(error is poll_error, "shared polling replaced the attempt error")
+    else:
+        raise AssertionError("shared polling swallowed an attempt error")
+
+    expired_calls = 0
+
+    def remain_incomplete(_graphql: str, _prompt: str) -> list[dict[str, Any]]:
+        nonlocal expired_calls
+        expired_calls += 1
+        return []
+
+    clock_values = iter((1.0, 1.0, 1.0, 3.0, 3.0))
+    original_monotonic = time.monotonic
+    original_sleep = time.sleep
+    time.monotonic = lambda: next(clock_values)  # type: ignore[assignment]
+    time.sleep = lambda _seconds: None  # type: ignore[assignment]
+    try:
+        try:
+            completed_request_for_prompt(
+                "http://unused.invalid/graphql",
+                "incomplete-prompt",
+                expected="unused",
+                expected_session=None,
+                deadline=2.0,
+                query_rows=remain_incomplete,
+            )
+        except AssertionError as error:
+            require(
+                str(error) == "stock pager turn did not produce a completed AgentRequest",
+                "stock incomplete timeout changed shape",
+            )
+        else:
+            raise AssertionError("stock incomplete timeout unexpectedly succeeded")
+    finally:
+        time.monotonic = original_monotonic  # type: ignore[assignment]
+        time.sleep = original_sleep  # type: ignore[assignment]
+    require(expired_calls == 1, "stock polling queried again after its deadline")
 
     accept(lambda: validate_endpoint("http://one", "http://one", "http://one", None))
     reject(lambda: validate_endpoint("http://one", "http://two", "http://one", None))
