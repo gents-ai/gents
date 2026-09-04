@@ -101,11 +101,11 @@ impl AgentRequestRow {
             return PreclaimSignal::Terminal;
         }
         match crate::lifecycle::parse_valid_until(self.valid_until.as_deref(), chrono::Utc::now()) {
-            crate::lifecycle::TtlOutcome::Expired => PreclaimSignal::Terminal,
+            crate::lifecycle::TtlOutcome::Expired(_) => PreclaimSignal::Terminal,
             // Fail closed: an unparseable TTL is not evidence the request is
             // still live, so it must not be claimed as if unset.
             crate::lifecycle::TtlOutcome::Malformed => PreclaimSignal::Malformed,
-            crate::lifecycle::TtlOutcome::NotSet | crate::lifecycle::TtlOutcome::Live => {
+            crate::lifecycle::TtlOutcome::NotSet | crate::lifecycle::TtlOutcome::Live(_) => {
                 PreclaimSignal::None
             }
         }

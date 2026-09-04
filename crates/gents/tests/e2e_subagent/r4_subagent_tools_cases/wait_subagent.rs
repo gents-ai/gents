@@ -116,7 +116,7 @@ async fn wait_subagent_maps_child_terminal_failures_without_lifecycle_row() {
             "dead",
             "failed",
             None,
-            "child request reached terminal state dead",
+            "child request reached the dead terminal state",
         ),
         (
             "interrupted",

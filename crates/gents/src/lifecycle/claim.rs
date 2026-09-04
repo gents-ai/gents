@@ -442,21 +442,13 @@ impl RequestLifecycle {
                 super::TtlOutcome::Malformed => {
                     anyhow::bail!("invalid valid_until on request {}", self.request.doc_id);
                 }
-                super::TtlOutcome::Expired => {
+                super::TtlOutcome::Expired(_) => {
                     self.transition_pending_to_dead_stale().await?;
                     self.state = LocalLifecycleState::Dead;
                     return Ok(ClaimOutcome::Expired);
                 }
                 super::TtlOutcome::NotSet => None,
-                super::TtlOutcome::Live => Some(
-                    chrono::DateTime::parse_from_rfc3339(
-                        valid_until
-                            .as_deref()
-                            .expect("TtlOutcome::Live implies valid_until is Some"),
-                    )
-                    .expect("TtlOutcome::Live implies valid_until already parsed")
-                    .with_timezone(&chrono::Utc),
-                ),
+                super::TtlOutcome::Live(parsed) => Some(parsed),
             };
 
         let dedup = self.check_deduplication().await?;

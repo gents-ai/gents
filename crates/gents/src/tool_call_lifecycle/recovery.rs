@@ -315,12 +315,13 @@ impl super::ToolCallLifecycle {
     /// 3. Require a terminal parent before any write.
     /// 4. Leave every native background row to the registry-aware orphan
     ///    sweep, regardless of parent state.
-    /// 5. Detached bridges under an *interrupted* parent are left running.
-    /// 6. Child-linked bridges under a *cleanly completed* parent are left
-    ///    running — clean completion is not a cancel signal (live cascade and
-    ///    recovery only cancel on cancel-worthy terminals).
-    /// 7. Then project already-terminal children onto bridges (matches startup
-    ///    child-precedence so restart and live ticks converge).
+    /// 5. Project already-terminal children onto bridges first (matches
+    ///    startup child-precedence so restart and live ticks converge).
+    /// 6. Only then: detached bridges under an *interrupted* parent (whose
+    ///    child hasn't independently gone terminal) are left running, and
+    ///    child-linked bridges under a *cleanly completed* parent are left
+    ///    running too — clean completion is not a cancel signal (live
+    ///    cascade and recovery only cancel on cancel-worthy terminals).
     ///
     /// Covers running native tool calls stranded under a terminal parent with
     /// no executor active.
@@ -371,13 +372,13 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            // Detached bridges may outlive an interrupted parent by design
-            // (startup recovery leaves them running too).
-            if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
-                continue;
-            }
-
             // Child-terminal precedence only after owner + terminal-parent gates.
+            // (Detached bridges under an interrupted parent are still left
+            // running when their child hasn't independently gone terminal —
+            // that's `classify_terminal_parent_tool_recovery`'s
+            // `is_detached_subagent_tool && request_is_interrupted` branch,
+            // reached below. Checking child-terminal precedence first here
+            // matches the startup sweep's order, which does the same.)
             if recover_bridge_terminal_child(node, agent_did, &row).await? {
                 report.tool_calls_terminalized += 1;
                 tracing::info!(
