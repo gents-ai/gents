@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
@@ -67,6 +67,69 @@ impl AgentRequest {
                 Some("event" | "schedule")
             )
     }
+}
+
+impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
+    type Error = anyhow::Error;
+
+    fn try_from(row: gents_protocol::row::AgentRequestRow) -> Result<Self> {
+        let subagent_depth = row
+            .subagent_depth
+            .map(u32::try_from)
+            .transpose()
+            .context("agent request subagent_depth must fit in u32")?
+            .unwrap_or(0);
+        let request = Self {
+            doc_id: row.doc_id.context("agent request is missing _docID")?,
+            request_id: row.request_id,
+            agent_did: row
+                .agent_did
+                .context("agent request is missing agent_did")?,
+            requester_did: normalize_optional_string(row.requester_did),
+            behavior_id: normalize_optional_string(row.behavior_id),
+            session_id: row
+                .session_id
+                .context("agent request is missing session_id")?,
+            content: row.content.context("agent request is missing content")?,
+            temperature: row.temperature,
+            top_p: row.top_p,
+            top_k: row.top_k,
+            seed: row.seed,
+            max_tokens: row.max_tokens,
+            max_total_tokens: row.max_total_tokens,
+            metadata: row.metadata,
+            execution_origin: normalize_optional_string(row.execution_origin),
+            created_at: row
+                .created_at
+                .context("agent request is missing created_at")?,
+            deadline: normalize_optional_string(row.deadline),
+            subagent_depth,
+            caused_by_parent_request_id: row.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,
+            caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id,
+            caused_by_trigger_id: normalize_optional_string(row.caused_by_trigger_id),
+            caused_by_trigger_kind: normalize_optional_string(row.caused_by_trigger_kind),
+            caused_by_source_doc_id: normalize_optional_string(row.caused_by_source_doc_id),
+            caused_by_correlation: normalize_optional_string(row.caused_by_correlation),
+            caused_by_trigger_context: normalize_optional_string(row.caused_by_trigger_context),
+            workspace_id: normalize_optional_string(row.workspace_id),
+            workspace_authority: normalize_optional_string(row.workspace_authority),
+            workspace_owner_deployment_id: normalize_optional_string(
+                row.workspace_owner_deployment_id,
+            ),
+            workspace_seal_hash: normalize_optional_string(row.workspace_seal_hash),
+        };
+        validate_agent_request(&request)?;
+        Ok(request)
+    }
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
 }
 
 pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
