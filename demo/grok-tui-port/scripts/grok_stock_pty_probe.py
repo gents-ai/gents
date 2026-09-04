@@ -123,23 +123,6 @@ def validate_listener_identity(claimed_pid: int, actual_pids: list[int]) -> None
     )
 
 
-def validate_pty_evidence(
-    *,
-    prompt: bytes,
-    pre_submit: bytes,
-    post_submit: bytes,
-    expected: bytes,
-    idle_transition: bool,
-) -> int:
-    require(expected, "expected PTY marker is empty")
-    require(expected not in prompt, "expected marker occurs in the typed prompt")
-    require(expected not in pre_submit, "expected marker occurred before submission")
-    offset = post_submit.find(expected)
-    require(offset >= 0, "expected marker was absent after submission")
-    require(idle_transition, "stock pager never returned to a stable idle/input state")
-    return offset
-
-
 def graphql_port(graphql_url: str) -> int:
     parsed = urlparse(graphql_url)
     require(parsed.scheme in {"http", "https"}, "live GraphQL URL must be HTTP(S)")
@@ -207,6 +190,70 @@ def request_rows_for_prompt(graphql_url: str, prompt: str) -> list[dict[str, Any
     return rows
 
 
+def assistant_rows_for_request(
+    graphql_url: str, request_id: str
+) -> list[dict[str, Any]]:
+    escaped = graphql_escape(request_id)
+    data = graphql_query(
+        graphql_url,
+        f'{{ AgentMessage(filter: {{request_id: {{_eq: "{escaped}"}}}}, '
+        "order: {sequence: ASC}, limit: 8) { request_id session_id sequence role content } }",
+    )
+    rows = data.get("AgentMessage")
+    require(isinstance(rows, list), "AgentMessage query did not return a list")
+    for row in rows:
+        require(isinstance(row, dict), "AgentMessage row is not an object")
+    return rows
+
+
+def visible_assistant_text(content: Any) -> str:
+    require(isinstance(content, str) and content, "assistant message content is empty")
+    try:
+        message = json.loads(content)
+    except json.JSONDecodeError as error:
+        raise AssertionError("assistant message content is not valid JSON") from error
+    require(isinstance(message, dict), "assistant message content is not an object")
+    require(
+        message.get("role") == "assistant",
+        "assistant message payload has the wrong role",
+    )
+    require("id" in message, "assistant message payload has no canonical id field")
+    require(
+        message["id"] is None or isinstance(message["id"], str),
+        "assistant message payload has an invalid id",
+    )
+    blocks = message.get("content")
+    require(isinstance(blocks, list), "assistant message payload has no content blocks")
+    visible = [
+        block["text"]
+        for block in blocks
+        if isinstance(block, dict)
+        and set(block) == {"text"}
+        and isinstance(block.get("text"), str)
+    ]
+    require(
+        len(visible) == 1,
+        "assistant message payload must have one canonical text block",
+    )
+    return "".join(visible)
+
+
+def validate_assistant_rows(
+    rows: list[dict[str, Any]],
+    *,
+    request_id: str,
+    session_id: str,
+    expected: str,
+) -> None:
+    assistant_rows = [row for row in rows if row.get("role") == "assistant"]
+    require(len(assistant_rows) == 1, "expected exactly one durable assistant message")
+    row = assistant_rows[0]
+    require(row.get("request_id") == request_id, "assistant message request ID drifted")
+    require(row.get("session_id") == session_id, "assistant message session ID drifted")
+    output = visible_assistant_text(row.get("content"))
+    require(output == expected, "durable assistant output differs from the challenge")
+
+
 def validate_prompt_request(
     rows: list[dict[str, Any]],
     *,
@@ -231,13 +278,30 @@ def completed_request_for_prompt(
     graphql_url: str,
     prompt: str,
     *,
+    expected: str,
     expected_session: str | None,
     deadline: float,
     query_rows: Callable[[str, str], list[dict[str, Any]]] = request_rows_for_prompt,
+    query_messages: Callable[[str, str], list[dict[str, Any]]] = assistant_rows_for_request,
 ) -> tuple[str, str]:
     while time.monotonic() < deadline:
         try:
             rows = query_rows(graphql_url, prompt)
+            if len(rows) == 1 and rows[0].get("lifecycle_state") == "completed":
+                request_id, session_id = validate_prompt_request(
+                    rows,
+                    prompt=prompt,
+                    expected_session=expected_session,
+                )
+                messages = query_messages(graphql_url, request_id)
+                if any(row.get("role") == "assistant" for row in messages):
+                    validate_assistant_rows(
+                        messages,
+                        request_id=request_id,
+                        session_id=session_id,
+                        expected=expected,
+                    )
+                    return request_id, session_id
         except urllib.error.HTTPError:
             raise
         except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
@@ -247,12 +311,6 @@ def completed_request_for_prompt(
                 ) from error
             time.sleep(0.2)
             continue
-        if len(rows) == 1 and rows[0].get("lifecycle_state") == "completed":
-            return validate_prompt_request(
-                rows,
-                prompt=prompt,
-                expected_session=expected_session,
-            )
         require(len(rows) <= 1, "duplicate AgentRequests exist for the random PTY prompt")
         time.sleep(0.2)
     raise AssertionError("stock pager turn did not produce a completed AgentRequest")
@@ -442,14 +500,9 @@ def terminate_client(process: subprocess.Popen[bytes], master_fd: int) -> None:
 
 
 def challenge_prompt() -> tuple[str, str, bytes]:
-    challenge = f"gents{secrets.token_hex(8)}"
-    expected = challenge[::-1]
-    require(expected != challenge, "random challenge unexpectedly forms a palindrome")
-    prompt = (
-        f"Reverse the characters in token {challenge}. "
-        "Output only the reversed token, with no explanation."
-    ).encode()
-    require(expected.encode() not in prompt, "expected marker leaked into prompt")
+    challenge = secrets.token_hex(12)
+    expected = f"GENTS_STOCK_{challenge}"
+    prompt = f"Reply with exactly: {expected}".encode()
     return challenge, expected, prompt
 
 
@@ -480,7 +533,6 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
     challenge, expected, prompt_bytes = challenge_prompt()
     expected_bytes = expected.encode()
     idle_challenge, idle_expected, idle_prompt_bytes = challenge_prompt()
-    idle_expected_bytes = idle_expected.encode()
 
     master_fd, slave_fd = pty.openpty()
     process: subprocess.Popen[bytes] | None = None
@@ -525,53 +577,47 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
         os.write(master_fd, prompt_bytes)
         time.sleep(0.15)
         os.write(master_fd, b"\r")
-        post_submit, first_quiet = read_until_quiet(
+        first_request_id, stock_session_id = (
+            completed_request_for_prompt(
+                args.graphql,
+                prompt_bytes.decode(),
+                expected=expected,
+                expected_session=None,
+                deadline=bounded_deadline(overall_deadline, args.timeout),
+            )
+        )
+        _post_submit, first_quiet = read_until_quiet(
             master_fd,
             deadline=bounded_deadline(overall_deadline, args.timeout),
             quiet_seconds=args.quiet_seconds,
-            predicate=lambda output: expected_bytes in output,
         )
         require(first_quiet and process.poll() is None, "first stock pager response did not settle")
-        first_request_id, stock_session_id = completed_request_for_prompt(
-            args.graphql,
-            prompt_bytes.decode(),
-            expected_session=None,
-            deadline=bounded_deadline(overall_deadline, args.timeout),
-        )
-        between_turns = read_available(master_fd, 0.5)
+        read_available(master_fd, 0.5)
         os.write(master_fd, idle_prompt_bytes)
         time.sleep(0.15)
         os.write(master_fd, b"\r")
-        idle_output, second_quiet = read_until_quiet(
+        second_request_id, second_session_id = (
+            completed_request_for_prompt(
+                args.graphql,
+                idle_prompt_bytes.decode(),
+                expected=idle_expected,
+                expected_session=stock_session_id,
+                deadline=bounded_deadline(overall_deadline, args.timeout),
+            )
+        )
+        _idle_output, second_quiet = read_until_quiet(
             master_fd,
             deadline=bounded_deadline(overall_deadline, args.timeout),
             quiet_seconds=args.quiet_seconds,
-            predicate=lambda output: idle_expected_bytes in output,
         )
-        require(second_quiet and process.poll() is None, "input-ready proof response did not settle")
-        second_request_id, second_session_id = completed_request_for_prompt(
-            args.graphql,
-            idle_prompt_bytes.decode(),
-            expected_session=stock_session_id,
-            deadline=bounded_deadline(overall_deadline, args.timeout),
+        require(
+            second_quiet and process.poll() is None,
+            "input-ready proof response did not settle",
         )
         require(second_request_id != first_request_id, "input-ready proof reused the first request")
         require(second_session_id == stock_session_id, "input-ready proof changed sessions")
         idle_transition = process.poll() is None
-        match_offset = validate_pty_evidence(
-            prompt=prompt_bytes,
-            pre_submit=pre_submit,
-            post_submit=post_submit,
-            expected=expected_bytes,
-            idle_transition=idle_transition,
-        )
-        idle_relative_offset = validate_pty_evidence(
-            prompt=idle_prompt_bytes,
-            pre_submit=pre_submit + post_submit + between_turns,
-            post_submit=idle_output,
-            expected=idle_expected_bytes,
-            idle_transition=idle_transition,
-        )
+        require(idle_transition, "stock pager exited before completing the second turn")
     finally:
         # The hard wall bounds active probe work.  Cleanup has its own bounded
         # waits.  Defer an already-pending alarm until ownership is released;
@@ -616,12 +662,10 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
         "pty_expected": expected,
         "pty_prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
         "pty_pre_submit_bytes": len(pre_submit),
-        "pty_post_submit_match_offset": match_offset,
         "pty_session_id": stock_session_id,
         "pty_terminal_request_id": first_request_id,
         "pty_idle_challenge": idle_challenge,
         "pty_idle_expected": idle_expected,
-        "pty_idle_match_offset": len(post_submit) + len(between_turns) + idle_relative_offset,
         "pty_idle_probe_request_id": second_request_id,
         "pty_idle_transition": True,
         "pty_verified": True,
@@ -778,15 +822,42 @@ def self_test() -> dict[str, int]:
             }
         ]
 
+    message_calls = 0
+
+    def transient_messages(_graphql: str, _request_id: str) -> list[dict[str, Any]]:
+        nonlocal message_calls
+        message_calls += 1
+        if message_calls == 1:
+            raise urllib.error.URLError("transient message hydration failure")
+        return [
+            {
+                "request_id": "request-1",
+                "session_id": "session-1",
+                "sequence": 2,
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "role": "assistant",
+                        "id": None,
+                        "content": [{"text": "answer-1"}],
+                    }
+                ),
+            }
+        ]
+
     transient_result = completed_request_for_prompt(
         "http://unused.invalid/graphql",
         "prompt-1",
+        expected="answer-1",
         expected_session="session-1",
         deadline=time.monotonic() + 1.0,
         query_rows=transient_then_complete,
+        query_messages=transient_messages,
     )
     require(
-        transient_calls == 2 and transient_result == ("request-1", "session-1"),
+        transient_calls == 3
+        and message_calls == 2
+        and transient_result == ("request-1", "session-1"),
         "transient GraphQL polling did not recover deterministically",
     )
 
@@ -869,28 +940,73 @@ def self_test() -> dict[str, int]:
         )
     )
 
-    good = dict(
-        prompt=b"reverse abc",
-        pre_submit=b"ready",
-        post_submit=b"thinking...cba\nidle",
-        expected=b"cba",
-        idle_transition=True,
-    )
-    accept(lambda: validate_pty_evidence(**good))
-    reject(
-        lambda: validate_pty_evidence(
-            **{**good, "post_submit": b"reverse abc", "expected": b"cba"}
+    good_assistant = {
+        "request_id": "request-1",
+        "session_id": "session-1",
+        "sequence": 2,
+        "role": "assistant",
+        "content": json.dumps(
+            {"role": "assistant", "id": None, "content": [{"text": "answer-1"}]}
+        ),
+    }
+
+    def assistant_fixture(message: dict[str, Any]) -> list[dict[str, Any]]:
+        return [{**good_assistant, "content": json.dumps(message)}]
+
+    canonical_assistant = {
+        "role": "assistant",
+        "id": None,
+        "content": [{"text": "answer-1"}],
+    }
+    accept(
+        lambda: validate_assistant_rows(
+            [good_assistant],
+            request_id="request-1",
+            session_id="session-1",
+            expected="answer-1",
         )
     )
     reject(
-        lambda: validate_pty_evidence(
-            **{**good, "pre_submit": b"ready cba", "post_submit": b"idle"}
+        lambda: validate_assistant_rows(
+            assistant_fixture(
+                {
+                    key: value
+                    for key, value in canonical_assistant.items()
+                    if key != "id"
+                }
+            ),
+            request_id="request-1",
+            session_id="session-1",
+            expected="answer-1",
         )
     )
-    reject(lambda: validate_pty_evidence(**{**good, "idle_transition": False}))
     reject(
-        lambda: validate_pty_evidence(
-            **{**good, "prompt": b"reverse abc; answer cba"}
+        lambda: validate_assistant_rows(
+            assistant_fixture({**canonical_assistant, "role": "user"}),
+            request_id="request-1",
+            session_id="session-1",
+            expected="answer-1",
+        )
+    )
+    reject(
+        lambda: validate_assistant_rows(
+            assistant_fixture({**canonical_assistant, "content": {}}),
+            request_id="request-1",
+            session_id="session-1",
+            expected="answer-1",
+        )
+    )
+    reject(
+        lambda: validate_assistant_rows(
+            assistant_fixture(
+                {
+                    **canonical_assistant,
+                    "content": [{"text": "answer-1", "extra": True}],
+                }
+            ),
+            request_id="request-1",
+            session_id="session-1",
+            expected="answer-1",
         )
     )
     return {"accepted": accepted, "rejected": rejected}

@@ -19,12 +19,10 @@ type PortLiveEnvironmentProof {
   pty_expected: String @immutable
   pty_prompt_sha256: String @immutable
   pty_pre_submit_bytes: Int @immutable
-  pty_post_submit_match_offset: Int @immutable
   pty_session_id: String @immutable
   pty_terminal_request_id: String @immutable
   pty_idle_challenge: String @immutable
   pty_idle_expected: String @immutable
-  pty_idle_match_offset: Int @immutable
   pty_idle_probe_request_id: String @immutable
   pty_idle_transition: Boolean @immutable
   pty_verified: Boolean @immutable

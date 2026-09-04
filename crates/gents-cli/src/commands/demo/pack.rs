@@ -5370,7 +5370,6 @@ mod tests {
                 let live_io_text = live_io.to_string();
                 assert!(live_io_text.contains("write_port_live_environment_proof"));
                 assert!(live_io_text.contains("cleanup_listener_absent"));
-                assert!(live_io_text.contains("pty_post_submit_match_offset"));
                 assert!(live_io_text.contains("pty_session_id"));
                 assert!(live_io_text.contains("proof_json_continuation"));
                 let live_review_io = read_pack_json_defaults(
@@ -5391,11 +5390,12 @@ mod tests {
                     assert!(prompt.contains("GENTS_GROK_PORT_ENDPOINT_1"));
                     assert!(prompt.contains("obsolete"));
                     assert!(prompt.contains("wrapper shell"));
-                    assert!(prompt.contains("post-Enter"));
-                    assert!(prompt.contains("echo is not evidence"));
+                    assert!(prompt.contains("durable assistant"));
+                    assert!(prompt.contains("Terminal repaint bytes"));
+                    assert!(prompt.contains("framed probe"));
                 }
                 assert!(live_prompt.contains("InferenceBackend"));
-                assert!(live_prompt.contains("expected transformed response does not occur"));
+                assert!(live_prompt.contains("fresh random"));
                 assert!(live_prompt.contains("grok_stock_pty_probe.py self-test"));
                 assert!(live_prompt.contains("grok_stock_pty_probe.py run"));
                 assert!(live_prompt.contains("grok_stock_pty_probe.py cleanup"));
@@ -5426,7 +5426,8 @@ mod tests {
                 let live_review_words =
                     live_review.split_whitespace().collect::<Vec<_>>().join(" ");
                 assert!(live_review_words.contains("Require exactly one environment proof"));
-                assert!(live_review_words.contains("reverse of the non-empty random challenge"));
+                assert!(live_review_words.contains("GENTS_STOCK_"));
+                assert!(live_review_words.contains("24-character lowercase hexadecimal"));
                 assert!(live_review_words.contains("every duplicated value"));
                 assert!(live_review_words.contains("coverage_complete=false"));
                 assert!(live_review_words.contains("two terminal request IDs"));

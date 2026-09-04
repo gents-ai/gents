@@ -12,12 +12,14 @@ backend is exactly `grok-port-backend-ws1`; its endpoint variable is exactly
 hexadecimal characters and both preflight booleans are true; its endpoint and
 listener booleans are true; its live-home/GraphQL/socket fields equal the job
 values; its PID is positive and listener command names that exact run-owned
-home, HTTP port, socket, and Gents server; its PTY expected marker is
-the reverse of the non-empty random challenge; its prompt SHA-256 is 64
-lowercase hexadecimal characters; its pre-submit byte count and post-submit
-match offset are nonnegative; its second idle expected marker reverses its
-distinct idle challenge; its idle match offset is after the end of the first
-marker; its two terminal request IDs are non-empty and distinct; its PTY
+home, HTTP port, socket, and Gents server; its PTY expected answer is exactly
+`GENTS_STOCK_` followed by the 24-character lowercase hexadecimal challenge;
+its prompt SHA-256 is 64
+lowercase hexadecimal characters; its pre-submit byte count is nonnegative;
+its second expected answer uses the same prefix and its distinct 24-character
+lowercase hexadecimal idle challenge; its two
+terminal request IDs are non-empty and distinct and share one non-empty stock
+session; its PTY
 idle/verified booleans are true; and both cleanup booleans are true. Require
 both proof strings to be non-empty and at most 2,000 bytes, concatenate
 `proof_json` plus `proof_json_continuation`, parse the result, and require every

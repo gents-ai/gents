@@ -131,17 +131,17 @@ set `GENTS_GROK_PORT_ENDPOINT_1` to the immutable job `live_endpoint`; the
 obsolete unsuffixed variable is not consumed by this pack. Query the resulting
 `InferenceBackend.endpoint` and require exact equality before launching the
 live probes. Run the checked-in vacancy preflight before launching the live
-server. For stock-pager PTY evidence, use a fresh transform challenge
-whose expected response is absent from the input, inspect only bytes received
-after submission, and require a second distinct completed turn to prove the
-return to the idle/input UI. The checked-in
+server. For stock-pager PTY evidence, use a fresh random marker, require its exact echo in the
+correlated durable assistant message, and require a second distinct completed
+turn in the same stock-client session while the pager remains alive. The framed
+probe separately verifies the exact ACP output wire. The checked-in
 `scripts/grok_stock_pty_probe.py` enforces those boundaries and emits the
 structured `PortLiveEnvironmentProof` that independent live review requires.
 A deep worktree can make the absolute socket exceed the platform Unix-socket
 pathname ceiling; both probes retain the job's exact socket identity in
 evidence but bridge `connect(2)` through a short alias inside a private
 temporary directory.
-A local input echo is not model-response evidence.
+Terminal repaint bytes and local input echo are not model-response evidence.
 
 Do not manually seal or integrate an abandoned workspace. Those transitions
 belong to the host: a stage output without its writer receipt must remain

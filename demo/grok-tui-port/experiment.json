@@ -238,7 +238,7 @@
       {
         "collection": "PortLiveEnvironmentProof",
         "correlation_field": "run_id",
-        "fields": ["final_review_head", "preflight_nonce", "preflight_port_vacant", "preflight_socket_absent", "expected_endpoint", "applied_endpoint", "backend_id", "live_home", "live_graphql", "live_socket", "endpoint_env_name", "endpoint_verified", "listener_pid", "listener_command", "listener_verified", "pty_challenge", "pty_expected", "pty_prompt_sha256", "pty_pre_submit_bytes", "pty_post_submit_match_offset", "pty_session_id", "pty_terminal_request_id", "pty_idle_challenge", "pty_idle_expected", "pty_idle_match_offset", "pty_idle_probe_request_id", "pty_idle_transition", "pty_verified", "cleanup_listener_absent", "cleanup_socket_absent", "proof_json", "proof_json_continuation"]
+        "fields": ["final_review_head", "preflight_nonce", "preflight_port_vacant", "preflight_socket_absent", "expected_endpoint", "applied_endpoint", "backend_id", "live_home", "live_graphql", "live_socket", "endpoint_env_name", "endpoint_verified", "listener_pid", "listener_command", "listener_verified", "pty_challenge", "pty_expected", "pty_prompt_sha256", "pty_pre_submit_bytes", "pty_session_id", "pty_terminal_request_id", "pty_idle_challenge", "pty_idle_expected", "pty_idle_probe_request_id", "pty_idle_transition", "pty_verified", "cleanup_listener_absent", "cleanup_socket_absent", "proof_json", "proof_json_continuation"]
       },
       {
         "collection": "PortLiveResult",

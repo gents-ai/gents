@@ -10,13 +10,14 @@ unsuffixed variable. Run the checked-in live-gate preflight before launch, then
 immediately after readiness have its live phase query and verify the persisted
 backend and run one stock interactive `grok --leader --leader-socket` PTY smoke
 through the checked-in `grok_stock_pty_probe.py`. Its structured proof must
-show a fresh challenge whose expected marker is absent from the typed prompt,
-a post-Enter-only match, and a second distinct completed turn proving the
-idle/input transition. Use the probes' private short Unix-socket alias in deep
+show a fresh random marker, its exact correlated durable assistant echo, and a second distinct completed
+turn in the same live stock-client session while the pager remains alive.
+Terminal repaint bytes and local input echo are not model-output evidence; the
+framed probe owns exact ACP output-wire verification. Use the probes' private short Unix-socket alias in deep
 worktrees while retaining the job's exact socket identity in evidence. Run it
 with the full 120-second tool timeout and its
 bounded `--total-timeout 95`; never pipe or otherwise mask its exit status.
-Local terminal echo is not evidence. Only after that
+Only after that
 stock proof, run the checked-in framed edge probe separately for handshake,
 prompt, tool, subprocess, subagent, and cancel. Track and stop the exact
 run-home/port/socket HTTP listener PID, not a wrapper shell.

@@ -58,10 +58,11 @@ proof before continuing. The script queries the live-home
 `InferenceBackend` itself and requires its endpoint to equal the job endpoint.
 It launches stock interactive
 `grok --leader --leader-socket <live_socket>` in a PTY, uses a fresh random
-challenge whose expected transformed response does not occur in the prompt,
-separates pre-submit from post-Enter bytes, then proves a stable idle/input
-transition with a second distinct challenge and two distinct completed
-`AgentRequest` rows. The local terminal echo is not evidence. `grok -p`
+marker, then requires its exact echo in the correlated durable assistant
+message. A second distinct challenge must complete in the same stock-client
+session while the pager process remains alive, proving the client returned to
+usable input. Terminal repaint bytes and local input echo are not model-output
+evidence; the framed probe below owns exact ACP output-wire verification. `grok -p`
 bypasses leader mode and is never evidence for this port.
 
 Then run the edge probe against `live_socket` and `live_graphql`, passing
