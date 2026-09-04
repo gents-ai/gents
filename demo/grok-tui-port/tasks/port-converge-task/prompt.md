@@ -47,6 +47,13 @@ Run formatting and focused compilation/tests, fixing every real diagnostic:
 2. `RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`
 3. `RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo check -p gents-cli --all-targets`
 
+The exit status of each command is authoritative. Any nonzero exit is a failed
+gate, including `Operation not permitted`, listener/socket setup failures,
+timeouts, or failures described as environmental. Do not waive, reinterpret,
+or summarize a failed command as passing. Repair it and rerun the exact command,
+or write a blocked report. The convergence tool policy permits local networking
+because the required Grok shim tests bind loopback listeners and Unix sockets.
+
 Add further focused tests when an interface repair changes semantics. Inspect
 and repair the cause of every failure. Once green, stage only the explicit Grok shim and
 CLI assembly paths, inspect the staged diff, create one focused convergence

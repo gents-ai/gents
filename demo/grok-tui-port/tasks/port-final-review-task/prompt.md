@@ -21,6 +21,14 @@ the tracked worktree is dirty, do not review or modify source. Write one final
 report with `status=blocked`, zero rounds, the actual head and counts, and the
 precise mismatch.
 
+Treat the convergence report as non-green evidence if `tests_run` records any
+nonzero exit, failed test, permission error, timeout, or required gate that was
+not executed, regardless of its declared `status`. Before a green final report,
+independently rerun all three convergence gates, including
+`RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`.
+As in convergence, command exit status is authoritative and failures cannot be
+waived as environmental.
+
 The bundled graph is installed in the orchestration home. For each full review
 round:
 

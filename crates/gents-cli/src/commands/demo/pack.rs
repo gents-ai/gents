@@ -5253,7 +5253,15 @@ mod tests {
                     assert_eq!(tools["bash_mode"], "Unrestricted");
                     assert_eq!(tools["file_tools_mode"], "ReadWrite");
                     assert_eq!(tools["command_execution_policy"], "workspace_write");
-                    assert_eq!(tools["command_network_mode"], "disabled");
+                    let expected_network_mode = if selection == "port-converge-tools" {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    };
+                    assert_eq!(
+                        tools["command_network_mode"], expected_network_mode,
+                        "convergence must be allowed to bind the loopback listeners and Unix sockets exercised by the required Grok shim gate"
+                    );
                     assert!(
                         tools["command_allowed_argv_prefixes"]
                             .as_array()
@@ -5332,11 +5340,15 @@ mod tests {
                         .expect("final review prompt should load");
                 assert!(final_review.contains("gents graph run code-review"));
                 assert!(final_review.contains("not the sentinel document count"));
+                assert!(final_review.contains("independently rerun all three convergence gates"));
+                assert!(final_review.contains("failures cannot be\nwaived as environmental"));
                 let convergence =
                     std::fs::read_to_string(pack.join("tasks/port-converge-task/prompt.md"))
                         .expect("convergence prompt should load");
                 assert!(convergence.contains("cargo test -p gents-cli --lib grok_shim"));
                 assert!(convergence.contains("cargo check -p gents-cli --all-targets"));
+                assert!(convergence.contains("Any nonzero exit is a failed\ngate"));
+                assert!(convergence.contains("Do not waive, reinterpret"));
                 let final_review_trigger = read_pack_json_defaults(
                     &pack.join("event_triggers/port-final-review/object.json"),
                 )
