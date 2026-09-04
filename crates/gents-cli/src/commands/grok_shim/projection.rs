@@ -52,7 +52,7 @@ pub(crate) const SUBAGENT_NOTIFICATION_METHOD: &str = "x.ai/session_notification
 /// supply one. Mirrors the model catalog's `totalContextTokens` default scale
 /// (`gents::DEFAULT_CONTEXT_WINDOW`) so a bound behavior that never pinned a
 /// window still reports a truthful, bounded value instead of zero.
-pub(crate) const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 262_144;
+pub(crate) const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = gents::DEFAULT_CONTEXT_WINDOW as u64;
 
 /// Normalize a configured context window for every Grok-facing consumer.
 /// Older profiles use zero for "unspecified", but the wire catalog and token
@@ -2998,11 +2998,12 @@ mod tests {
     }
 
     #[test]
-    fn bound_context_window_falls_back_to_catalog_default() {
+    fn bound_context_window_falls_back_to_runtime_default() {
         let zeroed = BoundModelContext::new("b::m".to_string(), "m".to_string(), 0);
         assert_eq!(
             zeroed.effective_context_window(),
-            DEFAULT_CONTEXT_WINDOW_TOKENS
+            gents::DEFAULT_CONTEXT_WINDOW as u64,
+            "the Grok fallback must come from the runtime's single context-window default"
         );
         let pinned = BoundModelContext::new("b::m".to_string(), "m".to_string(), 8_192);
         assert_eq!(pinned.effective_context_window(), 8_192);
@@ -3079,6 +3080,48 @@ mod tests {
         assert_eq!(bound.model_name, "GLM-5.3-NVFP4");
         assert_eq!(bound.total_context_tokens, 262_144);
         assert_eq!(bound.effective_context_window(), 262_144);
+    }
+
+    #[tokio::test]
+    async fn resolve_bound_model_context_without_profile_uses_runtime_default() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let node = Arc::new(
+            defra_node::EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
+                .build()
+                .await
+                .expect("embedded node"),
+        );
+        gents::schema::ensure_runtime_schemas(node.as_ref())
+            .await
+            .expect("runtime schemas");
+
+        let seed = r#"mutation {
+            create_AgentBehavior(input: {
+                behavior_id: "no-profile"
+                agent_did: "did:key:zGrokNoProfilePlaceholder000000000000000000000000"
+                display_name: "Grok behavior without an inference profile"
+                backend_id: "local-backend"
+                model_name: "local-model"
+                enabled: true
+            }) { _docID }
+        }"#;
+        let response = node.execute(seed).await;
+        assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+
+        let bound = resolve_bound_model_context(node.as_ref(), "no-profile")
+            .await
+            .expect("bound model context");
+        assert_eq!(bound.model_id, "local-model");
+        assert_eq!(
+            bound.total_context_tokens,
+            gents::DEFAULT_CONTEXT_WINDOW as u64
+        );
+        assert_eq!(
+            bound.effective_context_window(),
+            gents::DEFAULT_CONTEXT_WINDOW as u64
+        );
     }
 
     /// One durable assistant row carrying both a reasoning thought and body

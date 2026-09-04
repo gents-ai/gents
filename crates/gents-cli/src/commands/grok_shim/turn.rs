@@ -410,6 +410,8 @@ pub(super) struct TurnManager {
     disconnect_gate: Mutex<Option<DisconnectGate>>,
     #[cfg(test)]
     cancel_drain_gate: Mutex<Option<CancelDrainGate>>,
+    #[cfg(test)]
+    cancel_selection_gate: Mutex<Option<CancelSelectionGate>>,
 }
 
 /// Deterministic test seam: when armed, `handle_prompt` parks immediately
@@ -446,6 +448,17 @@ struct CancelDrainGate {
     release: Arc<tokio::sync::Notify>,
 }
 
+/// Deterministic test seam: when armed, `handle_cancel` parks after
+/// snapshotting the matching entry generations but before attempting to
+/// drain them. A test can replace an exact key in that window and verify the
+/// stale cancellation does not drain the replacement generation.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+struct CancelSelectionGate {
+    arrived: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+
 impl TurnManager {
     pub(super) fn new(node: Arc<EmbeddedNode>, config: TurnManagerConfig) -> Self {
         TurnManager {
@@ -458,6 +471,8 @@ impl TurnManager {
             disconnect_gate: Mutex::new(None),
             #[cfg(test)]
             cancel_drain_gate: Mutex::new(None),
+            #[cfg(test)]
+            cancel_selection_gate: Mutex::new(None),
         }
     }
 
@@ -698,22 +713,32 @@ impl TurnManager {
             "Grok shim received session/cancel"
         );
         let target_prompt_id = notification.prompt_id.clone();
-        let keys: Vec<(String, String)> = {
+        let targets: Vec<((String, String), Arc<Mutex<CancelBeforeIdLatch>>)> = {
             let state = self.state.lock().await;
             state
                 .entries
-                .keys()
-                .filter(|(session, _)| session == &notification.session_id)
-                .filter(|(_, prompt_id)| {
+                .iter()
+                .filter(|((session, _), _)| session == &notification.session_id)
+                .filter(|((_, prompt_id), _)| {
                     target_prompt_id
                         .as_deref()
                         .is_none_or(|expected| expected == prompt_id.as_str())
                 })
-                .cloned()
+                .map(|(key, entry)| (key.clone(), entry.cancel_before_id.clone()))
                 .collect()
         };
-        for key in keys {
-            let request_id = self.drain_entry(&key, StopReason::Cancelled).await;
+        #[cfg(test)]
+        {
+            let gate = self.cancel_selection_gate.lock().await.clone();
+            if let Some(gate) = gate {
+                gate.arrived.notify_one();
+                gate.release.notified().await;
+            }
+        }
+        for (key, generation) in targets {
+            let request_id = self
+                .drain_entry(&key, &generation, StopReason::Cancelled)
+                .await;
             if let Some(request_id) = request_id {
                 self.interrupt_submitted(&request_id).await;
                 if notification.cancel_subagents {
@@ -787,12 +812,18 @@ impl TurnManager {
         Ok(())
     }
 
-    /// Drain one pending entry: resolve its deferred response with the given
+    /// Drain one pending entry only when it still belongs to the generation
+    /// selected by the caller: resolve its deferred response with the given
     /// stop reason and return the submitted request id (if any) so the caller
     /// can interrupt it. A cancel that fires before the request id is known
     /// still latches `cancel_before_id`, which the submitter observes.
-    async fn drain_entry(&self, key: &(String, String), stop_reason: StopReason) -> Option<String> {
-        let entry = self.state.lock().await.entries.remove(key);
+    async fn drain_entry(
+        &self,
+        key: &(String, String),
+        generation: &Arc<Mutex<CancelBeforeIdLatch>>,
+        stop_reason: StopReason,
+    ) -> Option<String> {
+        let (entry, _) = self.take_entry_if_generation(key, generation).await;
         let mut entry = entry?;
         #[cfg(test)]
         {
@@ -3146,6 +3177,114 @@ mod tests {
             .expect("replacement task")
             .expect("replacement result");
         assert_eq!(replacement_result["stopReason"], json!("cancelled"));
+    }
+
+    /// An explicit cancel snapshots an entry, then yields before draining it.
+    /// If the old generation terminalizes and a peer reuses the exact key in
+    /// that window, the stale cancel must not resolve or interrupt the
+    /// replacement generation.
+    #[tokio::test]
+    async fn cancel_selection_cannot_drain_an_exact_key_replacement() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let manager = Arc::new(TurnManager::new(
+            node,
+            test_config("http://127.0.0.1:1/".to_string(), &agent_did),
+        ));
+        let key = ("session-reuse".to_string(), "same-prompt".to_string());
+        let old_generation = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));
+        let (old_tx, mut old_rx) = oneshot::channel::<Result<Value>>();
+        manager.state.lock().await.entries.insert(
+            key.clone(),
+            PendingPrompt {
+                response_tx: Some(old_tx),
+                request_id: Some("old-request".to_string()),
+                cancel_before_id: old_generation,
+                drained: false,
+            },
+        );
+
+        let gate = CancelSelectionGate {
+            arrived: Arc::new(tokio::sync::Notify::new()),
+            release: Arc::new(tokio::sync::Notify::new()),
+        };
+        *manager.cancel_selection_gate.lock().await = Some(gate.clone());
+        let cancel = parse_cancel_notification(&json!({
+            "sessionId": "session-reuse",
+            "_meta": {"promptId": "same-prompt"},
+        }))
+        .expect("cancel");
+        let cancel_handle = tokio::spawn({
+            let manager = manager.clone();
+            async move { manager.handle_cancel(cancel).await }
+        });
+        tokio::time::timeout(Duration::from_secs(30), gate.arrived.notified())
+            .await
+            .expect("cancel should snapshot the old generation");
+
+        let replacement_generation = Arc::new(Mutex::new(CancelBeforeIdLatch::default()));
+        let (replacement_tx, mut replacement_rx) = oneshot::channel::<Result<Value>>();
+        {
+            let mut state = manager.state.lock().await;
+            let mut old = state.entries.remove(&key).expect("old generation");
+            old.resolve(Ok(json!({"stopReason": "end_turn"})));
+            state.entries.insert(
+                key.clone(),
+                PendingPrompt {
+                    response_tx: Some(replacement_tx),
+                    request_id: Some("replacement-request".to_string()),
+                    cancel_before_id: replacement_generation.clone(),
+                    drained: false,
+                },
+            );
+        }
+        assert_eq!(
+            old_rx
+                .try_recv()
+                .expect("old generation terminal response")
+                .expect("old generation result")["stopReason"],
+            json!("end_turn")
+        );
+
+        gate.release.notify_one();
+        tokio::time::timeout(Duration::from_secs(30), cancel_handle)
+            .await
+            .expect("cancel should finish")
+            .expect("cancel task")
+            .expect("cancel result");
+
+        {
+            let state = manager.state.lock().await;
+            let replacement = state.entries.get(&key).expect("replacement survives");
+            assert!(Arc::ptr_eq(
+                &replacement.cancel_before_id,
+                &replacement_generation
+            ));
+            assert_eq!(
+                replacement.request_id.as_deref(),
+                Some("replacement-request")
+            );
+            assert!(!replacement.drained);
+        }
+        assert!(matches!(
+            replacement_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+
+        let mut replacement = manager
+            .state
+            .lock()
+            .await
+            .entries
+            .remove(&key)
+            .expect("replacement cleanup");
+        replacement.resolve(Ok(json!({"stopReason": "cancelled"})));
+        assert_eq!(
+            replacement_rx
+                .try_recv()
+                .expect("replacement cleanup response")
+                .expect("replacement cleanup result")["stopReason"],
+            json!("cancelled")
+        );
     }
 
     /// Disconnect before the request id is registered: the entry is drained
