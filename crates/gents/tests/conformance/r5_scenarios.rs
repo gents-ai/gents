@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::support::r5_conformance::invariants;
 use crate::support::r5_conformance::runner::Observation;
 use crate::support::r5_conformance::{Harness, Scenario};
@@ -55,7 +57,7 @@ async fn r5_b_crash_mid_execution() {
     let child = last
         .child_for_bridge(bridge)
         .expect("child row for B-crash bridge");
-    assert_eq!(child.lifecycle_state, "failed");
+    assert_eq!(child.lifecycle_state, RequestLifecycleState::Failed);
     assert!(
         last.b_process_generation >= 1,
         "B must have crossed at least one process crash boundary"

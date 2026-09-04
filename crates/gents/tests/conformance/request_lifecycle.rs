@@ -1,5 +1,7 @@
 use super::*;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
         ("workspaceBindingPending", "pending") => Some("bindWorkspace"),
@@ -2261,7 +2263,7 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
 #[derive(Debug, Clone, Deserialize)]
 struct QueueRuntimeRow {
     request_id: String,
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     metadata: Option<String>,
 }
 
@@ -2275,7 +2277,7 @@ struct QueueRuntimeSnapshot {
 
 #[derive(Debug, Clone, Deserialize)]
 struct DeadlineRuntimeRow {
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     deadline: String,
 }
 
@@ -2295,21 +2297,18 @@ fn symbolic_request_id(
 }
 
 fn row_is_pending(row: &QueueRuntimeRow) -> bool {
-    row.lifecycle_state.as_deref() == Some("pending")
+    row.lifecycle_state == Some(RequestLifecycleState::Pending)
 }
 
 fn row_is_active(row: &QueueRuntimeRow) -> bool {
     matches!(
-        row.lifecycle_state.as_deref(),
-        Some("claimed" | "processing")
+        row.lifecycle_state,
+        Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
     )
 }
 
 fn row_is_terminal(row: &QueueRuntimeRow) -> bool {
-    matches!(
-        row.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    )
+    row.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
 }
 
 fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> bool {
@@ -2808,7 +2807,7 @@ async fn drive_claim_preserves_explicit_deadline(
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
     let row = fetch_deadline_runtime_row(db.node.as_ref(), request_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("claimed"));
+    assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Claimed));
 
     let persisted_deadline = chrono::DateTime::parse_from_rfc3339(&row.deadline).unwrap();
     assert_eq!(

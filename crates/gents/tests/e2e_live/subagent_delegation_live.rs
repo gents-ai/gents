@@ -60,6 +60,7 @@ use gents::{
     DescendantQuery, DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling,
     ToolSelectionDocument,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
@@ -1654,16 +1655,13 @@ struct ChildRow {
     /// Deserialized for Debug-trace output on failures; not read directly.
     #[allow(dead_code)]
     agent_did: String,
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     caused_by_parent_request_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
 }
 
 fn is_terminal(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "dead" | "interrupted" | "superseded"
-    )
+    RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String> {

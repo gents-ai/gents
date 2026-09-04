@@ -4,6 +4,7 @@ use gents::__test_internals::{
     drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
 };
 use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 const CONVERGENCE_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 const OWNER_DID: &str = AGENT_DID;
@@ -12,7 +13,7 @@ const REQUESTER_DID: &str = "did:test:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
     agent_did: String,
     failure_reason: Option<String>,
     terminalized_at: Option<String>,
@@ -100,10 +101,7 @@ async fn create_owned_request_with_times_and_requester(
     terminalized_at: &str,
     requester_did: Option<&str>,
 ) -> String {
-    let is_terminal = matches!(
-        lifecycle_state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
-    );
+    let is_terminal = RequestLifecycleState::is_terminal_str(Some(lifecycle_state));
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
@@ -160,7 +158,7 @@ async fn create_owned_request_with_times_and_requester(
 
 #[derive(Debug, Deserialize)]
 struct QueueConvergenceRow {
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
     agent_did: String,
     superseded_by_request: Option<String>,
 }
@@ -378,12 +376,12 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert!(!first.is_noop());
 
     let owned = fetch_convergence_row(&db.node, "convergence-owned-failed").await;
-    assert_eq!(owned.lifecycle_state, "failed");
+    assert_eq!(owned.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(owned.terminal_redrive_attempts, Some(1));
     assert!(owned.terminalized_at.is_some());
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
-    assert_eq!(foreign.lifecycle_state, "failed");
+    assert_eq!(foreign.lifecycle_state, RequestLifecycleState::Failed);
 
     for _ in 1..TERMINAL_REDRIVE_CAP {
         let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
@@ -491,7 +489,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         "one logical terminal repair must add one composite request commit"
     );
     let row = fetch_convergence_row(&db.node, request_id).await;
-    assert_eq!(row.lifecycle_state, "failed");
+    assert_eq!(row.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(
         row.failure_reason.as_deref(),
         Some("provider failed durably")
@@ -546,7 +544,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(provider_repair.repaired, 1);
     let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
-    assert_eq!(provider_row.lifecycle_state, "failed");
+    assert_eq!(provider_row.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
 
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
@@ -600,7 +598,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(runtime_interrupt_repair.repaired, 1);
     let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
-    assert_eq!(runtime_interrupt_row.lifecycle_state, "interrupted");
+    assert_eq!(runtime_interrupt_row.lifecycle_state, RequestLifecycleState::Interrupted);
     assert_eq!(
         runtime_interrupt_row.failure_reason.as_deref(),
         Some("interrupted")
@@ -643,7 +641,10 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
 
     let row = fetch_convergence_row(&db.node, "convergence-stuck-claimed").await;
     assert!(
-        matches!(row.lifecycle_state.as_str(), "failed" | "completed"),
+        matches!(
+            row.lifecycle_state,
+            RequestLifecycleState::Failed | RequestLifecycleState::Completed
+        ),
         "recovered request must be terminal, got {}",
         row.lifecycle_state
     );
@@ -703,11 +704,11 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let owner_survivor =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-survivor").await;
-    assert_eq!(owner_survivor.lifecycle_state, "pending");
+    assert_eq!(owner_survivor.lifecycle_state, RequestLifecycleState::Pending);
 
     let owner_duplicate =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-duplicate").await;
-    assert_eq!(owner_duplicate.lifecycle_state, "superseded");
+    assert_eq!(owner_duplicate.lifecycle_state, RequestLifecycleState::Superseded);
     assert_eq!(
         owner_duplicate.superseded_by_request.as_deref(),
         Some("convergence-coalesce-owner-survivor"),
@@ -719,7 +720,7 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         "foreign replica ownership unchanged"
     );
     assert_eq!(
-        foreign.lifecycle_state, "pending",
+        foreign.lifecycle_state, RequestLifecycleState::Pending,
         "foreign replica must not be superseded by the owner's coalesce reconcile"
     );
     assert_eq!(
@@ -769,12 +770,12 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     );
 
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
-    assert_eq!(owner.lifecycle_state, "interrupted");
+    assert_eq!(owner.lifecycle_state, RequestLifecycleState::Interrupted);
 
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
     assert_eq!(
-        foreign.lifecycle_state, "pending",
+        foreign.lifecycle_state, RequestLifecycleState::Pending,
         "foreign replica must not be interrupted by the owner's wake-up drain"
     );
 }

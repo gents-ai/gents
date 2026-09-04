@@ -30,6 +30,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
@@ -253,10 +254,7 @@ async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Resul
 }
 
 fn is_terminal(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "dead" | "interrupted" | "superseded"
-    )
+    RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 async fn fetch_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String> {

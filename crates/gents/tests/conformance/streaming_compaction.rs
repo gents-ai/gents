@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use gents::StreamWriter;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::transcript::present_persisted_message;
 
 use super::support::fixtures::test_identity;
@@ -936,10 +937,7 @@ fn live_tail_shape(row: &StreamingResponseRow) -> &'static str {
 }
 
 fn request_state_is_terminal(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
-    )
+    RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 fn response_status_is_terminal(status: &str) -> bool {

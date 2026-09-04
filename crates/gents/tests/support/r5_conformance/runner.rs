@@ -9,6 +9,7 @@ use gents::{
     interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
     RequestLifecycle, ToolSelectionDocument,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -76,17 +77,14 @@ pub struct BridgeObservation {
 pub struct RequestObservation {
     pub request_id: String,
     pub agent_did: String,
-    pub lifecycle_state: String,
+    pub lifecycle_state: RequestLifecycleState,
     pub caused_by_parent_tool_call_id: Option<String>,
     pub interrupt_requested_at: Option<String>,
 }
 
 impl RequestObservation {
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.lifecycle_state.as_str(),
-            "completed" | "failed" | "dead" | "interrupted" | "superseded"
-        )
+        self.lifecycle_state.is_terminal()
     }
 }
 
@@ -1070,16 +1068,13 @@ struct RequestRow {
     agent_did: String,
     behavior_id: String,
     session_id: String,
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
     interrupt_requested_at: Option<String>,
 }
 
 impl RequestRow {
     fn is_terminal(&self) -> bool {
-        matches!(
-            self.lifecycle_state.as_str(),
-            "completed" | "failed" | "dead" | "interrupted" | "superseded"
-        )
+        self.lifecycle_state.is_terminal()
     }
 }
 

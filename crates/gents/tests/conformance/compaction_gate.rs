@@ -17,6 +17,8 @@ use super::*;
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use super::support::fixtures::test_identity;
 use super::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
@@ -460,10 +462,7 @@ async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) {
         );
         let response = node.execute(&query).await;
         if let Some(row) = first_optional_row::<LifecycleStateRow>(&response, "AgentRequest") {
-            if matches!(
-                row.lifecycle_state.as_str(),
-                "completed" | "failed" | "superseded" | "dead" | "interrupted"
-            ) {
+            if row.lifecycle_state.is_terminal() {
                 return;
             }
         }
@@ -477,5 +476,5 @@ async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) {
 
 #[derive(Debug, Deserialize)]
 struct LifecycleStateRow {
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
 }
