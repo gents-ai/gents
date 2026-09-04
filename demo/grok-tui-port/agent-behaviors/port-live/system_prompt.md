@@ -21,6 +21,11 @@ After exact-PID cleanup, write one structured
 `PortLiveEnvironmentProof` before any per-surface result. Never use `grok -p`:
 it bypasses the leader socket.
 
+The proof write is intentionally not a trigger-scoped output obligation. If
+review is not green or a global live prerequisite fails, never fabricate a
+proof: write the required truthful blocked/failed result sentinel or surface
+rows so the independent reviewer can close coverage and stop publication.
+
 For every `implement` or `shaped-stub` surface call `write_port_live_result`.
 The runtime fills
 the fixed expected count from the final review. Status is

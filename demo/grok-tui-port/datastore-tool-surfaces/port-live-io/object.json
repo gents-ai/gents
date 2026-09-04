@@ -49,7 +49,6 @@
       "tool_name": "write_port_live_environment_proof",
       "collection": "PortLiveEnvironmentProof",
       "description": "Record the structured endpoint, listener, stock-PTY, and cleanup proof before surface results.",
-      "output_obligation": {"scope": "trigger", "minimum_writes": 1},
       "fields": [
         {"name": "run_id", "required": false, "fill": "correlation"},
         {"name": "final_review_head", "required": true},

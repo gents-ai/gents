@@ -5423,10 +5423,25 @@ mod tests {
                 assert!(live_proof_schema.contains("pty_verified: Boolean @immutable"));
                 assert!(live_proof_schema.contains("cleanup_socket_absent: Boolean @immutable"));
                 assert!(live_proof_schema.contains("proof_json_continuation: String @immutable"));
-                assert_eq!(
-                    experiment["expect"]["collection_counts"]["PortLiveEnvironmentProof"],
-                    1
-                );
+                assert!(experiment["expect"]["collection_counts"]
+                    .get("PortLiveEnvironmentProof")
+                    .is_none());
+                let live_io = read_pack_json_defaults(
+                    &pack
+                        .join("datastore-tool-surfaces")
+                        .join("port-live-io")
+                        .join("object.json"),
+                )
+                .expect("live I/O surface should load");
+                let proof_write = live_io["entries"]
+                    .as_array()
+                    .expect("live I/O entries")
+                    .iter()
+                    .find(|entry| {
+                        entry["tool_name"].as_str() == Some("write_port_live_environment_proof")
+                    })
+                    .expect("live environment proof write");
+                assert!(proof_write.get("output_obligation").is_none());
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));

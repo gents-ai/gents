@@ -185,7 +185,6 @@
       "PortIntegrateResult": 8,
       "PortConvergenceReport": 1,
       "PortFinalReviewReport": 1,
-      "PortLiveEnvironmentProof": 1,
       "PortLiveResult": 1,
       "PortLiveReport": 1,
       "PortPullRequest": 1

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -170,9 +171,20 @@ def completed_request_for_prompt(
     *,
     expected_session: str | None,
     deadline: float,
+    query_rows: Callable[[str, str], list[dict[str, Any]]] = request_rows_for_prompt,
 ) -> tuple[str, str]:
     while time.monotonic() < deadline:
-        rows = request_rows_for_prompt(graphql_url, prompt)
+        try:
+            rows = query_rows(graphql_url, prompt)
+        except urllib.error.HTTPError:
+            raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    "live GraphQL remained unavailable while correlating the PTY request"
+                ) from error
+            time.sleep(0.2)
+            continue
         if len(rows) == 1 and rows[0].get("lifecycle_state") == "completed":
             return validate_prompt_request(
                 rows,
@@ -496,7 +508,6 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         "listener_pid": args.listener_pid,
         "listener_command": command,
         "listener_verified": True,
-        "wrapper_pid": args.wrapper_pid,
         "pty_challenge": challenge,
         "pty_expected": expected,
         "pty_prompt_sha256": hashlib.sha256(prompt_bytes).hexdigest(),
@@ -583,9 +594,9 @@ def self_test() -> dict[str, int]:
         finally:
             os.close(write_fd)
 
+    ready_started = time.monotonic()
     ready_writer = threading.Thread(target=delayed_ready_output)
     ready_writer.start()
-    ready_started = time.monotonic()
     try:
         ready_data, ready_quiet = read_until_quiet(
             read_fd,
@@ -599,6 +610,35 @@ def self_test() -> dict[str, int]:
     require(
         time.monotonic() - ready_started >= 0.03,
         "ready quiet timer armed before the first byte",
+    )
+
+    transient_calls = 0
+
+    def transient_then_complete(_graphql: str, prompt: str) -> list[dict[str, Any]]:
+        nonlocal transient_calls
+        transient_calls += 1
+        if transient_calls == 1:
+            raise urllib.error.URLError("transient self-test failure")
+        return [
+            {
+                "request_id": "request-1",
+                "session_id": "session-1",
+                "behavior_id": "port-live",
+                "content": prompt,
+                "lifecycle_state": "completed",
+            }
+        ]
+
+    transient_result = completed_request_for_prompt(
+        "http://unused.invalid/graphql",
+        "prompt-1",
+        expected_session="session-1",
+        deadline=time.monotonic() + 1.0,
+        query_rows=transient_then_complete,
+    )
+    require(
+        transient_calls == 2 and transient_result == ("request-1", "session-1"),
+        "transient GraphQL polling did not recover deterministically",
     )
 
     accept(lambda: validate_endpoint("http://one", "http://one", "http://one", None))
@@ -733,7 +773,6 @@ def parse_args() -> argparse.Namespace:
     run.add_argument("--expected-home", required=True)
     run.add_argument("--preflight", required=True)
     run.add_argument("--listener-pid", required=True, type=int)
-    run.add_argument("--wrapper-pid", type=int)
     run.add_argument("--grok-bin", default="grok")
     run.add_argument("--cwd", default=os.getcwd())
     run.add_argument("--ready-timeout", type=float, default=20.0)
