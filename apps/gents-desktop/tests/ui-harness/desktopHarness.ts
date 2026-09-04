@@ -1479,6 +1479,7 @@ export function createDesktopUiHarness(
           service.mcpPath ?? "/mcp"
         }`,
         status: "healthy",
+        displayState: "healthy",
         failureCount: 0,
         kMax: 3,
         backoffUntil: null,

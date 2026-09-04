@@ -268,10 +268,12 @@ pub struct InferenceCallSummaryView {
 /// desktop sees the K-model state evolve over time without needing an
 /// in-process agent runtime.
 ///
-/// `status` is the internal `HealthStateInternal` projection
-/// (`healthy` / `stale` / `evicted` / `reconnecting`) so the operator UI
-/// can distinguish back-off from in-flight retry; the public three-state
-/// `HealthStatus` collapses `evicted` and `reconnecting` to `unreachable`.
+/// `status` is the internal `ToolServiceHealthState` vocabulary
+/// (`healthy` / `degraded` / `evicted` / `reconnecting`) so the operator UI
+/// can distinguish back-off from in-flight retry; `display_state` is the
+/// collapsed three-state projection (`healthy` / `stale` / `unreachable`),
+/// projection owned by `ToolServiceHealthState::project` — the panel and
+/// table classify against `display_state` only, never `status`.
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct MCPServiceHealthView {
@@ -279,6 +281,7 @@ pub struct MCPServiceHealthView {
     pub agent_did: Option<String>,
     pub endpoint: Option<String>,
     pub status: Option<String>,
+    pub display_state: String,
     pub tool_count: Option<i64>,
     pub failure_count: Option<i64>,
     pub k_max: Option<i64>,

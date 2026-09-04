@@ -7,6 +7,9 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 6.2: additive — MCPServiceHealthView.displayState is the projected
+//      three-state MCP health classification (ToolServiceHealthState::project);
+//      the desktop no longer re-derives a synthetic "stuck" state from status.
 // 6.1: additive — DesktopInitSummary is generated from the Rust struct
 //      (camelCase wire shape) instead of a hand-written TS mirror (#1340).
 // 6.0: breaking — exact-version matching, single-owner client state, and
@@ -45,13 +48,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "6.1";
+pub const CONTRACT_VERSION: &str = "6.2";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "67594ec0a37b28e01076fc29b20bf04a87a76f51373c698a156bc0a7b9d90a02";
+    "df5cd8234a352627975cc23f8b8f258d7d0675a4c544d4a8f8b02b930f35010e";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

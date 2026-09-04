@@ -8,9 +8,11 @@
  * desktop sees the K-model state evolve over time without needing an
  * in-process agent runtime.
  *
- * `status` is the internal `HealthStateInternal` projection
- * (`healthy` / `stale` / `evicted` / `reconnecting`) so the operator UI
- * can distinguish back-off from in-flight retry; the public three-state
- * `HealthStatus` collapses `evicted` and `reconnecting` to `unreachable`.
+ * `status` is the internal `ToolServiceHealthState` vocabulary
+ * (`healthy` / `degraded` / `evicted` / `reconnecting`) so the operator UI
+ * can distinguish back-off from in-flight retry; `display_state` is the
+ * collapsed three-state projection (`healthy` / `stale` / `unreachable`),
+ * projection owned by `ToolServiceHealthState::project` — the panel and
+ * table classify against `display_state` only, never `status`.
  */
-export type MCPServiceHealthView = { serviceId: string, agentDid: string | null, endpoint: string | null, status: string | null, toolCount: number | null, failureCount: number | null, kMax: number | null, backoffUntil: string | null, lastProbeAt: string | null, lastSeen: string | null, lastErrorClass: string | null, lastErrorMessage: string | null, updatedAt: string | null, };
+export type MCPServiceHealthView = { serviceId: string, agentDid: string | null, endpoint: string | null, status: string | null, displayState: string, toolCount: number | null, failureCount: number | null, kMax: number | null, backoffUntil: string | null, lastProbeAt: string | null, lastSeen: string | null, lastErrorClass: string | null, lastErrorMessage: string | null, updatedAt: string | null, };

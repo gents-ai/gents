@@ -100,6 +100,7 @@ function ServiceRows({
         : visual === "reconnecting"
           ? "blue"
           : "red";
+  const projection = projectStatus(service);
   const k = service.kMax ?? 0;
   const fc = service.failureCount ?? 0;
   const probeText = probeOutcome
@@ -147,7 +148,7 @@ function ServiceRows({
               className={`mcp-health-dot mcp-health-dot-${dotClass} mcp-health-dot-${visual}`}
               aria-hidden
             />
-            {statusLabel(visual)}
+            {statusLabel(projection)}
           </span>
         </td>
         <td>
@@ -224,7 +225,7 @@ function ServiceRows({
                     "status",
                     `${service.status ?? "unknown"} (visual: ${visual})`,
                   ],
-                  ["projected status", projectStatus(visual)],
+                  ["projected status", projection],
                   ["failure_count", `${fc} / ${k} (K)`],
                   ["backoff_until", service.backoffUntil ?? "—"],
                   ["last_probe_at", service.lastProbeAt ?? "—"],

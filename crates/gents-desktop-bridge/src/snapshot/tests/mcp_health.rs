@@ -4,7 +4,7 @@ mod lean_vocab_test;
 use gents_protocol::row::ToolServiceHealthStateRow;
 use lean_vocab_test::lean_mcp_health_cases;
 
-use crate::types::MCPServiceHealthView;
+use crate::commands::mcp_health::view_from_row;
 
 /// Translate an internal Lean `HealthState` name to the DefraDB-persisted
 /// string vocabulary used by `health_checker::HealthStateInternal::to_defradb`.
@@ -54,24 +54,6 @@ fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealt
     }
 }
 
-fn view_from_row(row: &ToolServiceHealthStateRow) -> MCPServiceHealthView {
-    MCPServiceHealthView {
-        service_id: row.service_id.clone(),
-        agent_did: row.agent_did.clone(),
-        endpoint: row.endpoint.clone(),
-        status: row.status.clone(),
-        tool_count: row.tool_count,
-        failure_count: row.failure_count,
-        k_max: row.k_max,
-        backoff_until: row.backoff_until.clone(),
-        last_probe_at: row.last_probe_at.clone(),
-        last_seen: row.last_seen.clone(),
-        last_error_class: row.last_error_class.clone(),
-        last_error_message: row.last_error_message.clone(),
-        updated_at: row.updated_at.clone(),
-    }
-}
-
 #[test]
 fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
     let cases = lean_mcp_health_cases();
@@ -90,7 +72,12 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
         };
 
         let row = row_from_lean(&case.name, next_state, next_count);
-        let view = view_from_row(&row);
+        let view = view_from_row(row).unwrap_or_else(|error| {
+            panic!(
+                "Lean MCP health case {} row must project to a view: {error}",
+                case.name
+            )
+        });
 
         let expected_persisted_status = lean_state_to_defradb_status(next_state);
         assert_eq!(
@@ -112,15 +99,9 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
         );
 
         if let Some(projection) = case.rust_projection.as_deref() {
-            let view_projection = match view.status.as_deref().unwrap_or("") {
-                "healthy" => "healthy",
-                "degraded" => "stale",
-                "evicted" | "reconnecting" => "unreachable",
-                other => panic!("unexpected view status {other:?}"),
-            };
             assert_eq!(
-                view_projection, projection,
-                "Lean MCP health case {} HealthStatus projection must agree with view collapse",
+                view.display_state, projection,
+                "Lean MCP health case {} HealthStatus projection must agree with the bridge's display_state",
                 case.name,
             );
         }

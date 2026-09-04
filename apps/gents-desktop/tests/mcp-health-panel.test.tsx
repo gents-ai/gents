@@ -26,14 +26,32 @@ const api = createDesktopApiAdapter(
   }),
 );
 
+// Mirrors ToolServiceHealthState::project (crates/gents-protocol/src/tool_service_health.rs)
+// so fixtures don't drift from the server's classification.
+function displayStateFor(status: string): "healthy" | "stale" | "unreachable" {
+  switch (status) {
+    case "healthy":
+      return "healthy";
+    case "degraded":
+      return "stale";
+    case "evicted":
+    case "reconnecting":
+      return "unreachable";
+    default:
+      return "unreachable";
+  }
+}
+
 function svc(
   overrides: Partial<MCPServiceHealthView> & { serviceId: string },
 ): MCPServiceHealthView {
+  const status = overrides.status ?? "healthy";
   return {
     serviceId: overrides.serviceId,
     agentDid: overrides.agentDid ?? "did:test:agent-1",
     endpoint: overrides.endpoint ?? "100.69.4.79:9201/mcp",
-    status: overrides.status ?? "healthy",
+    status,
+    displayState: overrides.displayState ?? displayStateFor(status),
     failureCount: overrides.failureCount ?? 0,
     kMax: overrides.kMax ?? 3,
     backoffUntil: overrides.backoffUntil ?? null,
@@ -70,7 +88,7 @@ describe("McpHealthPanelView", () => {
 
     expect(screen.getByTestId("mcp-health-status-ok-svc")).toHaveTextContent("healthy");
     expect(screen.getByTestId("mcp-health-status-evicted-svc")).toHaveTextContent(
-      "evicted (backoff)",
+      "unreachable",
     );
 
     fireEvent.click(screen.getByTestId("mcp-health-probe-ok-svc"));

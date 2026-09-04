@@ -3,18 +3,18 @@ import type { MCPServiceHealthView } from "@source-inc/gents-desktop-client";
 export type FilterId = "all" | "unhealthy" | "reconnecting";
 
 export type VisualState =
-  "healthy" | "degraded" | "evicted" | "reconnecting" | "stuck" | "unknown";
+  "healthy" | "degraded" | "evicted" | "reconnecting" | "unknown";
 
+export type DisplayProjection = "healthy" | "stale" | "unreachable" | "unknown";
+
+// Raw persisted `status` typed for presentation (dot color, CSS class).
+// This mirrors the server's raw vocabulary verbatim — it does not
+// classify or invent any state. The single owner of MCP health
+// classification is `MCPServiceHealthView.displayState`
+// (`ToolServiceHealthState::project` in Rust); see `projectStatus`.
 export function visualState(service: MCPServiceHealthView): VisualState {
   const raw = (service.status ?? "").toLowerCase();
   const status = raw === "stale" ? "degraded" : raw;
-  const failureCount = service.failureCount ?? 0;
-  const kMax = service.kMax ?? 1;
-  const stuck =
-    (status === "evicted" || status === "reconnecting") &&
-    (failureCount >= 2 * Math.max(1, kMax) ||
-      isLastSeenOlderThan(service, 5 * 60_000));
-  if (stuck) return "stuck";
   switch (status) {
     case "healthy":
       return "healthy";
@@ -29,29 +29,30 @@ export function visualState(service: MCPServiceHealthView): VisualState {
   }
 }
 
-export function projectStatus(
-  visual: VisualState,
-): "healthy" | "stale" | "unreachable" | "unknown" {
-  if (visual === "healthy") return "healthy";
-  if (visual === "degraded") return "stale";
-  if (visual === "evicted" || visual === "reconnecting" || visual === "stuck") {
-    return "unreachable";
+// Pass-through of the server-projected `displayState`. This is the only
+// classification the desktop performs — no TS heuristic re-derives it
+// from `status`/`failureCount`/`lastSeen`. The `"unknown"` fallback is
+// the single place a missing/unrecognized `displayState` is handled.
+export function projectStatus(service: MCPServiceHealthView): DisplayProjection {
+  const displayState = service.displayState;
+  if (
+    displayState === "healthy" ||
+    displayState === "stale" ||
+    displayState === "unreachable"
+  ) {
+    return displayState;
   }
   return "unknown";
 }
 
-export function statusLabel(visual: VisualState): string {
-  switch (visual) {
+export function statusLabel(projection: DisplayProjection): string {
+  switch (projection) {
     case "healthy":
       return "healthy";
-    case "degraded":
-      return "degraded";
-    case "evicted":
-      return "evicted (backoff)";
-    case "reconnecting":
-      return "reconnecting";
-    case "stuck":
-      return "stuck";
+    case "stale":
+      return "stale";
+    case "unreachable":
+      return "unreachable";
     default:
       return "unknown";
   }
@@ -62,9 +63,8 @@ export function matchesFilter(
   filter: FilterId,
 ): boolean {
   if (filter === "all") return true;
-  const visual = visualState(service);
-  if (filter === "unhealthy") return projectStatus(visual) !== "healthy";
-  if (filter === "reconnecting") return visual === "reconnecting";
+  if (filter === "unhealthy") return projectStatus(service) !== "healthy";
+  if (filter === "reconnecting") return visualState(service) === "reconnecting";
   return true;
 }
 
@@ -98,16 +98,6 @@ export function backoffRemaining(backoffUntil: string | null | undefined): {
   const remainingMs = target - Date.now();
   if (remainingMs <= 0) return { remainingMs: 0, text: "backoff expired" };
   return { remainingMs, text: `retry in ${formatRemaining(remainingMs)}` };
-}
-
-function isLastSeenOlderThan(
-  service: MCPServiceHealthView,
-  ms: number,
-): boolean {
-  if (!service.lastSeen) return false;
-  const ts = Date.parse(service.lastSeen);
-  if (Number.isNaN(ts)) return false;
-  return Date.now() - ts > ms;
 }
 
 function formatRemaining(ms: number): string {
