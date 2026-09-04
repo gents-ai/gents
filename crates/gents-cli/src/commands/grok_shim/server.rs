@@ -143,9 +143,18 @@ const STAGING_DIR_PREFIX: &str = ".gents-grok-";
 /// Naming attempts per staging ancestor before falling back to a deeper one.
 const STAGING_ATTEMPTS: usize = 8;
 
-/// Upper bound on any shutdown grace, so a large configured `shutdown_delay_ms`
-/// cannot stall a clean stop.
+/// Upper bound on one per-connection dispatch/writer cleanup operation.
 const MAX_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// Internal bound for joining all live connection tasks during leader
+/// shutdown. This is deliberately independent of the pager-facing shutdown
+/// envelope, whose delay remains zero: the wire asks clients to stop now,
+/// while the leader still waits for their `on_disconnect` cleanup to finish.
+const CONNECTION_CLEANUP_GRACE: Duration = Duration::from_secs(5);
+
+/// Grok's audited shutdown envelope is immediate. This is a wire value, not
+/// the server's internal cleanup deadline.
+const WIRE_SHUTDOWN_DELAY_MS: u64 = 0;
 
 /// Maximum number of complete outbound envelopes waiting behind a slow pager.
 const OUTBOUND_FRAME_CAPACITY: usize = 256;
@@ -344,17 +353,12 @@ where
 pub(crate) struct LeaderServerConfig {
     /// Filesystem path of the published leader socket.
     pub(crate) socket_path: PathBuf,
-    /// Delay announced in the `shutting_down` frame before the stop, and the
-    /// bound the accept loop waits for live connections to finish. Zero skips
-    /// the wait entirely.
-    pub(crate) shutdown_delay_ms: u64,
 }
 
 impl LeaderServerConfig {
     pub(crate) fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
-            shutdown_delay_ms: 0,
         }
     }
 }
@@ -479,7 +483,6 @@ pub(crate) fn spawn_leader(
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (lifecycle_tx, _lifecycle_rx) = broadcast::channel::<ServerEnvelope>(16);
-    let shutdown_delay_ms = config.shutdown_delay_ms;
     let task = tokio::spawn(accept_loop(
         listener,
         // The open guard moves into the accept-loop future: the exclusive
@@ -489,7 +492,6 @@ pub(crate) fn spawn_leader(
         factory,
         lifecycle_tx,
         shutdown_rx,
-        shutdown_delay_ms,
     ));
 
     Ok(LeaderHandle {
@@ -552,7 +554,6 @@ async fn accept_loop(
     factory: Arc<dyn AcpDelegateFactory>,
     lifecycle: broadcast::Sender<ServerEnvelope>,
     mut shutdown: watch::Receiver<bool>,
-    shutdown_delay_ms: u64,
 ) -> Result<()> {
     let next_client_id = AtomicU64::new(1);
     let mut connections = JoinSet::new();
@@ -596,24 +597,37 @@ async fn accept_loop(
     // Announce the stop to every live connection, then stop accepting.
     let _ = lifecycle.send(ServerEnvelope::ShuttingDown {
         reason: ShutdownReason::Manual,
-        delay_ms: shutdown_delay_ms,
+        delay_ms: WIRE_SHUTDOWN_DELAY_MS,
     });
     let _ = lifecycle.send(ServerEnvelope::Shutdown);
+    // Close the lifecycle channel after queuing both frames. Connections
+    // drain the announcements, then observe `Closed` and enter their
+    // `on_disconnect` cleanup while the accept loop waits below.
+    drop(lifecycle);
 
-    if shutdown_delay_ms > 0 {
-        let grace = Duration::from_millis(shutdown_delay_ms).min(MAX_SHUTDOWN_GRACE);
-        let drain = async { while connections.join_next().await.is_some() {} };
-        if tokio::time::timeout(grace, drain).await.is_err() {
-            tracing::debug!(
-                target: LOG_TARGET,
-                "grok shim leader shutdown grace elapsed with connections still open"
-            );
-        }
+    // The pager-facing delay is zero, but clean server shutdown still owns
+    // every connection task until its delegate has run `on_disconnect` and
+    // its bounded per-connection cleanup has completed. Detaching here would
+    // let `LeaderHandle::shutdown` return while pending turns were still live.
+    let drain = async { while connections.join_next().await.is_some() {} };
+    let cleanup_result = if tokio::time::timeout(CONNECTION_CLEANUP_GRACE, drain)
+        .await
+        .is_err()
+    {
+        tracing::warn!(
+            target: LOG_TARGET,
+            grace_ms = CONNECTION_CLEANUP_GRACE.as_millis(),
+            "grok shim leader connection cleanup grace elapsed"
+        );
+        connections.abort_all();
+        while connections.join_next().await.is_some() {}
+        Err(anyhow!(
+            "grok shim leader connection cleanup exceeded {}ms",
+            CONNECTION_CLEANUP_GRACE.as_millis()
+        ))
     } else {
-        // Connections observe the lifecycle frames (or the closed lifecycle
-        // channel when this task returns) and clean themselves up.
-        connections.detach_all();
-    }
+        Ok(())
+    };
 
     drop(listener);
 
@@ -625,7 +639,7 @@ async fn accept_loop(
         socket = %socket_path.display(),
         "grok shim leader stopped cleanly"
     );
-    Ok(())
+    cleanup_result
 }
 
 fn remove_published_socket(socket_path: &Path) {
@@ -1564,7 +1578,7 @@ fn staging_dir_name() -> String {
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
     use std::sync::Mutex;
     use tokio::time::{sleep, timeout, Instant};
 
@@ -1644,6 +1658,43 @@ mod tests {
         fn on_disconnect(&self) -> BoxFuture<'_, ()> {
             Box::pin(async move {
                 self.disconnects.fetch_add(1, Ordering::SeqCst);
+            })
+        }
+    }
+
+    /// Delegate whose disconnect hook parks until the test releases it. This
+    /// makes the leader-vs-connection shutdown ordering observable without
+    /// sleeps or scheduler assumptions.
+    struct GatedDisconnectDelegate {
+        started: tokio::sync::Notify,
+        release: tokio::sync::Notify,
+        completed: AtomicBool,
+    }
+
+    impl GatedDisconnectDelegate {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                started: tokio::sync::Notify::new(),
+                release: tokio::sync::Notify::new(),
+                completed: AtomicBool::new(false),
+            })
+        }
+    }
+
+    impl AcpDelegate for GatedDisconnectDelegate {
+        fn handle_acp<'a>(
+            &'a self,
+            _payload: &'a str,
+            _outbound: AcpOutbound,
+        ) -> BoxFuture<'a, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn on_disconnect(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                self.started.notify_one();
+                self.release.notified().await;
+                self.completed.store(true, Ordering::SeqCst);
             })
         }
     }
@@ -3074,6 +3125,50 @@ mod tests {
 
         drop((reader_a, writer_a));
         handle.shutdown().await.expect("clean shutdown");
+        assert_clean_stop(&handle);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn default_shutdown_waits_for_connection_on_disconnect_cleanup() {
+        let root = unique_test_root("shutdown-disconnect-cleanup");
+        let socket = root.join("leader.sock");
+        let delegate = GatedDisconnectDelegate::new();
+        let factory: Arc<dyn AcpDelegateFactory> = Arc::new({
+            let delegate = delegate.clone();
+            move |_client_id: u64, _registration: &Registration| {
+                Ok(delegate.clone() as Arc<dyn AcpDelegate>)
+            }
+        });
+        let handle = spawn_leader(LeaderServerConfig::new(socket.clone()), factory)
+            .expect("the leader should spawn");
+        let (_reader, _writer, _client_id) = register(&socket).await;
+
+        let mut shutdown = tokio::spawn(async move {
+            let mut handle = handle;
+            let result = handle.shutdown().await;
+            (handle, result)
+        });
+        timeout(TEST_TIMEOUT, delegate.started.notified())
+            .await
+            .expect("the connection should enter on_disconnect");
+        assert!(
+            timeout(Duration::from_millis(50), &mut shutdown)
+                .await
+                .is_err(),
+            "LeaderHandle::shutdown must wait while on_disconnect is still running"
+        );
+
+        delegate.release.notify_one();
+        let (handle, result) = timeout(TEST_TIMEOUT, shutdown)
+            .await
+            .expect("leader shutdown should finish after disconnect cleanup")
+            .expect("shutdown task should join");
+        result.expect("leader shutdown should succeed");
+        assert!(
+            delegate.completed.load(Ordering::SeqCst),
+            "shutdown may return only after on_disconnect completed"
+        );
         assert_clean_stop(&handle);
         let _ = std::fs::remove_dir_all(&root);
     }
