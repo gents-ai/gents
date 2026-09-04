@@ -21,7 +21,6 @@
           "inference_call_count": 1,
           "lifecycle_state": "completed",
           "request_id": "req-atif-1",
-          "status": "completed",
           "tool_call_count": 1
         },
         "total_steps": 2

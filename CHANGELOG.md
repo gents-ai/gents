@@ -29,6 +29,12 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   (`SubagentTreeNode.status`, `SessionHistoryRow.latest_request_status`,
   `RequestShowHeader.status`, `ChildRequestView.status`,
   `GraphRunRequestView.status`); read `lifecycle_state` instead.
+- External projections expose request state once in their native vocabulary:
+  OpenAI-Codex request items drop `lifecycle_state` (keep `status`), ATIF
+  request extras drop `status` (keep `lifecycle_state`), and Amy trace records
+  drop `request_lifecycle_state` (keep `request_status`). Session-history rows
+  rename session `status` to `session_status` and keep request state separately
+  as `latest_request_lifecycle_state`.
 
 ### Fixed
 

@@ -92,7 +92,6 @@ pub struct AmyToolCallTraceRecord {
     pub session_id: String,
     pub request_id: Option<String>,
     pub request_status: Option<String>,
-    pub request_lifecycle_state: Option<String>,
     pub request_failure_reason: Option<String>,
     pub response_status: Option<String>,
     pub response_error_message: Option<String>,

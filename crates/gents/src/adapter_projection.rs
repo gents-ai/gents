@@ -258,8 +258,6 @@ pub enum OpenAiCodexTraceItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        lifecycle_state: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         agent_did: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         behavior_id: Option<String>,
@@ -782,7 +780,6 @@ pub fn adapter_projection_eval_jsonl_records(
                     OpenAiCodexTraceItem::Request {
                         id,
                         status,
-                        lifecycle_state: _,
                         agent_did,
                         behavior_id,
                         parent_request_id,
@@ -1332,7 +1329,6 @@ fn openai_codex_projection_schema() -> Value {
                                 "type": { "const": "request" },
                                 "id": string_schema(),
                                 "status": optional_string_schema(),
-                                "lifecycle_state": optional_string_schema(),
                                 "agent_did": optional_string_schema(),
                                 "behavior_id": optional_string_schema(),
                                 "parent_request_id": optional_string_schema(),
@@ -1859,7 +1855,6 @@ fn build_openai_codex_run_trace(
                 items.push(OpenAiCodexTraceItem::Request {
                     id: event.request_id.clone(),
                     status: event.lifecycle_state.clone(),
-                    lifecycle_state: event.lifecycle_state.clone(),
                     agent_did: event.agent_did.clone(),
                     behavior_id: event.behavior_id.clone(),
                     parent_request_id: event.parent_request_id.clone(),

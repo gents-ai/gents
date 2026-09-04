@@ -9,7 +9,6 @@
         {
           "id": "req-codex-1",
           "input": "[training_safe_redacted]",
-          "lifecycle_state": "completed",
           "status": "completed",
           "timestamp": "2026-06-05T17:00:00Z",
           "type": "request"

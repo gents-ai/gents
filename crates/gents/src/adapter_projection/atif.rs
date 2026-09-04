@@ -147,10 +147,6 @@ pub(super) fn build_atif_trajectory(
                     optional_string_value(timeline.session_id.as_deref()),
                 ),
                 (
-                    "status",
-                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
-                ),
-                (
                     "lifecycle_state",
                     optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
                 ),
@@ -328,10 +324,6 @@ pub(super) fn build_atif_trajectory(
             total_steps: steps.len(),
             extra: optional_extra([
                 ("request_id", string_value(&timeline.request_id)),
-                (
-                    "status",
-                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
-                ),
                 (
                     "lifecycle_state",
                     optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),

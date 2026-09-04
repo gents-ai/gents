@@ -514,9 +514,6 @@ fn build_records(
                 request_status: request
                     .and_then(|request| request.lifecycle_state)
                     .map(|state| state.as_str().to_string()),
-                request_lifecycle_state: request
-                    .and_then(|request| request.lifecycle_state)
-                    .map(|state| state.as_str().to_string()),
                 request_failure_reason: request.and_then(|request| request.failure_reason.clone()),
                 response_status: response.and_then(|response| response.status.clone()),
                 response_error_message: response
