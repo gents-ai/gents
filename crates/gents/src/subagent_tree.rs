@@ -1,22 +1,83 @@
-use std::collections::{BTreeMap, BTreeSet};
+//! One projector for the subagent tree: root request plus descendant nodes
+//! and edges, depth-bounded, with fully-terminal subtrees prunable (#1334).
+//!
+//! Two callers walk this graph: the CLI's `/subagents/tree` HTTP route (a
+//! single [`ConfigAccess::Graphql`] endpoint) and the desktop bridge's Tauri
+//! command (the local embedded node plus zero or more peer GraphQL
+//! endpoints, aggregated with per-access partial-failure reporting via
+//! [`SubagentTreeAccess::label`]). Both map [`SubagentTree`] into their own
+//! presentation DTO; this module owns only the graph walk and the terminal
+//! predicate ([`gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str`]).
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
-use gents::{
-    ConfigAccess, DescendantEdge, DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
-};
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use defra_node::EmbeddedNode;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
-use serde_json::Value;
 
-use crate::types::{SubagentEdgeView, SubagentNodeView, SubagentTreeView};
+use crate::config_client::ConfigAccess;
+use crate::descendant_graph::{
+    resolve_descendant_graph, DescendantEdge, DescendantGraphAccess, DescendantQuery,
+    MAX_DESCENDANT_PAGE_LIMIT,
+};
+use crate::graphql::escape_graphql_string;
 
 pub const DEFAULT_SUBAGENT_TREE_MAX_DEPTH: usize = 8;
 pub const HARD_SUBAGENT_TREE_MAX_DEPTH: usize = 32;
+
+/// Clamp a caller-supplied max depth to the hard ceiling, defaulting when
+/// none was supplied.
+pub fn effective_subagent_tree_max_depth(max_depth: Option<u32>) -> usize {
+    max_depth
+        .map(|value| (value as usize).min(HARD_SUBAGENT_TREE_MAX_DEPTH))
+        .unwrap_or(DEFAULT_SUBAGENT_TREE_MAX_DEPTH)
+}
+
+/// One query source contributing to the tree, labeled for partial-error
+/// attribution. `label: None` means the local node.
+pub struct SubagentTreeAccess {
+    pub label: Option<String>,
+    pub access: ConfigAccess,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubagentTreeNode {
+    pub request_id: String,
+    /// Peer label the row was resolved from; `None` = the local node.
+    pub resolved_via: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_did: Option<String>,
+    pub behavior_id: Option<String>,
+    pub lifecycle_state: Option<String>,
+    pub subagent_depth: Option<i64>,
+    pub caused_by_parent_request_id: Option<String>,
+    pub caused_by_parent_tool_call_id: Option<String>,
+    pub backend_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubagentTreeEdge {
+    pub parent_request_id: String,
+    pub child_request_id: String,
+    pub parent_tool_call_id: Option<String>,
+    pub tool_name: Option<String>,
+    pub await_mode: Option<String>,
+    pub cancel_policy: Option<String>,
+    pub lifecycle_state: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubagentTree {
+    pub root_request_id: String,
+    pub nodes: Vec<SubagentTreeNode>,
+    pub edges: Vec<SubagentTreeEdge>,
+    pub truncated: bool,
+    /// Accesses that could not be queried this walk; the tree may be missing
+    /// their branches. Empty when every access answered.
+    pub partial_errors: Vec<String>,
+}
 
 #[derive(Debug, Deserialize)]
 struct RootRequestEnvelope {
@@ -46,58 +107,18 @@ struct RequestRow {
     backend_id: Option<String>,
 }
 
-pub fn effective_subagent_tree_max_depth(max_depth: Option<u32>) -> usize {
-    max_depth
-        .map(|value| (value as usize).min(HARD_SUBAGENT_TREE_MAX_DEPTH))
-        .unwrap_or(DEFAULT_SUBAGENT_TREE_MAX_DEPTH)
-}
-
-pub struct SubagentTreeAccess {
-    pub label: Option<String>,
-    pub access: TreeQueryAccess,
-}
-
-pub enum TreeQueryAccess {
-    Local(Arc<EmbeddedNode>),
-    Graphql(String),
-}
-
-impl TreeQueryAccess {
-    async fn execute(&self, query: &str) -> Result<Value> {
-        match self {
-            Self::Local(node) => {
-                let response = node.execute(query).await;
-                if response.has_errors() {
-                    let errors = response
-                        .errors
-                        .iter()
-                        .map(|error| error.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("graphql returned errors: {errors}");
-                }
-                Ok(serde_json::json!({
-                    "data": response.data.unwrap_or(Value::Null),
-                }))
-            }
-            Self::Graphql(endpoint) => {
-                execute_graphql_async(endpoint, query, GraphqlRequestOptions::default()).await
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
+/// Build the tree from a single local embedded node — the common case for a
+/// caller with no peers to aggregate.
 pub async fn build_local_subagent_tree(
     node: Arc<EmbeddedNode>,
     root_request_id: &str,
     include_terminal: bool,
     max_depth: usize,
-) -> Result<SubagentTreeView> {
+) -> Result<SubagentTree> {
     build_subagent_tree(
         &[SubagentTreeAccess {
             label: None,
-            access: TreeQueryAccess::Local(node),
+            access: ConfigAccess::Local(node),
         }],
         root_request_id,
         include_terminal,
@@ -106,13 +127,17 @@ pub async fn build_local_subagent_tree(
     .await
 }
 
+/// Build the tree by aggregating one or more query accesses. A failing
+/// access is recorded in `partial_errors` (once) and skipped rather than
+/// failing the whole walk, so a live tree still renders when a peer
+/// deployment is unreachable.
 pub async fn build_subagent_tree(
     accesses: &[SubagentTreeAccess],
     root_request_id: &str,
     include_terminal: bool,
     max_depth: usize,
-) -> Result<SubagentTreeView> {
-    let mut nodes: BTreeMap<String, SubagentNodeView> = BTreeMap::new();
+) -> Result<SubagentTree> {
+    let mut nodes: BTreeMap<String, SubagentTreeNode> = BTreeMap::new();
     let mut partial_errors: Vec<String> = Vec::new();
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
 
@@ -142,14 +167,10 @@ pub async fn build_subagent_tree(
         if dead_accesses.contains(&index) {
             continue;
         }
-        let access = match &entry.access {
-            TreeQueryAccess::Local(node) => ConfigAccess::Local(node.clone()),
-            TreeQueryAccess::Graphql(endpoint) => ConfigAccess::Graphql(endpoint.clone()),
-        };
         let mut after = None;
         loop {
-            let page = match gents::resolve_descendant_graph(
-                DescendantGraphAccess::Config(&access),
+            let page = match resolve_descendant_graph(
+                DescendantGraphAccess::Config(&entry.access),
                 &DescendantQuery {
                     after: after.clone(),
                     limit: MAX_DESCENDANT_PAGE_LIMIT,
@@ -198,7 +219,7 @@ pub async fn build_subagent_tree(
     {
         nodes.insert(
             edge.child_request_id.clone(),
-            SubagentNodeView {
+            SubagentTreeNode {
                 request_id: edge.child_request_id.clone(),
                 resolved_via,
                 session_id: edge.child_session_id.clone(),
@@ -211,7 +232,7 @@ pub async fn build_subagent_tree(
                 backend_id: None,
             },
         );
-        edges.push(SubagentEdgeView {
+        edges.push(SubagentTreeEdge {
             parent_request_id: edge.immediate_parent_request_id,
             child_request_id: edge.child_request_id,
             parent_tool_call_id: Some(edge.immediate_parent_tool_call_id),
@@ -237,7 +258,7 @@ pub async fn build_subagent_tree(
             ))
     });
 
-    Ok(SubagentTreeView {
+    Ok(SubagentTree {
         root_request_id: root_request_id.to_string(),
         nodes: nodes.into_values().collect(),
         edges,
@@ -259,8 +280,8 @@ fn record_dead_access(
     }
 }
 
-fn request_row_into_node(row: RequestRow) -> SubagentNodeView {
-    SubagentNodeView {
+fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
+    SubagentTreeNode {
         request_id: clean_string(&row.request_id),
         resolved_via: None,
         session_id: clean_optional_string(row.session_id.as_deref()),
@@ -279,7 +300,7 @@ fn request_row_into_node(row: RequestRow) -> SubagentNodeView {
 }
 
 async fn fetch_root_request(
-    access: &TreeQueryAccess,
+    access: &ConfigAccess,
     root_request_id: &str,
 ) -> Result<Option<RequestRow>> {
     let escaped = escape_graphql_string(root_request_id);
@@ -307,7 +328,7 @@ async fn fetch_root_request(
 }
 
 async fn execute_access_query<T: serde::de::DeserializeOwned>(
-    access: &TreeQueryAccess,
+    access: &ConfigAccess,
     query: &str,
     context: &str,
 ) -> Result<T> {
@@ -323,8 +344,8 @@ async fn execute_access_query<T: serde::de::DeserializeOwned>(
 }
 
 fn prune_terminal_subtrees(
-    nodes: &mut BTreeMap<String, SubagentNodeView>,
-    edges: &mut Vec<SubagentEdgeView>,
+    nodes: &mut BTreeMap<String, SubagentTreeNode>,
+    edges: &mut Vec<SubagentTreeEdge>,
     root_request_id: &str,
 ) {
     let mut children: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -338,7 +359,7 @@ fn prune_terminal_subtrees(
     let mut keep: BTreeSet<String> = BTreeSet::new();
     fn mark(
         request_id: &str,
-        nodes: &BTreeMap<String, SubagentNodeView>,
+        nodes: &BTreeMap<String, SubagentTreeNode>,
         children: &BTreeMap<String, Vec<String>>,
         keep: &mut BTreeSet<String>,
     ) -> bool {
@@ -378,3 +399,7 @@ fn clean_optional_string(value: Option<&str>) -> Option<String> {
 fn clean_string(value: &str) -> String {
     value.trim().to_string()
 }
+
+#[cfg(test)]
+#[path = "subagent_tree/tests.rs"]
+mod tests;

@@ -188,9 +188,6 @@ pub use operations_signature::{
     compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow,
 };
 
-#[path = "snapshot/subagent_tree.rs"]
-pub mod subagent_tree;
-
 #[path = "snapshot/session.rs"]
 mod session;
 pub use session::apply_session_timeline_page;
