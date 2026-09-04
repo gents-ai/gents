@@ -234,8 +234,7 @@ pub mod cancel_propagation {
                 assert!(
                     !naturally_terminal,
                     "natural terminal child {} was interrupted (lifecycle_state={})",
-                    child.request_id,
-                    child.lifecycle_state
+                    child.request_id, child.lifecycle_state
                 );
             }
         }

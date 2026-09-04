@@ -598,7 +598,10 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(runtime_interrupt_repair.repaired, 1);
     let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
-    assert_eq!(runtime_interrupt_row.lifecycle_state, RequestLifecycleState::Interrupted);
+    assert_eq!(
+        runtime_interrupt_row.lifecycle_state,
+        RequestLifecycleState::Interrupted
+    );
     assert_eq!(
         runtime_interrupt_row.failure_reason.as_deref(),
         Some("interrupted")
@@ -704,11 +707,17 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let owner_survivor =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-survivor").await;
-    assert_eq!(owner_survivor.lifecycle_state, RequestLifecycleState::Pending);
+    assert_eq!(
+        owner_survivor.lifecycle_state,
+        RequestLifecycleState::Pending
+    );
 
     let owner_duplicate =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-duplicate").await;
-    assert_eq!(owner_duplicate.lifecycle_state, RequestLifecycleState::Superseded);
+    assert_eq!(
+        owner_duplicate.lifecycle_state,
+        RequestLifecycleState::Superseded
+    );
     assert_eq!(
         owner_duplicate.superseded_by_request.as_deref(),
         Some("convergence-coalesce-owner-survivor"),
@@ -720,7 +729,8 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         "foreign replica ownership unchanged"
     );
     assert_eq!(
-        foreign.lifecycle_state, RequestLifecycleState::Pending,
+        foreign.lifecycle_state,
+        RequestLifecycleState::Pending,
         "foreign replica must not be superseded by the owner's coalesce reconcile"
     );
     assert_eq!(
@@ -775,7 +785,8 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
     assert_eq!(
-        foreign.lifecycle_state, RequestLifecycleState::Pending,
+        foreign.lifecycle_state,
+        RequestLifecycleState::Pending,
         "foreign replica must not be interrupted by the owner's wake-up drain"
     );
 }

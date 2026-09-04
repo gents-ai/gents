@@ -2308,7 +2308,8 @@ fn row_is_active(row: &QueueRuntimeRow) -> bool {
 }
 
 fn row_is_terminal(row: &QueueRuntimeRow) -> bool {
-    row.lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
+    row.lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
 }
 
 fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> bool {

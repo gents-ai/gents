@@ -47,12 +47,12 @@ use std::time::Duration;
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
     DocumentRuntimeOptions, Gents, ToolCeiling,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
