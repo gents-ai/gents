@@ -956,6 +956,25 @@ impl ProjectionEngine {
                             .count(),
                     });
                 }
+                tools::ToolUpdate::BackgroundTask(update) => {
+                    let Some(advance) = cursor.background_task_novel(&update.key) else {
+                        continue;
+                    };
+                    merged.push(MergedEvent {
+                        event: NovelProjectionEvent {
+                            method: update.method,
+                            payload: update.payload.clone(),
+                            timing: None,
+                            advance,
+                        },
+                        chronology,
+                        family_rank: FAMILY_RANK_TOOL,
+                        family_ordinal: merged
+                            .iter()
+                            .filter(|item| item.family_rank == FAMILY_RANK_TOOL)
+                            .count(),
+                    });
+                }
                 tools::ToolUpdate::AvailableCommands(update) => {
                     let payload = update.to_payload();
                     let fingerprint = payload_fingerprint(&payload);
@@ -1089,9 +1108,9 @@ impl ProjectionEngine {
                 }
                 let chronology = messages.chronology.get(index).copied().flatten();
                 if let messages::MessageUpdate::UserMessageChunk { text } = update {
-                    // Server wakeups are durable transcript entries. Show
-                    // those exact rows, while the foreground echo and hidden
-                    // context/instruction inputs stay on their existing path.
+                    // Keep the exact durable wakeup echo, but tag it as
+                    // runtime input using Grok's native hidden-echo metadata.
+                    // Lifecycle events surface the completion in the UI.
                     let is_notification = durable_message_key(key, update.session_update_kind())
                         .is_some_and(gents::background_completion::is_background_completion_notification_message_key);
                     if is_notification {
@@ -1104,8 +1123,7 @@ impl ProjectionEngine {
                             merged.push(MergedEvent {
                                 event: NovelProjectionEvent {
                                     method: SESSION_UPDATE_METHOD,
-                                    payload: messages::MessageUpdate::chunk_payload(
-                                        update.session_update_kind(),
+                                    payload: messages::MessageUpdate::background_completion_payload(
                                         &text[sent_len..],
                                     ),
                                     timing: None,
@@ -1394,6 +1412,8 @@ pub(crate) enum CursorAdvance {
     Commands { fingerprint: u64 },
     /// A distinct subagent payload was observed for its key.
     Subagent { key: String, fingerprint: u64 },
+    /// One native background task lifecycle notification was delivered.
+    BackgroundTask { key: String },
     /// A live response tail delta was planned and sent. The `plan` is the
     /// post-send cursor state (including the history anchor it absorbed);
     /// `progress_seq` is the durable progress counter observed with this
@@ -2368,6 +2388,8 @@ pub(crate) struct RequestCursor {
     commands_state: Option<u64>,
     /// Last-sent payload fingerprint per subagent key.
     subagent_states: BTreeMap<String, u64>,
+    /// Delivery receipts only; process lifecycle remains in AgentToolCall.
+    background_task_events: std::collections::BTreeSet<String>,
     /// The committed (send-success) state of the live tail cursors.
     live_cursors: LiveCursorPair,
     /// The committed (send-success) delivered length per durable chunk key.
@@ -2519,6 +2541,11 @@ impl RequestCursor {
     }
 
     /// Whether the subagent payload is novel for its key.
+    pub(super) fn subagent_spawn_was_delivered(&self, child_session_id: &str) -> bool {
+        self.subagent_states
+            .contains_key(&format!("subagent_spawned:{child_session_id}"))
+    }
+
     fn subagent_changed(&mut self, key: &str, fingerprint: u64) -> Option<CursorAdvance> {
         if self.subagent_states.get(key) == Some(&fingerprint) {
             return None;
@@ -2526,6 +2553,12 @@ impl RequestCursor {
         Some(CursorAdvance::Subagent {
             key: key.to_string(),
             fingerprint,
+        })
+    }
+
+    fn background_task_novel(&self, key: &str) -> Option<CursorAdvance> {
+        (!self.background_task_events.contains(key)).then(|| CursorAdvance::BackgroundTask {
+            key: key.to_string(),
         })
     }
 
@@ -2560,6 +2593,9 @@ impl RequestCursor {
             }
             CursorAdvance::Subagent { key, fingerprint } => {
                 self.subagent_states.insert(key, fingerprint);
+            }
+            CursorAdvance::BackgroundTask { key } => {
+                self.background_task_events.insert(key);
             }
             CursorAdvance::LiveContent { plan, progress_seq } => {
                 self.live_cursors.content.commit(plan, progress_seq);
@@ -2768,6 +2804,25 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn background_task_receipts_advance_only_after_delivery() {
+        let mut cursor = RequestCursor::default();
+        let started = "task_backgrounded:call";
+        let done = "task_completed:call";
+        assert!(cursor.background_task_novel(started).is_some());
+        // A planned but failed send remains retryable.
+        let retry = cursor.background_task_novel(started).unwrap();
+        cursor.record(retry);
+        assert!(cursor.background_task_novel(started).is_none());
+        let completion = cursor.background_task_novel(done).unwrap();
+        assert!(cursor.background_task_novel(done).is_some());
+        cursor.record(completion);
+        assert!(cursor.background_task_novel(done).is_none());
+        assert!(cursor
+            .background_task_novel("task_backgrounded:other")
+            .is_some());
+    }
 
     /// A deterministic sender that records wire-enqueue order and can delay
     /// or fail sends: exactly the shape a closed/failing live outbound has.
@@ -4229,6 +4284,11 @@ mod tests {
                 "wake-instruction",
                 "Review background results and continue",
             ),
+            (
+                4,
+                "ordinary-user-input",
+                "<tool-completion>This text alone does not establish runtime origin</tool-completion>",
+            ),
         ] {
             let response = engine
                 .node
@@ -4250,6 +4310,7 @@ mod tests {
             .unwrap();
         assert_eq!(unsent.len(), 1);
         assert_eq!(unsent[0].payload["sessionUpdate"], "user_message_chunk");
+        assert_eq!(unsent[0].payload["_meta"]["hideFromScrollback"], true);
         assert!(unsent[0].payload["content"]["text"]
             .as_str()
             .unwrap()

@@ -409,7 +409,7 @@ def probe_handshake(
         )
     }
     subagent, _ = client.request(
-        "x.ai/subagent/get", {"sessionId": session_id, "subagentId": "missing"}
+        "x.ai/subagent/get", {"subagentId": "missing"}
     )
     # Exact real Grok DTO, checked by the ONE shared method-discriminated
     # validator (`require_exact_stub_result`) that the inline self-test
@@ -432,10 +432,17 @@ def probe_handshake(
     # CancelSubagentResponse — subagentId echo, cancelled false, and the
     # not_found outcome kind — never an outcome wrapper.
     cancel, _ = client.request(
-        "x.ai/subagent/cancel", {"sessionId": session_id, "subagentId": "missing"}
+        "x.ai/subagent/cancel", {"subagentId": "missing"}
     )
     require("result" in cancel, f"x.ai/subagent/cancel returned no result: {cancel}")
     require_exact_stub_result("x.ai/subagent/cancel", cancel.get("result"))
+    for method in ("x.ai/subagent/get", "x.ai/subagent/cancel"):
+        malformed, _ = client.request(method, {})
+        require(malformed.get("error", {}).get("code") == -32602,
+                f"{method} must require subagentId: {malformed}")
+    foreign, _ = client.request("x.ai/subagent/list_running", {"sessionId": "not-registered"})
+    require(foreign.get("error", {}).get("code") == -32602,
+            f"subagent controls must reject foreign connection sessions: {foreign}")
 
     # `terminal/wait_for_exit` is exercised on its own: the reference pager
     # answers it with the exact METHOD_NOT_FOUND message
@@ -511,6 +518,10 @@ def require_exact_stub_result(
     self-test fixtures pin their own id), and every other field is
     compared for exact equality against the audited shape.
     """
+    # The JSON-RPC result contains the shell's ExtMethodResult envelope.
+    require(isinstance(result, dict) and set(result) == {"result"},
+            f"{method} requires the stock extension result envelope: {result!r}")
+    result = result["result"]
     require(
         method in STUB_METHOD_AUDITED_RESULTS,
         f"unknown stub result method {method!r}; expected one of "
@@ -2113,6 +2124,13 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         # outcome-wrapper drift: the result is direct, not nested.
         ("cancel", "x.ai/subagent/cancel", {"result": dict(cancel_audited_result)}),
     ]
+    stub_exact_fixtures = [
+        (label, method, {"result": dto}) for label, method, dto in stub_exact_fixtures
+    ]
+    stub_drift_fixtures = [
+        (label, method, {"result": dto}) for label, method, dto in stub_drift_fixtures
+    ]
+    stub_drift_fixtures.append(("missing envelope", "x.ai/subagent/get", get_audited_result))
 
     # ------------------------------------------------------------------
     # Execute every fixture through the REAL validators, counting each
@@ -2337,7 +2355,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         # itself must reject it. The drift guard below is only a fixture
         # sanity check — it never counts as evidence on its own.
         require(
-            wrong_result != STUB_METHOD_AUDITED_RESULTS[method],
+            wrong_result != {"result": STUB_METHOD_AUDITED_RESULTS[method]},
             f"{what} drift guard collided: {wrong_result}",
         )
         stub_result_rejected(method, wrong_result, what)

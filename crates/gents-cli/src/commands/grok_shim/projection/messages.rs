@@ -86,6 +86,16 @@ pub(super) enum MessageUpdate {
 }
 
 impl MessageUpdate {
+    /// Echo a persisted runtime completion without presenting it as something
+    /// the human typed. This is Grok's native ContentChunk metadata; task and
+    /// subagent lifecycle projections provide the visible activity instead.
+    /// Call only after classifying the durable message key, never from text.
+    pub fn background_completion_payload(text: impl Into<String>) -> Value {
+        let mut payload = Self::chunk_payload(USER_MESSAGE_CHUNK, text);
+        payload["_meta"] = json!({"hideFromScrollback": true});
+        payload
+    }
+
     /// The `sessionUpdate` discriminator for this update.
     pub fn session_update_kind(&self) -> &'static str {
         match self {
@@ -2123,6 +2133,10 @@ mod tests {
         assert_eq!(message["sessionUpdate"], "agent_message_chunk");
         let user = MessageUpdate::chunk_payload(USER_MESSAGE_CHUNK, "notice");
         assert_eq!(user["sessionUpdate"], "user_message_chunk");
+        assert!(
+            user.get("_meta").is_none(),
+            "ordinary user echoes stay visible"
+        );
 
         let unknown = MessageUpdate::chunk_payload("agent_message_block", "delta");
         assert_eq!(
@@ -2134,6 +2148,16 @@ mod tests {
             unknown.get("contentBlock").is_none(),
             "the chunk field name is `content`, never `contentBlock`"
         );
+    }
+
+    #[test]
+    fn background_completion_uses_native_hidden_echo_metadata() {
+        let text = "<tool-completion>unchanged durable content</tool-completion>";
+        let payload = MessageUpdate::background_completion_payload(text);
+        assert_eq!(payload["sessionUpdate"], USER_MESSAGE_CHUNK);
+        assert_eq!(payload["content"]["text"], text);
+        assert_eq!(payload["_meta"]["hideFromScrollback"], true);
+        assert!(payload["content"].get("_meta").is_none());
     }
 
     /// A sink serving one empty response discovery and one empty transcript

@@ -9,16 +9,10 @@
 //! parent session's channel.
 //!
 //! The `x.ai/subagent/get`, `x.ai/subagent/list_running`, and
-//! `x.ai/subagent/cancel` ext requests are deliberately shaped stubs that
-//! match the generated Grok shell contract exactly: v1 of the shim never
-//! queries or mutates static `Task` configuration rows as runtime state and
-//! never fabricates child `AgentRequest`/`AgentResponse` documents. `get`
-//! answers the generated `GetSubagentResponse` with a `null` snapshot,
-//! `list_running` answers `ListRunningSubagentsResponse` with
-//! `{"subagents": []}`, and `cancel` keeps the generated
-//! `CancelSubagentResponse` shape (`subagentId`/`cancelled`/`outcome`), so
-//! the pager renders a truthful "no subagent" view instead of a fabricated
-//! one.
+//! `x.ai/subagent/cancel` ext requests use the runtime's session descendant
+//! graph for authorization. Inspection projects persisted child rows into
+//! the stock shell DTOs; cancellation delegates to the runtime's shared
+//! control operation. Static `Task` configuration is never lifecycle state.
 //!
 //! All queries go through the in-process embedded node (`node.execute`) with
 //! every interpolated value passed through `escape_graphql_string`; no HTTP
@@ -37,6 +31,8 @@ use serde_json::{json, Value};
 
 use super::{effective_context_window_tokens, nonempty};
 
+pub(crate) mod control;
+
 /// Ext request methods routed to this leaf by the ACP service.
 pub(crate) const SUBAGENT_GET_METHOD: &str = "x.ai/subagent/get";
 pub(crate) const SUBAGENT_LIST_RUNNING_METHOD: &str = "x.ai/subagent/list_running";
@@ -47,7 +43,6 @@ pub(crate) const SUBAGENT_CANCEL_METHOD: &str = "x.ai/subagent/cancel";
 /// contract (`GetSubagentResponse`/`ListRunningSubagentsResponse`/
 /// `CancelSubagentResponse`); anything else surfaces this code through the
 /// error envelope.
-pub(super) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 
 /// Shape of a `subagent_spawned` update payload (Grok pager
 /// `extensions::notification::SubagentSpawned`).
@@ -869,27 +864,20 @@ fn elapsed_millis(started_at: Option<&str>, ended_at: Option<&str>) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Generated-contract ext stubs
+// Generated-contract not-found results
 // ---------------------------------------------------------------------------
 
-/// Result of `x.ai/subagent/get`: the shim has no live observed subagent to
-/// resolve, so it answers the generated shell contract
-/// `GetSubagentResponse` (`xai-grok-shell/src/extensions/task.rs`) with its
-/// single nullable `snapshot` field set to `null`. The pager reads the null
-/// snapshot as its truthful "no subagent" view — never a fabricated
-/// `SubagentSnapshotDto`, never an invented `outcome` wrapper, and never an
-/// echo of the requested id (the generated response carries no such field).
+/// Stock GetSubagentResponse when the authorized descendant graph has no
+/// matching child. The extension envelope is added at the ACP boundary.
 pub(super) fn subagent_get_not_found_result() -> Value {
     json!({
         "snapshot": null,
     })
 }
 
-/// Result of `x.ai/subagent/list_running`: an empty running list, keyed by
-/// `subagents` exactly as the generated `ListRunningSubagentsResponse` serializes
-/// it (`{"subagents": []}`). The stub never queries `Task` rows and never
-/// fabricates child state.
-pub(super) fn subagent_list_running_empty_result() -> Value {
+/// Empty stock ListRunningSubagentsResponse fixture.
+#[cfg(test)]
+fn subagent_list_running_empty_result() -> Value {
     json!({
         "subagents": [],
     })
@@ -906,39 +894,6 @@ pub(super) fn subagent_cancel_not_found_result(subagent_id: &str) -> Value {
             "kind": "not_found",
         },
     })
-}
-
-/// Route one subagent ext request to its shaped stub result.
-///
-/// Returns `Ok(result)` for the three known methods and an error carrying
-/// the JSON-RPC method-not-found code for anything else, so the ACP service
-/// can surface a uniform error. The stubs are pure: they never touch the
-/// node, never read `Task`, and never write documents.
-pub(crate) fn handle_subagent_ext_request(method: &str, params: &Value) -> Result<Value> {
-    match method {
-        SUBAGENT_GET_METHOD => {
-            // The generated `GetSubagentResponse` carries only the nullable
-            // `snapshot`; the requested id is neither echoed on the wire nor
-            // needed to shape the not-found answer.
-            let _ = params;
-            Ok(subagent_get_not_found_result())
-        }
-        SUBAGENT_LIST_RUNNING_METHOD => Ok(subagent_list_running_empty_result()),
-        SUBAGENT_CANCEL_METHOD => {
-            let subagent_id = params
-                .get("subagentId")
-                .and_then(Value::as_str)
-                .and_then(nonempty)
-                .unwrap_or_default();
-            Ok(subagent_cancel_not_found_result(subagent_id))
-        }
-        other => Err(anyhow::anyhow!(
-            "unknown subagent ext method {other:?}; the Grok shim supports only \
-             {SUBAGENT_GET_METHOD}, {SUBAGENT_LIST_RUNNING_METHOD}, and \
-             {SUBAGENT_CANCEL_METHOD} as shaped not-found stubs"
-        ))
-        .with_context(|| format!("jsonrpc code {JSONRPC_METHOD_NOT_FOUND}")),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1722,43 +1677,6 @@ mod tests {
     }
 
     #[test]
-    fn ext_router_serves_all_three_stubs_and_rejects_unknown_methods() {
-        let params = json!({"sessionId": "session-1", "subagentId": "sub-1"});
-        let get = handle_subagent_ext_request(SUBAGENT_GET_METHOD, &params)
-            .expect("get stub should succeed");
-        // The generated `GetSubagentResponse`: a null snapshot, nothing else.
-        assert_eq!(get, json!({"snapshot": null}));
-
-        let list = handle_subagent_ext_request(SUBAGENT_LIST_RUNNING_METHOD, &params)
-            .expect("list stub should succeed");
-        // The generated `ListRunningSubagentsResponse`: `subagents: []`.
-        assert_eq!(list, json!({"subagents": []}));
-
-        let cancel = handle_subagent_ext_request(SUBAGENT_CANCEL_METHOD, &params)
-            .expect("cancel stub should succeed");
-        // The generated `CancelSubagentResponse` keeps its own shape:
-        // `subagentId` + legacy `cancelled` bool + typed `outcome`.
-        assert_eq!(cancel["subagentId"], "sub-1");
-        assert_eq!(cancel["cancelled"], false);
-        assert_eq!(cancel["outcome"]["kind"], "not_found");
-
-        let unknown = handle_subagent_ext_request("x.ai/subagent/invent", &params);
-        assert!(unknown.is_err());
-    }
-
-    #[test]
-    fn ext_stubs_tolerate_missing_subagent_id_params() {
-        let params = json!({"sessionId": "session-1"});
-        let get = handle_subagent_ext_request(SUBAGENT_GET_METHOD, &params)
-            .expect("get stub should succeed");
-        // The generated get response is id-independent: a null snapshot.
-        assert_eq!(get, json!({"snapshot": null}));
-        let cancel = handle_subagent_ext_request(SUBAGENT_CANCEL_METHOD, &params)
-            .expect("cancel stub should succeed");
-        assert_eq!(cancel["subagentId"], "");
-    }
-
-    #[test]
     fn blank_child_rows_do_not_project_a_finished_update() {
         let children = vec![child_row("child-1", None)];
         let (updates, _chronology) = project_child_rows(
@@ -2072,6 +1990,7 @@ mod tests {
                 parent: create_AgentRequest(input: {{
                     request_id: "{escaped_parent}"
                     agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
                     session_id: "{escaped_session}"
                     content: "parent work"
                     status: "completed"
@@ -2106,6 +2025,11 @@ mod tests {
                     requester_did: "did:test:grok-shim"
                     tool_call_id: "call-child"
                     tool_name: "task"
+                    args: "{{}}"
+                    started_at: "2026-08-31T22:46:44Z"
+                    deadline_at: "2099-08-31T22:46:44Z"
+                    await_mode: "background"
+                    cancel_policy: "cascade"
                     child_request_id: "{escaped_child}"
                     lifecycle_state: "running"
                     status: "running"
@@ -2138,6 +2062,8 @@ mod tests {
                 child: create_AgentRequest(input: {{
                     request_id: "{escaped_child}"
                     agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    behavior_id: "test-child"
                     session_id: "child-session"
                     caused_by_parent_request_id: "{escaped_parent}"
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
@@ -2234,5 +2160,99 @@ mod tests {
             .updates
             .iter()
             .all(|update| update.subagent_id() != "forged-child-session"));
+
+        let node = std::sync::Arc::new(node);
+        let sessions = vec![session_id.to_owned()];
+        let params = json!({"subagentId": "child-session"});
+        let get = control::handle(
+            node.clone(),
+            "did:test:grok-shim",
+            &sessions,
+            SUBAGENT_GET_METHOD,
+            &params,
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(get["snapshot"]["status"], "cancelled");
+        assert_eq!(get["snapshot"]["parentSessionId"], session_id);
+        let missing = control::handle(
+            node.clone(),
+            "did:test:grok-shim",
+            &["unrelated".into()],
+            SUBAGENT_GET_METHOD,
+            &params,
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(missing, json!({"snapshot": null}));
+        let wrong_principal = control::handle(
+            node.clone(),
+            "did:test:other",
+            &sessions,
+            SUBAGENT_GET_METHOD,
+            &params,
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(wrong_principal, json!({"snapshot": null}));
+
+        let active = node
+            .execute(&format!(
+                r#"mutation {{ update_AgentRequest(
+            filter: {{request_id: {{_eq: "{escaped_child}"}}}},
+            input: {{lifecycle_state: "processing", terminalized_at: null}}
+        ) {{_docID}} }}"#
+            ))
+            .await;
+        assert!(!active.has_errors(), "{:?}", active.errors);
+        let list = control::handle(
+            node.clone(),
+            "did:test:grok-shim",
+            &sessions,
+            SUBAGENT_LIST_RUNNING_METHOD,
+            &json!({}),
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(list["subagents"].as_array().unwrap().len(), 1);
+        assert_eq!(list["subagents"][0]["childSessionId"], "child-session");
+        assert!(
+            list["subagents"][0].get("status").is_none(),
+            "list has the stock live DTO shape"
+        );
+        let wrong_cancel = control::handle(
+            node.clone(),
+            "did:test:grok-shim",
+            &["unrelated".into()],
+            SUBAGENT_CANCEL_METHOD,
+            &params,
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(wrong_cancel["outcome"]["kind"], "not_found");
+        let cancelled = control::handle(
+            node.clone(),
+            "did:test:grok-shim",
+            &sessions,
+            SUBAGENT_CANCEL_METHOD,
+            &params,
+            262_144,
+        )
+        .await
+        .unwrap();
+        assert_eq!(cancelled["outcome"]["kind"], "cancelled");
+        let state = node.execute(&format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{escaped_child}"}}}}) {{interrupt_requested_at lifecycle_state}} }}"#)).await;
+        assert!(!state.has_errors());
+        assert!(state
+            .data
+            .as_ref()
+            .unwrap()
+            .pointer("/AgentRequest/0/interrupt_requested_at")
+            .is_some_and(|v| !v.is_null()));
     }
 }

@@ -64,6 +64,8 @@ use serde_json::{json, Map, Value};
 
 use super::nonempty;
 
+mod background;
+
 /// JSON-RPC error code the pager uses for a client method the client does
 /// not implement (method not supported by the connection).
 pub(crate) const JSONRPC_METHOD_NOT_SUPPORTED: i64 = -32601;
@@ -218,6 +220,10 @@ pub(super) struct ToolCallRow {
     /// output yet.
     #[serde(default)]
     partial_output_tail: Option<String>,
+    #[serde(default)]
+    started_at: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
 }
 
 /// One durable `AgentToolResult` conversation audit row for the projected
@@ -245,6 +251,8 @@ const TOOL_CALL_FIELDS: &str = r#"
     await_mode
     message_sequence
     partial_output_tail
+    started_at
+    completed_at
 "#;
 
 const TOOL_RESULT_FIELDS: &str = r#"
@@ -280,6 +288,7 @@ pub(super) enum ToolUpdate {
     ToolCallUpdate(ToolCallFieldsUpdate),
     /// An `available_commands_update` carrying the visible tool list.
     AvailableCommands(AvailableCommandsUpdate),
+    BackgroundTask(background::BackgroundTaskUpdate),
 }
 
 impl ToolUpdate {
@@ -291,6 +300,7 @@ impl ToolUpdate {
             ToolUpdate::ToolCall(_) => "tool_call",
             ToolUpdate::ToolCallUpdate(_) => "tool_call_update",
             ToolUpdate::AvailableCommands(_) => "available_commands_update",
+            ToolUpdate::BackgroundTask(update) => update.kind,
         }
     }
 }
@@ -558,8 +568,20 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
         let kind = ToolCallKind::from_tool_name(tool_name);
         let title = tool_title(row, &kind);
         let content = tool_content(result_text);
-        let raw_input = raw_input_value(args, meta.as_ref());
-        let raw_output = raw_output_value(result_text);
+        let mut raw_input = raw_input_value(args, meta.as_ref());
+        let background = background::project(row, &tool_call_id, result_text);
+        if background.is_some() {
+            if let Some(input) = raw_input.as_mut().and_then(Value::as_object_mut) {
+                // Native pager defers this execute registration until its
+                // task_backgrounded card, including fast terminal calls.
+                input.insert("is_background".to_string(), Value::Bool(true));
+            }
+        }
+        let raw_output = if background.is_some() && !result_text.is_empty() {
+            Some(background::raw_output(result_text))
+        } else {
+            raw_output_value(result_text)
+        };
 
         updates.push(ToolUpdate::ToolCall(ToolCallUpdate {
             tool_call_id: tool_call_id.clone(),
@@ -573,6 +595,11 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
         }));
         chronology.push(row.message_sequence);
 
+        if let Some((started, _)) = &background {
+            updates.push(ToolUpdate::BackgroundTask(started.clone()));
+            chronology.push(row.message_sequence);
+        }
+
         // A terminal first observation still emits the base `tool_call`
         // (a fast call may first be observed already completed); a later
         // lifecycle change emits `tool_call_update`.
@@ -583,6 +610,10 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
                     "status": status.wire_name(),
                 }),
             }));
+            chronology.push(row.message_sequence);
+        }
+        if let Some((_, Some(completed))) = background {
+            updates.push(ToolUpdate::BackgroundTask(completed));
             chronology.push(row.message_sequence);
         }
     }
@@ -1048,6 +1079,8 @@ mod tests {
             await_mode: None,
             message_sequence: None,
             partial_output_tail: None,
+            started_at: None,
+            completed_at: None,
         }
     }
 

@@ -28,12 +28,10 @@
 //!   [`super::turn::TurnManager`], which owns the connection-scoped pending
 //!   prompt, deferred response, and interrupt lifecycle.
 //! - `x.ai/subagent/get` / `x.ai/subagent/list_running` /
-//!   `x.ai/subagent/cancel` — the three exact known ext methods, each
-//!   validated for a required `sessionId` here before delegating to the
-//!   sibling [`super::projection::subagents`] generated-contract stubs,
-//!   which own those result shapes (`get` -> `{"snapshot": null}`,
-//!   `list_running` -> `{"subagents": []}`, `cancel` -> the generated
-//!   `CancelSubagentResponse`). Any other `x.ai/subagent/*` method is
+//!   `x.ai/subagent/cancel` — inspect/control only runtime descendants of
+//!   sessions registered on this connection, using the runtime's canonical
+//!   authorization and the stock shell's extension DTOs.
+//!   Any other `x.ai/subagent/*` method is
 //!   unrouted and answers the typed method-not-found (`-32601`) like every
 //!   other unknown method, never the sibling leaf's generic error.
 //!
@@ -1027,45 +1025,87 @@ impl AcpService {
     /// shapes. The leaf is pure: it never queries `Task` rows and never
     /// fabricates child documents.
     ///
-    /// All three known methods are session-scoped, so each one validates its
-    /// required `sessionId` (typed [`required_session_id`] -> `-32602`) at
-    /// this boundary before the leaf runs — otherwise a request without a
-    /// session would incorrectly answer a successful stub result.
-    ///
-    /// `x.ai/subagent/cancel` additionally takes a caller-controlled
-    /// `subagentId`; a missing, non-string, or blank id is a client
-    /// invalid-params error, not an internal failure. (`get`/`list_running`
-    /// take no further caller-shaped params the stub needs.)
+    /// Enforce the connection's session boundary before any descendant read.
+    /// Stock get/cancel requests carry only subagentId, whereas list_running
+    /// requires sessionId. An optional explicit session is validated equally.
     async fn handle_subagent_ext_request(
         &self,
         method: &str,
         request: &AcpRequest,
     ) -> Result<RequestOutcome> {
-        required_session_id(&request.params)?;
-        if method == SUBAGENT_CANCEL_METHOD {
+        let session_id = if method == SUBAGENT_LIST_RUNNING_METHOD
+            || request.params.get("sessionId").is_some()
+        {
+            Some(required_session_id(&request.params)?)
+        } else {
+            None
+        };
+        if method != SUBAGENT_LIST_RUNNING_METHOD {
             let id = request.params.get("subagentId");
             match id {
                 None | Some(Value::Null) => {
-                    return Err(invalid_params("x.ai/subagent/cancel requires a subagentId"));
+                    return Err(invalid_params("subagent request requires a subagentId"));
                 }
                 Some(value) if !value.is_string() => {
                     return Err(invalid_params(&format!(
-                        "x.ai/subagent/cancel requires a string subagentId, got {value:?}"
+                        "subagent request requires a string subagentId, got {value:?}"
                     )));
                 }
                 Some(value) if value.as_str().is_some_and(|id| id.trim().is_empty()) => {
                     return Err(invalid_params(
-                        "x.ai/subagent/cancel requires a non-empty subagentId",
+                        "subagent request requires a non-empty subagentId",
                     ));
                 }
                 _ => {}
             }
         }
-        let result =
-            super::projection::subagents::handle_subagent_ext_request(method, &request.params)?;
+        for (key, valid) in [
+            (
+                "block",
+                request
+                    .params
+                    .get("block")
+                    .is_none_or(|v| v.is_null() || v.is_boolean()),
+            ),
+            (
+                "timeoutMs",
+                request
+                    .params
+                    .get("timeoutMs")
+                    .is_none_or(|v| v.is_null() || v.as_u64().is_some()),
+            ),
+        ] {
+            if !valid {
+                return Err(invalid_params(&format!("invalid subagent {key}")));
+            }
+        }
+        let sessions = {
+            let known = self.sessions.lock().await;
+            match session_id {
+                Some(session) => {
+                    if !known.contains_key(&session) {
+                        return Err(invalid_params(
+                            "subagent request names an unknown connection session",
+                        ));
+                    }
+                    vec![session]
+                }
+                None => known.keys().cloned().collect(),
+            }
+        };
+        let result = super::projection::subagents::control::handle(
+            self.config.node.clone(),
+            &self.config.agent_did,
+            &sessions,
+            method,
+            &request.params,
+            self.config.current_model.effective_context_window(),
+        )
+        .await?;
         Ok(RequestOutcome {
             notifications: Vec::new(),
-            result,
+            // The stock shell wraps extension DTOs in ExtMethodResult.
+            result: json!({"result": result}),
         })
     }
 }
@@ -3424,7 +3464,7 @@ mod tests {
             ))
             .await;
         let get = parse_response(get.response.as_deref().expect("response line"));
-        assert_eq!(get["result"], json!({ "snapshot": null }));
+        assert_eq!(get["result"], json!({ "result": {"snapshot": null} }));
 
         let list = service
             .handle_acp_payload(&request_payload(
@@ -3433,7 +3473,7 @@ mod tests {
             ))
             .await;
         let list = parse_response(list.response.as_deref().expect("response line"));
-        assert_eq!(list["result"], json!({ "subagents": [] }));
+        assert_eq!(list["result"], json!({ "result": {"subagents": []} }));
 
         let cancel = service
             .handle_acp_payload(&request_payload(
@@ -3443,13 +3483,41 @@ mod tests {
             .await;
         let cancel = parse_response(cancel.response.as_deref().expect("response line"));
         assert_eq!(
-            cancel["result"],
+            cancel["result"]["result"],
             json!({
                 "subagentId": "child-1",
                 "cancelled": false,
                 "outcome": { "kind": "not_found" },
             })
         );
+
+        // Stock get/cancel DTOs omit sessionId; their reach is limited to
+        // sessions registered on this connection, never an arbitrary ID.
+        for method in [SUBAGENT_GET_METHOD, SUBAGENT_CANCEL_METHOD] {
+            let dispatch = service
+                .handle_acp_payload(&request_payload(
+                    method,
+                    json!({"subagentId": "unknown-child"}),
+                ))
+                .await;
+            let response = parse_response(dispatch.response.as_deref().unwrap());
+            assert!(response.get("error").is_none(), "{response}");
+            assert!(response["result"].get("result").is_some());
+        }
+        for method in [
+            SUBAGENT_GET_METHOD,
+            SUBAGENT_LIST_RUNNING_METHOD,
+            SUBAGENT_CANCEL_METHOD,
+        ] {
+            let dispatch = service
+                .handle_acp_payload(&request_payload(
+                    method,
+                    json!({"sessionId": "not-registered", "subagentId": "child-1"}),
+                ))
+                .await;
+            let response = parse_response(dispatch.response.as_deref().unwrap());
+            assert_eq!(response["error"]["code"], -32602, "{response}");
+        }
 
         // No durable rows were fabricated by any rejected input: no
         // AgentRequest, no AgentMessage, no extra AgentSession beyond the

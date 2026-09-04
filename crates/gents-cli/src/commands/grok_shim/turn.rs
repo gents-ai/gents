@@ -56,7 +56,7 @@
 //! (advancing the request-local cursor only after a successful send), and
 //! delivers.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -67,8 +67,8 @@ use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 
 use super::projection::{
-    AsyncCommit, AsyncSendLine, CursorAdvance, ProjectionEngine, RequestCursor,
-    SessionUpdateChannel, UpdateTimestamps, SESSION_UPDATE_METHOD,
+    AsyncCommit, AsyncSendLine, CursorAdvance, NovelProjectionEvent, ProjectionEngine,
+    RequestCursor, SessionUpdateChannel, UpdateTimestamps, SESSION_UPDATE_METHOD,
 };
 use super::server::AcpOutbound;
 use crate::request_helpers::{
@@ -829,6 +829,7 @@ impl TurnManager {
                 cursor,
                 timing,
                 !continuing_autonomous,
+                0,
             )
             .await?;
             if !progress.completion_sent {
@@ -1534,6 +1535,7 @@ impl TurnManager {
                     cursor,
                     update_timing,
                     false,
+                    0,
                 )
                 .await
             {
@@ -1621,6 +1623,7 @@ impl TurnManager {
         cursor: &tokio::sync::Mutex<RequestCursor>,
         update_timing: &mut RequestUpdateTiming,
         include_notifications: bool,
+        descendant_depth: usize,
     ) -> Result<()> {
         let batch = {
             let mut cursor = cursor.lock().await;
@@ -1629,7 +1632,14 @@ impl TurnManager {
                 .await?
         };
         let mut deferred_notifications = false;
+        let mut child_finishes = Vec::new();
         for event in batch.events {
+            if event.payload.get("sessionUpdate").and_then(Value::as_str)
+                == Some("subagent_finished")
+            {
+                child_finishes.push(event);
+                continue;
+            }
             if !include_notifications
                 && event.payload.get("sessionUpdate").and_then(Value::as_str)
                     == Some("user_message_chunk")
@@ -1639,50 +1649,48 @@ impl TurnManager {
                 deferred_notifications = true;
                 continue;
             }
-            let session_for_lock = session_id.to_string();
-            let session_id = session_id.to_string();
-            // These are durable background-completion notices; ordinary
-            // user input is suppressed by the projector and echoed elsewhere.
-            // A wake prompt ID would make the pager hide the notice itself.
-            let prompt_id = if event.payload.get("sessionUpdate").and_then(Value::as_str)
-                == Some("user_message_chunk")
-            {
-                None
-            } else {
-                prompt_id.map(str::to_owned)
-            };
-            let method = event.method;
-            let payload = event.payload;
-            let timestamps =
-                update_timing.resolve(event.timing.as_ref(), chrono::Utc::now().timestamp_millis());
-            let commit = ProjectionCursorCommit {
+            self.send_projection_event(
+                session_id,
+                prompt_id,
+                event,
+                sender,
+                projections,
                 cursor,
-                advance: event.advance,
-            };
-            let notification = move |event_id: &str, total_tokens: u64| {
-                let meta = super::projection::stamp_update_meta(
-                    event_id,
-                    total_tokens,
-                    prompt_id.as_deref(),
-                    None,
-                    timestamps,
-                );
-                Ok(super::projection::session_notification_for_method(
-                    method,
-                    &session_id,
-                    payload,
-                    meta,
-                ))
-            };
-            projections
-                .session_updates()
-                .send_with_commit(
-                    &session_for_lock,
-                    notification,
-                    PromptSenderLine(sender),
-                    commit,
-                )
-                .await?;
+                update_timing,
+            )
+            .await?;
+        }
+        // The pager creates child panes on spawned and finalizes them on
+        // finished. Deliver their transcript/tools between those boundaries.
+        let deferred_children = self
+            .stream_readable_child_updates(
+                session_id,
+                request_id,
+                sender,
+                projections,
+                cursor,
+                descendant_depth,
+            )
+            .await?;
+        for event in child_finishes {
+            if event
+                .payload
+                .get("child_session_id")
+                .and_then(Value::as_str)
+                .is_some_and(|session| deferred_children.contains(session))
+            {
+                continue;
+            }
+            self.send_projection_event(
+                session_id,
+                prompt_id,
+                event,
+                sender,
+                projections,
+                cursor,
+                update_timing,
+            )
+            .await?;
         }
         // No-wire observations (tail resets/no-op commits) form the suffix
         // of the same delivery prefix. They become durable cursor state only
@@ -1701,6 +1709,217 @@ impl TurnManager {
             }
         }
         Ok(())
+    }
+
+    async fn send_projection_event(
+        &self,
+        session_id: &str,
+        prompt_id: Option<&str>,
+        event: NovelProjectionEvent,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+        cursor: &Mutex<RequestCursor>,
+        timing: &mut RequestUpdateTiming,
+    ) -> Result<()> {
+        let timestamps =
+            timing.resolve(event.timing.as_ref(), chrono::Utc::now().timestamp_millis());
+        let commit = ProjectionCursorCommit {
+            cursor,
+            advance: event.advance,
+        };
+        projections
+            .session_updates()
+            .send_with_commit(
+                session_id,
+                move |event_id, total_tokens| {
+                    let meta = super::projection::stamp_update_meta(
+                        event_id,
+                        total_tokens,
+                        prompt_id,
+                        None,
+                        timestamps,
+                    );
+                    Ok(super::projection::session_notification_for_method(
+                        event.method,
+                        session_id,
+                        event.payload,
+                        meta,
+                    ))
+                },
+                PromptSenderLine(sender),
+                commit,
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn stream_readable_child_updates(
+        &self,
+        parent_session_id: &str,
+        parent_request_id: &str,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+        parent_cursor: &Mutex<RequestCursor>,
+        depth: usize,
+    ) -> Result<BTreeSet<String>> {
+        let mut deferred = BTreeSet::new();
+        if depth >= gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH as usize {
+            return Ok(deferred);
+        }
+        let mut query = gents::DescendantQuery::direct(parent_request_id);
+        query.limit = gents::MAX_DESCENDANT_PAGE_LIMIT;
+        loop {
+            let page = gents::resolve_descendant_graph(
+                gents::DescendantGraphAccess::Local(&self.node),
+                &query,
+            )
+            .await?;
+            for child in page.edges.into_iter().filter(|edge| edge.readable()) {
+                let Some(session_id) = child.child_session_id.as_deref() else {
+                    continue;
+                };
+                if session_id == parent_session_id
+                    || !parent_cursor
+                        .lock()
+                        .await
+                        .subagent_spawn_was_delivered(session_id)
+                {
+                    continue;
+                }
+                for (request_id, started_at) in self
+                    .readable_child_session_requests(session_id, &child.child_request_id)
+                    .await?
+                {
+                    let progress = self
+                        .observed
+                        .lock()
+                        .await
+                        .entry((session_id.to_owned(), request_id.clone()))
+                        .or_insert_with(|| {
+                            Arc::new(Mutex::new(ObservedRequest::new(
+                                request_id.clone(),
+                                started_at,
+                                true,
+                            )))
+                        })
+                        .clone();
+                    // Ownership contention must defer the parent's finish too:
+                    // another sender may still be flushing the child's tail.
+                    let Ok(mut progress) = progress.try_lock() else {
+                        deferred.insert(session_id.to_owned());
+                        continue;
+                    };
+                    let terminal = self.request_stop_reason(&request_id).await?;
+                    if terminal.is_none() {
+                        deferred.insert(session_id.to_owned());
+                    }
+                    let ObservedRequest {
+                        cursor,
+                        token_high_water,
+                        timing,
+                        ..
+                    } = &mut *progress;
+                    Box::pin(self.stream_projection_updates(
+                        session_id,
+                        &request_id,
+                        None,
+                        sender,
+                        projections,
+                        token_high_water,
+                        cursor,
+                        timing,
+                        terminal.is_some(),
+                        depth + 1,
+                    ))
+                    .await?;
+                }
+            }
+            if !page.has_more {
+                break;
+            }
+            query.after = page.next_cursor;
+        }
+        Ok(deferred)
+    }
+
+    /// A canonical edge authorizes its child session, but not foreign
+    /// principal rows sharing that label. Followups must preserve the exact
+    /// child agent/requester identity, including absent requester identity.
+    async fn readable_child_session_requests(
+        &self,
+        session_id: &str,
+        child_request_id: &str,
+    ) -> Result<Vec<(String, i64)>> {
+        let response = self
+            .node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2)
+            {{ request_id session_id agent_did requester_did }} }}"#,
+                escape_graphql_string(child_request_id)
+            ))
+            .await;
+        ensure_no_errors(&response, "load canonical child session principal")?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .context("missing canonical child request rows")?;
+        let [owner] = rows.as_slice() else {
+            anyhow::bail!("canonical child request is missing or ambiguous")
+        };
+        let agent = owner
+            .get("agent_did")
+            .and_then(Value::as_str)
+            .filter(|id| !id.trim().is_empty())
+            .context("canonical child principal is missing")?;
+        anyhow::ensure!(
+            owner.get("session_id").and_then(Value::as_str) == Some(session_id),
+            "canonical child session changed"
+        );
+        let requester = owner.get("requester_did").and_then(Value::as_str);
+        let mut after = String::new();
+        let mut requests = Vec::new();
+        loop {
+            let response = self.node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
+                agent_did: {{ _eq: "{}" }}, request_id: {{ _gt: "{}" }} }}, order: {{ request_id: ASC }}, limit: 128)
+                {{ request_id requester_did created_at }} }}"#,
+                escape_graphql_string(session_id), escape_graphql_string(agent), escape_graphql_string(&after))).await;
+            ensure_no_errors(&response, "discover readable child session requests")?;
+            let rows = response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .and_then(Value::as_array)
+                .context("missing child session request rows")?;
+            for row in rows {
+                if row.get("requester_did").and_then(Value::as_str) != requester {
+                    continue;
+                }
+                let id = row
+                    .get("request_id")
+                    .and_then(Value::as_str)
+                    .context("child session request missing ID")?;
+                let started_at = row
+                    .get("created_at")
+                    .and_then(Value::as_str)
+                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                    .map(|value| value.timestamp_millis())
+                    .unwrap_or(0);
+                requests.push((id.to_owned(), started_at));
+            }
+            if rows.len() < 128 {
+                break;
+            }
+            after = rows
+                .last()
+                .and_then(|row| row.get("request_id"))
+                .and_then(Value::as_str)
+                .context("child session discovery missing pagination ID")?
+                .to_owned();
+        }
+        requests.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        Ok(requests)
     }
 
     /// Query the durable request's terminal state and project a `stopReason`.
@@ -3153,6 +3372,161 @@ mod tests {
         assert!(manager.autonomous_delivery.lock().await.is_empty());
     }
 
+    #[tokio::test]
+    async fn child_pane_streams_followups_before_finish_and_excludes_foreign_requester() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let manager = TurnManager::new(node.clone(), test_config(String::new(), &agent_did));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+        let response = node
+            .execute(
+                r#"mutation { create_AgentRequest(input: {
+            request_id: "pane-root", session_id: "session-1", agent_did: "did:test:grok-shim",
+            requester_did: "did:test:grok-shim", lifecycle_state: "processing"
+        }) { _docID } }"#,
+            )
+            .await;
+        ensure_no_errors(&response, "seed pane root").unwrap();
+        seed_tool_call(
+            &node,
+            "pane-root",
+            "call-1",
+            "spawn_subagent",
+            "running",
+            "",
+            Some("pane-child"),
+        )
+        .await;
+        seed_child_request(&node, "pane-root", "pane-child", "processing").await;
+        for (id, requester, text) in [
+            ("pane-child", None, "Original child output"),
+            ("pane-followup", None, "Steered child output"),
+            ("pane-foreign", Some("did:foreign"), "MUST NOT LEAK"),
+        ] {
+            if id != "pane-child" {
+                let requester = requester
+                    .map(|did| format!("requester_did: \"{did}\""))
+                    .unwrap_or_default();
+                let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+                    request_id: "{id}", session_id: "session-1-child", agent_did: "did:test:grok-shim",
+                    {requester}, lifecycle_state: "processing"
+                }}) {{ _docID }} }}"#)).await;
+                ensure_no_errors(&response, "seed child followup").unwrap();
+            }
+            let content = escape_graphql_string(
+                &serde_json::to_string(&gents_protocol::message::Message::assistant(text)).unwrap(),
+            );
+            let response = node.execute(&format!(r#"mutation {{ create_AgentMessage(input: {{
+                message_key: "{id}:1", request_id: "{id}", session_id: "session-1-child",
+                agent_did: "did:test:grok-shim", sequence: 1, role: "assistant", content: "{content}"
+            }}) {{ _docID }} }}"#)).await;
+            ensure_no_errors(&response, "seed child transcript").unwrap();
+        }
+        let response = node
+            .execute(
+                r#"mutation { create_AgentToolCall(input: {
+            tool_call_key: "session-1-child:child-bash", tool_call_id: "child-bash",
+            request_id: "pane-child", session_id: "session-1-child",
+            agent_did: "did:test:grok-shim", tool_name: "bash", lifecycle_state: "running"
+        }) { _docID } }"#,
+            )
+            .await;
+        ensure_no_errors(&response, "scope child tool").unwrap();
+        let cursor = Mutex::new(RequestCursor::new());
+        let mut tokens = 0;
+        let mut timing = RequestUpdateTiming::new(0);
+        manager
+            .stream_projection_updates(
+                "session-1",
+                "pane-root",
+                Some("parent-prompt"),
+                &sender,
+                &engine,
+                &mut tokens,
+                &cursor,
+                &mut timing,
+                false,
+                0,
+            )
+            .await
+            .unwrap();
+        complete_child_request(&node, "pane-child").await;
+        complete_tool_call(&node, "child-bash", "child tool done").await;
+        complete_tool_call(&node, "call-1", "done").await;
+        manager
+            .stream_projection_updates(
+                "session-1",
+                "pane-root",
+                None,
+                &sender,
+                &engine,
+                &mut tokens,
+                &cursor,
+                &mut timing,
+                true,
+                0,
+            )
+            .await
+            .unwrap();
+        assert!(!buffered_update_kinds(&buffer)
+            .await
+            .iter()
+            .any(|kind| kind == "subagent_finished"));
+        complete_child_request(&node, "pane-followup").await;
+        manager
+            .stream_projection_updates(
+                "session-1",
+                "pane-root",
+                None,
+                &sender,
+                &engine,
+                &mut tokens,
+                &cursor,
+                &mut timing,
+                true,
+                0,
+            )
+            .await
+            .unwrap();
+        let updates = parse_buffered_updates(&buffer).await;
+        let position = |kind: &str| {
+            updates
+                .iter()
+                .position(|row| row["params"]["update"]["sessionUpdate"] == kind)
+                .unwrap()
+        };
+        let spawned = position("subagent_spawned");
+        let finished = position("subagent_finished");
+        let child_tools: Vec<_> = updates
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| {
+                row["params"]["sessionId"] == "session-1-child"
+                    && row["params"]["update"]["toolCallId"] == "child-bash"
+            })
+            .collect();
+        assert!(
+            !child_tools.is_empty(),
+            "child pane receives native tool frames"
+        );
+        assert!(child_tools
+            .iter()
+            .all(|(index, _)| spawned < *index && *index < finished));
+        for text in ["Original child output", "Steered child output"] {
+            let matches: Vec<_> = updates
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row["params"]["update"]["content"]["text"] == text)
+                .collect();
+            assert_eq!(matches.len(), 1, "child cursor must not replay {text}");
+            assert!(spawned < matches[0].0 && matches[0].0 < finished);
+            assert_eq!(matches[0].1["params"]["sessionId"], "session-1-child");
+        }
+        assert!(!updates
+            .iter()
+            .any(|row| row.to_string().contains("MUST NOT LEAK")));
+    }
+
     /// Foreground completion transfers its exact cursor; late tool updates
     /// and durable wake results remain visible without replaying old output.
     #[tokio::test]
@@ -3269,13 +3643,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!parse_buffered_updates(&buffer)
-            .await
-            .iter()
-            .any(|event| event
+        assert!(!parse_buffered_updates(&buffer).await.iter().any(|event| {
+            event
                 .pointer("/params/update/content/text")
                 .and_then(Value::as_str)
-                == Some("Background work finished.")));
+                == Some("Background work finished.")
+        }));
         drop(response_delivery);
         for _ in 0..2 {
             manager
@@ -3346,10 +3719,12 @@ mod tests {
             completion["params"]["_meta"]["promptId"],
             format!("notifications-{wake}")
         );
-        assert!(updates[..completion_index].iter().any(|event| event
-            .pointer("/params/update/content/text")
-            .and_then(Value::as_str)
-            == Some("Background work finished.")));
+        assert!(updates[..completion_index].iter().any(|event| {
+            event
+                .pointer("/params/update/content/text")
+                .and_then(Value::as_str)
+                == Some("Background work finished.")
+        }));
 
         manager
             .observe_session("session-1", sender.clone(), engine.clone())

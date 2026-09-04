@@ -2,6 +2,7 @@
 
 mod buffer;
 pub(crate) mod r4c_args;
+pub(crate) mod subagent_control;
 mod transcript_render;
 
 use std::collections::{HashMap, HashSet};
@@ -15,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::descendant_graph::{
-    resolve_descendant_edge, resolve_descendant_graph, resolve_descendant_root_request_id,
+    resolve_descendant_edge, resolve_session_descendant_edge, resolve_session_descendant_graph,
     DescendantGraphAccess, DescendantQuery,
 };
 pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_AUTHORIZATION};
@@ -508,13 +509,10 @@ pub async fn handle_list_subagents(
     args: ListSubagentsArgs,
 ) -> Result<ListSubagentsResponse> {
     let limit = args.validated_limit() as usize;
-    let root_request_id =
-        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
-            .await?;
-    let page = resolve_descendant_graph(
+    let page = resolve_session_descendant_graph(
         DescendantGraphAccess::Local(node),
         &DescendantQuery {
-            root_request_id,
+            root_request_id: caller_request_id.to_owned(),
             scope: args.scope,
             after: args.after.clone(),
             limit: crate::descendant_graph::MAX_DESCENDANT_PAGE_LIMIT,
@@ -686,12 +684,9 @@ pub async fn handle_read_subagent(
     args: ReadSubagentArgs,
 ) -> Result<Option<ReadSubagentResponse>> {
     let child_request_id = args.child_request_id.trim();
-    let root_request_id =
-        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
-            .await?;
-    let Some(canonical_edge) = resolve_descendant_edge(
+    let Some(canonical_edge) = resolve_session_descendant_edge(
         DescendantGraphAccess::Local(node),
-        &root_request_id,
+        caller_request_id,
         child_request_id,
     )
     .await?
@@ -1142,12 +1137,9 @@ pub async fn load_steer_subagent_target(
     if child_request_id.trim().is_empty() {
         return Ok(SteerSubagentTarget::NotAuthorized);
     }
-    let root_request_id =
-        resolve_descendant_root_request_id(DescendantGraphAccess::Local(node), caller_request_id)
-            .await?;
-    let Some(canonical) = resolve_descendant_edge(
+    let Some(canonical) = resolve_session_descendant_edge(
         DescendantGraphAccess::Local(node),
-        &root_request_id,
+        caller_request_id,
         child_request_id,
     )
     .await?
