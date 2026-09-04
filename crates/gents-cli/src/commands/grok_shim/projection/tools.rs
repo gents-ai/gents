@@ -27,6 +27,17 @@
 //! - orphan `tool_call_update` values arriving before their `tool_call` are
 //!   merged into the pending base by `toolCallId` on arrival.
 //!
+//! Streaming bash output deltas: while a call is still running, the runtime
+//! flushes a bounded `partial_output_tail` (the last bytes of the combined
+//! stream, lossily decoded when persisted) onto the `AgentToolCall` row. A
+//! running row with no durable result projects that tail as its
+//! `rawOutput` — a streaming window, never replayed from scratch or
+//! duplicated as durable materialization — decoded with incremental UTF-8
+//! semantics: the longest valid UTF-8 prefix is emitted and a trailing
+//! replacement character that stands for an incomplete final sequence is
+//! held back until the next flush proves it terminal (terminal rows keep
+//! it).
+//!
 //! Terminal ACP client methods `terminal/create`, `terminal/output`,
 //! `terminal/wait_for_exit`, `terminal/kill`, and `terminal/release` remain
 //! explicit shaped unsupported results: the shim registers
@@ -81,6 +92,12 @@ pub(super) const TOOL_META_KIND_ACTIVE_AGENT_MESSAGE: &str = "ActiveAgentMessage
 /// Title the pager falls back to when recognizing
 /// `send_subagent_message` without canonical meta.
 pub(super) const SEND_SUBAGENT_MESSAGE_TITLE: &str = "send_subagent_message";
+
+/// The replacement character the runtime's lossy UTF-8 persistence of a
+/// live-output tail uses for bytes that did not yet decode: a running
+/// row's trailing one stands for an incomplete final sequence the next
+/// flush completes, so the streaming window holds it back.
+const REPLACEMENT_CHARACTER: char = '\u{FFFD}';
 
 /// Grok pager tool-call kinds, mapped from durable tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,6 +210,12 @@ pub(super) struct ToolCallRow {
     /// projection engine's merged emission order.
     #[serde(default)]
     message_sequence: Option<i64>,
+    /// Bounded live-output tail the runtime flushes onto a running row
+    /// (`hook.rs::flush_live_output_tails`): the last bytes of the combined
+    /// stream, persisted lossily decoded. Empty for rows with no live
+    /// output yet.
+    #[serde(default)]
+    partial_output_tail: Option<String>,
 }
 
 /// One durable `AgentToolResult` conversation audit row for the projected
@@ -219,6 +242,7 @@ const TOOL_CALL_FIELDS: &str = r#"
     tool_failure_class
     await_mode
     message_sequence
+    partial_output_tail
 "#;
 
 const TOOL_RESULT_FIELDS: &str = r#"
@@ -468,7 +492,7 @@ fn tool_call_row_sort_key(row: &ToolCallRow) -> (i64, String) {
 /// produces never leak into the projected wire order: this stable sort
 /// is the single ordering authority for the family.
 fn sort_tool_call_rows(rows: &mut [ToolCallRow]) {
-    rows.sort_by(|a, b| tool_call_row_sort_key(a).cmp(&tool_call_row_sort_key(b)));
+    rows.sort_by_key(tool_call_row_sort_key);
 }
 
 /// Pure projection over decoded rows; unit-testable without a node.
@@ -483,6 +507,10 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
     let mut ordered = rows.to_vec();
     sort_tool_call_rows(&mut ordered);
 
+    // Streaming windows owned across the loop so `result_text` can borrow
+    // them; one entry per row that needed the live-output fallback.
+    let mut live_windows: Vec<String> = Vec::new();
+
     for row in &ordered {
         let Some(tool_call_id) = row.tool_call_key_tool_call_id() else {
             continue;
@@ -493,7 +521,20 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
             .and_then(nonempty)
             .unwrap_or_default();
         let args = row.args.as_deref().and_then(nonempty).unwrap_or("");
-        let result_text = effective_result_text(row, results);
+        // Streaming first: a running row with no durable result text yet
+        // projects its live output window, so bash output deltas stream
+        // through `rawOutput` instead of appearing only at terminalization.
+        let durable_result = effective_result_text(row, results);
+        let result_text: &str = if durable_result.is_empty() {
+            if let Some(window) = live_output_window(row) {
+                live_windows.push(window);
+                live_windows.last().expect("just pushed").as_str()
+            } else {
+                ""
+            }
+        } else {
+            durable_result
+        };
         // The `meta` envelope: the canonical `x.ai/tool` entry decoded from
         // the recorded args, with a `subagentBackground` boolean sibling
         // merged from the row's persisted `await_mode` (the exact value
@@ -546,7 +587,7 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
 
     if !updates.is_empty() {
         updates.push(ToolUpdate::AvailableCommands(AvailableCommandsUpdate {
-            tools: available_commands(&rows),
+            tools: available_commands(rows),
         }));
         // The available-commands bookkeeping is positionless: it sorts after
         // every positioned tool event of the family.
@@ -598,7 +639,9 @@ impl ToolCallRow {
 /// by `tool_call_doc_id` — the audit row names the exact `AgentToolCall`
 /// document it spilled for, so two same-name calls never borrow each other's
 /// output. The association is only ever an output source, never a status
-/// override.
+/// override. When neither durable source has text, a still-streaming row
+/// falls back to its live output window (see [`live_output_window`]), which
+/// is *not* trimmed: trailing whitespace is meaningful shell output.
 fn effective_result_text<'a>(row: &'a ToolCallRow, results: &'a [ToolResultRow]) -> &'a str {
     if let Some(result) = row.result.as_deref().and_then(nonempty) {
         return result;
@@ -616,6 +659,40 @@ fn effective_result_text<'a>(row: &'a ToolCallRow, results: &'a [ToolResultRow])
                 .and_then(nonempty)
         })
         .unwrap_or("")
+}
+
+/// The streaming live-output window of one tool row, when the durable
+/// result sources have no text yet.
+///
+/// While a call runs, the runtime flushes a bounded tail of the combined
+/// stdout/stderr bytes onto the row (`partial_output_tail`) so the pager's
+/// bash output streams through `rawOutput` instead of appearing only at
+/// terminalization. The window is a streaming view, never a durable
+/// materialization: it is decoded incrementally — the longest valid UTF-8
+/// prefix is emitted, and a trailing replacement character that stands for
+/// an incomplete final sequence is held back while the row is still
+/// running (the next flush or the durable result completes it). A terminal
+/// row's tail is kept verbatim: its stream is finished, so a replacement
+/// character is genuine decoded data, not a pending sequence.
+fn live_output_window(row: &ToolCallRow) -> Option<String> {
+    let tail = row.partial_output_tail.as_deref()?;
+    // Whitespace is meaningful shell output (trailing newlines are real
+    // stream content), so the window is not trimmed — only a blank tail is
+    // rejected.
+    if tail.trim().is_empty() {
+        return None;
+    }
+    if observed_status(row).is_completed() {
+        return Some(tail.to_string());
+    }
+    let mut decoded = tail.to_string();
+    if decoded.ends_with(REPLACEMENT_CHARACTER) {
+        decoded.pop();
+    }
+    if decoded.trim().is_empty() {
+        return None;
+    }
+    Some(decoded)
 }
 
 /// The authoritative observed lifecycle status of one tool row. The durable
@@ -968,6 +1045,7 @@ mod tests {
             tool_failure_class: None,
             await_mode: None,
             message_sequence: None,
+            partial_output_tail: None,
         }
     }
 
@@ -1427,6 +1505,181 @@ mod tests {
             panic!("first update should be a tool_call");
         };
         assert_eq!(call.tool_call_id, "call-bash");
+    }
+
+    #[test]
+    fn running_row_with_no_durable_result_streams_live_output_window() {
+        // While a bash call runs, the runtime flushes a bounded
+        // `partial_output_tail` onto the row; the projection surfaces it as
+        // the call's `rawOutput` so output streams through the pager
+        // instead of appearing only at terminalization.
+        let mut row = tool_row("bash", Some("running"));
+        row.result = None;
+        row.partial_output_tail = Some("streaming line one\n".to_string());
+        let projection = project_tool_rows(&[row], &[]);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(call.status, ToolCallStatus::InProgress);
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("streaming line one"),
+            "the live tail streams as rawOutput while the call runs (payload rendering trims, as for a durable result)"
+        );
+        assert_eq!(
+            call.content
+                .first()
+                .and_then(|block| block.get("text"))
+                .and_then(Value::as_str),
+            Some("streaming line one"),
+            "the live tail is also the call's content block"
+        );
+    }
+
+    #[test]
+    fn running_row_streams_incremental_growth_not_replay() {
+        // Two successive live flushes grow the tail monotonically. The
+        // projection is a pure function of the row, so each projection pass
+        // emits the current window; the projection engine's cursor diffs
+        // `rawOutput` and streams only the delta to the pager. The window
+        // itself must be the row's tail, never a replay of a durable
+        // materialization.
+        let mut row = tool_row("bash", Some("running"));
+        row.result = None;
+        row.partial_output_tail = Some("first".to_string());
+        let first = project_tool_rows(&[row.clone()], &[]);
+        row.partial_output_tail = Some("first second".to_string());
+        let second = project_tool_rows(&[row], &[]);
+        let window = |projection: &ToolProjection| {
+            projection
+                .updates
+                .iter()
+                .find_map(|update| match update {
+                    ToolUpdate::ToolCall(call) => call.raw_output.as_ref().map(|output| {
+                        output
+                            .get("output")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string()
+                    }),
+                    _ => None,
+                })
+                .expect("a running row with a tail projects rawOutput")
+        };
+        assert_eq!(window(&first), "first");
+        assert_eq!(window(&second), "first second");
+    }
+
+    #[test]
+    fn running_row_holds_back_a_trailing_incomplete_utf8_sequence() {
+        // The runtime persists the tail lossily: an incomplete final
+        // multibyte sequence becomes a trailing replacement character. On a
+        // running row that trailing replacement is a placeholder for bytes
+        // the next flush completes, so the streaming window holds it back;
+        // the next projection pass (with the completed sequence) streams
+        // the full character.
+        let mut row = tool_row("bash", Some("running"));
+        row.result = None;
+        let mut split_tail = "counter: 3 ".to_string();
+        split_tail.push(REPLACEMENT_CHARACTER);
+        row.partial_output_tail = Some(split_tail);
+        let held = project_tool_rows(&[row.clone()], &[]);
+        let ToolUpdate::ToolCall(call) = &held.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("counter: 3"),
+            "incremental decoding streams the longest valid prefix and holds back only the pending sequence"
+        );
+
+        row.partial_output_tail = Some("counter: 3 ✅".to_string());
+        let complete = project_tool_rows(&[row], &[]);
+        let ToolUpdate::ToolCall(call) = &complete.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("counter: 3 ✅"),
+            "the completed sequence streams whole once flushed"
+        );
+    }
+
+    #[test]
+    fn terminal_row_keeps_a_trailing_replacement_character() {
+        // A terminal row's stream is finished: a replacement character in
+        // the tail is genuine decoded data (lossy persistence of invalid
+        // bytes), not a pending sequence, so it is kept verbatim.
+        let mut row = tool_row("bash", Some("completed"));
+        row.result = None;
+        let mut tail = "done ".to_string();
+        tail.push(REPLACEMENT_CHARACTER);
+        row.partial_output_tail = Some(tail);
+        let projection = project_tool_rows(&[row], &[]);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        let mut expected = "done ".to_string();
+        expected.push(REPLACEMENT_CHARACTER);
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some(expected.as_str()),
+            "a terminal row keeps its genuine lossy decoding"
+        );
+    }
+
+    #[test]
+    fn durable_result_always_beats_the_live_window() {
+        // Once a durable result exists it is authoritative: the live window
+        // never overrides or duplicates it.
+        let mut row = tool_row("bash", Some("completed"));
+        row.partial_output_tail = Some("stale streaming tail".to_string());
+        let projection = project_tool_rows(&[row], &[]);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("gents-subprocess-probe"),
+            "the durable result wins"
+        );
+    }
+
+    #[test]
+    fn durable_spill_also_beats_the_live_window() {
+        let mut row = tool_row("bash", Some("running"));
+        row.result = None;
+        row.partial_output_tail = Some("stale streaming tail".to_string());
+        let results = vec![ToolResultRow {
+            tool_call_doc_id: "doc-bash".to_string(),
+            output_text: Some("spilled durable output".to_string()),
+        }];
+        let projection = project_tool_rows(&[row], &results);
+        let ToolUpdate::ToolCall(call) = &projection.updates[0] else {
+            panic!("first update should be a tool_call");
+        };
+        assert_eq!(
+            call.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("spilled durable output")
+        );
     }
 
     #[test]
@@ -2056,5 +2309,112 @@ mod tests {
             })
             .expect("terminal call emits a same-id tool_call_update");
         assert_eq!(update.fields["status"], "completed");
+    }
+
+    /// The embedded-node live-flush regression, mirroring the runtime's
+    /// `hook.rs::flush_live_output_tails`: a running bash row receives a
+    /// bounded `partial_output_tail` through the exact production update
+    /// mutation, the full production path streams it as `rawOutput`, and a
+    /// terminalization with a durable result replaces the window (the live
+    /// window is streaming evidence, never durable materialization).
+    #[tokio::test]
+    async fn embedded_live_output_tail_streams_then_durable_result_replaces_it() {
+        let (_dir, node) = embedded_node().await;
+        let session_id = "s-embedded-live";
+        let request_id = "req-embedded-live";
+
+        let seed_calls = r#"mutation {
+            live: create_AgentToolCall(input: {
+                    tool_call_key: "s-embedded-live:call-live"
+                    request_id: "req-embedded-live"
+                    session_id: "s-embedded-live"
+                    agent_did: "did:test:grok-shim"
+                    requester_did: "did:test:grok-shim"
+                    tool_call_id: "call-live"
+                    tool_name: "bash"
+                    lifecycle_state: "running"
+                    status: "running"
+                    args: "{\"command\":\"echo gents-subprocess-probe\"}"
+                    result: ""
+                    message_sequence: 1
+                    started_at: "2026-08-31T23:10:01Z"
+            }) { _docID }
+        }"#
+        .to_string();
+        let response = node.execute(&seed_calls).await;
+        assert!(
+            !response.has_errors(),
+            "seed call failed: {:?}",
+            response.errors
+        );
+
+        // Mirror `flush_live_output_tails`: the runtime stamps the bounded
+        // tail plus the monotonic byte sequence on the still-running row.
+        let live_flush = r#"mutation {
+            update_AgentToolCall(
+                filter: { tool_call_id: { _eq: "call-live" } },
+                input: {
+                    partial_output_tail: "streaming probe\n"
+                }
+            ) { _docID }
+        }"#
+        .to_string();
+        let response = node.execute(&live_flush).await;
+        assert!(
+            !response.has_errors(),
+            "live flush failed: {:?}",
+            response.errors
+        );
+
+        // The production path streams the window while the call runs.
+        let projection = project_tools(&node, request_id, session_id)
+            .await
+            .expect("live projection");
+        let live = call_for(&projection, "call-live");
+        assert_eq!(live.status, ToolCallStatus::InProgress);
+        assert_eq!(
+            live.raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("streaming probe"),
+            "the live tail streams through rawOutput while the call runs"
+        );
+
+        // Terminalization: the durable result replaces the window; the
+        // projection must not duplicate or replay the streaming evidence.
+        let mutation = r#"mutation {
+            update_AgentToolCall(
+                filter: { tool_call_id: { _eq: "call-live" } },
+                input: {
+                    lifecycle_state: "completed"
+                    status: "completed"
+                    result: "gents-subprocess-probe"
+                    partial_output_tail: ""
+                }
+            ) { _docID }
+        }"#
+        .to_string();
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "terminal update failed: {:?}",
+            response.errors
+        );
+
+        let reprojection = project_tools(&node, request_id, session_id)
+            .await
+            .expect("terminal projection");
+        let terminal = call_for(&reprojection, "call-live");
+        assert_eq!(terminal.status, ToolCallStatus::Completed);
+        assert_eq!(
+            terminal
+                .raw_output
+                .as_ref()
+                .and_then(|output| output.get("output"))
+                .and_then(Value::as_str),
+            Some("gents-subprocess-probe"),
+            "the durable result replaces the live window at terminalization"
+        );
     }
 }
