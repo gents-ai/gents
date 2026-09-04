@@ -88,7 +88,8 @@ pub(crate) async fn enqueue_goal_continuation(
     // lookup below only needs a fingerprint of the pre-signature fields.
     let mut create = build_request(spec)?;
     let expected = crate::goal::GoalBackedRequestFingerprint::from_create(&create)?;
-    if let Some(doc_id) = lookup_goal_continuation_by_retry_key(node, &retry_key, &expected).await?
+    if let Some(doc_id) =
+        crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await?
     {
         return Ok(EnqueuedAgentRequest {
             doc_id,
@@ -103,13 +104,15 @@ pub(crate) async fn enqueue_goal_continuation(
     let doc_id = match response {
         Ok(response) => match extract_single_doc_id(&response, "create_AgentRequest") {
             Some(doc_id) => Some(doc_id),
-            None => lookup_goal_continuation_by_retry_key(node, &retry_key, &expected).await?,
+            None => {
+                crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await?
+            }
         },
         Err(create_error) => {
             // `retry_key` is unique. A concurrent reconciler or a lost create
             // acknowledgement therefore resolves to the same durable child.
             // Only surface the original error when no such child exists.
-            match lookup_goal_continuation_by_retry_key(node, &retry_key, &expected).await? {
+            match crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await? {
                 Some(doc_id) => Some(doc_id),
                 None => return Err(create_error),
             }
@@ -122,50 +125,6 @@ pub(crate) async fn enqueue_goal_continuation(
         request_id,
         session_id: parent.session_id.clone(),
     })
-}
-
-async fn lookup_goal_continuation_by_retry_key(
-    node: &EmbeddedNode,
-    retry_key: &str,
-    expected: &crate::goal::GoalBackedRequestFingerprint,
-) -> Result<Option<String>> {
-    let retry_key = crate::graphql::escape_graphql_string(retry_key);
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{retry_key}" }} }}, limit: 2) {{
-            _docID {}
-        }} }}"#,
-        crate::goal::GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS,
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "lookup goal continuation by retry key failed: {:?}",
-            response.errors
-        );
-    }
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    anyhow::ensure!(rows.len() <= 1, "goal continuation retry key is not unique");
-    let Some(row) = rows.first() else {
-        return Ok(None);
-    };
-    let persisted: crate::goal::GoalBackedRequestFingerprint = serde_json::from_value(row.clone())
-        .context("decoding existing goal continuation fingerprint")?;
-    anyhow::ensure!(
-        persisted == *expected,
-        "goal continuation retry key conflicts with different immutable lineage"
-    );
-    Ok(Some(
-        row.get("_docID")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string)
-            .context("goal continuation has no document ID")?,
-    ))
 }
 
 // SAFETY (#664): `agent_did` scopes the candidate query AND the supersede

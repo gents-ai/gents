@@ -1509,29 +1509,65 @@ fn goal_backed_request_recovery_query(
     ))
 }
 
-fn decode_goal_backed_request_recovery(
+/// Decode the `AgentRequest` rows from a retry-key lookup, matching the
+/// unique row (if any) against `expected`. Fails closed if the retry key is
+/// not unique or if the persisted row's immutable fields differ from
+/// `expected`. Returns the row's document id if a matching row exists,
+/// `None` if none exists yet.
+fn decode_agent_request_by_retry_key(
+    rows: &[serde_json::Value],
+    expected: &GoalBackedRequestFingerprint,
+) -> Result<Option<String>> {
+    anyhow::ensure!(rows.len() <= 1, "AgentRequest retry key is not unique");
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let persisted: GoalBackedRequestFingerprint =
+        serde_json::from_value(row.clone()).context("decoding AgentRequest fingerprint")?;
+    anyhow::ensure!(
+        persisted == *expected,
+        "AgentRequest retry key conflicts with a different immutable request"
+    );
+    row.get("_docID")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .context("AgentRequest matched by retry key has no document ID")
+        .map(Some)
+}
+
+/// Query one `AgentRequest` by `retry_key`, decode it into a
+/// `GoalBackedRequestFingerprint`, and compare it against `expected`.
+/// Shared by goal creation/continuation recovery, both of which query an
+/// `AgentRequest` by its unique `retry_key` and need the same fail-closed
+/// uniqueness and immutable-field checks before trusting an existing row.
+pub(crate) async fn load_agent_request_by_retry_key(
+    node: &EmbeddedNode,
+    retry_key: &str,
+    expected: &GoalBackedRequestFingerprint,
+) -> Result<Option<String>> {
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
+            _docID {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
+        }} }}"#,
+        escape_graphql_string(retry_key),
+    );
+    let response =
+        graphql_with_transaction_retry(node, &query, "load AgentRequest by retry key").await?;
+    decode_agent_request_by_retry_key(&rows(&response, "AgentRequest")?, expected)
+}
+
+/// Verify that the durable `Goal`/`GoalCreationClaim` rows in `response`
+/// match the goal a goal-backed request is meant to belong to. Separate
+/// from the `AgentRequest` retry-key match above: an existing request row
+/// only proves the request was staged, not that it landed on the goal this
+/// caller expects.
+fn verify_goal_creation_claim_cross_check(
     response: &serde_json::Value,
     agent_did: &str,
     session_id: &str,
     objective: &str,
     token_budget: Option<i64>,
-    request: &gents_protocol::request_admission::AgentRequestCreate,
-) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
-    let rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(serde_json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    anyhow::ensure!(rows.len() <= 1, "goal request retry key is not unique");
-    let Some(row) = rows.first() else {
-        return Ok(None);
-    };
-    let persisted: GoalBackedRequestFingerprint =
-        serde_json::from_value(row.clone()).context("decoding goal-backed request fingerprint")?;
-    anyhow::ensure!(
-        persisted == GoalBackedRequestFingerprint::from_create(request)?,
-        "goal request retry key conflicts with different immutable request fields"
-    );
+) -> Result<()> {
     let expected_claim = GoalCreationFingerprint {
         owner: agent_did.to_string(),
         session: session_id.to_string(),
@@ -1595,11 +1631,33 @@ fn decode_goal_backed_request_recovery(
             && claim == expected_claim,
         "goal-backed request conflicts with its durable goal claim"
     );
-    let doc_id = row
-        .get("_docID")
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string)
-        .context("goal-backed request has no document ID")?;
+    Ok(())
+}
+
+fn decode_goal_backed_request_recovery(
+    response: &serde_json::Value,
+    agent_did: &str,
+    session_id: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let expected = GoalBackedRequestFingerprint::from_create(request)?;
+    let Some(doc_id) = decode_agent_request_by_retry_key(&rows, &expected)? else {
+        return Ok(None);
+    };
+    verify_goal_creation_claim_cross_check(
+        response,
+        agent_did,
+        session_id,
+        objective,
+        token_budget,
+    )?;
     Ok(Some(crate::lifecycle::materialize::EnqueuedAgentRequest {
         doc_id,
         request_id: request.request_id.clone(),
@@ -1627,6 +1685,23 @@ async fn load_goal_backed_request_by_retry_key_from_access(
     )
 }
 
+fn goal_creation_claim_recovery_query(agent_did: &str, session_id: &str) -> String {
+    format!(
+        r#"{{
+            Goal(
+                filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
+                order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
+            ) {{ {GOAL_FIELDS} }}
+            GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
+                goal_id agent_did session_id objective token_budget
+            }}
+        }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(session_id),
+        escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id)),
+    )
+}
+
 async fn load_goal_backed_request_by_retry_key(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -1635,21 +1710,33 @@ async fn load_goal_backed_request_by_retry_key(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<Option<crate::lifecycle::materialize::EnqueuedAgentRequest>> {
-    let query = goal_backed_request_recovery_query(agent_did, session_id, request)?;
+    let retry_key = request
+        .retry_key
+        .as_deref()
+        .context("goal-backed request requires a stable retry_key")?;
+    let expected = GoalBackedRequestFingerprint::from_create(request)?;
+    let Some(doc_id) = load_agent_request_by_retry_key(node, retry_key, &expected).await? else {
+        return Ok(None);
+    };
+    let query = goal_creation_claim_recovery_query(agent_did, session_id);
     let response =
-        graphql_with_transaction_retry(node, &query, "load goal-backed request by retry key")
+        graphql_with_transaction_retry(node, &query, "load goal-backed request creation claim")
             .await?;
     let response = serde_json::json!({
         "data": response.data.unwrap_or(serde_json::Value::Null),
     });
-    decode_goal_backed_request_recovery(
+    verify_goal_creation_claim_cross_check(
         &response,
         agent_did,
         session_id,
         objective,
         token_budget,
-        request,
-    )
+    )?;
+    Ok(Some(crate::lifecycle::materialize::EnqueuedAgentRequest {
+        doc_id,
+        request_id: request.request_id.clone(),
+        session_id: request.session_id.clone(),
+    }))
 }
 
 /// Embedded-runtime counterpart of [`submit_goal_backed_request`].
