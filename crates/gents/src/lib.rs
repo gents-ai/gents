@@ -151,6 +151,9 @@ pub use adapter_projection::{
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
 pub use admission::BackendAdmissionConfig;
+pub use admission::{
+    call_state_holds_backend_slot, reconstructed_running_slot_count, InferenceCallSlotRow,
+};
 pub use admission::{document_available_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,

@@ -5,7 +5,6 @@ mod permit;
 mod persistence;
 mod recovery;
 mod registry;
-#[cfg(test)]
 mod slot_accounting;
 pub(crate) mod stream_guard;
 
@@ -19,6 +18,9 @@ pub(crate) use config::BackendAvailability;
 pub use config::{document_available_from_fields, BackendAdmissionConfig};
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
+pub use slot_accounting::{
+    call_state_holds_backend_slot, reconstructed_running_slot_count, InferenceCallSlotRow,
+};
 
 #[cfg(test)]
 mod tests;

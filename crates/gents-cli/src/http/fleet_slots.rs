@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use gents::{HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
+use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
+use gents_protocol::row::{
+    project_behavior_readiness_summary, AgentBehaviorReadinessRow, BehaviorReadinessState,
+    ProjectedBehaviorReadinessSummary,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -72,6 +76,8 @@ struct FleetSlotQueryEnvelope {
     calls: Vec<InferenceCallRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<RequestRow>,
+    #[serde(rename = "AgentBehaviorReadiness", default)]
+    behavior_readiness: Vec<AgentBehaviorReadinessRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -123,17 +129,16 @@ impl BackendRow {
         self.enabled.unwrap_or(false)
     }
 
-    fn normalized_probe_status(&self) -> String {
+    /// Raw operator-intent `probe_status` for display only — never a truth
+    /// source for admission (that's the readiness projection; see
+    /// `backend_admission_from_readiness`).
+    fn display_probe_status(&self) -> String {
         let probe_status = clean_optional_string(self.probe_status.as_deref());
         if probe_status.is_empty() {
             UNKNOWN_PROBE_STATUS.to_string()
         } else {
             probe_status
         }
-    }
-
-    fn accepting_admission(&self) -> bool {
-        self.is_enabled() && self.normalized_probe_status() == HEALTHY_PROBE_STATUS
     }
 
     fn max_concurrent(&self) -> i64 {
@@ -217,6 +222,11 @@ fn fleet_slot_snapshot_query() -> &'static str {
             behavior_id
             deadline
         }
+        AgentBehaviorReadiness(order: { agent_did: ASC }) {
+            agent_did
+            snapshot_json
+            updated_at
+        }
     }"#
 }
 
@@ -241,6 +251,22 @@ fn build_fleet_slot_snapshot(
             (!behavior_id.is_empty()).then_some((behavior_id, behavior))
         })
         .collect::<BTreeMap<_, _>>();
+
+    let readiness_by_agent = envelope
+        .behavior_readiness
+        .into_iter()
+        .map(|row| (row.agent_did.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+
+    // Measured backend health is never persisted to `InferenceBackend`
+    // (#640), so out-of-process readers like this one cannot compute
+    // admission from that document's `enabled`/`probe_status` fields —
+    // only the runtime that owns the live `BackendHealthMap` can. The
+    // per-backend "accepting" flag instead comes from the readiness rows
+    // for behaviors bound to that backend, published by each behavior's
+    // own runtime.
+    let backend_accepting =
+        backend_admission_from_readiness(&behaviors, &readiness_by_agent, generated_at);
 
     let mut backend_counts = BTreeMap::<String, SlotCounts>::new();
     let mut behavior_counts = BTreeMap::<String, SlotCounts>::new();
@@ -289,15 +315,13 @@ fn build_fleet_slot_snapshot(
         let max_concurrent = configured
             .map(BackendRow::max_concurrent)
             .unwrap_or_default();
-        let accepting_admission = configured
-            .map(BackendRow::accepting_admission)
-            .unwrap_or(false);
+        let accepting_admission = backend_accepting.get(&backend_id).copied().unwrap_or(false);
         backend_snapshots.push(FleetBackendAdmissionCounters {
             backend_id,
             configured: configured.is_some(),
             enabled: configured.map(BackendRow::is_enabled).unwrap_or(false),
             probe_status: configured
-                .map(BackendRow::normalized_probe_status)
+                .map(BackendRow::display_probe_status)
                 .unwrap_or_else(|| UNKNOWN_PROBE_STATUS.to_string()),
             accepting_admission,
             running: counts.assigned,
@@ -330,9 +354,7 @@ fn build_fleet_slot_snapshot(
             .unwrap_or_default();
         let backend = backends.get(&backend_id);
         let max = backend.map(BackendRow::max_concurrent).unwrap_or_default();
-        let backend_available = backend
-            .map(BackendRow::accepting_admission)
-            .unwrap_or(false);
+        let backend_available = backend_accepting.get(&backend_id).copied().unwrap_or(false);
         let enabled = configured.map(BehaviorRow::is_enabled).unwrap_or(false);
         let backend_running = backend_counts
             .get(&backend_id)
@@ -386,11 +408,46 @@ fn build_fleet_slot_snapshot(
     }
 }
 
+/// Per-backend "accepting admission" from the readiness rows of the
+/// behaviors currently bound to it — never from `InferenceBackend`'s
+/// `enabled`/`probe_status` (measured health stays unpersisted; see
+/// `backend_health.rs`). A backend accepts once any bound behavior's own
+/// runtime reports it `Ready`; with no such signal it fails closed to
+/// not-accepting, matching every other unconfigured/stale edge in this
+/// snapshot.
+fn backend_admission_from_readiness(
+    behaviors: &BTreeMap<String, BehaviorRow>,
+    readiness_by_agent: &BTreeMap<String, AgentBehaviorReadinessRow>,
+    observed_at: DateTime<Utc>,
+) -> BTreeMap<String, bool> {
+    let mut accepting = BTreeMap::<String, bool>::new();
+    for (behavior_id, behavior) in behaviors {
+        let backend_id = behavior.normalized_backend_id();
+        if backend_id.is_empty() {
+            continue;
+        }
+        let agent_did = clean_string(&behavior.agent_did);
+        let readiness_row = readiness_by_agent.get(&agent_did);
+        let projected = project_behavior_readiness_summary(readiness_row, &agent_did, observed_at);
+        let ready = matches!(
+            &projected,
+            ProjectedBehaviorReadinessSummary::Observed(summary)
+                if summary.snapshot.behaviors.iter().any(|entry| {
+                    &entry.behavior_id == behavior_id
+                        && entry.state == BehaviorReadinessState::Ready
+                })
+        );
+        let entry = accepting.entry(backend_id).or_insert(false);
+        *entry = *entry || ready;
+    }
+    accepting
+}
+
 fn apply_call_state(call_state: &str, counts: &mut SlotCounts) {
-    match call_state {
-        "running" => counts.assigned += 1,
-        "queued" => counts.queued += 1,
-        _ => {}
+    if call_state_holds_backend_slot(call_state) {
+        counts.assigned += 1;
+    } else if call_state == "queued" {
+        counts.queued += 1;
     }
 }
 
@@ -414,7 +471,39 @@ fn clean_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::row::{
+        BehaviorReadinessEntry, BehaviorReadinessProcessState, BehaviorReadinessSnapshot,
+        BEHAVIOR_READINESS_FORMAT_VERSION,
+    };
     use serde_json::json;
+
+    fn readiness_row(
+        agent_did: &str,
+        default_behavior_id: &str,
+        ready_behavior_ids: &[&str],
+        updated_at: &str,
+    ) -> AgentBehaviorReadinessRow {
+        AgentBehaviorReadinessRow {
+            agent_did: agent_did.to_string(),
+            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
+                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+                process_state: BehaviorReadinessProcessState::Ready,
+                active_generation: 1,
+                router_generation: 1,
+                default_behavior_id: default_behavior_id.to_string(),
+                behaviors: ready_behavior_ids
+                    .iter()
+                    .map(|behavior_id| BehaviorReadinessEntry {
+                        behavior_id: behavior_id.to_string(),
+                        state: BehaviorReadinessState::Ready,
+                        reason: None,
+                    })
+                    .collect(),
+            })
+            .unwrap(),
+            updated_at: updated_at.to_string(),
+        }
+    }
 
     fn find_backend<'a>(
         snapshot: &'a FleetSlotSnapshot,
@@ -485,6 +574,12 @@ mod tests {
                     behavior_id: Some("behavior-a".to_string()),
                     deadline: Some("2026-05-20T11:59:00Z".to_string()),
                 }],
+                behavior_readiness: vec![readiness_row(
+                    "did:test:test",
+                    "behavior-a",
+                    &["behavior-a", "behavior-b"],
+                    "2026-05-20T11:59:50Z",
+                )],
             },
         );
 
@@ -581,6 +676,7 @@ mod tests {
                         deadline: None,
                     },
                 ],
+                behavior_readiness: Vec::new(),
             },
         );
 
