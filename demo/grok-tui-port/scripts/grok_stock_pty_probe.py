@@ -21,6 +21,7 @@ import shlex
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -303,16 +304,20 @@ def read_until_quiet(
     predicate: Callable[[bytes], bool] | None = None,
 ) -> tuple[bytes, bool]:
     data = bytearray()
-    last_output = time.monotonic()
-    matched = predicate is None
+    last_output: float | None = None
+    matched = False
     while time.monotonic() < deadline:
         chunk = read_available(fd, min(0.2, max(0.0, deadline - time.monotonic())))
         if chunk:
             data.extend(chunk)
             last_output = time.monotonic()
-            if predicate is not None and predicate(bytes(data)):
+            if predicate is None or predicate(bytes(data)):
                 matched = True
-        elif matched and time.monotonic() - last_output >= quiet_seconds:
+        elif (
+            matched
+            and last_output is not None
+            and time.monotonic() - last_output >= quiet_seconds
+        ):
             return bytes(data), True
     return bytes(data), False
 
@@ -320,19 +325,33 @@ def read_until_quiet(
 def terminate_client(process: subprocess.Popen[bytes], master_fd: int) -> None:
     if process.poll() is None:
         for _ in range(2):
-            os.write(master_fd, b"\x03")
+            try:
+                os.write(master_fd, b"\x03")
+            except OSError as error:
+                if error.errno not in {errno.EBADF, errno.EIO}:
+                    raise
+                break
             try:
                 process.wait(timeout=2)
                 break
             except subprocess.TimeoutExpired:
                 pass
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
         try:
             process.wait(timeout=3)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-            process.wait(timeout=3)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                return
 
 
 def challenge_prompt() -> tuple[str, str, bytes]:
@@ -554,6 +573,31 @@ def self_test() -> dict[str, int]:
             rejected += 1
             return
         raise AssertionError("negative live-gate fixture unexpectedly passed")
+
+    read_fd, write_fd = os.pipe()
+
+    def delayed_ready_output() -> None:
+        time.sleep(0.03)
+        os.write(write_fd, b"ready")
+        os.close(write_fd)
+
+    ready_writer = threading.Thread(target=delayed_ready_output)
+    ready_writer.start()
+    ready_started = time.monotonic()
+    try:
+        ready_data, ready_quiet = read_until_quiet(
+            read_fd,
+            deadline=ready_started + 0.2,
+            quiet_seconds=0.01,
+        )
+    finally:
+        os.close(read_fd)
+        ready_writer.join()
+    require(ready_data == b"ready" and ready_quiet, "delayed ready output was lost")
+    require(
+        time.monotonic() - ready_started >= 0.03,
+        "ready quiet timer armed before the first byte",
+    )
 
     accept(lambda: validate_endpoint("http://one", "http://one", "http://one", None))
     reject(lambda: validate_endpoint("http://one", "http://two", "http://one", None))
