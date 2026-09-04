@@ -1,5 +1,11 @@
-type CodeReviewEvidencePage0 {
-  evidence_id: String @index(unique: true) @immutable
+type CodeReviewEvidencePage {
+  page_key: String @index(unique: true) @immutable
+  evidence_id: String @index @immutable
+  page_index: String @index @immutable
+  page_count: String @immutable
+  evidence_chunk_count: String @immutable
+  evidence_byte_count: String @immutable
+  evidence_sha256: String @immutable
   evidence_chunk_0: String @immutable
   evidence_chunk_1: String @immutable
   evidence_chunk_2: String @immutable

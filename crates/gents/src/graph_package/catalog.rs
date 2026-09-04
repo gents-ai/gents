@@ -736,48 +736,61 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        for index in 0..18 {
-            let tool_name = format!("read_review_evidence_{index}");
-            let tool = scan_surface
-                .entries
-                .iter()
-                .find(|entry| entry.tool_name() == tool_name)
-                .unwrap();
-            let SurfaceToolDecl::Query(tool) = tool else {
-                panic!("{tool_name} must be a query tool");
-            };
-            assert_eq!(tool.collection, format!("CodeReviewEvidencePage{index}"));
-            let first_chunk = index * 16;
-            let expected_fields = (first_chunk..first_chunk + 16)
-                .map(|chunk| format!("evidence_chunk_{chunk}"))
-                .collect::<Vec<_>>();
-            assert_eq!(tool.fields, expected_fields);
-            assert_eq!(tool.filter_fields.len(), 1);
-            assert_eq!(tool.filter_fields[0].name, "evidence_id");
-            assert_eq!(
-                tool.filter_fields[0].fill,
-                Some(WriteToolFieldFill::SourceField("evidence_id".to_owned()))
-            );
+        let manifest_tool = scan_surface
+            .entries
+            .iter()
+            .find(|entry| entry.tool_name() == "read_review_evidence_manifest")
+            .unwrap();
+        let SurfaceToolDecl::Query(manifest_tool) = manifest_tool else {
+            panic!("review evidence manifest must be a query tool");
+        };
+        assert_eq!(manifest_tool.collection, "CodeReviewEvidenceManifest");
+        assert_eq!(manifest_tool.filter_fields.len(), 1);
+        assert_eq!(manifest_tool.filter_fields[0].name, "evidence_id");
+        assert_eq!(
+            manifest_tool.filter_fields[0].fill,
+            Some(WriteToolFieldFill::SourceField("evidence_id".to_owned()))
+        );
 
-            let schema_path = format!("schemas/evidence_page_{index}.graphql");
-            let schema = package.asset_text(&schema_path).unwrap();
-            assert!(
-                schema.starts_with(&format!("type CodeReviewEvidencePage{index} {{")),
-                "{schema_path}"
-            );
-            let schema_fields = schema
-                .lines()
-                .map(str::trim)
-                .filter(|line| line.contains(':'))
-                .map(|line| line.split(':').next().unwrap().to_owned())
-                .collect::<Vec<_>>();
-            let mut expected_schema_fields = vec!["evidence_id".to_owned()];
-            expected_schema_fields.extend(expected_fields.iter().cloned());
-            assert_eq!(schema_fields, expected_schema_fields, "{schema_path}");
-        }
-        assert!(scan_prompt.contains("read_review_evidence_0"));
-        assert!(scan_prompt.contains("read_review_evidence_17"));
-        assert!(scan_prompt.contains("evidence_chunk_287"));
+        let page_tool = scan_surface
+            .entries
+            .iter()
+            .find(|entry| entry.tool_name() == "read_review_evidence_page")
+            .unwrap();
+        let SurfaceToolDecl::Query(page_tool) = page_tool else {
+            panic!("review evidence page must be a query tool");
+        };
+        assert_eq!(page_tool.collection, "CodeReviewEvidencePage");
+        assert_eq!(page_tool.filter_fields.len(), 2);
+        assert_eq!(page_tool.filter_fields[0].name, "evidence_id");
+        assert_eq!(
+            page_tool.filter_fields[0].fill,
+            Some(WriteToolFieldFill::SourceField("evidence_id".to_owned()))
+        );
+        assert_eq!(page_tool.filter_fields[1].name, "page_index");
+        assert!(page_tool.filter_fields[1].required);
+        assert_eq!(page_tool.filter_fields[1].fill, None);
+        let expected_chunk_fields = (0..16)
+            .map(|chunk| format!("evidence_chunk_{chunk}"))
+            .collect::<Vec<_>>();
+        assert!(expected_chunk_fields
+            .iter()
+            .all(|field| page_tool.fields.contains(field)));
+
+        let manifest_schema = package
+            .asset_text("schemas/evidence_manifest.graphql")
+            .unwrap();
+        assert!(manifest_schema.starts_with("type CodeReviewEvidenceManifest {"));
+        let page_schema = package.asset_text("schemas/evidence_page.graphql").unwrap();
+        assert!(page_schema.starts_with("type CodeReviewEvidencePage {"));
+        assert!(page_schema.contains("page_key: String @index(unique: true) @immutable"));
+        assert!(page_schema.contains("evidence_chunk_15: String @immutable"));
+
+        assert!(scan_prompt.contains("read_review_evidence_manifest"));
+        assert!(scan_prompt.contains("read_review_evidence_page"));
+        assert!(scan_prompt.contains("page_count - 1"));
+        assert!(scan_prompt.contains("evidence_chunk_15"));
+        assert!(!scan_prompt.contains("read_review_evidence_0"));
     }
 
     #[test]
