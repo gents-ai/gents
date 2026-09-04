@@ -28,7 +28,7 @@ const CONFIG_APPLY_ORDER: [Collection; 14] = gents::DESIRED_STATE_APPLY_ORDER;
 /// Reverses a fixed-size `Collection` array at compile time. Pulled out so
 /// `CONFIG_PRUNE_ORDER` derives from `CONFIG_APPLY_ORDER` instead of
 /// maintaining its own hand-reversed literal.
-const fn reversed(order: [Collection; 14]) -> [Collection; 14] {
+const fn reversed<const N: usize>(order: [Collection; N]) -> [Collection; N] {
     let mut reversed = order;
     let mut i = 0;
     while i < reversed.len() / 2 {
@@ -44,7 +44,7 @@ const fn reversed(order: [Collection; 14]) -> [Collection; 14] {
 /// Delete order must undo create order: children before the parents they
 /// reference. Derived from `CONFIG_APPLY_ORDER` reversed rather than a
 /// second hand-maintained literal (#1339).
-const CONFIG_PRUNE_ORDER: [Collection; 14] = reversed(CONFIG_APPLY_ORDER);
+const CONFIG_PRUNE_ORDER: [Collection; CONFIG_APPLY_ORDER.len()] = reversed(CONFIG_APPLY_ORDER);
 
 #[cfg(test)]
 pub(crate) const CONFIG_APPLY_ORDER_FOR_TESTS: &[Collection] = &CONFIG_APPLY_ORDER;

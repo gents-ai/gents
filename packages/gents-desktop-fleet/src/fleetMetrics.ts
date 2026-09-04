@@ -78,6 +78,9 @@ export function inferenceBackendTitle(deployment: DeploymentView) {
 }
 
 export function needsInferenceSetup(deployment: DeploymentView): boolean {
+  // Enrollment-owned deployments are configured by their remote runtime;
+  // this client cannot satisfy a credentials/readiness failure locally.
+  if (deployment.source === "enrollment") return false;
   return behaviorReadinessIsInferenceFailure(
     selectedBehaviorReadinessDecision(deployment, null),
   );

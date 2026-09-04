@@ -18,6 +18,7 @@ describe("bridge error contract", () => {
         code: "backend",
         message: "query failed",
         retryable: true,
+        endpoint: null,
       }),
     ).toEqual({
       code: "backend",
@@ -25,6 +26,16 @@ describe("bridge error contract", () => {
       retryable: true,
       endpoint: null,
     });
+  });
+
+  it("rejects the pre-6.3 payload when endpoint is absent", () => {
+    expect(
+      asBridgeErrorPayload({
+        code: "backend",
+        message: "query failed",
+        retryable: true,
+      }),
+    ).toBeNull();
   });
 
   it("carries the structured endpoint for endpointUnreachable payloads", () => {

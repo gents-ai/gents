@@ -22,11 +22,11 @@ pub(super) async fn http_get_json<T: for<'de> Deserialize<'de>>(
 ) -> Result<T> {
     let response = client.get(url).send().await.map_err(|error| {
         if error.is_connect() {
-            anyhow::anyhow!(
+            anyhow::Error::from(error).context(format!(
                 "no gents server found at {url}. Start one first with \
                  `gents server` or `gents demo`. Remote runtimes must be added \
                  through authenticated status enrollment in the desktop app."
-            )
+            ))
         } else {
             anyhow::Error::from(error).context(format!("sending GET request to {url}"))
         }

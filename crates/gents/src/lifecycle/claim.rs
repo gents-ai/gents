@@ -439,8 +439,11 @@ impl RequestLifecycle {
 
         let valid_until_at_claim =
             match super::parse_valid_until(valid_until.as_deref(), chrono::Utc::now()) {
-                super::TtlOutcome::Malformed => {
-                    anyhow::bail!("invalid valid_until on request {}", self.request.doc_id);
+                super::TtlOutcome::Malformed(error) => {
+                    anyhow::bail!(
+                        "invalid valid_until on request {}: {error}",
+                        self.request.doc_id
+                    );
                 }
                 super::TtlOutcome::Expired(_) => {
                     self.transition_pending_to_dead_stale().await?;

@@ -12,9 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-pub use gents_protocol::chatgpt_oauth::{
-    CLIENT_ID, DEFAULT_ISSUER, REFRESH_TOKEN_URL, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
-};
+use gents_protocol::chatgpt_oauth::{token_endpoint, CLIENT_ID, DEFAULT_ISSUER};
 use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -354,7 +352,7 @@ async fn exchange_code_for_tokens(
     pkce: &PkceCodes,
     code: &str,
 ) -> io::Result<LoginTokens> {
-    let endpoint = format!("{}/oauth/token", options.issuer.trim_end_matches('/'));
+    let endpoint = token_endpoint(&options.issuer);
     let response = build_http_client()?
         .post(endpoint)
         .form(&[

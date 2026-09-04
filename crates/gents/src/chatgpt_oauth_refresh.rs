@@ -1,7 +1,8 @@
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
 use gents_protocol::chatgpt_oauth::{
-    CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID, REFRESH_TOKEN_URL, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+    token_endpoint, CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID, DEFAULT_ISSUER,
+    REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -40,7 +41,7 @@ pub async fn refresh_chatgpt_token(
     let endpoint = std::env::var(REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR)
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| REFRESH_TOKEN_URL.to_string());
+        .unwrap_or_else(|| token_endpoint(DEFAULT_ISSUER));
     let request = RefreshRequest {
         client_id: CHATGPT_OAUTH_CLIENT_ID,
         grant_type: "refresh_token",

@@ -6,5 +6,6 @@ mod util;
 mod views;
 
 pub use requests::*;
-pub use util::{is_live_turn_state, normalize_optional, turn_state_label};
+pub(crate) use util::is_live_turn_state;
+pub use util::{normalize_optional, turn_state_label};
 pub use views::*;

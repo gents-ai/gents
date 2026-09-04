@@ -119,12 +119,11 @@ impl DefraSessionHook {
     ) -> anyhow::Result<ToolCallHookAction> {
         loop {
             let observed = {
-                let now = Utc::now();
                 let map = self.in_flight_lifecycles.lock().await;
                 map.get(internal_call_id).map(|lifecycle| {
                     (
                         lifecycle.state(),
-                        lifecycle.is_deadline_expired(now),
+                        lifecycle.is_deadline_expired(Utc::now()),
                         lifecycle.doc_id().map(str::to_string),
                     )
                 })

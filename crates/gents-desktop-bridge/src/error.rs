@@ -91,71 +91,39 @@ impl BridgeError {
 
     /// An `EndpointUnreachable` error carrying the endpoint that could not be
     /// reached as a structured field.
-    pub fn endpoint_unreachable(endpoint: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn endpoint_unreachable(
+        endpoint: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             endpoint: Some(endpoint.into()),
             ..Self::new(BridgeErrorCode::EndpointUnreachable, message)
         }
     }
 
-    /// Classify a lower-level transport failure message. Connection
-    /// failures (refused, timed out, DNS, or a failed send/read) become
-    /// `EndpointUnreachable` with the endpoint recovered from the message
-    /// when one is present; anything else (a non-2xx response, a JSON
-    /// decode failure, …) stays untyped, exactly as before. Single owner
-    /// for the classification shared by
+    /// Classify a lower-level transport failure from its typed error chain.
+    /// Connection, timeout, and response-body transport failures become
+    /// `EndpointUnreachable`, with the endpoint taken from the underlying
+    /// `reqwest::Error`; anything else (a non-2xx response, a JSON decode
+    /// failure, or unrelated prose containing words such as "timeout") stays
+    /// untyped. Single owner for the classification shared by
     /// `tauri_commands::peers::desktop_peer_status_fetch` and the
     /// local-runtime discovery path in `tauri_commands::lifecycle`, so
     /// neither call site — nor the TS client — needs its own copy (#1339).
-    pub fn classify_transport_error(message: impl Into<String>) -> Self {
-        let message = message.into();
-        if !looks_like_unreachable_endpoint(&message) {
+    pub(crate) fn classify_transport_error(error: anyhow::Error) -> Self {
+        let transport = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<reqwest::Error>())
+            .filter(|error| error.is_connect() || error.is_timeout() || error.is_body());
+        let message = error.to_string();
+        let Some(transport) = transport else {
             return Self::untyped(message);
-        }
-        match transport_endpoint_from_message(&message) {
-            Some(endpoint) => Self::endpoint_unreachable(endpoint, message),
+        };
+        match transport.url() {
+            Some(url) => Self::endpoint_unreachable(url.origin().ascii_serialization(), message),
             None => Self::new(BridgeErrorCode::EndpointUnreachable, message),
         }
     }
-}
-
-/// True when `message` describes a connection-level transport failure
-/// (refused, timed out, DNS, or a failed send/read) rather than an
-/// application-level failure (a non-2xx response, a JSON decode error, …)
-/// from an endpoint that was in fact reachable.
-fn looks_like_unreachable_endpoint(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("connection refused")
-        || lower.contains("refused")
-        || lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("no gents server found at")
-        || lower.contains("sending get request to")
-        || lower.contains("sending post request to")
-        || lower.contains("sending delete request to")
-        || lower.contains("reading get response body from")
-        || lower.contains("error trying to connect")
-        || lower.contains("dns error")
-}
-
-/// Best-effort recovery of the origin a transport-failure message names
-/// (e.g. "...sending GET request to http://127.0.0.1:9181/status" ->
-/// "http://127.0.0.1:9181"). `None` when the message names no URL.
-fn transport_endpoint_from_message(message: &str) -> Option<String> {
-    let start = message
-        .find("http://")
-        .or_else(|| message.find("https://"))?;
-    let candidate = &message[start..];
-    // Capture the whole non-whitespace token first (a host/IP legitimately
-    // contains '.'), then trim only trailing punctuation the token picked up
-    // from surrounding prose (e.g. a sentence-ending period).
-    let end = candidate
-        .find(char::is_whitespace)
-        .unwrap_or(candidate.len());
-    let token = candidate[..end].trim_end_matches(['.', ',', ';', ')', ']']);
-    reqwest::Url::parse(token)
-        .ok()
-        .map(|parsed| parsed.origin().ascii_serialization())
 }
 
 impl std::fmt::Display for BridgeError {
@@ -212,67 +180,45 @@ mod tests {
         assert_eq!(json["endpoint"], "http://127.0.0.1:9181");
     }
 
-    #[test]
-    fn classify_transport_error_flags_connection_failures_with_endpoint() {
-        let err = BridgeError::classify_transport_error(
-            "sending GET request to http://127.0.0.1:9181/api/v0/p2p/shareable-address",
-        );
-        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
-        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9181"));
+    #[tokio::test]
+    async fn classify_transport_error_uses_reqwest_source_and_url() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind temporary port");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
+        drop(listener);
 
-        let err = BridgeError::classify_transport_error(
-            "no gents server found at http://127.0.0.1:9191/status. Start one first with              `gents server` or `gents demo`.",
-        );
+        let error = gents_desktop_core::local_runtime::fetch_runtime_connection_payload(&endpoint)
+            .await
+            .expect_err("closed temporary port must refuse the request");
+        let err = BridgeError::classify_transport_error(error);
         assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
-        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9191"));
-
-        let err = BridgeError::classify_transport_error("connection refused (os error 61)");
-        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
-        assert_eq!(err.endpoint, None);
-
-        let err = BridgeError::classify_transport_error("request timed out after 5s");
-        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(err.endpoint.as_deref(), Some(endpoint.as_str()));
     }
 
     #[test]
     fn classify_transport_error_leaves_application_level_failures_untyped() {
-        let err = BridgeError::classify_transport_error(
-            "GET http://127.0.0.1:9181/status failed with 500 Internal Server Error: boom",
-        );
+        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "GET http://127.0.0.1:9181/status failed with 504 Gateway Timeout: request refused"
+        ));
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
 
-        let err = BridgeError::classify_transport_error(
-            "decoding JSON response from http://127.0.0.1:9181/status",
-        );
+        let err = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "decoding JSON response from http://127.0.0.1:9181/status"
+        ));
         assert_eq!(err.code, BridgeErrorCode::Unknown);
         assert_eq!(err.endpoint, None);
     }
 
     /// `tauri_commands::peers::desktop_peer_enroll_status` and
     /// `desktop_peer_status_fetch` both map a `fetch_runtime_connection_payload`
-    /// failure through `classify_transport_error(error.to_string())` — the
-    /// exact message shapes `gents_desktop_core::local_runtime::http_get_json`
-    /// produces for a connection-refused failure and a JSON decode failure
-    /// against the status-enrollment server address (#1339 review round 2).
+    /// failure through `classify_transport_error`. A display string alone is
+    /// never sufficient evidence of an unreachable endpoint (#1339).
     #[test]
-    fn classify_transport_error_covers_enroll_status_connection_and_json_failures() {
-        let connection_refused = BridgeError::classify_transport_error(
-            "no gents server found at http://198.51.100.7:9191/status. Start one first with              `gents server` or `gents demo`. Remote runtimes must be added through              authenticated status enrollment in the desktop app.",
-        );
-        assert_eq!(
-            connection_refused.code,
-            BridgeErrorCode::EndpointUnreachable
-        );
-        assert_eq!(
-            connection_refused.endpoint.as_deref(),
-            Some("http://198.51.100.7:9191")
-        );
-
-        let json_failure = BridgeError::classify_transport_error(
-            "decoding JSON response from http://198.51.100.7:9191/status",
-        );
-        assert_eq!(json_failure.code, BridgeErrorCode::Unknown);
-        assert_eq!(json_failure.endpoint, None);
+    fn classify_transport_error_rejects_message_only_transport_lookalikes() {
+        let lookalike = BridgeError::classify_transport_error(anyhow::anyhow!(
+            "no gents server found at http://198.51.100.7:9191/status: connection refused"
+        ));
+        assert_eq!(lookalike.code, BridgeErrorCode::Unknown);
+        assert_eq!(lookalike.endpoint, None);
     }
 }

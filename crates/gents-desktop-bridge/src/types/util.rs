@@ -23,9 +23,6 @@ pub fn turn_state_label(state: ClientTurnState) -> &'static str {
 /// snapshot. Single owner for the `Some(WaitingForClaim) | Some(Streaming)`
 /// check shared by `snapshot::session::projection` and
 /// `snapshot::session::live_delta`.
-pub fn is_live_turn_state(state: Option<ClientTurnState>) -> bool {
-    matches!(
-        state,
-        Some(ClientTurnState::WaitingForClaim) | Some(ClientTurnState::Streaming)
-    )
+pub(crate) fn is_live_turn_state(state: Option<ClientTurnState>) -> bool {
+    state.is_some_and(|state| !state.is_terminal())
 }

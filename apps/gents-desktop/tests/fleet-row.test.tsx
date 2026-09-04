@@ -133,9 +133,24 @@ describe("FleetRow", () => {
 
   it("does not infer missing backend setup from redacted enrolled-agent config", () => {
     const onSetupInference = vi.fn();
+    const hostManagedMissingCredentials: DeploymentView = {
+      ...deployment,
+      source: "enrollment",
+      inferenceBackends: [],
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: [
+          {
+            state: "unavailable",
+            behaviorId: "default",
+            reason: "credentials_required",
+          },
+        ],
+      },
+    };
     renderRow(
       { onSetupInference },
-      { ...deployment, source: "enrollment", inferenceBackends: [] },
+      hostManagedMissingCredentials,
     );
 
     expect(

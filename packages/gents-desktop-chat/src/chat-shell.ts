@@ -11,10 +11,6 @@ import {
   projectRouteOperationalStatus,
 } from "@source-inc/gents-desktop-client";
 
-// Re-exported for existing `@source-inc/gents-desktop-chat` consumers; the
-// single owner is `@source-inc/gents-desktop-client`'s `turnState.ts` (#1339).
-export { isTerminalTurnState } from "@source-inc/gents-desktop-client";
-
 export type OptimisticPendingTurn = PendingTurnView & { sessionId: string };
 
 export type RequestProgressPresentation = {

@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use gents_chatgpt_login::{
-    complete_device_code_login, request_device_code, run_login_server, LoginOptions, CLIENT_ID,
+    complete_device_code_login, request_device_code, run_login_server, LoginOptions,
 };
+use gents_protocol::chatgpt_oauth::CLIENT_ID;
 use serde_json::{json, Value};
 
 use crate::cli::args::CodexLoginArgs;

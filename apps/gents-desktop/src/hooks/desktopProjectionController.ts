@@ -1,5 +1,7 @@
-import { isTerminalTurnState } from "@source-inc/gents-desktop-chat";
-import type { DesktopSessionSnapshot } from "@source-inc/gents-desktop-client";
+import {
+  isTerminalTurnState,
+  type DesktopSessionSnapshot,
+} from "@source-inc/gents-desktop-client";
 
 import type { DesktopUpdateRefreshScope } from "./desktopShellRuntime";
 

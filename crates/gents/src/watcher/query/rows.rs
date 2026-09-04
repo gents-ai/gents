@@ -104,7 +104,7 @@ impl AgentRequestRow {
             crate::lifecycle::TtlOutcome::Expired(_) => PreclaimSignal::Terminal,
             // Fail closed: an unparseable TTL is not evidence the request is
             // still live, so it must not be claimed as if unset.
-            crate::lifecycle::TtlOutcome::Malformed => PreclaimSignal::Malformed,
+            crate::lifecycle::TtlOutcome::Malformed(_) => PreclaimSignal::Malformed,
             crate::lifecycle::TtlOutcome::NotSet | crate::lifecycle::TtlOutcome::Live(_) => {
                 PreclaimSignal::None
             }

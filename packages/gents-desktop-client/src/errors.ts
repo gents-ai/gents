@@ -29,7 +29,7 @@ export class BridgeInvokeError extends Error {
     this.name = "BridgeInvokeError";
     this.code = payload.code;
     this.retryable = payload.retryable;
-    this.endpoint = payload.endpoint ?? null;
+    this.endpoint = payload.endpoint;
   }
 }
 
@@ -48,13 +48,14 @@ export function asBridgeErrorPayload(
     typeof candidate.code === "string" &&
     BRIDGE_ERROR_CODES.has(candidate.code as BridgeErrorCode) &&
     typeof candidate.message === "string" &&
-    typeof candidate.retryable === "boolean"
+    typeof candidate.retryable === "boolean" &&
+    (typeof candidate.endpoint === "string" || candidate.endpoint === null)
   ) {
     return {
       code: candidate.code as BridgeErrorCode,
       message: candidate.message,
       retryable: candidate.retryable,
-      endpoint: typeof candidate.endpoint === "string" ? candidate.endpoint : null,
+      endpoint: candidate.endpoint as string | null,
     };
   }
   return null;

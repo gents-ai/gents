@@ -47,7 +47,7 @@ pub const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 /// claimed as if `valid_until` were unset.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TtlOutcome {
-    /// No `valid_until` was persisted (or it was empty/whitespace).
+    /// No `valid_until` was persisted.
     NotSet,
     /// `valid_until` parsed and has not yet passed; carries the parsed
     /// value so callers that need it (e.g. to persist alongside a claim)
@@ -57,7 +57,7 @@ pub(crate) enum TtlOutcome {
     /// the same reason.
     Expired(chrono::DateTime<chrono::Utc>),
     /// `valid_until` was present but did not parse as RFC3339.
-    Malformed,
+    Malformed(chrono::ParseError),
 }
 
 /// Parse a persisted `valid_until` value against `now`. See [`TtlOutcome`].
@@ -65,7 +65,7 @@ pub(crate) fn parse_valid_until(
     value: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> TtlOutcome {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(value) = value else {
         return TtlOutcome::NotSet;
     };
     match chrono::DateTime::parse_from_rfc3339(value) {
@@ -77,7 +77,7 @@ pub(crate) fn parse_valid_until(
                 TtlOutcome::Live(parsed)
             }
         }
-        Err(_) => TtlOutcome::Malformed,
+        Err(error) => TtlOutcome::Malformed(error),
     }
 }
 
@@ -543,7 +543,14 @@ mod tests {
             .with_timezone(&chrono::Utc);
 
         assert_eq!(parse_valid_until(None, now), TtlOutcome::NotSet);
-        assert_eq!(parse_valid_until(Some("   "), now), TtlOutcome::NotSet);
+        assert!(matches!(
+            parse_valid_until(Some("   "), now),
+            TtlOutcome::Malformed(_)
+        ));
+        assert!(matches!(
+            parse_valid_until(Some(" 2026-08-12T23:00:00Z "), now),
+            TtlOutcome::Malformed(_)
+        ));
         assert_eq!(
             parse_valid_until(Some(future), now),
             TtlOutcome::Live(future_at)
@@ -552,10 +559,10 @@ mod tests {
             parse_valid_until(Some(past), now),
             TtlOutcome::Expired(past_at)
         );
-        assert_eq!(
+        assert!(matches!(
             parse_valid_until(Some("not-a-timestamp"), now),
-            TtlOutcome::Malformed
-        );
+            TtlOutcome::Malformed(_)
+        ));
     }
 
     #[test]

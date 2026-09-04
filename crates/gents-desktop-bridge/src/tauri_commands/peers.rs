@@ -34,7 +34,7 @@ pub async fn desktop_peer_status_fetch(
         .ok_or_else(|| format!("saved peer {peer_id} was not found"))?;
     fetch_runtime_connection_payload(&addr)
         .await
-        .map_err(|error| BridgeError::classify_transport_error(error.to_string()))
+        .map_err(BridgeError::classify_transport_error)
 }
 
 #[tauri::command]
@@ -51,7 +51,7 @@ pub async fn desktop_peer_enroll_status(
     }
     let status = fetch_runtime_connection_payload(address)
         .await
-        .map_err(|error| BridgeError::classify_transport_error(error.to_string()))?;
+        .map_err(BridgeError::classify_transport_error)?;
     let server_label = status
         .get("agent_name")
         .and_then(serde_json::Value::as_str)

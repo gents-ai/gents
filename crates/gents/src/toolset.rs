@@ -339,33 +339,41 @@ pub enum NativeTool {
 }
 
 impl NativeTool {
-    /// Names of the non-parameterized native tool kinds, i.e. every variant
-    /// except `Cli` (whose name is config-defined). Single source of truth
-    /// for callers that need to reserve or enumerate the built-in native
-    /// tool surface without constructing an instance of each variant; kept
-    /// in sync with `tool_name` by the
-    /// `reserved_names_cover_native_and_meta_tools` test.
-    pub const ALL_NAMES: [&'static str; 8] = [
-        "list_files",
-        "read_file",
-        "glob",
-        "grep",
-        "write_file",
-        "edit_file",
-        "bash",
-        "bash_unrestricted",
+    const LIST_FILES_NAME: &'static str = <ListFilesTool as crate::llm::tool::Tool>::NAME;
+    const READ_FILE_NAME: &'static str = <ReadFileTool as crate::llm::tool::Tool>::NAME;
+    const GLOB_NAME: &'static str = <GlobTool as crate::llm::tool::Tool>::NAME;
+    const GREP_NAME: &'static str = <GrepTool as crate::llm::tool::Tool>::NAME;
+    const WRITE_FILE_NAME: &'static str = <WriteFileTool as crate::llm::tool::Tool>::NAME;
+    const EDIT_FILE_NAME: &'static str = <EditFileTool as crate::llm::tool::Tool>::NAME;
+    const BASH_NAME: &'static str = <ReadOnlyBashTool as crate::llm::tool::Tool>::NAME;
+    const BASH_UNRESTRICTED_NAME: &'static str =
+        <UnrestrictedBashTool as crate::llm::tool::Tool>::NAME;
+
+    /// Names of every fixed-name `NativeTool` variant. The concrete `Tool`
+    /// implementations own the strings; this registry and `tool_name` both
+    /// derive from those constants. `Cli` is excluded because its name comes
+    /// from configuration.
+    pub(crate) const ALL_NAMES: [&'static str; 8] = [
+        Self::LIST_FILES_NAME,
+        Self::READ_FILE_NAME,
+        Self::GLOB_NAME,
+        Self::GREP_NAME,
+        Self::WRITE_FILE_NAME,
+        Self::EDIT_FILE_NAME,
+        Self::BASH_NAME,
+        Self::BASH_UNRESTRICTED_NAME,
     ];
 
     pub fn tool_name(&self) -> String {
         match self {
-            Self::ListFiles { .. } => "list_files".to_string(),
-            Self::ReadFile { .. } => "read_file".to_string(),
-            Self::Glob { .. } => "glob".to_string(),
-            Self::Grep { .. } => "grep".to_string(),
-            Self::WriteFile { .. } => "write_file".to_string(),
-            Self::EditFile { .. } => "edit_file".to_string(),
-            Self::BashReadOnly { .. } => "bash".to_string(),
-            Self::BashUnrestricted { .. } => "bash_unrestricted".to_string(),
+            Self::ListFiles { .. } => Self::LIST_FILES_NAME.to_string(),
+            Self::ReadFile { .. } => Self::READ_FILE_NAME.to_string(),
+            Self::Glob { .. } => Self::GLOB_NAME.to_string(),
+            Self::Grep { .. } => Self::GREP_NAME.to_string(),
+            Self::WriteFile { .. } => Self::WRITE_FILE_NAME.to_string(),
+            Self::EditFile { .. } => Self::EDIT_FILE_NAME.to_string(),
+            Self::BashReadOnly { .. } => Self::BASH_NAME.to_string(),
+            Self::BashUnrestricted { .. } => Self::BASH_UNRESTRICTED_NAME.to_string(),
             Self::Cli(tool) => tool.name.clone(),
         }
     }

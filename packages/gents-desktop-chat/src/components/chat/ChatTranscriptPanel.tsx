@@ -1,13 +1,11 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 
-import {
-  isTerminalTurnState,
-  type OptimisticPendingTurn,
-} from "../../chat-shell.js";
+import type { OptimisticPendingTurn } from "../../chat-shell.js";
 import type {
   DesktopSessionSnapshot,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { MessageList } from "../Transcript.js";
 
 export type ChatTranscriptPanelProps = {

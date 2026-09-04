@@ -2,7 +2,9 @@ use anyhow::{bail, Result};
 use gents_desktop_core::client::{ClientCore, SubmitRequestOptions};
 use uuid::Uuid;
 
-use super::super::types::{ChatSendRequest, ChatSendResult, ConversationRenameRequest};
+use super::super::types::{
+    turn_state_label, ChatSendRequest, ChatSendResult, ConversationRenameRequest,
+};
 
 pub async fn send_chat_message(
     core: &ClientCore,
@@ -37,7 +39,10 @@ pub async fn send_chat_message(
     let store = core.store().snapshot();
     if let Some(turn_state) = store.derive_turn_for_agent(&session_id, &agent_did) {
         if !turn_state.is_terminal() {
-            bail!("cannot send while current turn is {turn_state:?}");
+            bail!(
+                "cannot send while current turn is {}",
+                turn_state_label(turn_state)
+            );
         }
     }
 
