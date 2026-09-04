@@ -46,7 +46,7 @@ fn config(
     }
 }
 
-fn request(request_id: &str) -> AgentRequest {
+pub(super) fn request(request_id: &str) -> AgentRequest {
     AgentRequest {
         doc_id: format!("doc-{request_id}"),
         request_id: request_id.to_string(),

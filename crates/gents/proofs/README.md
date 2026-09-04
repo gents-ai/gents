@@ -587,6 +587,14 @@ queued rows contribute zero slots, running rows contribute one slot on their
 cannot leave a row counted, and live linked queued/running calls have a model
 path to a non-slot-holding terminal state.
 
+`Proofs/InferenceCall/Persistence.lean` refines the database writer guards:
+start requires the current row to be queued; completion/failure require running;
+cancellation accepts queued/running. A terminal winner preserves its outcome
+and stamp against later lifecycle writes, while late provider usage can update
+the usage observation without reopening the call. Usage observation does not
+itself charge the aggregate budget. These laws support the admission persistence
+reverse-race regressions; no new legal lifecycle transitions are introduced.
+
 ### Session Recovery
 
 `Proofs/SessionRecovery.lean` proves that retry/reissue behavior preserves the
