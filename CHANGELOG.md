@@ -26,6 +26,8 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ### Fixed
 
+- `/healthz` and `gents fleet-slots` now report backends the local prober has
+  vetoed as degraded/not accepting, matching admission.
 - `Goal.tokens_used` now reports the charged total (input incl. cached +
   output), matching the request ledger; `/self` utilization is measured
   against the effective input budget.
