@@ -97,6 +97,65 @@ impl BridgeError {
             ..Self::new(BridgeErrorCode::EndpointUnreachable, message)
         }
     }
+
+    /// Classify a lower-level transport failure message. Connection
+    /// failures (refused, timed out, DNS, or a failed send/read) become
+    /// `EndpointUnreachable` with the endpoint recovered from the message
+    /// when one is present; anything else (a non-2xx response, a JSON
+    /// decode failure, …) stays untyped, exactly as before. Single owner
+    /// for the classification shared by
+    /// `tauri_commands::peers::desktop_peer_status_fetch` and the
+    /// local-runtime discovery path in `tauri_commands::lifecycle`, so
+    /// neither call site — nor the TS client — needs its own copy (#1339).
+    pub fn classify_transport_error(message: impl Into<String>) -> Self {
+        let message = message.into();
+        if !looks_like_unreachable_endpoint(&message) {
+            return Self::untyped(message);
+        }
+        match transport_endpoint_from_message(&message) {
+            Some(endpoint) => Self::endpoint_unreachable(endpoint, message),
+            None => Self::new(BridgeErrorCode::EndpointUnreachable, message),
+        }
+    }
+}
+
+/// True when `message` describes a connection-level transport failure
+/// (refused, timed out, DNS, or a failed send/read) rather than an
+/// application-level failure (a non-2xx response, a JSON decode error, …)
+/// from an endpoint that was in fact reachable.
+fn looks_like_unreachable_endpoint(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("connection refused")
+        || lower.contains("refused")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("no gents server found at")
+        || lower.contains("sending get request to")
+        || lower.contains("sending post request to")
+        || lower.contains("sending delete request to")
+        || lower.contains("reading get response body from")
+        || lower.contains("error trying to connect")
+        || lower.contains("dns error")
+}
+
+/// Best-effort recovery of the origin a transport-failure message names
+/// (e.g. "...sending GET request to http://127.0.0.1:9181/status" ->
+/// "http://127.0.0.1:9181"). `None` when the message names no URL.
+fn transport_endpoint_from_message(message: &str) -> Option<String> {
+    let start = message
+        .find("http://")
+        .or_else(|| message.find("https://"))?;
+    let candidate = &message[start..];
+    // Capture the whole non-whitespace token first (a host/IP legitimately
+    // contains '.'), then trim only trailing punctuation the token picked up
+    // from surrounding prose (e.g. a sentence-ending period).
+    let end = candidate
+        .find(char::is_whitespace)
+        .unwrap_or(candidate.len());
+    let token = candidate[..end].trim_end_matches(['.', ',', ';', ')', ']']);
+    reqwest::Url::parse(token)
+        .ok()
+        .map(|parsed| parsed.origin().ascii_serialization())
 }
 
 impl std::fmt::Display for BridgeError {
@@ -151,5 +210,42 @@ mod tests {
         let json = serde_json::to_value(&err).expect("serialize");
         assert_eq!(json["code"], "endpointUnreachable");
         assert_eq!(json["endpoint"], "http://127.0.0.1:9181");
+    }
+
+    #[test]
+    fn classify_transport_error_flags_connection_failures_with_endpoint() {
+        let err = BridgeError::classify_transport_error(
+            "sending GET request to http://127.0.0.1:9181/api/v0/p2p/shareable-address",
+        );
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9181"));
+
+        let err = BridgeError::classify_transport_error(
+            "no gents server found at http://127.0.0.1:9191/status. Start one first with              `gents server` or `gents demo`.",
+        );
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(err.endpoint.as_deref(), Some("http://127.0.0.1:9191"));
+
+        let err = BridgeError::classify_transport_error("connection refused (os error 61)");
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+        assert_eq!(err.endpoint, None);
+
+        let err = BridgeError::classify_transport_error("request timed out after 5s");
+        assert_eq!(err.code, BridgeErrorCode::EndpointUnreachable);
+    }
+
+    #[test]
+    fn classify_transport_error_leaves_application_level_failures_untyped() {
+        let err = BridgeError::classify_transport_error(
+            "GET http://127.0.0.1:9181/status failed with 500 Internal Server Error: boom",
+        );
+        assert_eq!(err.code, BridgeErrorCode::Unknown);
+        assert_eq!(err.endpoint, None);
+
+        let err = BridgeError::classify_transport_error(
+            "decoding JSON response from http://127.0.0.1:9181/status",
+        );
+        assert_eq!(err.code, BridgeErrorCode::Unknown);
+        assert_eq!(err.endpoint, None);
     }
 }

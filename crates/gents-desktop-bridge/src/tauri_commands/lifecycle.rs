@@ -89,7 +89,7 @@ pub async fn desktop_init_local_standard(
             .unwrap_or_else(|| "Local Agent".to_string()),
     })
     .await
-    .map_err(|error| BridgeError::untyped(error.to_string()))
+    .map_err(|error| BridgeError::classify_transport_error(error.to_string()))
 }
 
 fn ensure_client_stopped_for_init(client_is_running: bool) -> Result<(), BridgeError> {
@@ -368,7 +368,7 @@ async fn start_client_core_async(
 
     match rx.await {
         Ok(Ok(core)) => Ok(core),
-        Ok(Err(error)) => Err(BridgeError::untyped(error.to_string())),
+        Ok(Err(error)) => Err(BridgeError::classify_transport_error(error.to_string())),
         Err(_) => Err(BridgeError::new(
             BridgeErrorCode::ClientStartFailed,
             "desktop client startup thread panicked or dropped its result",

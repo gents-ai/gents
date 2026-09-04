@@ -1,3 +1,11 @@
+import { asBridgeErrorPayload } from "@source-inc/gents-desktop-client";
+
+import {
+  DEFAULT_CLI_BINARY_NAME,
+  DEFAULT_RUNTIME_PRODUCT_NAME,
+  type FleetCopy,
+} from "./copy.js";
+
 export type PeerConnectionAction =
   | "add-peer"
   | "local-runtime"
@@ -11,16 +19,19 @@ export function formatPeerConnectionError(
   action: PeerConnectionAction,
   copy: Pick<FleetCopy, "runtimeProductName" | "cliBinaryName"> = {},
 ): string {
-  const message = errorMessage(error);
-  // Prefer the bridge's structured endpoint (BridgeErrorCode.endpointUnreachable,
-  // #1339) when the error carries one; only a command not yet wired to emit a
-  // typed BridgeError falls back to parsing the underlying transport message.
-  const url = structuredEndpointFromError(error) ?? requestUrlFromMessage(message);
-  if (!url) {
+  // The bridge classifies connectivity failures into
+  // BridgeErrorCode.endpointUnreachable and attaches the endpoint as a
+  // structured field (#1339) — no message parsing on the TS side. Prefer the
+  // payload's own `message` (correctly extracted even for a plain object)
+  // over the generic `errorMessage` fallback, which only handles `Error`/
+  // string inputs.
+  const payload = asBridgeErrorPayload(error);
+  const message = payload?.message ?? errorMessage(error);
+  if (payload?.code !== "endpointUnreachable" || !payload.endpoint) {
     return message;
   }
 
-  const endpoint = endpointLabel(url);
+  const endpoint = endpointLabel(payload.endpoint);
   if (action === "local-runtime") {
     const productName =
       copy.runtimeProductName?.trim() || DEFAULT_RUNTIME_PRODUCT_NAME;
@@ -35,30 +46,11 @@ export function formatPeerConnectionError(
   return message;
 }
 
-function structuredEndpointFromError(error: unknown): string | null {
-  const payload = asBridgeErrorPayload(error);
-  return payload?.code === "endpointUnreachable" ? payload.endpoint : null;
-}
-
 function errorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
   }
   return String(error);
-}
-
-function requestUrlFromMessage(message: string): string | null {
-  const match = message.match(
-    /\b(?:sending|reading) GET request to (https?:\/\/\S+)/i,
-  );
-  if (!match) {
-    return null;
-  }
-  return stripTrailingPunctuation(match[1]);
-}
-
-function stripTrailingPunctuation(value: string): string {
-  return value.replace(/[),.;]+$/g, "");
 }
 
 function endpointLabel(url: string): string {
@@ -69,10 +61,3 @@ function endpointLabel(url: string): string {
     return url;
   }
 }
-import { asBridgeErrorPayload } from "@source-inc/gents-desktop-client";
-
-import {
-  DEFAULT_CLI_BINARY_NAME,
-  DEFAULT_RUNTIME_PRODUCT_NAME,
-  type FleetCopy,
-} from "./copy.js";
