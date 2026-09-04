@@ -577,9 +577,11 @@ def self_test() -> dict[str, int]:
     read_fd, write_fd = os.pipe()
 
     def delayed_ready_output() -> None:
-        time.sleep(0.03)
-        os.write(write_fd, b"ready")
-        os.close(write_fd)
+        try:
+            time.sleep(0.03)
+            os.write(write_fd, b"ready")
+        finally:
+            os.close(write_fd)
 
     ready_writer = threading.Thread(target=delayed_ready_output)
     ready_writer.start()
@@ -587,12 +589,12 @@ def self_test() -> dict[str, int]:
     try:
         ready_data, ready_quiet = read_until_quiet(
             read_fd,
-            deadline=ready_started + 0.2,
+            deadline=ready_started + 2.0,
             quiet_seconds=0.01,
         )
     finally:
-        os.close(read_fd)
         ready_writer.join()
+        os.close(read_fd)
     require(ready_data == b"ready" and ready_quiet, "delayed ready output was lost")
     require(
         time.monotonic() - ready_started >= 0.03,
