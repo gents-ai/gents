@@ -2071,6 +2071,82 @@ mod tests {
         assert!(messages.contains("limit: 64"));
     }
 
+    /// A live/durable reconciliation caller hands `(kind, delta)` pairs whose
+    /// kind string was observed from a durable row; an unknown discriminator
+    /// must fall back to `agent_message_chunk` rather than fabricate an
+    /// unrecognized `sessionUpdate` tag on the wire, while the two known
+    /// assistant kinds pass through byte-exact.
+    #[test]
+    fn chunk_payload_preserves_known_kinds_and_falls_back_for_unknown() {
+        let thought = MessageUpdate::chunk_payload(AGENT_THOUGHT_CHUNK, "why");
+        assert_eq!(thought["sessionUpdate"], "agent_thought_chunk");
+        assert_eq!(thought["content"]["text"], "why");
+
+        let message = MessageUpdate::chunk_payload(AGENT_MESSAGE_CHUNK, "what");
+        assert_eq!(message["sessionUpdate"], "agent_message_chunk");
+
+        let unknown = MessageUpdate::chunk_payload("agent_message_block", "delta");
+        assert_eq!(
+            unknown["sessionUpdate"], "agent_message_chunk",
+            "an unknown kind must fall back to agent_message_chunk, never reach the wire as-is"
+        );
+        assert_eq!(unknown["content"]["text"], "delta");
+        assert!(
+            unknown.get("contentBlock").is_none(),
+            "the chunk field name is `content`, never `contentBlock`"
+        );
+    }
+
+    /// A sink serving one empty response discovery and one empty transcript
+    /// page: the minimal request with no rows at all.
+    struct EmptyRequestSink;
+
+    impl QuerySink for EmptyRequestSink {
+        async fn execute(&self, query: &str) -> defra_node::QueryResponse {
+            assert!(
+                query.contains(r#"request_id: { _eq: "req-1" }"#),
+                "every query must stay request-scoped: {query}"
+            );
+            if query.contains("AgentResponse(") {
+                return query_response(json!({ "AgentResponse": [] }));
+            }
+            if query.contains("AgentMessage(") {
+                return query_response(json!({ "AgentMessage": [] }));
+            }
+            panic!("unexpected query for an empty request: {query}");
+        }
+    }
+
+    /// The projection exposes the effective `totalContextTokens` bound the
+    /// engine clamps `_meta.totalTokens` against: a configured window passes
+    /// through unchanged, and the unspecified (zero) configuration falls back
+    /// to the catalog default so the bound is never zero.
+    #[tokio::test]
+    async fn projection_binds_context_window_tokens_to_the_bound_catalog() {
+        let mut observation = HistoryObservation::default();
+        let default_projection =
+            project_messages_with_sink(&EmptyRequestSink, &mut observation, None, "req-1", 0)
+                .await
+                .expect("empty-request projection");
+        assert_eq!(
+            default_projection.context_window_tokens,
+            super::super::DEFAULT_CONTEXT_WINDOW_TOKENS,
+            "an unspecified context window must fall back to the catalog default"
+        );
+        assert_eq!(default_projection.total_tokens, 0);
+        assert!(!default_projection.terminal);
+
+        let mut observation = HistoryObservation::default();
+        let bound_projection =
+            project_messages_with_sink(&EmptyRequestSink, &mut observation, None, "req-1", 524_288)
+                .await
+                .expect("empty-request projection");
+        assert_eq!(
+            bound_projection.context_window_tokens, 524_288,
+            "a configured window must pass through without modification"
+        );
+    }
+
     struct MessagePageSink {
         pages: std::sync::Mutex<std::collections::VecDeque<defra_node::QueryResponse>>,
         queries: std::sync::Mutex<Vec<String>>,
