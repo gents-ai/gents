@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
 
 use super::graphql_fields;
+use super::references::ConfigReferences;
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 
 const DEFAULT_BEHAVIOR_LABEL: &str = "Default";
@@ -36,6 +37,86 @@ pub struct AgentBehavior {
     )]
     pub skill_excludes: Vec<String>,
     pub created_at: Option<String>,
+}
+
+impl AgentBehavior {
+    /// Validate this behavior's document references — the single owner
+    /// every write path (CLI desired state, self-config's
+    /// `configure_behavior`) calls. Checks that `backend_id`, `model_name`
+    /// (against the backend's advertised models), `tool_selection_id`,
+    /// `inference_profile_id`, and every `skill_refs`/`skill_excludes` entry
+    /// name something that actually exists in `refs`. Structural checks
+    /// (empty ids, ownership, template syntax) stay with each write path —
+    /// they are shape checks on the manifest/patch, not document
+    /// references (#1331).
+    pub fn validate_references(&self, refs: &ConfigReferences) -> Result<()> {
+        fn non_empty(value: Option<&str>) -> Option<&str> {
+            value.map(str::trim).filter(|value| !value.is_empty())
+        }
+
+        if let Some(backend_id) = non_empty(self.backend_id.as_deref()) {
+            let Some(advertised) = refs.backends.get(backend_id) else {
+                anyhow::bail!(
+                    "behavior {} references missing backend_id {}",
+                    self.behavior_id,
+                    backend_id
+                );
+            };
+            if let Some(model_name) = non_empty(self.model_name.as_deref()) {
+                if !advertised.is_empty() && !advertised.iter().any(|model| model == model_name) {
+                    anyhow::bail!(
+                        "behavior {} selects model {} which backend {} does not advertise",
+                        self.behavior_id,
+                        model_name,
+                        backend_id
+                    );
+                }
+            }
+        }
+
+        if let Some(selection_id) = non_empty(self.tool_selection_id.as_deref()) {
+            if !refs.tool_selections.contains(selection_id) {
+                anyhow::bail!(
+                    "behavior {} references missing tool_selection_id {}",
+                    self.behavior_id,
+                    selection_id
+                );
+            }
+        }
+
+        if let Some(profile_id) = non_empty(self.inference_profile_id.as_deref()) {
+            if !refs.profiles.contains(profile_id) {
+                anyhow::bail!(
+                    "behavior {} references missing inference_profile_id {}",
+                    self.behavior_id,
+                    profile_id
+                );
+            }
+        }
+
+        for skill_ref in &self.skill_refs {
+            let skill_ref = skill_ref.trim();
+            if !skill_ref.is_empty() && !refs.skills.contains(skill_ref) {
+                anyhow::bail!(
+                    "behavior {} references missing skill_ref {} (import the skill first)",
+                    self.behavior_id,
+                    skill_ref
+                );
+            }
+        }
+        for skill_exclude in &self.skill_excludes {
+            let skill_exclude = skill_exclude.trim();
+            if !skill_exclude.is_empty() && !refs.skills.contains(skill_exclude) {
+                anyhow::bail!(
+                    "behavior {} references missing skill_exclude {}",
+                    self.behavior_id,
+                    skill_exclude
+                );
+            }
+        }
+
+        Ok(())
+    }
 }
 
 pub async fn load_agent_behavior(

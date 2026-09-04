@@ -39,6 +39,57 @@ pub struct InferenceProfile {
     pub retry_interactive_max: Option<i64>,
 }
 
+impl InferenceProfile {
+    /// Validate this profile's bounds — the single owner every write path
+    /// (CLI desired state, self-config, `upsert_inference_profile`) calls.
+    /// Mirrors the historical `gents-cli` desired-state rules exactly so no
+    /// case is lost by the move (#1331).
+    pub fn validate(&self) -> Result<()> {
+        let profile_id = self.profile_id.trim();
+        let stream_liveness_timeout_secs = match self.stream_liveness_timeout_secs {
+            Some(value) if value <= 0 => anyhow::bail!(
+                "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+            ),
+            Some(value) => value,
+            None => DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64,
+        };
+        let deadline_duration_secs = match self.deadline_duration_secs {
+            Some(value) if value <= 0 => anyhow::bail!(
+                "InferenceProfile {profile_id} deadline_duration_secs must be positive"
+            ),
+            Some(value) => value,
+            None => DEFAULT_DEADLINE_DURATION_SECS as i64,
+        };
+        if stream_liveness_timeout_secs >= deadline_duration_secs {
+            anyhow::bail!(
+                "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
+            );
+        }
+        if self.seed.is_some_and(|value| value < 0) {
+            anyhow::bail!("InferenceProfile {profile_id} seed must be non-negative");
+        }
+        // Empty reasoning effort is unset: DefraDB may materialize nullable
+        // strings as empty values, and exported manifests must round-trip.
+        if self
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| {
+                !matches!(
+                    value,
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            })
+        {
+            anyhow::bail!(
+                "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+            );
+        }
+        Ok(())
+    }
+}
+
 const DEFAULT_INFERENCE_PROFILE_LABEL: &str = "Default";
 
 pub fn default_inference_profile_id_for_behavior(behavior_id: &str) -> String {
@@ -237,9 +288,7 @@ pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     profile: &InferenceProfile,
 ) -> Result<()> {
-    if profile.seed.is_some_and(|seed| seed < 0) {
-        anyhow::bail!("seed must be non-negative");
-    }
+    profile.validate()?;
     let mutation = upsert_inference_profile_mutation(profile);
 
     graphql_mutation_with_transaction_retry(node, &mutation, "upsert InferenceProfile").await?;

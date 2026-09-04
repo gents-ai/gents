@@ -900,7 +900,7 @@ async fn inference_profile_upsert_rejects_negative_seed() {
             .await
             .unwrap_err()
             .to_string(),
-        "seed must be non-negative"
+        "InferenceProfile negative-seed-profile seed must be non-negative"
     );
 }
 
@@ -1112,4 +1112,286 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
         ..Default::default()
     };
     assert!(doc.validate().is_err());
+}
+
+// ---------------------------------------------------------------------------
+// InferenceProfile::validate (#1331) — table-driven from the historical
+// gents-cli desired-state rules (crates/gents-cli/src/desired_state/validate/agent.rs).
+// ---------------------------------------------------------------------------
+
+fn base_profile(profile_id: &str) -> InferenceProfile {
+    InferenceProfile {
+        profile_id: profile_id.to_string(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_defaults() {
+    assert!(base_profile("defaults").validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_stream_liveness_timeout() {
+    for value in [0, -1] {
+        let mut profile = base_profile("liveness");
+        profile.stream_liveness_timeout_secs = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("stream_liveness_timeout_secs must be positive"),
+            "value {value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_deadline() {
+    for value in [0, -1] {
+        let mut profile = base_profile("deadline");
+        profile.stream_liveness_timeout_secs = Some(300);
+        profile.deadline_duration_secs = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("deadline_duration_secs must be positive"),
+            "value {value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_liveness_at_or_past_deadline() {
+    for (liveness, deadline) in [(300, 300), (600, 300)] {
+        let mut profile = base_profile("relationship");
+        profile.stream_liveness_timeout_secs = Some(liveness);
+        profile.deadline_duration_secs = Some(deadline);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "stream_liveness_timeout_secs ({liveness}) must be less than deadline_duration_secs ({deadline})"
+            )),
+            "liveness {liveness} deadline {deadline}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_liveness_shorter_than_deadline() {
+    let mut profile = base_profile("ok-relationship");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(600);
+    assert!(profile.validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_negative_seed() {
+    let mut profile = base_profile("seeded");
+    profile.seed = Some(-1);
+    let error = profile.validate().unwrap_err().to_string();
+    assert_eq!(error, "InferenceProfile seeded seed must be non-negative");
+}
+
+#[test]
+fn inference_profile_validate_accepts_unset_reasoning_effort_in_every_empty_form() {
+    for unset in [None, Some(""), Some("   ")] {
+        let mut profile = base_profile("unset-effort");
+        profile.reasoning_effort = unset.map(str::to_string);
+        assert!(profile.validate().is_ok(), "unset form {unset:?} failed");
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_every_reasoning_effort_in_the_vocabulary() {
+    for value in [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ] {
+        let mut profile = base_profile("vocab");
+        profile.reasoning_effort = Some(value.to_string());
+        assert!(profile.validate().is_ok(), "value {value} failed");
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_reasoning_effort_outside_the_vocabulary() {
+    let mut profile = base_profile("bad-effort");
+    profile.reasoning_effort = Some("extreme".to_string());
+    let error = profile.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("reasoning_effort must be one of"),
+        "{error}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// InferenceBackend::validate lives in `backend_registry` (crate root); see
+// `crates/gents/src/backend_registry/tests.rs` for its table-driven cases.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// AgentBehavior::validate_references (#1331)
+// ---------------------------------------------------------------------------
+
+fn base_behavior(behavior_id: &str) -> AgentBehavior {
+    AgentBehavior {
+        behavior_id: behavior_id.to_string(),
+        agent_did: "did:test:agent".to_string(),
+        display_name: None,
+        description: None,
+        summary: None,
+        system_prompt: None,
+        request_context_template: None,
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
+        created_at: None,
+    }
+}
+
+fn refs_with(
+    backends: &[(&str, &[&str])],
+    tool_selections: &[&str],
+    profiles: &[&str],
+    skills: &[&str],
+) -> ConfigReferences {
+    ConfigReferences {
+        backends: backends
+            .iter()
+            .map(|(id, models)| {
+                (
+                    id.to_string(),
+                    models.iter().map(|m| m.to_string()).collect(),
+                )
+            })
+            .collect(),
+        tool_selections: tool_selections.iter().map(|s| s.to_string()).collect(),
+        profiles: profiles.iter().map(|s| s.to_string()).collect(),
+        skills: skills.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_no_references() {
+    let behavior = base_behavior("empty");
+    let refs = ConfigReferences::default();
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_backend() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("ghost".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(error.contains("references missing backend_id ghost"), "{error}");
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_model_not_advertised() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("GLM-5.2".to_string());
+    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("selects model GLM-5.2 which backend reviewers does not advertise"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_model_when_backend_advertises_none() {
+    // An empty advertised-models list means "any model is accepted" — the
+    // backend hasn't been probed, or advertises nothing specific.
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("anything".to_string());
+    let refs = refs_with(&[("reviewers", &[])], &[], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_advertised_model() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("d4f".to_string());
+    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_tool_selection() {
+    let mut behavior = base_behavior("b");
+    behavior.tool_selection_id = Some("ghost-tools".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing tool_selection_id ghost-tools"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_tool_selection() {
+    let mut behavior = base_behavior("b");
+    behavior.tool_selection_id = Some("known-tools".to_string());
+    let refs = refs_with(&[], &["known-tools"], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_profile() {
+    let mut behavior = base_behavior("b");
+    behavior.inference_profile_id = Some("ghost-profile".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing inference_profile_id ghost-profile"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_profile() {
+    let mut behavior = base_behavior("b");
+    behavior.inference_profile_id = Some("known-profile".to_string());
+    let refs = refs_with(&[], &[], &["known-profile"], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_skill_ref() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_refs = vec!["ghost-skill".to_string()];
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing skill_ref ghost-skill"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_skill_exclude() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_excludes = vec!["ghost-skill".to_string()];
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing skill_exclude ghost-skill"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_skills() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_refs = vec!["known-skill".to_string()];
+    behavior.skill_excludes = vec!["known-skill".to_string()];
+    let refs = refs_with(&[], &[], &[], &["known-skill"]);
+    assert!(behavior.validate_references(&refs).is_ok());
 }

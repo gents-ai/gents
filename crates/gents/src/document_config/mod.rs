@@ -8,6 +8,7 @@ mod graph_run;
 mod graphql_fields;
 mod inference_profile;
 mod principal;
+mod references;
 mod schedule;
 mod serde_helpers;
 mod skill;
@@ -19,6 +20,8 @@ mod tool_selection;
 pub(crate) use chain_key_binding::load_chain_key_binding;
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
 pub(crate) use principal::{load_agent_principal_by_doc_id, load_agent_principal_record};
+
+pub use references::ConfigReferences;
 
 use behavior::create_default_behavior;
 #[allow(unused_imports)]

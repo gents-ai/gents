@@ -210,3 +210,132 @@ fn resolved_api_key_none_when_unset() {
     let backend = backend_with_keys(None, Some("BACKEND_REGISTRY_TEST_KEY_MISSING"));
     assert_eq!(backend.resolved_api_key(), None);
 }
+
+// ---------------------------------------------------------------------------
+// InferenceBackend::validate (#1331) — table-driven from the historical
+// gents-cli desired-state rules (crates/gents-cli/src/desired_state/validate/agent.rs).
+// ---------------------------------------------------------------------------
+
+fn base_backend() -> InferenceBackend {
+    InferenceBackend {
+        backend_id: "reviewers".to_string(),
+        name: "Reviewers".to_string(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: None,
+        endpoint: "http://127.0.0.1:8000/v1".to_string(),
+        api_key: None,
+        api_key_env_var: None,
+        max_concurrent: 4,
+        max_queue_depth: 8,
+        enabled: true,
+        models: vec!["d4f".to_string()],
+        probe_status: UNKNOWN_PROBE_STATUS.to_string(),
+    }
+}
+
+#[test]
+fn inference_backend_validate_accepts_a_well_formed_backend() {
+    assert!(base_backend().validate(None).is_ok());
+}
+
+#[test]
+fn inference_backend_validate_rejects_empty_backend_id() {
+    let mut backend = base_backend();
+    backend.backend_id = "  ".to_string();
+    let error = backend.validate(None).unwrap_err().to_string();
+    assert!(error.contains("backend_id must not be empty"), "{error}");
+}
+
+#[test]
+fn inference_backend_validate_rejects_empty_endpoint() {
+    let mut backend = base_backend();
+    backend.endpoint = "  ".to_string();
+    let error = backend.validate(None).unwrap_err().to_string();
+    assert!(error.contains("endpoint must not be empty"), "{error}");
+}
+
+#[test]
+fn inference_backend_validate_rejects_empty_api_key() {
+    let mut backend = base_backend();
+    backend.api_key = Some("   ".to_string());
+    let error = backend.validate(None).unwrap_err().to_string();
+    assert!(error.contains("api_key must not be empty"), "{error}");
+}
+
+#[test]
+fn inference_backend_validate_rejects_api_key_and_env_var_together() {
+    let mut backend = base_backend();
+    backend.api_key = Some("sk-live".to_string());
+    backend.api_key_env_var = Some("BACKEND_API_KEY".to_string());
+    let error = backend.validate(None).unwrap_err().to_string();
+    assert!(
+        error.contains("must not set both api_key and api_key_env_var"),
+        "{error}"
+    );
+}
+
+#[test]
+fn inference_backend_validate_accepts_api_key_xor_env_var() {
+    let mut with_key = base_backend();
+    with_key.api_key = Some("sk-live".to_string());
+    assert!(with_key.validate(None).is_ok());
+
+    let mut with_env_var = base_backend();
+    with_env_var.api_key_env_var = Some("BACKEND_API_KEY".to_string());
+    assert!(with_env_var.validate(None).is_ok());
+}
+
+#[test]
+fn inference_backend_validate_rejects_non_positive_max_concurrent() {
+    for value in [0, -1] {
+        let mut backend = base_backend();
+        backend.max_concurrent = value;
+        let error = backend.validate(None).unwrap_err().to_string();
+        assert!(error.contains("max_concurrent must be positive"), "{error}");
+    }
+}
+
+#[test]
+fn inference_backend_validate_rejects_non_positive_max_queue_depth() {
+    for value in [0, -1] {
+        let mut backend = base_backend();
+        backend.max_queue_depth = value;
+        let error = backend.validate(None).unwrap_err().to_string();
+        assert!(
+            error.contains("max_queue_depth must be positive"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn inference_backend_validate_no_lockout_rejects_dropping_the_current_model() {
+    let backend = base_backend(); // models: ["d4f"]
+    let error = backend
+        .validate(Some("gone"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("would drop the current model \"gone\""),
+        "{error}"
+    );
+}
+
+#[test]
+fn inference_backend_validate_no_lockout_accepts_the_current_model_still_listed() {
+    let backend = base_backend(); // models: ["d4f"]
+    assert!(backend.validate(Some("d4f")).is_ok());
+}
+
+#[test]
+fn inference_backend_validate_no_lockout_is_skipped_when_models_list_is_empty() {
+    let mut backend = base_backend();
+    backend.models = Vec::new();
+    assert!(backend.validate(Some("anything")).is_ok());
+}
+
+#[test]
+fn inference_backend_validate_no_lockout_is_skipped_without_a_current_model() {
+    let backend = base_backend(); // models: ["d4f"]
+    assert!(backend.validate(None).is_ok());
+}
