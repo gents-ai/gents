@@ -297,6 +297,7 @@ pub(crate) fn stamp_update_meta(
     total_tokens: u64,
     prompt_id: Option<&str>,
     is_replay: Option<bool>,
+    timestamps: UpdateTimestamps,
 ) -> Value {
     let mut meta = Map::new();
     meta.insert("eventId".to_string(), Value::String(event_id.to_string()));
@@ -307,7 +308,26 @@ pub(crate) fn stamp_update_meta(
     if let Some(is_replay) = is_replay {
         meta.insert("isReplay".to_string(), Value::Bool(is_replay));
     }
+    if let Some(value) = timestamps.agent_timestamp_ms {
+        meta.insert("agentTimestampMs".to_string(), Value::from(value));
+    }
+    if let Some(value) = timestamps.stream_start_ms {
+        meta.insert("streamStartMs".to_string(), Value::from(value));
+    }
+    if let Some(value) = timestamps.turn_start_ms {
+        meta.insert("turnStartMs".to_string(), Value::from(value));
+    }
     Value::Object(meta)
+}
+
+/// Server-side timestamps understood by the Grok pager. `streamStartMs` is
+/// also the pager's model-generation boundary key, so it must stay stable
+/// within one generation and change across tool-loop generations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct UpdateTimestamps {
+    pub(crate) agent_timestamp_ms: Option<i64>,
+    pub(crate) stream_start_ms: Option<i64>,
+    pub(crate) turn_start_ms: Option<i64>,
 }
 
 /// Wrap one projected update payload in a `session/update` notification
@@ -323,7 +343,7 @@ pub(crate) fn session_update_notification(session_id: &str, update: Value, meta:
 
 /// Wrap a projected payload on its protocol rail. Standard ACP updates use
 /// `session/update`; live subagent lifecycle updates use Grok's
-/// `x.ai/session_notification` extension rail (the similarly named
+/// `_x.ai/session_notification` wire extension rail (the similarly named
 /// `x.ai/session/update` is a replay alias, not the live method).
 pub(crate) fn session_notification_for_method(
     method: &str,
@@ -340,7 +360,7 @@ pub(crate) fn session_notification_for_method(
     params.insert("_meta".to_string(), meta);
     json!({
         "jsonrpc": "2.0",
-        "method": method,
+        "method": super::acp::wire_method(method),
         "params": Value::Object(params),
     })
 }
@@ -609,8 +629,8 @@ impl ProjectionEngine {
     ///   full tracker registration; a later change to the tracked fields
     ///   (`title`/`kind`/`status`/`content`/`rawInput`/`rawOutput`/`meta`)
     ///   emits a `tool_call_update` carrying exactly the changed fields. The
-    ///   leaves' own redundant `tool_call_update` events are ignored: the
-    ///   base payload already carries the current authoritative status.
+    ///   terminal status has a dedicated status-only update whose delivery
+    ///   is tracked separately from content refinements.
     ///   `available_commands_update` emits once per distinct visible tool
     ///   list.
     /// - subagents: one event per distinct payload per
@@ -660,6 +680,7 @@ impl ProjectionEngine {
             self.bound.effective_context_window(),
         )
         .await?;
+        cursor.observe_timestamps(&messages);
         self.sequencer.apply_token_observation(
             session_id,
             token_high_water,
@@ -685,6 +706,22 @@ impl ProjectionEngine {
             cursor.live_cursors.clone()
         };
         if let Some(history) = messages.history.as_deref() {
+            let mut active_segment_key: Option<String> = None;
+            let history_segment_keys: Vec<Option<String>> = history
+                .iter()
+                .map(|snapshot| {
+                    if snapshot.content().is_empty() && snapshot.reasoning().is_empty() {
+                        active_segment_key = None;
+                    } else if active_segment_key.is_none() {
+                        active_segment_key = Some(format!(
+                            "{}:{}",
+                            messages.response_doc_id.as_deref().unwrap_or(request_id),
+                            snapshot.cid
+                        ));
+                    }
+                    active_segment_key.clone()
+                })
+                .collect();
             let reasoning_start =
                 replay_start(history, planned_live.reasoning.absorbed_commit.as_deref());
             let content_start =
@@ -729,6 +766,9 @@ impl ProjectionEngine {
                         .plan(observed, progress_seq, is_reasoning, true)
                         .unwrap_or_else(|| (String::new(), live.anchor_plan(&snapshot.cid)));
                     plan.absorbed_commit = Some(snapshot.cid.clone());
+                    if plan.segment_key.is_none() && !plan.sent_bytes.is_empty() {
+                        plan.segment_key = history_segment_keys[snapshot_index].clone();
+                    }
 
                     // A reset/divergence closes exactly the preceding
                     // delivered segment. Preserve it in order for later
@@ -747,6 +787,7 @@ impl ProjectionEngine {
                             )
                             .or_else(|| inferred_row.clone()),
                             history_height: snapshot.height,
+                            segment_key: before.segment_key.clone(),
                         });
                     }
                     // A final/interrupted materialization stamp can bind the
@@ -766,6 +807,7 @@ impl ProjectionEngine {
                                     &durable_rows,
                                 ),
                                 history_height: snapshot.height,
+                                segment_key: plan.segment_key.clone(),
                             });
                         }
                     }
@@ -784,6 +826,7 @@ impl ProjectionEngine {
                                 snapshot.materialized_message_sequence(),
                                 row,
                                 snapshot.height,
+                                plan.segment_key.clone(),
                             );
                         }
                     }
@@ -791,11 +834,6 @@ impl ProjectionEngine {
                     if delta.is_empty() {
                         continue;
                     }
-                    let advance = if is_reasoning {
-                        CursorAdvance::LiveReasoning { plan, progress_seq }
-                    } else {
-                        CursorAdvance::LiveContent { plan, progress_seq }
-                    };
                     let chronology = inferred_row
                         .as_ref()
                         .map(|row| row.sequence)
@@ -809,10 +847,20 @@ impl ProjectionEngine {
                                 .then_some(messages.live_tail.assistant_sequence)
                                 .flatten()
                         });
+                    let timing = plan
+                        .segment_key
+                        .clone()
+                        .map(|segment_key| cursor.timing_for_segment(segment_key, chronology));
+                    let advance = if is_reasoning {
+                        CursorAdvance::LiveReasoning { plan, progress_seq }
+                    } else {
+                        CursorAdvance::LiveContent { plan, progress_seq }
+                    };
                     merged.push(MergedEvent {
                         event: NovelProjectionEvent {
                             method: SESSION_UPDATE_METHOD,
                             payload: messages::MessageUpdate::chunk_payload(kind, delta),
+                            timing,
                             advance,
                         },
                         chronology,
@@ -824,36 +872,52 @@ impl ProjectionEngine {
                     });
                 }
             }
+            // Cross-document race: the runtime persists an assistant
+            // AgentMessage before it stamps/resets AgentResponse. If that row
+            // appears after this rail already absorbed the unchanged history
+            // tip, replay_start has no snapshots to revisit. Bind the proven
+            // tip segment to its uniquely inferred row here so the durable
+            // pass cannot replay bytes already delivered live.
+            if let Some((tip_index, tip)) = history
+                .len()
+                .checked_sub(1)
+                .map(|index| (index, &history[index]))
+            {
+                if let Some(row) = history_rows.get(&tip_index) {
+                    bind_open_tip_evidence(
+                        &mut planned_live.reasoning,
+                        row,
+                        EvidenceRail::Reasoning,
+                        &durable_rows,
+                        tip.height,
+                    );
+                    bind_open_tip_evidence(
+                        &mut planned_live.content,
+                        row,
+                        EvidenceRail::Content,
+                        &durable_rows,
+                        tip.height,
+                    );
+                }
+            }
         }
         // 4. Tools (lifecycle of the request's tool calls).
         let tools = tools::project_tools(&self.node, request_id, session_id).await?;
-        let mut terminal_covered_by_base_diff = std::collections::BTreeSet::new();
         for (index, update) in tools.updates.iter().enumerate() {
             let chronology = tools.chronology.get(index).copied().flatten();
             match update {
                 tools::ToolUpdate::ToolCall(base) => {
                     let payload = base.to_payload();
-                    let previously_seen = cursor.tool_bases.contains_key(&base.tool_call_id);
-                    let Some((emitted, mut advance)) =
+                    let Some((emitted, advance)) =
                         cursor.tool_base_novel(&base.tool_call_id, &payload)
                     else {
                         continue;
                     };
-                    if previously_seen && base.status.is_completed() {
-                        let status = base.status.wire_name().to_string();
-                        advance = CursorAdvance::Many(vec![
-                            advance,
-                            CursorAdvance::ToolTerminal {
-                                tool_call_id: base.tool_call_id.clone(),
-                                status,
-                            },
-                        ]);
-                        terminal_covered_by_base_diff.insert(base.tool_call_id.clone());
-                    }
                     merged.push(MergedEvent {
                         event: NovelProjectionEvent {
                             method: SESSION_UPDATE_METHOD,
                             payload: emitted,
+                            timing: None,
                             advance,
                         },
                         chronology,
@@ -865,9 +929,6 @@ impl ProjectionEngine {
                     });
                 }
                 tools::ToolUpdate::ToolCallUpdate(update) => {
-                    if terminal_covered_by_base_diff.contains(&update.tool_call_id) {
-                        continue;
-                    }
                     let status = update
                         .fields
                         .get("status")
@@ -884,6 +945,7 @@ impl ProjectionEngine {
                                 &update.tool_call_id,
                                 &update.fields,
                             ),
+                            timing: None,
                             advance,
                         },
                         chronology,
@@ -904,6 +966,7 @@ impl ProjectionEngine {
                         event: NovelProjectionEvent {
                             method: SESSION_UPDATE_METHOD,
                             payload,
+                            timing: None,
                             advance,
                         },
                         chronology,
@@ -937,6 +1000,7 @@ impl ProjectionEngine {
                 event: NovelProjectionEvent {
                     method: SUBAGENT_NOTIFICATION_METHOD,
                     payload,
+                    timing: None,
                     advance,
                 },
                 chronology,
@@ -1017,9 +1081,6 @@ impl ProjectionEngine {
             let mut row_offsets: BTreeMap<(DurableRowIdentity, EvidenceRail), usize> =
                 BTreeMap::new();
             for (index, update) in messages.updates.iter().enumerate() {
-                if matches!(update, messages::MessageUpdate::UserMessageChunk { .. }) {
-                    continue;
-                }
                 let Some(key) = messages.update_keys.get(index) else {
                     continue;
                 };
@@ -1027,6 +1088,41 @@ impl ProjectionEngine {
                     continue;
                 }
                 let chronology = messages.chronology.get(index).copied().flatten();
+                if let messages::MessageUpdate::UserMessageChunk { text } = update {
+                    // Server wakeups are durable transcript entries. Show
+                    // those exact rows, while the foreground echo and hidden
+                    // context/instruction inputs stay on their existing path.
+                    let is_notification = durable_message_key(key, update.session_update_kind())
+                        .is_some_and(gents::background_completion::is_background_completion_notification_message_key);
+                    if is_notification {
+                        let planned = planned_durable.entry(key.clone()).or_default();
+                        let sent_len = text
+                            .strip_prefix(&planned.sent_text)
+                            .map(|suffix| text.len() - suffix.len())
+                            .unwrap_or(0);
+                        if sent_len < text.len() {
+                            merged.push(MergedEvent {
+                                event: NovelProjectionEvent {
+                                    method: SESSION_UPDATE_METHOD,
+                                    payload: messages::MessageUpdate::chunk_payload(
+                                        update.session_update_kind(),
+                                        &text[sent_len..],
+                                    ),
+                                    timing: None,
+                                    advance: CursorAdvance::DurableChunk {
+                                        message_key: key.clone(),
+                                        sent_text: text.clone(),
+                                    },
+                                },
+                                chronology,
+                                family_rank: FAMILY_RANK_MESSAGE,
+                                family_ordinal: index,
+                            });
+                            planned.sent_text = text.clone();
+                        }
+                    }
+                    continue;
+                }
                 let (rail, text) = match update {
                     messages::MessageUpdate::AgentMessageChunk { text } => {
                         (EvidenceRail::Content, text)
@@ -1057,12 +1153,12 @@ impl ProjectionEngine {
                         }
                     })
                 });
-                let evidence = chronology
-                    .and_then(|_| {
-                        live.closed_evidence
-                            .iter()
-                            .find(|evidence| evidence.bound_row.as_ref() == row_identity.as_ref())
-                    })
+                let bound_evidence = chronology.and_then(|_| {
+                    live.closed_evidence
+                        .iter()
+                        .find(|evidence| evidence.bound_row.as_ref() == row_identity.as_ref())
+                });
+                let evidence = bound_evidence
                     .map(|evidence| evidence.sent_bytes.as_str())
                     .unwrap_or_default();
                 let row_offset = row_identity
@@ -1107,10 +1203,20 @@ impl ProjectionEngine {
                 // all char boundaries of `text`.
                 let suffix = text[sent_len..].to_string();
                 let payload_kind = update.session_update_kind();
+                let segment_key = bound_evidence
+                    .and_then(|evidence| evidence.segment_key.clone())
+                    .or_else(|| {
+                        row_identity.as_ref().map(|identity| {
+                            format!("message:{}:{}", identity.sequence, identity.message_key)
+                        })
+                    });
+                let timing = segment_key
+                    .map(|segment_key| cursor.timing_for_segment(segment_key, chronology));
                 merged.push(MergedEvent {
                     event: NovelProjectionEvent {
                         method: SESSION_UPDATE_METHOD,
                         payload: messages::MessageUpdate::chunk_payload(payload_kind, suffix),
+                        timing,
                         advance: CursorAdvance::DurableChunk {
                             message_key: key.clone(),
                             sent_text: text.clone(),
@@ -1224,8 +1330,20 @@ pub(crate) struct NovelProjectionEvent {
     /// The `session/update` payload (`sessionUpdate` object) to wrap and
     /// send.
     pub(crate) payload: Value,
+    /// Stable logical model-generation identity and its best durable start
+    /// candidate. The turn sender resolves this into one request-local,
+    /// strictly increasing `streamStartMs` and reuses it on every later
+    /// chunk/retry of the same segment.
+    pub(crate) timing: Option<ProjectionEventTiming>,
     /// The advance that records this event as delivered once it is sent.
     pub(crate) advance: CursorAdvance,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ProjectionEventTiming {
+    pub(crate) segment_key: String,
+    pub(crate) stream_start_candidate_ms: Option<i64>,
+    pub(crate) agent_timestamp_candidate_ms: Option<i64>,
 }
 
 /// One fully planned projection poll.
@@ -1306,6 +1424,10 @@ pub(crate) enum CursorAdvance {
 /// the real cursor's *delivered* state.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiveSegmentPlan {
+    /// Stable identity of the current logical model generation. Assigned
+    /// from the first response-history commit that carries bytes after a
+    /// reset and retained across later prefix-growth commits.
+    segment_key: Option<String>,
     /// The observed tail snapshot after this send.
     observed: String,
     /// How many bytes of the current segment's logical stream were
@@ -1370,6 +1492,8 @@ pub(crate) struct LiveSegmentPlan {
 /// shows is ever lost.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct LiveSegmentCursor {
+    /// See [`LiveSegmentPlan::segment_key`].
+    segment_key: Option<String>,
     /// The most recently observed snapshot of the live tail.
     observed: String,
     /// How many bytes of the current segment's logical stream were already
@@ -1418,6 +1542,7 @@ struct ClosedEvidence {
     materialized_sequence: Option<i64>,
     bound_row: Option<DurableRowIdentity>,
     history_height: i64,
+    segment_key: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1600,6 +1725,7 @@ fn upsert_bound_evidence(
     materialized_sequence: Option<i64>,
     row: DurableRowIdentity,
     history_height: i64,
+    segment_key: Option<String>,
 ) {
     if let Some(existing) = evidence
         .iter_mut()
@@ -1609,6 +1735,7 @@ fn upsert_bound_evidence(
             existing.sent_bytes = sent_bytes;
         }
         existing.materialized_sequence = existing.materialized_sequence.or(materialized_sequence);
+        existing.segment_key = existing.segment_key.clone().or(segment_key);
         return;
     }
     evidence.push(ClosedEvidence {
@@ -1616,7 +1743,40 @@ fn upsert_bound_evidence(
         materialized_sequence,
         bound_row: Some(row),
         history_height,
+        segment_key,
     });
+}
+
+fn bind_open_tip_evidence(
+    live: &mut LiveSegmentCursor,
+    row: &DurableRowIdentity,
+    rail: EvidenceRail,
+    rows: &[DurableRowView],
+    history_height: i64,
+) {
+    if live.sent_bytes.is_empty() {
+        return;
+    }
+    let Some(view) = rows.iter().find(|view| &view.identity == row) else {
+        return;
+    };
+    let durable = match rail {
+        EvidenceRail::Content => &view.content,
+        EvidenceRail::Reasoning => &view.reasoning,
+    };
+    if !durable.starts_with(&live.sent_bytes) {
+        return;
+    }
+    let sent_bytes = live.sent_bytes.clone();
+    let segment_key = live.segment_key.clone();
+    upsert_bound_evidence(
+        &mut live.closed_evidence,
+        sent_bytes,
+        None,
+        row.clone(),
+        history_height,
+        segment_key,
+    );
 }
 
 fn bind_durable_evidence(
@@ -1748,6 +1908,7 @@ impl LiveSegmentCursor {
     /// against — every rebase must re-stamp it, never inherit a stale one).
     fn fresh_segment_plan(&self, observed: &str) -> LiveSegmentPlan {
         LiveSegmentPlan {
+            segment_key: None,
             observed: observed.to_string(),
             sent_len: observed.len(),
             sent_bytes: observed.to_string(),
@@ -1779,6 +1940,7 @@ impl LiveSegmentCursor {
                             completed: String|
          -> LiveSegmentPlan {
             LiveSegmentPlan {
+                segment_key: self.segment_key.clone(),
                 observed,
                 sent_len,
                 sent_bytes,
@@ -1806,6 +1968,7 @@ impl LiveSegmentCursor {
             return Some((
                 String::new(),
                 LiveSegmentPlan {
+                    segment_key: None,
                     observed: String::new(),
                     sent_len: 0,
                     sent_bytes: String::new(),
@@ -1832,6 +1995,7 @@ impl LiveSegmentCursor {
             return Some((
                 String::new(),
                 LiveSegmentPlan {
+                    segment_key: self.segment_key.clone(),
                     observed: observed.to_string(),
                     sent_len: self.sent_len,
                     sent_bytes: self.sent_bytes.clone(),
@@ -1870,6 +2034,7 @@ impl LiveSegmentCursor {
                 return Some((
                     String::new(),
                     LiveSegmentPlan {
+                        segment_key: self.segment_key.clone(),
                         observed: observed.to_string(),
                         sent_len: self.sent_len,
                         sent_bytes: self.sent_bytes.clone(),
@@ -1946,6 +2111,7 @@ impl LiveSegmentCursor {
                 return Some((
                     String::new(),
                     LiveSegmentPlan {
+                        segment_key: self.segment_key.clone(),
                         observed: observed.to_string(),
                         sent_len: self.sent_len,
                         sent_bytes: self.sent_bytes.clone(),
@@ -1967,6 +2133,7 @@ impl LiveSegmentCursor {
 
     /// Commit one planned (and successfully sent) state into this cursor.
     fn commit(&mut self, plan: LiveSegmentPlan, progress_seq: Option<u64>) {
+        self.segment_key = plan.segment_key;
         self.observed = plan.observed;
         self.sent_len = plan.sent_len;
         self.sent_bytes = plan.sent_bytes;
@@ -1988,6 +2155,7 @@ impl LiveSegmentCursor {
     /// composite anchor without inventing a wire update.
     fn anchor_plan(&self, cid: &str) -> LiveSegmentPlan {
         LiveSegmentPlan {
+            segment_key: self.segment_key.clone(),
             observed: self.observed.clone(),
             sent_len: self.sent_len,
             sent_bytes: self.sent_bytes.clone(),
@@ -2211,6 +2379,12 @@ pub(crate) struct RequestCursor {
     /// Last transcript sequence whose complete projection batch succeeded.
     /// Queries include this row because the current assistant row may grow.
     message_sequence_high_water: Option<i64>,
+    /// Timestamp evidence is observation state, not delivery state. Retain
+    /// it across incremental pages so a growing current assistant row keeps
+    /// the same start derived from its preceding tool-result/input row.
+    timing_response_doc: Option<String>,
+    response_started_at_ms: Option<i64>,
+    message_timestamps: BTreeMap<i64, (String, Option<i64>)>,
 }
 
 /// The rail one row's live evidence streamed on.
@@ -2223,6 +2397,64 @@ enum EvidenceRail {
 impl RequestCursor {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    fn observe_timestamps(&mut self, messages: &messages::MessageProjection) {
+        if self.timing_response_doc != messages.response_doc_id {
+            self.timing_response_doc = messages.response_doc_id.clone();
+            self.response_started_at_ms = messages.response_started_at_ms;
+            self.message_timestamps.clear();
+        } else if self.response_started_at_ms.is_none() {
+            self.response_started_at_ms = messages.response_started_at_ms;
+        }
+        for row in &messages.timeline {
+            let entry = self
+                .message_timestamps
+                .entry(row.sequence)
+                .or_insert_with(|| (row.message_key.clone(), row.timestamp_ms));
+            if entry.0 == row.message_key {
+                entry.1 = match (entry.1, row.timestamp_ms) {
+                    (Some(old), Some(new)) => Some(old.min(new)),
+                    (old, new) => old.or(new),
+                };
+            }
+        }
+    }
+
+    fn timing_for_segment(
+        &self,
+        segment_key: String,
+        chronology: Option<i64>,
+    ) -> ProjectionEventTiming {
+        let stream_start_candidate_ms = chronology
+            .and_then(|sequence| {
+                self.message_timestamps
+                    .range(..sequence)
+                    .rev()
+                    .find_map(|(_, (_, timestamp))| *timestamp)
+            })
+            .or_else(|| {
+                chronology
+                    .is_none()
+                    .then(|| {
+                        self.message_timestamps
+                            .iter()
+                            .rev()
+                            .find_map(|(_, (_, timestamp))| *timestamp)
+                    })
+                    .flatten()
+            })
+            .or(self.response_started_at_ms);
+        let agent_timestamp_candidate_ms = chronology.and_then(|sequence| {
+            self.message_timestamps
+                .get(&sequence)
+                .and_then(|(_, timestamp)| *timestamp)
+        });
+        ProjectionEventTiming {
+            segment_key,
+            stream_start_candidate_ms,
+            agent_timestamp_candidate_ms,
+        }
     }
 
     /// The novel event for one tool call's base payload: the full
@@ -2241,7 +2473,19 @@ impl RequestCursor {
         match self.tool_bases.get(tool_call_id) {
             None => Some((payload.clone(), advance)),
             Some(last_sent) => {
-                let fields = changed_tool_fields(last_sent, payload)?;
+                let mut fields = changed_tool_fields(last_sent, payload)?;
+                // Lifecycle completion has its own status-only event and
+                // send-success cursor. A content refinement must not consume
+                // that event if delivery stops between the two sends.
+                if matches!(
+                    payload.get("status").and_then(Value::as_str),
+                    Some("completed" | "failed")
+                ) {
+                    fields.as_object_mut()?.remove("status");
+                    if fields.as_object()?.is_empty() {
+                        return None;
+                    }
+                }
                 Some((
                     tools::tool_call_update_payload(tool_call_id, &fields),
                     advance,
@@ -2953,20 +3197,39 @@ mod tests {
 
     #[test]
     fn stamp_update_meta_carries_event_tokens_prompt_and_replay_keys() {
-        let fresh = stamp_update_meta("s-1", 64, Some("prompt-9"), None);
+        let fresh = stamp_update_meta(
+            "s-1",
+            64,
+            Some("prompt-9"),
+            None,
+            UpdateTimestamps {
+                agent_timestamp_ms: Some(1_700_000_003_200),
+                stream_start_ms: Some(1_700_000_000_000),
+                turn_start_ms: Some(1_699_999_999_000),
+            },
+        );
         assert_eq!(fresh["eventId"], "s-1");
         assert_eq!(fresh["totalTokens"], 64);
         assert_eq!(fresh["promptId"], "prompt-9");
+        assert_eq!(fresh["agentTimestampMs"], 1_700_000_003_200i64);
+        assert_eq!(fresh["streamStartMs"], 1_700_000_000_000i64);
+        assert_eq!(fresh["turnStartMs"], 1_699_999_999_000i64);
         assert!(
             fresh.get("isReplay").is_none(),
             "fresh updates omit the key"
         );
 
-        let replay = stamp_update_meta("s-2", 64, None, Some(true));
+        let replay = stamp_update_meta("s-2", 64, None, Some(true), UpdateTimestamps::default());
         assert_eq!(replay["isReplay"], true);
         assert!(replay.get("promptId").is_none());
 
-        let echo = stamp_update_meta("s-3", 0, Some("prompt-1"), Some(false));
+        let echo = stamp_update_meta(
+            "s-3",
+            0,
+            Some("prompt-1"),
+            Some(false),
+            UpdateTimestamps::default(),
+        );
         assert_eq!(echo["isReplay"], false);
         assert_eq!(echo["promptId"], "prompt-1");
         assert_eq!(echo["totalTokens"], 0);
@@ -2974,7 +3237,13 @@ mod tests {
 
     #[test]
     fn session_update_notification_wraps_payload_with_session_and_meta() {
-        let meta = stamp_update_meta("session-1-1", 64, Some("prompt-1"), None);
+        let meta = stamp_update_meta(
+            "session-1-1",
+            64,
+            Some("prompt-1"),
+            None,
+            UpdateTimestamps::default(),
+        );
         let notification = session_update_notification(
             "session-1",
             json!({
@@ -2995,6 +3264,16 @@ mod tests {
         assert_eq!(notification["params"]["_meta"]["promptId"], "prompt-1");
         assert_eq!(notification["params"]["_meta"]["eventId"], "session-1-1");
         assert_eq!(notification["params"]["_meta"]["totalTokens"], 64);
+        let extension = session_notification_for_method(
+            SUBAGENT_NOTIFICATION_METHOD,
+            "session-1",
+            json!({"sessionUpdate": "subagent_spawned"}),
+            json!({}),
+        );
+        assert_eq!(
+            extension["method"], "_x.ai/session_notification",
+            "ACP SDK requires the extension marker on serialized methods"
+        );
     }
 
     #[test]
@@ -3722,6 +4001,7 @@ mod tests {
                     sequence: {sequence}
                     role: "assistant"
                     content: "{escaped_message}"
+                    timestamp: "2026-08-31T23:00:05Z"
                 }}) {{ _docID }}
             }}"#
         );
@@ -3841,6 +4121,30 @@ mod tests {
         assert!(third.is_empty(), "an unchanged tail is not novel");
     }
 
+    #[tokio::test]
+    async fn reasoning_and_content_in_one_generation_share_a_stream_identity() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-one-stream";
+        let request_id = "req-one-stream";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
+        update_response_tail(&engine, request_id, "answer", "thinking", 1, 1).await;
+        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let keys: Vec<_> = events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .timing
+                    .as_ref()
+                    .map(|timing| timing.segment_key.as_str())
+            })
+            .collect();
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0], keys[1]);
+    }
+
     /// 2. A missed poll window (the live tail reset before the final row was
     /// observed) plus the durable final row emits only the never-sent
     /// suffix, never a replay of the already-sent prefix.
@@ -3905,6 +4209,172 @@ mod tests {
         assert!(
             second.is_empty(),
             "a fully live-sent final row never replays durably"
+        );
+    }
+
+    #[tokio::test]
+    async fn durable_wakeup_notification_projects_once_without_internal_inputs() {
+        let (_dir, engine) = embedded_engine().await;
+        let mut cursor = RequestCursor::new();
+        let mut tokens = 0;
+        for (sequence, key, text) in [
+            (1, "wake-context", "private context"),
+            (
+                2,
+                "background-completion-notification:call:tool",
+                "<tool-completion status=\"completed\"><result>done</result></tool-completion>",
+            ),
+            (
+                3,
+                "wake-instruction",
+                "Review background results and continue",
+            ),
+        ] {
+            let response = engine
+                .node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentMessage(input: {{
+                    message_key: "{}", session_id: "s-wakeup", request_id: "r-wakeup",
+                    agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
+                    sequence: {sequence}, role: "user", content: "{}"
+                }}) {{ _docID }} }}"#,
+                    gents::graphql::escape_graphql_string(key),
+                    gents::graphql::escape_graphql_string(text)
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let unsent = engine
+            .project_request_updates("s-wakeup", "r-wakeup", &mut tokens, &mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(unsent.len(), 1);
+        assert_eq!(unsent[0].payload["sessionUpdate"], "user_message_chunk");
+        assert!(unsent[0].payload["content"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("<tool-completion"));
+        let sent = deliver(&engine, "s-wakeup", "r-wakeup", &mut tokens, &mut cursor).await;
+        assert_eq!(sent.len(), 1, "unsent notification retries");
+        assert_eq!(sent[0].payload, unsent[0].payload);
+        assert!(
+            deliver(&engine, "s-wakeup", "r-wakeup", &mut tokens, &mut cursor)
+                .await
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_tool_terminal_retries_after_content_refinement_delivery() {
+        let (_dir, engine) = embedded_engine().await;
+        let mut cursor = RequestCursor::new();
+        let mut tokens = 0;
+        let doc = seed_tool_call_row(
+            &engine,
+            "s-failed",
+            "r-failed",
+            None,
+            "failed-call",
+            "bash",
+            2,
+            None,
+        )
+        .await;
+        let response = engine.node.execute(&format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "running", result: null }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(&doc))).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor).await;
+        let response = engine.node.execute(&format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "failed", result: "exit 7" }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(&doc))).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let batch = engine
+            .project_request_updates("s-failed", "r-failed", &mut tokens, &mut cursor)
+            .await
+            .unwrap();
+        let updates: Vec<_> = batch
+            .iter()
+            .filter(|event| event.payload["toolCallId"] == "failed-call")
+            .collect();
+        assert_eq!(updates.len(), 2);
+        assert!(updates[0].payload.get("status").is_none());
+        assert_eq!(
+            updates[1].payload,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "failed-call", "status": "failed"})
+        );
+        // The socket accepts the output refinement then fails before status.
+        cursor.record(updates[0].advance.clone());
+        let retry = deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor).await;
+        let terminal: Vec<_> = retry
+            .iter()
+            .filter(|event| event.payload["toolCallId"] == "failed-call")
+            .collect();
+        assert_eq!(terminal.len(), 1);
+        assert_eq!(terminal[0].payload, updates[1].payload);
+        assert!(
+            deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor)
+                .await
+                .is_empty()
+        );
+    }
+
+    /// Production-order regression: two live prefix polls are followed by
+    /// the durable row, materialization stamp, and only then the tail reset.
+    /// The durable row must not replay the full value after both live deltas
+    /// already reconstructed it on the wire.
+    #[tokio::test]
+    async fn split_live_growth_then_materialize_before_reset_never_duplicates() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-live-materialize-order";
+        let request_id = "req-live-materialize-order";
+        let mut tokens = 0u64;
+        let mut cursor = RequestCursor::new();
+
+        seed_response_row(
+            &engine,
+            session_id,
+            request_id,
+            "DUPLICATION_SENTIN",
+            "",
+            1,
+            0,
+            None,
+        )
+        .await;
+        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&first),
+            vec![("agent_message_chunk".into(), "DUPLICATION_SENTIN".into())]
+        );
+
+        update_response_tail(&engine, request_id, "DUPLICATION_SENTINEL_9472", "", 2, 0).await;
+        let growth = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&growth),
+            vec![("agent_message_chunk".into(), "EL_9472".into())]
+        );
+
+        seed_assistant_text_row(
+            &engine,
+            session_id,
+            request_id,
+            5,
+            "DUPLICATION_SENTINEL_9472",
+        )
+        .await;
+        let open_row = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            chunk_texts(&open_row).is_empty(),
+            "a durable row appearing while its fully sent tail is still open must not replay"
+        );
+        update_materialized_sequence(&engine, request_id, 5).await;
+        update_response_tail(&engine, request_id, "", "", 2, 0).await;
+
+        let materialized = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        assert!(
+            chunk_texts(&materialized).is_empty(),
+            "fully live-sent bytes must suppress the later durable row"
         );
     }
 
@@ -4021,6 +4491,20 @@ mod tests {
                 ("agent_message_chunk".into(), "B".into()),
             ]
         );
+        let segment_keys: Vec<_> = events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .timing
+                    .as_ref()
+                    .map(|timing| timing.segment_key.as_str())
+            })
+            .collect();
+        assert_eq!(segment_keys.len(), 2);
+        assert_ne!(
+            segment_keys[0], segment_keys[1],
+            "a reset opens a distinct pager stream generation"
+        );
         assert!(
             deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
                 .await
@@ -4117,6 +4601,9 @@ mod tests {
             chunk_texts(&events),
             vec![("agent_message_chunk".into(), "hello".into())]
         );
+        let timing = events[0].timing.as_ref().expect("message timing");
+        assert_eq!(timing.stream_start_candidate_ms, Some(1_788_217_200_000));
+        assert_eq!(timing.agent_timestamp_candidate_ms, Some(1_788_217_205_000));
         assert!(
             deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
                 .await
@@ -4133,12 +4620,14 @@ mod tests {
                     materialized_sequence: None,
                     bound_row: None,
                     history_height: 2,
+                    segment_key: None,
                 },
                 ClosedEvidence {
                     sent_bytes: "B".into(),
                     materialized_sequence: None,
                     bound_row: None,
                     history_height: 4,
+                    segment_key: None,
                 },
             ],
             ..LiveSegmentCursor::default()

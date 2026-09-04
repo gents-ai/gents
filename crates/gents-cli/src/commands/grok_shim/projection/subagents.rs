@@ -405,13 +405,27 @@ pub(super) async fn project_subagents(
         .map(spawn_timeline_row)
         .collect::<Vec<_>>();
 
-    // Use the runtime timeline's single provenance predicate verbatim. A
-    // logical parent id alone is never admission: tool-spawned children must
-    // bind the exact physical parent and tool documents, while the runtime's
-    // modeled request-only control continuations retain their shared rule.
+    // The timeline includes control continuations as well as spawned agents.
+    // Only a tool-spawned child in a distinct session is a pager subagent;
+    // retain the shared provenance predicate to validate its physical bridge.
     let mut children = candidate_children
         .into_iter()
         .filter(|child| {
+            if child.session_id.trim().is_empty()
+                || child.session_id == parent_session_id
+                || child
+                    .caused_by_parent_tool_call_id
+                    .as_deref()
+                    .and_then(nonempty)
+                    .is_none()
+                || child
+                    .caused_by_parent_tool_call_doc_id
+                    .as_deref()
+                    .and_then(nonempty)
+                    .is_none()
+            {
+                return false;
+            }
             let Some(timeline_child) = child_timeline_row(child) else {
                 return false;
             };
@@ -2113,6 +2127,9 @@ mod tests {
             .and_then(Value::as_str)
             .expect("bridge document id");
         let escaped_tool_doc = escape_graphql_string(tool_doc_id);
+        let control_metadata = escape_graphql_string(
+            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"wake:1","queued_after_request_id":"parent-req-embedded-interrupt"},"background_completion_wake_version":1}"#,
+        );
 
         // Only the first child has the runtime's full logical+physical
         // provenance. The forged logical-only sibling must not project.
@@ -2121,7 +2138,7 @@ mod tests {
                 child: create_AgentRequest(input: {{
                     request_id: "{escaped_child}"
                     agent_did: "did:test:grok-shim"
-                    session_id: "{escaped_session}"
+                    session_id: "child-session"
                     caused_by_parent_request_id: "{escaped_parent}"
                     caused_by_parent_request_doc_id: "{escaped_parent_doc}"
                     caused_by_parent_tool_call_id: "call-child"
@@ -2152,6 +2169,17 @@ mod tests {
                     retry_count: 0
                     max_retries: 3
                 }}) {{ _docID }}
+                control: create_AgentRequest(input: {{
+                    request_id: "valid-background-control"
+                    agent_did: "did:test:grok-shim"
+                    session_id: "{escaped_session}"
+                    caused_by_parent_request_id: "{escaped_parent}"
+                    caused_by_parent_request_doc_id: "{escaped_parent_doc}"
+                    content: "Review the new background completion results"
+                    lifecycle_state: "processing"
+                    metadata: "{control_metadata}"
+                    created_at: "2026-08-31T22:46:47Z"
+                }}) {{ _docID }}
             }}"#
         );
         let response = node.execute(&seed_children).await;
@@ -2160,6 +2188,20 @@ mod tests {
             "child seed failed: {:?}",
             response.errors
         );
+
+        // This is a valid timeline control link, not a malformed child. It
+        // must still be absent from the narrower subagent UI projection.
+        let candidates = node.execute(&child_requests_query(parent_request_id)).await;
+        let parents = decode_rows::<TimelineRequestRow>(&candidates, "parent", "parent");
+        let control = decode_child_rows(&candidates)
+            .into_iter()
+            .find(|child| child.request_id == "valid-background-control")
+            .unwrap();
+        assert!(child_bridge_is_corroborated(
+            &parents[0],
+            &child_timeline_row(&control).unwrap(),
+            &[]
+        ));
 
         // The actual production query/decoder path, not hand-built rows.
         let projection = project_subagents(&node, parent_request_id, session_id, 262_144)
@@ -2180,7 +2222,14 @@ mod tests {
             panic!("second update should be the finish");
         };
         assert_eq!(finished.status, SubagentFinishStatus::Cancelled);
-        assert_eq!(finished.child_session_id, session_id);
+        assert_eq!(finished.child_session_id, "child-session");
+        assert!(
+            projection
+                .updates
+                .iter()
+                .all(|update| update.subagent_id() != session_id),
+            "a valid same-session control continuation is never a subagent"
+        );
         assert!(projection
             .updates
             .iter()

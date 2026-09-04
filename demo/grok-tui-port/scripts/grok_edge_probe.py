@@ -32,15 +32,15 @@ MAX_FRAME = 64 * 1024 * 1024
 #
 # Standard ACP content/tool updates ride `session/update`. Live Grok
 # subagent lifecycle events ride the extension notification
-# `x.ai/session_notification`; `x.ai/session/update` is only a replay-path
+# `_x.ai/session_notification`; `_x.ai/session/update` is only a replay-path
 # alias the pager accepts, not the exact live rail. The two rails have
 # SEPARATE applied-event high-water semantics: extension notifications may
 # omit `totalTokens` entirely, and transient progress may carry no metadata
 # at all, so no single global monotonic event id/token counter may be
 # demanded across both rails.
 STANDARD_UPDATE_METHOD = "session/update"
-EXT_SESSION_NOTIFICATION_METHOD = "x.ai/session_notification"
-EXT_SESSION_UPDATE_ALIAS_METHOD = "x.ai/session/update"
+EXT_SESSION_NOTIFICATION_METHOD = "_x.ai/session_notification"
+EXT_SESSION_UPDATE_ALIAS_METHOD = "_x.ai/session/update"
 SUBAGENT_LIFECYCLE_METHODS = (
     EXT_SESSION_NOTIFICATION_METHOD,
     EXT_SESSION_UPDATE_ALIAS_METHOD,
@@ -143,6 +143,11 @@ class LeaderClient:
         require(self.recv_frame() == {"type": "pong"}, "ping did not return pong")
 
     def send_acp(self, payload: dict[str, Any]) -> None:
+        # ACP's SDK prefixes extension methods on the wire and strips the
+        # prefix before invoking Grok's internal x.ai handlers.
+        method = payload.get("method", "")
+        if method.startswith("x.ai/"):
+            payload = {**payload, "method": "_" + method}
         self.send_frame(
             {
                 "type": "acp",
@@ -186,6 +191,72 @@ class LeaderClient:
         self.send_acp({"jsonrpc": "2.0", "method": method, "params": params})
 
 
+def require_exact_mcp_initialized(message: Any, session_id: str) -> None:
+    """Validate the exact zero-MCP completion emitted by session/new."""
+    require(isinstance(message, dict), f"x.ai/mcp_initialized is not an object: {message!r}")
+    require(
+        set(message) == {"jsonrpc", "method", "params"},
+        f"x.ai/mcp_initialized envelope keys drifted: {message!r}",
+    )
+    require(
+        message.get("jsonrpc") == "2.0" and message.get("method") == "_x.ai/mcp_initialized",
+        f"session/new emitted the wrong MCP completion envelope: {message!r}",
+    )
+    params = message.get("params")
+    require(isinstance(params, dict), f"x.ai/mcp_initialized params are not an object: {params!r}")
+    require(
+        set(params) == {"sessionId", "mcpToolCount", "elapsedMs"}
+        and params.get("sessionId") == session_id
+        and params.get("mcpToolCount") == 0
+        and not isinstance(params.get("mcpToolCount"), bool)
+        and params.get("elapsedMs") == 0
+        and not isinstance(params.get("elapsedMs"), bool),
+        f"x.ai/mcp_initialized params drifted: {params!r}",
+    )
+
+
+def self_test_mcp_initialized_validator() -> dict[str, int]:
+    """Exercise the same exact-envelope validator used by the live handshake."""
+    session_id = "mcp-self-test-session"
+    good = {
+        "jsonrpc": "2.0",
+        "method": "_x.ai/mcp_initialized",
+        "params": {"sessionId": session_id, "mcpToolCount": 0, "elapsedMs": 0},
+    }
+    require_exact_mcp_initialized(good, session_id)
+    rejects = [
+        {**good, "id": 1},
+        {**good, "jsonrpc": "1.0"},
+        {**good, "method": "x.ai/mcp_initialized"},  # internal name is not a wire method
+        {**good, "params": []},
+        {**good, "params": {"mcpToolCount": 0, "elapsedMs": 0}},
+        {**good, "params": {"sessionId": "other", "mcpToolCount": 0, "elapsedMs": 0}},
+        {**good, "params": {"sessionId": session_id, "mcpToolCount": True, "elapsedMs": 0}},
+        {**good, "params": {"sessionId": session_id, "mcpToolCount": 1, "elapsedMs": 0}},
+        {**good, "params": {"sessionId": session_id, "mcpToolCount": 0, "elapsedMs": True}},
+        {**good, "params": {"sessionId": session_id, "mcpToolCount": 0, "elapsedMs": 1}},
+        {
+            **good,
+            "params": {
+                "sessionId": session_id,
+                "mcpToolCount": 0,
+                "elapsedMs": 0,
+                "extra": None,
+            },
+        },
+    ]
+    rejected = 0
+    for fixture in rejects:
+        try:
+            require_exact_mcp_initialized(fixture, session_id)
+        except AssertionError:
+            rejected += 1
+        else:
+            raise AssertionError(f"MCP completion validator accepted drift: {fixture!r}")
+    require(rejected == len(rejects), "MCP completion self-test reject count drifted")
+    return {"accepted": 1, "rejected": rejected}
+
+
 def initialize(
     client: LeaderClient, cwd: str, context_window: int
 ) -> tuple[str, dict[str, Any]]:
@@ -209,7 +280,7 @@ def initialize(
     require(authenticated.get("result", {}).get("_meta", {}).get("provider") == "gents", "auth failed")
 
     preferred = f"grok-edge-{uuid.uuid4().hex[:16]}"
-    created, _ = client.request(
+    created, session_notifications = client.request(
         "session/new",
         {
             "cwd": cwd,
@@ -221,6 +292,8 @@ def initialize(
         },
     )
     require("error" not in created, f"session/new failed: {created}")
+    require(not session_notifications, "session/new emitted a notification before session routing was ready")
+    require_exact_mcp_initialized(client.recv_acp(), preferred)
     session = created["result"]
     require(session["sessionId"] == preferred, "preferred session id was not honored")
     require(session["models"]["currentModelId"] == client.model, "current model mismatch")
@@ -272,7 +345,7 @@ def probe_handshake(
     )
     require("error" not in switched, f"session/set_model failed: {switched}")
     model_update = next(
-        (message for message in notifications if message.get("method") == "x.ai/models/update"),
+        (message for message in notifications if message.get("method") == "_x.ai/models/update"),
         None,
     )
     require(
@@ -1713,7 +1786,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
         (mutate(good_envelope, method=EXT_SESSION_UPDATE_ALIAS_METHOD), envelope_parent),
         # wrong method.
         (mutate(good_envelope, method=STANDARD_UPDATE_METHOD), envelope_parent),
-        (mutate(good_envelope, method="x.ai/session/notif"), envelope_parent),
+        (mutate(good_envelope, method="x.ai/session_notification"), envelope_parent),
         (mutate(good_envelope, method=None), envelope_parent),
         # missing jsonrpc (the top level is no longer exact).
         (
@@ -1790,7 +1863,7 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     lifecycle_batch = [
         {
             "jsonrpc": JSONRPC_VERSION,
-            "method": "x.ai/models/update",
+            "method": "_x.ai/models/update",
             "params": {"availableModels": [], "currentModelId": "fixture-model"},
         },
         {
@@ -2882,6 +2955,7 @@ def main() -> int:
     if args.edge == "offline":
         print(json.dumps({
             "edge": "offline",
+            "mcp_initialized_self_test": self_test_mcp_initialized_validator(),
             "validator_self_test": self_test_subagent_lifecycle_validators(),
             "subagent_document_query_self_test": self_test_subagent_document_query(),
             "subprocess_document_self_test": self_test_persisted_subprocess_probe(),

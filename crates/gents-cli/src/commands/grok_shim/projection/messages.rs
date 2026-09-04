@@ -104,13 +104,7 @@ impl MessageUpdate {
             | MessageUpdate::AgentThoughtChunk { text }
             | MessageUpdate::UserMessageChunk { text } => text,
         };
-        json!({
-            "sessionUpdate": self.session_update_kind(),
-            "content": {
-                "type": "text",
-                "text": text,
-            },
-        })
+        Self::chunk_payload(self.session_update_kind(), text)
     }
 
     /// Build the chunk payload for one `session_update_kind` discriminator
@@ -120,12 +114,13 @@ impl MessageUpdate {
     /// `(kind, delta)` pairs (a kind string observed from the response row
     /// or a durable row's chunk kind, plus the byte-exact suffix to send).
     /// `kind` must be one of
-    /// [`AGENT_MESSAGE_CHUNK`]/[`AGENT_THOUGHT_CHUNK`]; any other value
+    /// [`AGENT_MESSAGE_CHUNK`]/[`AGENT_THOUGHT_CHUNK`]/[`USER_MESSAGE_CHUNK`]; any other value
     /// falls back to `agent_message_chunk` rather than fabricating an
     /// unknown discriminator on the wire.
     pub fn chunk_payload(kind: &str, text: impl Into<String>) -> Value {
         let kind = match kind {
             AGENT_THOUGHT_CHUNK => AGENT_THOUGHT_CHUNK,
+            USER_MESSAGE_CHUNK => USER_MESSAGE_CHUNK,
             _ => AGENT_MESSAGE_CHUNK,
         };
         json!({
@@ -195,6 +190,22 @@ pub(super) struct MessageProjection {
     /// Inclusive durable transcript high-water proved by this projection.
     /// The caller commits it only after every event in the batch sends.
     pub message_sequence_high_water: Option<i64>,
+    /// Durable start of the request's response stream. The runtime creates
+    /// `AgentResponse` immediately before entering inference, so this is the
+    /// best durable start for the first model generation.
+    pub response_started_at_ms: Option<i64>,
+    /// Request-local transcript timestamps observed by this bounded read.
+    /// Projection retains these across polls to derive the start of later
+    /// tool-loop generations from the preceding durable input row.
+    pub timeline: Vec<MessageTimelineRow>,
+}
+
+/// Timestamp-bearing identity of one request-local transcript row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct MessageTimelineRow {
+    pub sequence: i64,
+    pub message_key: String,
+    pub timestamp_ms: Option<i64>,
 }
 
 /// The live streaming tail of the request's `AgentResponse` row.
@@ -343,6 +354,8 @@ struct MessageRow {
     content: Option<String>,
     #[serde(default)]
     reasoning: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
 }
 
 /// The query execution seam this leaf reads through.
@@ -553,6 +566,20 @@ async fn project_messages_with_sink<S: QuerySink>(
     let response_doc_id = authoritative_row
         .as_ref()
         .and_then(|row| row.doc_id.clone());
+    let response_started_at_ms = authoritative_row
+        .as_ref()
+        .and_then(|row| row.created_at.as_deref())
+        .and_then(rfc3339_millis);
+    let timeline = rows
+        .iter()
+        .filter_map(|row| {
+            Some(MessageTimelineRow {
+                sequence: row.sequence?,
+                message_key: row.message_key.clone(),
+                timestamp_ms: row.timestamp.as_deref().and_then(rfc3339_millis),
+            })
+        })
+        .collect();
 
     Ok(MessageProjection {
         updates,
@@ -566,7 +593,15 @@ async fn project_messages_with_sink<S: QuerySink>(
         history,
         response_doc_id,
         message_sequence_high_water,
+        response_started_at_ms,
+        timeline,
     })
+}
+
+fn rfc3339_millis(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|timestamp| timestamp.timestamp_millis())
 }
 
 /// Project one transcript row into ordered streaming updates.
@@ -834,6 +869,7 @@ const MESSAGE_FIELDS: &str = "
     role
     content
     reasoning
+    timestamp
 ";
 
 fn decode_response_row(response: &defra_node::QueryResponse) -> Option<ResponseRow> {
@@ -1710,6 +1746,7 @@ mod tests {
             role: Some(role.to_string()),
             content: Some(content.to_string()),
             reasoning: None,
+            timestamp: None,
         }
     }
 
@@ -2084,6 +2121,8 @@ mod tests {
 
         let message = MessageUpdate::chunk_payload(AGENT_MESSAGE_CHUNK, "what");
         assert_eq!(message["sessionUpdate"], "agent_message_chunk");
+        let user = MessageUpdate::chunk_payload(USER_MESSAGE_CHUNK, "notice");
+        assert_eq!(user["sessionUpdate"], "user_message_chunk");
 
         let unknown = MessageUpdate::chunk_payload("agent_message_block", "delta");
         assert_eq!(

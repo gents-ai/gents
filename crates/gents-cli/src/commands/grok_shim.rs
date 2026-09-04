@@ -392,16 +392,14 @@ mod tests {
         drained
     }
 
-    /// The last line of a drained outbound batch must be the request
-    /// response; everything before it is the notification stream.
+    /// Separate the single response from notifications, preserving their order.
     fn split_response(
         lines: Vec<serde_json::Value>,
     ) -> (Vec<serde_json::Value>, serde_json::Value) {
-        let mut lines = lines;
-        let response = lines
-            .pop()
-            .expect("the delegate must send the request response");
-        (lines, response)
+        let (mut responses, notifications): (Vec<_>, Vec<_>) =
+            lines.into_iter().partition(|line| line.get("id").is_some());
+        assert_eq!(responses.len(), 1, "expected exactly one request response");
+        (notifications, responses.pop().unwrap())
     }
 
     /// The `session/new` request shape the edge probe sends, with the three
@@ -502,10 +500,13 @@ mod tests {
         .await;
         let (notifications, response) = split_response(lines);
 
-        // `session/new` emits no notifications; the result is the response.
-        assert!(
-            notifications.is_empty(),
-            "session/new must not emit notifications, got: {notifications:?}"
+        assert_eq!(
+            notifications,
+            vec![serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "_x.ai/mcp_initialized",
+                "params": {"sessionId": "grok-registered-session", "mcpToolCount": 0, "elapsedMs": 0}
+            })]
         );
         assert!(
             response.get("error").is_none(),

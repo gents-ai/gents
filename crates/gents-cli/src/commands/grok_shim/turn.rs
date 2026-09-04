@@ -56,7 +56,7 @@
 //! (advancing the request-local cursor only after a successful send), and
 //! delivers.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -68,7 +68,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use super::projection::{
     AsyncCommit, AsyncSendLine, CursorAdvance, ProjectionEngine, RequestCursor,
-    SessionUpdateChannel, SESSION_UPDATE_METHOD,
+    SessionUpdateChannel, UpdateTimestamps, SESSION_UPDATE_METHOD,
 };
 use super::server::AcpOutbound;
 use crate::request_helpers::{
@@ -272,6 +272,7 @@ impl PromptSender {
                         "isReplay": false,
                         "eventId": event_id,
                         "totalTokens": total_tokens,
+                        "agentTimestampMs": chrono::Utc::now().timestamp_millis(),
                     });
                     let params = json!({
                         "sessionId": session_id,
@@ -316,6 +317,66 @@ impl AsyncSendLine for PromptSenderLine<'_> {
 struct ProjectionCursorCommit<'a> {
     cursor: &'a tokio::sync::Mutex<RequestCursor>,
     advance: CursorAdvance,
+}
+
+/// Request-local realization of projection segment identities into the
+/// pager's timestamp vocabulary. Segment starts remain stable across polls
+/// and retries, and are forced strictly increasing because the pager uses
+/// `streamStartMs` inequality as the model-generation boundary signal.
+struct RequestUpdateTiming {
+    turn_start_ms: i64,
+    active_segment: Option<String>,
+    starts: BTreeMap<String, i64>,
+    last_start_ms: Option<i64>,
+}
+
+impl RequestUpdateTiming {
+    fn new(turn_start_ms: i64) -> Self {
+        Self {
+            turn_start_ms,
+            active_segment: None,
+            starts: BTreeMap::new(),
+            last_start_ms: None,
+        }
+    }
+
+    fn resolve(
+        &mut self,
+        timing: Option<&super::projection::ProjectionEventTiming>,
+        now_ms: i64,
+    ) -> UpdateTimestamps {
+        if let Some(timing) = timing {
+            let start = if let Some(start) = self.starts.get(&timing.segment_key) {
+                *start
+            } else {
+                let candidate = timing.stream_start_candidate_ms.unwrap_or(now_ms);
+                let start = self.last_start_ms.map_or(candidate, |previous| {
+                    candidate.max(previous.saturating_add(1))
+                });
+                self.starts.insert(timing.segment_key.clone(), start);
+                self.last_start_ms = Some(start);
+                start
+            };
+            self.active_segment = Some(timing.segment_key.clone());
+            let agent_timestamp_ms = timing
+                .agent_timestamp_candidate_ms
+                .unwrap_or(now_ms)
+                .max(start);
+            return UpdateTimestamps {
+                agent_timestamp_ms: Some(agent_timestamp_ms),
+                stream_start_ms: Some(start),
+                turn_start_ms: Some(self.turn_start_ms),
+            };
+        }
+        UpdateTimestamps {
+            agent_timestamp_ms: Some(now_ms),
+            stream_start_ms: self
+                .active_segment
+                .as_ref()
+                .and_then(|segment| self.starts.get(segment).copied()),
+            turn_start_ms: Some(self.turn_start_ms),
+        }
+    }
 }
 
 impl AsyncCommit for ProjectionCursorCommit<'_> {
@@ -392,6 +453,55 @@ struct ConnectionState {
     entries: HashMap<(String, String), PendingPrompt>,
 }
 
+/// Delivery progress only. Lifecycle and content are always re-read from the
+/// database. The foreground watcher holds this lock until its final flush;
+/// afterwards the session observer continues with the very same cursor.
+struct ObservedRequest {
+    prompt_id: Option<String>,
+    cursor: Mutex<RequestCursor>,
+    token_high_water: u64,
+    timing: RequestUpdateTiming,
+    completion_sent: bool,
+}
+
+impl ObservedRequest {
+    fn new(prompt_id: String, started_at: i64, foreground: bool) -> Self {
+        Self {
+            prompt_id: (!foreground).then_some(prompt_id),
+            cursor: Mutex::new(RequestCursor::new()),
+            token_high_water: 0,
+            timing: RequestUpdateTiming::new(started_at),
+            completion_sent: foreground,
+        }
+    }
+}
+
+type ObservedRequests = BTreeMap<(String, String), Arc<Mutex<ObservedRequest>>>;
+
+type ForegroundDeliveries = Arc<std::sync::Mutex<HashMap<String, usize>>>;
+
+/// Holds observer output until the foreground response has been enqueued.
+/// Synchronous Drop also releases it on an outbound error or task abort.
+pub(super) struct ForegroundDelivery {
+    sessions: ForegroundDeliveries,
+    session_id: String,
+}
+
+impl Drop for ForegroundDelivery {
+    fn drop(&mut self) {
+        let mut sessions = self
+            .sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(count) = sessions.get_mut(&self.session_id) {
+            *count -= 1;
+            if *count == 0 {
+                sessions.remove(&self.session_id);
+            }
+        }
+    }
+}
+
 impl ConnectionState {
     fn is_closed(&self) -> bool {
         self.closed
@@ -404,6 +514,15 @@ pub(super) struct TurnManager {
     node: Arc<EmbeddedNode>,
     config: TurnManagerConfig,
     state: Mutex<ConnectionState>,
+    /// Serializes observer sends with foreground admission. Disconnect never
+    /// acquires this gate, so a blocked outbound send cannot block shutdown.
+    delivery_gate: Mutex<()>,
+    foreground_deliveries: ForegroundDeliveries,
+    /// Current autonomous wire turn, retained until its terminal notification
+    /// is delivered. This is a transport boundary, not a runtime lifecycle.
+    autonomous_delivery: Mutex<HashMap<String, String>>,
+    observed: Mutex<ObservedRequests>,
+    observers: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
     /// Parks `handle_prompt` before the insertion critical section.
     #[cfg(test)]
     insertion_gate: Mutex<Option<TestGate>>,
@@ -432,6 +551,11 @@ impl TurnManager {
             node,
             config,
             state: Mutex::new(ConnectionState::default()),
+            delivery_gate: Mutex::new(()),
+            foreground_deliveries: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            autonomous_delivery: Mutex::new(HashMap::new()),
+            observed: Mutex::new(BTreeMap::new()),
+            observers: Mutex::new(HashMap::new()),
             #[cfg(test)]
             insertion_gate: Mutex::new(None),
             #[cfg(test)]
@@ -441,6 +565,298 @@ impl TurnManager {
             #[cfg(test)]
             cancel_selection_gate: Mutex::new(None),
         }
+    }
+
+    pub(super) async fn begin_foreground_delivery(&self, session_id: &str) -> ForegroundDelivery {
+        let _delivery = self.delivery_gate.lock().await;
+        *self
+            .foreground_deliveries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(session_id.to_owned())
+            .or_default() += 1;
+        ForegroundDelivery {
+            sessions: self.foreground_deliveries.clone(),
+            session_id: session_id.to_owned(),
+        }
+    }
+
+    /// Observe this connection's session after the foreground RPC completes.
+    /// Each tick discovers one bounded page, then advances retained delivery
+    /// cursors. A new sweep revisits IDs below the previous page, so concurrent
+    /// inserts cannot fall permanently behind a pagination watermark.
+    pub(super) async fn observe_session(
+        self: &Arc<Self>,
+        session_id: &str,
+        sender: PromptSender,
+        projections: Arc<ProjectionEngine>,
+    ) {
+        let mut observers = self.observers.lock().await;
+        if observers.contains_key(session_id) || self.state.lock().await.closed {
+            return;
+        }
+        let session_id = session_id.to_owned();
+        let attached_at = chrono::Utc::now().to_rfc3339();
+        let manager = Arc::downgrade(self);
+        let observed_session = session_id.clone();
+        observers.insert(
+            session_id,
+            tokio::spawn(async move {
+                let mut after = String::new();
+                let mut delivery_after = String::new();
+                loop {
+                    tokio::time::sleep(TERMINAL_POLL_INTERVAL).await;
+                    let Some(manager) = manager.upgrade() else {
+                        break;
+                    };
+                    if manager.state.lock().await.closed {
+                        break;
+                    }
+                    if let Err(error) = manager
+                        .observe_session_tick(
+                            &observed_session,
+                            &attached_at,
+                            &mut after,
+                            &mut delivery_after,
+                            &sender,
+                            &projections,
+                        )
+                        .await
+                    {
+                        // Observation failures never change durable execution.
+                        // The cursor commits only delivered events, so retrying
+                        // after a database read conflict cannot lose an update.
+                        tracing::warn!(%error, session_id = %observed_session,
+                        "Grok shim session observation failed; retrying");
+                    }
+                }
+            }),
+        );
+    }
+
+    async fn observe_session_tick(
+        &self,
+        session_id: &str,
+        attached_at: &str,
+        after: &mut String,
+        delivery_after: &mut String,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+    ) -> Result<()> {
+        const PAGE_SIZE: usize = 128;
+        let query = format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
+                created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }} }},
+                order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ request_id created_at }} }}"#,
+            escape_graphql_string(session_id),
+            escape_graphql_string(attached_at),
+            escape_graphql_string(after),
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "Grok shim session request discovery")?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .context("missing session request discovery rows")?;
+        for row in rows {
+            let request_id = row
+                .get("request_id")
+                .and_then(Value::as_str)
+                .context("session request missing request_id")?;
+            // Submission installs its pending entry before the DB mutation.
+            // Keep this check and registration in one critical section: even
+            // a request whose ID has not returned yet cannot be double-owned.
+            let state = self.state.lock().await;
+            if state.entries.iter().any(|((session, _), pending)| {
+                session == session_id
+                    && pending
+                        .request_id
+                        .as_deref()
+                        .is_none_or(|id| id == request_id)
+            }) {
+                continue;
+            }
+            let started_at = row
+                .get("created_at")
+                .and_then(Value::as_str)
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|value| value.timestamp_millis())
+                .unwrap_or(0);
+            self.observed
+                .lock()
+                .await
+                .entry((session_id.to_owned(), request_id.to_owned()))
+                .or_insert_with(|| {
+                    Arc::new(Mutex::new(ObservedRequest::new(
+                        format!("notifications-{request_id}"),
+                        started_at,
+                        false,
+                    )))
+                });
+        }
+        *after = if rows.len() == PAGE_SIZE {
+            rows.last()
+                .and_then(|row| row.get("request_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        } else {
+            String::new()
+        };
+
+        // Retain cursors for the connection lifetime: a durable wake notice
+        // may be appended even after its tool and parent have terminalized.
+        // Bound database work per tick while sweeping those cursors fairly.
+        const DELIVERY_PAGE_SIZE: usize = 32;
+        let mut candidates: Vec<_> = self
+            .observed
+            .lock()
+            .await
+            .iter()
+            .filter(|((session, _), _)| session == session_id)
+            .map(|((_, id), progress)| {
+                let autonomous = progress
+                    .try_lock()
+                    .map(|p| p.prompt_id.is_some())
+                    .unwrap_or(false);
+                (
+                    format!("{}:{id}", u8::from(autonomous)),
+                    id.clone(),
+                    progress.clone(),
+                )
+            })
+            .collect();
+        candidates.sort_by(|a, b| a.0.cmp(&b.0));
+        candidates.retain(|(key, _, _)| key > &*delivery_after);
+        candidates.truncate(DELIVERY_PAGE_SIZE);
+        *delivery_after = if candidates.len() == DELIVERY_PAGE_SIZE {
+            candidates
+                .last()
+                .map(|(key, _, _)| key.clone())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        // Sweep all root notices before admitting the next autonomous turn,
+        // including sessions larger than one delivery page.
+        let mut requests: Vec<_> = candidates
+            .into_iter()
+            .map(|(_, id, progress)| (id, progress))
+            .collect();
+        if let Some(active) = self
+            .autonomous_delivery
+            .lock()
+            .await
+            .get(session_id)
+            .cloned()
+        {
+            if !requests.iter().any(|(id, _)| id == &active) {
+                if let Some(progress) = self
+                    .observed
+                    .lock()
+                    .await
+                    .get(&(session_id.to_owned(), active.clone()))
+                    .cloned()
+                {
+                    requests.push((active, progress));
+                }
+            }
+        }
+        for (request_id, progress) in requests {
+            let _delivery = self.delivery_gate.lock().await;
+            if self
+                .foreground_deliveries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .contains_key(session_id)
+            {
+                continue;
+            }
+            // The foreground owns this lock through its final flush. Never
+            // wait behind it: other completed requests may have late events.
+            let Ok(mut progress) = progress.try_lock() else {
+                continue;
+            };
+            // The pager treats a user notification as a turn boundary and
+            // accepts autonomous prompts only while idle. Leave all cursors
+            // untouched while a foreground request owns the session.
+            {
+                let state = self.state.lock().await;
+                if state.closed
+                    || state
+                        .entries
+                        .keys()
+                        .any(|(session, _)| session == session_id)
+                {
+                    continue;
+                }
+            }
+            let active = self
+                .autonomous_delivery
+                .lock()
+                .await
+                .get(session_id)
+                .cloned();
+            if active.as_deref().is_some_and(|id| id != request_id) {
+                continue;
+            }
+            let continuing_autonomous = active.is_some();
+            if progress.prompt_id.is_some() && !continuing_autonomous {
+                self.autonomous_delivery
+                    .lock()
+                    .await
+                    .insert(session_id.to_owned(), request_id.clone());
+            }
+            // Read terminal state first, then flush. Completion must never
+            // overtake the final content persisted before terminalization.
+            let terminal = self.request_stop_reason(&request_id).await?;
+            let ObservedRequest {
+                prompt_id,
+                cursor,
+                token_high_water,
+                timing,
+                ..
+            } = &mut *progress;
+            self.stream_projection_updates(
+                session_id,
+                &request_id,
+                prompt_id.as_deref(),
+                sender,
+                projections,
+                token_high_water,
+                cursor,
+                timing,
+                !continuing_autonomous,
+            )
+            .await?;
+            if !progress.completion_sent {
+                if let Some(reason) = terminal {
+                    let prompt_id = progress
+                        .prompt_id
+                        .clone()
+                        .context("missing autonomous prompt ID")?;
+                    projections.session_updates().send(session_id, move |event_id, total_tokens| {
+                        Ok(super::projection::session_notification_for_method(
+                            "x.ai/session_notification", session_id,
+                            json!({"sessionUpdate": "turn_completed", "prompt_id": prompt_id,
+                                "stop_reason": reason.wire_name()}),
+                            super::projection::stamp_update_meta(event_id, total_tokens,
+                                Some(&prompt_id), None, UpdateTimestamps::default()),
+                        ))
+                    }, PromptSenderLine(sender)).await?;
+                    progress.completion_sent = true;
+                    progress.prompt_id = None;
+                    self.autonomous_delivery.lock().await.remove(session_id);
+                    // The next tick first delivers deferred notices, then
+                    // admits the next wake. Do not jump over that boundary.
+                    delivery_after.clear();
+                    break;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Handle a `session/prompt` request.
@@ -465,6 +881,7 @@ impl TurnManager {
         if request.prompt.is_empty() {
             anyhow::bail!("session/prompt requires at least one prompt block");
         }
+        let turn_start_ms = chrono::Utc::now().timestamp_millis();
         let prompt_id = request
             .prompt_id
             .clone()
@@ -484,6 +901,7 @@ impl TurnManager {
             }
         }
         {
+            let _admission = self.delivery_gate.lock().await;
             let mut state = self.state.lock().await;
             if state.is_closed() {
                 // The connection already disconnected. Reject before any
@@ -514,6 +932,12 @@ impl TurnManager {
         // outbound send (the user echo below), so a send failure after
         // submission interrupts the request rather than leaking it.
         tracing::debug!(session_id = %request.session_id, prompt_id = %prompt_id, "Grok shim submitting prompt request");
+        let progress = Arc::new(Mutex::new(ObservedRequest::new(
+            prompt_id.clone(),
+            turn_start_ms,
+            true,
+        )));
+        let mut progress_guard = progress.lock().await;
         let submission = self.submit_request(&request, &prompt_id).await;
         let request_id = match submission {
             Ok(request_id) => {
@@ -522,6 +946,13 @@ impl TurnManager {
                     match state.entries.get_mut(&key) {
                         Some(entry) if Arc::ptr_eq(&entry.cancel_before_id, &cancel_before_id) => {
                             entry.request_id = Some(request_id.clone());
+                            // Install delivery ownership before cancellation
+                            // can remove the pending entry or the first echo
+                            // can yield. Discovery checks under this same lock.
+                            self.observed.lock().await.insert(
+                                (request.session_id.clone(), request_id.clone()),
+                                progress.clone(),
+                            );
                             true
                         }
                         _ => false,
@@ -665,9 +1096,14 @@ impl TurnManager {
                 &cancel_before_id,
                 sender,
                 projections,
+                &mut progress_guard,
                 response_rx,
             )
-            .await?;
+            .await;
+        // Transfer ownership while holding the delivery lock. Late updates
+        // refine existing tool/child cards without opening another prompt;
+        // actual durable continuation requests receive their own identity.
+        let outcome = outcome?;
         Ok(json!({"stopReason": outcome.wire_name()}))
     }
 
@@ -702,6 +1138,7 @@ impl TurnManager {
                 gate.release.notified().await;
             }
         }
+        let had_foreground_target = !targets.is_empty();
         for (key, generation) in targets {
             let request_id = self
                 .drain_entry(&key, &generation, StopReason::Cancelled)
@@ -710,6 +1147,33 @@ impl TurnManager {
                 self.interrupt_submitted(&request_id).await;
                 if notification.cancel_subagents {
                     self.interrupt_child_requests(&request_id).await;
+                }
+            }
+        }
+        let autonomous_target = match target_prompt_id.as_deref() {
+            Some(id) => id.strip_prefix("notifications-").map(str::to_owned),
+            None if !had_foreground_target => self
+                .autonomous_delivery
+                .lock()
+                .await
+                .get(&notification.session_id)
+                .cloned(),
+            None => None,
+        };
+        if let Some(request_id) = autonomous_target.as_deref() {
+            // Autonomous prompt identities are transport projections of a
+            // durable request already observed in this session. Cancellation
+            // uses the runtime's ordinary interrupt transition, never cursor
+            // state, and cannot block behind an outbound projection send.
+            let observed = self
+                .observed
+                .lock()
+                .await
+                .contains_key(&(notification.session_id.clone(), request_id.to_owned()));
+            if observed && self.request_stop_reason(request_id).await?.is_none() {
+                self.interrupt_submitted(request_id).await;
+                if notification.cancel_subagents {
+                    self.interrupt_child_requests(request_id).await;
                 }
             }
         }
@@ -746,6 +1210,13 @@ impl TurnManager {
             })
             .collect();
         drop(state);
+        let observers = std::mem::take(&mut *self.observers.lock().await);
+        for observer in observers.values() {
+            observer.abort();
+        }
+        for (_, observer) in observers {
+            let _ = observer.await;
+        }
         #[cfg(test)]
         {
             // Test seam: park deterministically after the closed+drained
@@ -981,14 +1452,19 @@ impl TurnManager {
         generation: &Arc<Mutex<CancelBeforeIdLatch>>,
         sender: &PromptSender,
         projections: &ProjectionEngine,
+        progress: &mut ObservedRequest,
         mut response_rx: oneshot::Receiver<Result<Value>>,
     ) -> Result<StopReason> {
-        let cursor = tokio::sync::Mutex::new(RequestCursor::new());
         // Request-local token-observation high-water: one per pending
         // request, so sequential requests accumulate per-request deltas into
         // the session total without double-counting and a retry-replaced
         // (smaller) observation can never decrease it.
-        let mut token_high_water = 0u64;
+        let ObservedRequest {
+            cursor,
+            token_high_water,
+            timing: update_timing,
+            ..
+        } = progress;
         let mut consecutive_transient_read_failures = 0usize;
         loop {
             // A cancel/disconnect that drained the entry resolves the
@@ -1051,11 +1527,13 @@ impl TurnManager {
                 .stream_projection_updates(
                     session_id,
                     request_id,
-                    prompt_id,
+                    Some(prompt_id),
                     sender,
                     projections,
-                    &mut token_high_water,
-                    &cursor,
+                    token_high_water,
+                    cursor,
+                    update_timing,
+                    false,
                 )
                 .await
             {
@@ -1136,11 +1614,13 @@ impl TurnManager {
         &self,
         session_id: &str,
         request_id: &str,
-        prompt_id: &str,
+        prompt_id: Option<&str>,
         sender: &PromptSender,
         projections: &ProjectionEngine,
         token_high_water: &mut u64,
         cursor: &tokio::sync::Mutex<RequestCursor>,
+        update_timing: &mut RequestUpdateTiming,
+        include_notifications: bool,
     ) -> Result<()> {
         let batch = {
             let mut cursor = cursor.lock().await;
@@ -1148,12 +1628,33 @@ impl TurnManager {
                 .project_request_updates(session_id, request_id, token_high_water, &mut cursor)
                 .await?
         };
+        let mut deferred_notifications = false;
         for event in batch.events {
+            if !include_notifications
+                && event.payload.get("sessionUpdate").and_then(Value::as_str)
+                    == Some("user_message_chunk")
+            {
+                // Do not commit this advance: the session observer delivers
+                // the notice after the foreground RPC has finished.
+                deferred_notifications = true;
+                continue;
+            }
             let session_for_lock = session_id.to_string();
             let session_id = session_id.to_string();
-            let prompt_id = prompt_id.to_string();
+            // These are durable background-completion notices; ordinary
+            // user input is suppressed by the projector and echoed elsewhere.
+            // A wake prompt ID would make the pager hide the notice itself.
+            let prompt_id = if event.payload.get("sessionUpdate").and_then(Value::as_str)
+                == Some("user_message_chunk")
+            {
+                None
+            } else {
+                prompt_id.map(str::to_owned)
+            };
             let method = event.method;
             let payload = event.payload;
+            let timestamps =
+                update_timing.resolve(event.timing.as_ref(), chrono::Utc::now().timestamp_millis());
             let commit = ProjectionCursorCommit {
                 cursor,
                 advance: event.advance,
@@ -1162,8 +1663,9 @@ impl TurnManager {
                 let meta = super::projection::stamp_update_meta(
                     event_id,
                     total_tokens,
-                    Some(&prompt_id),
+                    prompt_id.as_deref(),
                     None,
+                    timestamps,
                 );
                 Ok(super::projection::session_notification_for_method(
                     method,
@@ -1188,6 +1690,13 @@ impl TurnManager {
         if !batch.trailing_advances.is_empty() {
             let mut cursor = cursor.lock().await;
             for advance in batch.trailing_advances {
+                if deferred_notifications
+                    && matches!(advance, CursorAdvance::MessageHighWater { .. })
+                {
+                    // Keep incremental discovery behind the undelivered
+                    // notice, while other event cursors still deduplicate.
+                    continue;
+                }
                 cursor.record(advance);
             }
         }
@@ -1484,6 +1993,44 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
 mod tests {
     use super::super::projection::ProjectionSequencer;
     use super::*;
+
+    #[test]
+    fn request_update_timing_is_stable_per_segment_and_strict_across_same_ms_resets() {
+        let mut timing = RequestUpdateTiming::new(90);
+        let first = super::super::projection::ProjectionEventTiming {
+            segment_key: "response:commit-a".to_string(),
+            stream_start_candidate_ms: Some(100),
+            agent_timestamp_candidate_ms: None,
+        };
+        let second = super::super::projection::ProjectionEventTiming {
+            segment_key: "response:commit-b".to_string(),
+            stream_start_candidate_ms: Some(100),
+            agent_timestamp_candidate_ms: None,
+        };
+
+        let first_chunk = timing.resolve(Some(&first), 250);
+        let first_retry = timing.resolve(Some(&first), 300);
+        let second_chunk = timing.resolve(Some(&second), 300);
+
+        assert_eq!(first_chunk.stream_start_ms, Some(100));
+        assert_eq!(first_retry.stream_start_ms, Some(100));
+        assert_eq!(first_retry.agent_timestamp_ms, Some(300));
+        assert_eq!(second_chunk.stream_start_ms, Some(101));
+        assert_eq!(second_chunk.turn_start_ms, Some(90));
+    }
+
+    #[test]
+    fn request_update_timing_clamps_durable_event_time_to_its_stream_start() {
+        let mut timing = RequestUpdateTiming::new(90);
+        let event = super::super::projection::ProjectionEventTiming {
+            segment_key: "response:commit-a".to_string(),
+            stream_start_candidate_ms: Some(200),
+            agent_timestamp_candidate_ms: Some(150),
+        };
+        let resolved = timing.resolve(Some(&event), 175);
+        assert_eq!(resolved.agent_timestamp_ms, Some(200));
+        assert_eq!(resolved.stream_start_ms, Some(200));
+    }
 
     fn text_block(text: &str) -> Value {
         json!({"type": "text", "text": text})
@@ -2441,6 +2988,402 @@ mod tests {
         handle.await.expect("terminalize task");
     }
 
+    /// Only one autonomous turn can own the pager's live cards. Notices and
+    /// later wakes wait for its terminal delivery; ordinary Esc cancels it.
+    #[tokio::test]
+    async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+        let prompt = parse_prompt_request(
+            &json!({"sessionId": "session-1",
+            "prompt": [text_block("internal wake instruction")]}),
+            None,
+        )
+        .unwrap();
+        let root = manager.submit_request(&prompt, "root").await.unwrap();
+        terminalize_request(&node, &root, "completed").await;
+        manager.observed.lock().await.insert(
+            ("session-1".into(), root.clone()),
+            Arc::new(Mutex::new(ObservedRequest::new("root".into(), 0, true))),
+        );
+        let first = manager.submit_request(&prompt, "wake-a").await.unwrap();
+        seed_assistant_message(&node, &first, 1, "Wake A is working.").await;
+        seed_tool_call(&node, &first, "wake-a-tool", "bash", "running", "", None).await;
+        let mut after = String::new();
+        let mut delivery_after = String::new();
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            manager.autonomous_delivery.lock().await.get("session-1"),
+            Some(&first)
+        );
+
+        // Completion notices on both the older root and the active wake must
+        // wait; the pager treats either user chunk as a destructive boundary.
+        for (request, sequence, text) in [
+            (&root, 2, "Root task finished."),
+            (&first, 3, "Wake task finished."),
+        ] {
+            let result = node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentMessage(input: {{
+                message_key: "background-completion-notification:{sequence}:tool",
+                session_id: "session-1", request_id: "{}", sequence: {sequence},
+                agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
+                role: "user", content: "{}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(request),
+                    escape_graphql_string(text)
+                ))
+                .await;
+            ensure_no_errors(&result, "seed delayed completion notice").unwrap();
+        }
+        let second = manager.submit_request(&prompt, "wake-b").await.unwrap();
+        seed_assistant_message(&node, &second, 4, "Wake B response.").await;
+        terminalize_request(&node, &second, "completed").await;
+        seed_assistant_message(&node, &first, 5, "Wake A continues.").await;
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        let updates = parse_buffered_updates(&buffer).await;
+        let text: Vec<_> = updates
+            .iter()
+            .filter_map(|event| {
+                event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert!(text.contains(&"Wake A continues."));
+        assert!(!text.contains(&"Root task finished."));
+        assert!(!text.contains(&"Wake task finished."));
+        assert!(!text.contains(&"Wake B response."));
+
+        // Normal Esc carries no promptId. It must interrupt the visible
+        // autonomous request, even though no foreground RPC is pending.
+        manager
+            .handle_cancel(parse_cancel_notification(&json!({"sessionId": "session-1"})).unwrap())
+            .await
+            .unwrap();
+        let interrupted = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }})
+            {{ interrupt_requested_at }} }}"#,
+                escape_graphql_string(&first)
+            ))
+            .await;
+        ensure_no_errors(&interrupted, "read autonomous interrupt").unwrap();
+        assert!(interrupted
+            .data
+            .as_ref()
+            .and_then(|data| data.pointer("/AgentRequest/0/interrupt_requested_at"))
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty()));
+        terminalize_request(&node, &first, "interrupted").await;
+        for _ in 0..3 {
+            manager
+                .observe_session_tick(
+                    "session-1",
+                    "1970-01-01T00:00:00Z",
+                    &mut after,
+                    &mut delivery_after,
+                    &sender,
+                    &engine,
+                )
+                .await
+                .unwrap();
+        }
+        let updates = parse_buffered_updates(&buffer).await;
+        let first_complete = updates
+            .iter()
+            .position(|event| {
+                event
+                    .pointer("/params/update/prompt_id")
+                    .and_then(Value::as_str)
+                    == Some(format!("notifications-{first}").as_str())
+            })
+            .unwrap();
+        let second_start = updates
+            .iter()
+            .position(|event| {
+                event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+                    == Some("Wake B response.")
+            })
+            .unwrap();
+        for notice in ["Root task finished.", "Wake task finished."] {
+            let positions: Vec<_> = updates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, event)| {
+                    (event
+                        .pointer("/params/update/content/text")
+                        .and_then(Value::as_str)
+                        == Some(notice))
+                    .then_some(index)
+                })
+                .collect();
+            assert_eq!(
+                positions.len(),
+                1,
+                "each deferred notice survives the message high-water and is delivered once"
+            );
+            assert!(first_complete < positions[0] && positions[0] < second_start);
+        }
+        assert!(manager.autonomous_delivery.lock().await.is_empty());
+    }
+
+    /// Foreground completion transfers its exact cursor; late tool updates
+    /// and durable wake results remain visible without replaying old output.
+    #[tokio::test]
+    async fn session_observer_preserves_handoff_and_delivers_late_wake() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = Arc::new(TurnManager::new(
+            node.clone(),
+            test_config(graphql, &agent_did),
+        ));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1", "prompt": [text_block("start")],
+                "_meta": {"promptId": "foreground-1"},
+            }),
+            Some(json!(1)),
+        )
+        .unwrap();
+        let turn = {
+            let manager = manager.clone();
+            let engine = engine.clone();
+            let sender = sender.clone();
+            tokio::spawn(async move { manager.handle_prompt(prompt, &sender, &engine).await })
+        };
+        let root = wait_for_pending_request(&node).await;
+        seed_tool_call(&node, &root, "late-bash", "bash", "running", "", None).await;
+        seed_assistant_message(&node, &root, 1, "Root response.").await;
+        let mut after = String::new();
+        let mut delivery_after = String::new();
+        // A discovery poll while foreground ownership is installed cannot
+        // acquire another cursor for the submitted request.
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        terminalize_request(&node, &root, "completed").await;
+        let result = tokio::time::timeout(Duration::from_secs(30), turn)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(result["stopReason"], "end_turn");
+
+        let update = node
+            .execute(
+                r#"mutation { update_AgentToolCall(
+            filter: { tool_call_id: { _eq: "late-bash" } },
+            input: { lifecycle_state: "failed", result: "exit 7" }) { _docID } }"#,
+            )
+            .await;
+        ensure_no_errors(&update, "late tool finish").unwrap();
+        let wake_prompt = parse_prompt_request(&json!({
+            "sessionId": "session-1", "prompt": [text_block("internal notification instruction")],
+        }), None).unwrap();
+        let wake = manager
+            .submit_request(&wake_prompt, "durable-wake")
+            .await
+            .unwrap();
+        seed_assistant_message(&node, &wake, 2, "Background work finished.").await;
+        terminalize_request(&node, &wake, "completed").await;
+        let (pending_tx, _pending_rx) = oneshot::channel();
+        let foreground_key = ("session-1".to_owned(), "new-foreground".to_owned());
+        manager.state.lock().await.entries.insert(
+            foreground_key.clone(),
+            PendingPrompt {
+                response_tx: Some(pending_tx),
+                request_id: Some("new-foreground-request".to_owned()),
+                cancel_before_id: Arc::new(Mutex::new(CancelBeforeIdLatch::default())),
+                drained: false,
+            },
+        );
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !parse_buffered_updates(&buffer)
+                .await
+                .iter()
+                .any(|event| event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+                    == Some("Background work finished.")),
+            "wake output must remain undelivered while the pager has a foreground prompt"
+        );
+        manager.state.lock().await.entries.remove(&foreground_key);
+        // Pending removal precedes response enqueue in the live delegate.
+        // Its RAII transport guard must cover this remaining delivery gap.
+        let response_delivery = manager.begin_foreground_delivery("session-1").await;
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        assert!(!parse_buffered_updates(&buffer)
+            .await
+            .iter()
+            .any(|event| event
+                .pointer("/params/update/content/text")
+                .and_then(Value::as_str)
+                == Some("Background work finished.")));
+        drop(response_delivery);
+        for _ in 0..2 {
+            manager
+                .observe_session_tick(
+                    "session-1",
+                    "1970-01-01T00:00:00Z",
+                    &mut after,
+                    &mut delivery_after,
+                    &sender,
+                    &engine,
+                )
+                .await
+                .unwrap();
+        }
+        let updates = parse_buffered_updates(&buffer).await;
+        let text: Vec<_> = updates
+            .iter()
+            .filter_map(|event| {
+                event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(
+            text.iter()
+                .filter(|value| **value == "Root response.")
+                .count(),
+            1
+        );
+        assert_eq!(
+            text.iter()
+                .filter(|value| **value == "Background work finished.")
+                .count(),
+            1
+        );
+        assert!(!text.contains(&"internal notification instruction"));
+        let failed = updates
+            .iter()
+            .find(|event| {
+                event
+                    .pointer("/params/update/status")
+                    .and_then(Value::as_str)
+                    == Some("failed")
+            })
+            .unwrap();
+        assert!(
+            failed.pointer("/params/_meta/promptId").is_none(),
+            "late root update must pass the pager's idle prompt gate"
+        );
+        let completions: Vec<_> = updates
+            .iter()
+            .enumerate()
+            .filter(|(_, event)| {
+                event
+                    .pointer("/params/update/sessionUpdate")
+                    .and_then(Value::as_str)
+                    == Some("turn_completed")
+            })
+            .collect();
+        assert_eq!(completions.len(), 1);
+        let (completion_index, completion) = completions[0];
+        assert_eq!(completion["method"], "_x.ai/session_notification");
+        assert_eq!(
+            completion["params"]["update"]["prompt_id"],
+            format!("notifications-{wake}")
+        );
+        assert_eq!(
+            completion["params"]["_meta"]["promptId"],
+            format!("notifications-{wake}")
+        );
+        assert!(updates[..completion_index].iter().any(|event| event
+            .pointer("/params/update/content/text")
+            .and_then(Value::as_str)
+            == Some("Background work finished.")));
+
+        manager
+            .observe_session("session-1", sender.clone(), engine.clone())
+            .await;
+        // Model an observer blocked on outbound delivery: admission must wait
+        // on its independent gate, while disconnect can still close/drain.
+        let delivery = manager.delivery_gate.lock().await;
+        let prompt = parse_prompt_request(
+            &json!({
+                "sessionId": "session-1", "prompt": [text_block("after wake")],
+            }),
+            None,
+        )
+        .unwrap();
+        let mut admission = Box::pin(manager.handle_prompt(prompt, &sender, &engine));
+        tokio::select! {
+            biased;
+            result = &mut admission => panic!("admission crossed delivery gate: {result:?}"),
+            _ = tokio::task::yield_now() => {}
+        }
+        assert!(manager.state.lock().await.entries.is_empty());
+        tokio::time::timeout(Duration::from_secs(5), manager.handle_disconnect())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(manager.observers.lock().await.is_empty());
+        drop(delivery);
+        assert!(admission
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("disconnected"));
+    }
+
     /// A live turn streams every novel durable projection update before the
     /// deferred response: the tool call registers, the subagent lifecycle
     /// appears, and the assistant message chunk streams — each exactly once,
@@ -2540,15 +3483,33 @@ mod tests {
             let count = kinds.iter().filter(|k| k == &kind).count();
             assert_eq!(count, 1, "{kind} must stream exactly once, got {count}");
         }
-        // The tool status revision is the only tool_call_update.
-        assert_eq!(
-            kinds.iter().filter(|k| k == &"tool_call_update").count(),
-            1,
-            "exactly one tool status revision"
-        );
-
         // Every notification is well-formed and carries the turn's promptId.
         let updates = parse_buffered_updates(&buffer).await;
+        // Output refinement and lifecycle completion are separate deliveries:
+        // the pager receives the result first, then a dedicated status-only
+        // update for the same card. Neither repeats on subsequent polls.
+        let revisions: Vec<_> = updates
+            .iter()
+            .filter_map(|event| {
+                let update = event.pointer("/params/update")?;
+                (update.get("sessionUpdate").and_then(Value::as_str) == Some("tool_call_update"))
+                    .then_some(update)
+            })
+            .collect();
+        assert_eq!(
+            revisions,
+            vec![
+                &json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": "call-1",
+                    "content": [{"type": "text", "text": "file contents"}],
+                    "rawOutput": {"output": "file contents"},
+                }),
+                &json!({
+                    "sessionUpdate": "tool_call_update", "toolCallId": "call-1",
+                    "status": "completed",
+                }),
+            ]
+        );
         assert!(
             updates.len() >= 8,
             "expected the full stream, got {updates:?}"
@@ -2558,7 +3519,7 @@ mod tests {
                 .as_str()
                 .expect("sessionUpdate kind");
             let expected_method = if kind.starts_with("subagent_") {
-                "x.ai/session_notification"
+                "_x.ai/session_notification"
             } else {
                 "session/update"
             };

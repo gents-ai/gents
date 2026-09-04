@@ -74,7 +74,7 @@ use super::projection::subagents::{
 };
 use super::projection::{
     effective_context_window_tokens, stamp_update_meta, AsyncCommit, ProjectionEngine,
-    SESSION_UPDATE_METHOD,
+    UpdateTimestamps, SESSION_UPDATE_METHOD,
 };
 use super::protocol::{ClientCapabilities, RegisterMode};
 use super::server::{AcpDelegate, AcpOutbound};
@@ -135,6 +135,9 @@ pub(crate) const COMPACT_CONVERSATION_METHOD: &str = "x.ai/compact_conversation"
 
 /// Ext notification method emitted after a model catalog switch.
 pub(crate) const MODELS_UPDATE_METHOD: &str = "x.ai/models/update";
+
+/// Ext notification method that clears the pager's new-session MCP spinner.
+pub(crate) const MCP_INITIALIZED_METHOD: &str = "x.ai/mcp_initialized";
 
 // ---------------------------------------------------------------------------
 // Bound configuration
@@ -316,6 +319,7 @@ impl AcpRequest {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow::anyhow!("ACP payload has no method"))?
             .to_string();
+        let method = internal_method(&method).to_owned();
         // JSON-RPC 2.0: a request carries an id; a notification does not. A
         // JSON `null` id is treated as absent, matching the pager's decoder.
         let id = match object.get("id") {
@@ -333,20 +337,20 @@ impl AcpRequest {
 
 /// The wire output of one dispatched frame.
 ///
-/// Notifications are emitted before the response so a pager that drains
+/// Most notifications are emitted before the response so a pager that drains
 /// until it sees its response id observes the same order the reference agent
 /// produces (for example `x.ai/models/update` before the `session/set_model`
-/// response).
+/// response). MCP initialization completion follows session creation's response,
+/// because the native pager needs that response to attach its session routing.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AcpDispatch {
-    /// Serialized JSON-RPC notification lines to emit first.
+    /// Serialized JSON-RPC notification lines, ordered by the live delegate.
     pub(crate) notifications: Vec<String>,
     /// Serialized JSON-RPC response line, or `None` for notifications.
     pub(crate) response: Option<String>,
 }
 
-/// Outcome of a request handler: the result value plus notifications to emit
-/// before the response envelope is written.
+/// Outcome of a request handler: the result value plus notifications.
 struct RequestOutcome {
     notifications: Vec<Value>,
     result: Value,
@@ -373,10 +377,28 @@ fn error_line(id: &Value, code: i64, message: &str) -> String {
 }
 
 /// Shape a JSON-RPC notification line.
+/// ACP extensions carry a leading underscore on the JSON-RPC wire. The SDK
+/// strips it before dispatching the extension to Grok's `x.ai/...` handlers.
+pub(super) fn wire_method(method: &str) -> std::borrow::Cow<'_, str> {
+    if method.starts_with("x.ai/") {
+        std::borrow::Cow::Owned(format!("_{method}"))
+    } else {
+        std::borrow::Cow::Borrowed(method)
+    }
+}
+
+fn internal_method(method: &str) -> &str {
+    if method.starts_with("_x.ai/") {
+        &method[1..]
+    } else {
+        method
+    }
+}
+
 fn notification_line(method: &str, params: &Value) -> String {
     serde_json::to_string(&json!({
         "jsonrpc": "2.0",
-        "method": method,
+        "method": wire_method(method),
         "params": params,
     }))
     .expect("JSON-RPC notification envelope is serializable")
@@ -579,7 +601,19 @@ impl AcpService {
         match request.method.as_str() {
             INITIALIZE_METHOD => self.handle_initialize(request).await,
             AUTHENTICATE_METHOD => self.handle_authenticate(request).await,
-            SESSION_NEW_METHOD => self.handle_session_new(request).await,
+            SESSION_NEW_METHOD => {
+                let outcome = self.handle_session_new(request).await?;
+                if let Some(session_id) = outcome.result.get("sessionId").and_then(Value::as_str) {
+                    self.turns
+                        .observe_session(
+                            session_id,
+                            prompt_sender.clone(),
+                            self.projections.clone(),
+                        )
+                        .await;
+                }
+                Ok(outcome)
+            }
             SESSION_SET_MODEL_METHOD => self.handle_session_set_model(request).await,
             SESSION_SET_MODE_METHOD => self.handle_session_set_mode(request, prompt_sender).await,
             SESSION_PROMPT_METHOD => self.handle_session_prompt(request, prompt_sender).await,
@@ -760,7 +794,17 @@ impl AcpService {
         // reference pager registers `terminal: false`, so the shaped
         // terminal/* not-supported stubs stay the answered behavior.
         Ok(RequestOutcome {
-            notifications: Vec::new(),
+            // The stock pager seeds an MCP-initialization spinner before it
+            // sends session/new and clears it only when this extension
+            // notification arrives. Gents does not initialize the request's
+            // client-side MCP servers, so report the truthful zero count once
+            // the durable and connection-local session creation both succeed.
+            notifications: vec![json!({
+                "__method": MCP_INITIALIZED_METHOD,
+                "sessionId": session_id,
+                "mcpToolCount": 0_u32,
+                "elapsedMs": 0_u64,
+            })],
             result: json!({
                 "sessionId": session_id,
                 "models": self.config.models_object(),
@@ -905,7 +949,16 @@ impl AcpService {
             .send_with_commit(
                 &session_id,
                 |event_id, total_tokens| {
-                    let meta = stamp_update_meta(event_id, total_tokens, None, None);
+                    let meta = stamp_update_meta(
+                        event_id,
+                        total_tokens,
+                        None,
+                        None,
+                        UpdateTimestamps {
+                            agent_timestamp_ms: Some(chrono::Utc::now().timestamp_millis()),
+                            ..UpdateTimestamps::default()
+                        },
+                    );
                     Ok(json!({
                         "jsonrpc": "2.0",
                         "method": SESSION_UPDATE_METHOD,
@@ -1257,6 +1310,22 @@ impl AcpDelegate for AcpService {
         outbound: AcpOutbound,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
         Box::pin(async move {
+            // The foreground transport turn ends only after its response is
+            // enqueued. Keep autonomous session output behind that boundary,
+            // including the gap after the durable request terminalizes.
+            let envelope = serde_json::from_str::<Value>(payload).ok();
+            let _foreground_delivery = if let Some(session_id) = envelope
+                .as_ref()
+                .filter(|value| {
+                    value.get("method").and_then(Value::as_str) == Some(SESSION_PROMPT_METHOD)
+                })
+                .and_then(|value| value.pointer("/params/sessionId"))
+                .and_then(Value::as_str)
+            {
+                Some(self.turns.begin_foreground_delivery(session_id).await)
+            } else {
+                None
+            };
             // The live production path: every notification the turn produces
             // — the user echo plus each novel durable projection update — is
             // sent through the connection's outbound as it happens, and the
@@ -1267,11 +1336,33 @@ impl AcpDelegate for AcpService {
                 outbound: outbound.clone(),
             };
             let dispatch = self.dispatch_with_sender(payload, &sender).await;
-            for notification in &dispatch.notifications {
-                outbound.send(notification.clone()).await?;
+            // The native pager attaches routing from session/new's response.
+            // An earlier MCP completion can be received yet dropped, leaving
+            // its Starting session spinner alive indefinitely. Other extension
+            // notifications keep their established pre-response ordering.
+            let (after_response, before_response): (Vec<_>, Vec<_>) = dispatch
+                .notifications
+                .into_iter()
+                .partition(|notification| {
+                    serde_json::from_str::<Value>(notification)
+                        .ok()
+                        .and_then(|value| {
+                            value
+                                .get("method")
+                                .and_then(Value::as_str)
+                                .map(|method| internal_method(method).to_owned())
+                        })
+                        .as_deref()
+                        == Some(MCP_INITIALIZED_METHOD)
+                });
+            for notification in before_response {
+                outbound.send(notification).await?;
             }
             if let Some(response) = dispatch.response {
                 outbound.send(response).await?;
+            }
+            for notification in after_response {
+                outbound.send(notification).await?;
             }
             Ok(())
         })
@@ -1393,7 +1484,7 @@ mod tests {
         serde_json::to_string(&json!({
             "jsonrpc": "2.0",
             "id": 1,
-            "method": method,
+            "method": wire_method(method),
             "params": params,
         }))
         .expect("request payload")
@@ -1402,7 +1493,7 @@ mod tests {
     fn notification_payload(method: &str, params: Value) -> String {
         serde_json::to_string(&json!({
             "jsonrpc": "2.0",
-            "method": method,
+            "method": wire_method(method),
             "params": params,
         }))
         .expect("notification payload")
@@ -1775,6 +1866,50 @@ mod tests {
     }
 
     #[test]
+    fn extension_methods_use_sdk_wire_prefix_and_normalize_at_dispatch() {
+        for method in [
+            MCP_INITIALIZED_METHOD,
+            MODELS_UPDATE_METHOD,
+            "x.ai/session_notification",
+            SUBAGENT_GET_METHOD,
+        ] {
+            let encoded = wire_method(method);
+            assert_eq!(encoded, format!("_{method}"));
+            assert_eq!(
+                wire_method(&encoded),
+                encoded,
+                "encoding must not double-prefix"
+            );
+            let request = AcpRequest::from_payload(
+                &json!({
+                    "jsonrpc": "2.0", "id": 1, "method": encoded, "params": {},
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert_eq!(request.method, method);
+        }
+        for method in [
+            SESSION_PROMPT_METHOD,
+            "_unknown/extension",
+            "__x.ai/subagent/get",
+        ] {
+            assert_eq!(wire_method(method), method);
+            let request = AcpRequest::from_payload(
+                &json!({
+                    "jsonrpc": "2.0", "id": 1, "method": method,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            assert_eq!(
+                request.method, method,
+                "only the exact _x.ai/ namespace is normalized"
+            );
+        }
+    }
+
+    #[test]
     fn response_and_error_envelopes_are_shaped() {
         let response = parse_response(&response_line(&json!(7), &json!({"ok": true})));
         assert_eq!(response["jsonrpc"], "2.0");
@@ -1789,7 +1924,7 @@ mod tests {
 
         let notification = parse_response(&notification_line("x.ai/models/update", &json!({})));
         assert_eq!(notification["jsonrpc"], "2.0");
-        assert_eq!(notification["method"], "x.ai/models/update");
+        assert_eq!(notification["method"], "_x.ai/models/update");
         assert!(notification.get("id").is_none());
     }
 
@@ -1976,6 +2111,21 @@ mod tests {
                 }),
             ))
             .await;
+        assert_eq!(dispatch.notifications.len(), 1);
+        let mcp_initialized = parse_response(&dispatch.notifications[0]);
+        assert_eq!(
+            mcp_initialized,
+            json!({
+                "jsonrpc": "2.0",
+                "method": "_x.ai/mcp_initialized",
+                "params": {
+                    "sessionId": "grok-edge-preferred",
+                    "mcpToolCount": 0,
+                    "elapsedMs": 0,
+                },
+            }),
+            "session/new must emit the stock pager's exact MCP completion envelope"
+        );
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         let result = &response["result"];
         assert_eq!(result["sessionId"], "grok-edge-preferred");
@@ -2356,6 +2506,10 @@ mod tests {
                 .contains("bound catalog"),
             "rejection must name the bound catalog"
         );
+        assert!(
+            dispatch.notifications.is_empty(),
+            "a rejected session/new must not clear the pager's MCP spinner"
+        );
     }
 
     #[tokio::test]
@@ -2398,7 +2552,7 @@ mod tests {
             .await;
         assert_eq!(dispatch.notifications.len(), 1);
         let notification = parse_response(&dispatch.notifications[0]);
-        assert_eq!(notification["method"], "x.ai/models/update");
+        assert_eq!(notification["method"], "_x.ai/models/update");
         assert_eq!(notification["params"]["currentModelId"], "GLM-5.3-NVFP4");
         assert!(notification["params"].get("models").is_none());
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
@@ -2477,12 +2631,9 @@ mod tests {
         );
         assert_eq!(notification["params"]["update"]["currentModeId"], "yolo");
         assert_eq!(notification["params"]["sessionId"], "s-set-mode");
-        assert!(
-            notification["params"]["_meta"]["eventId"]
-                .as_str()
-                .expect("eventId")
-                .starts_with("s-set-mode-"),
-            "eventId must be {{sessionId}}-{{counter}}"
+        assert_eq!(
+            notification["params"]["_meta"]["eventId"], "s-set-mode-1",
+            "the MCP completion extension must not consume a session-update event id"
         );
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         assert_eq!(response["result"], json!({}), "set_mode result is empty");
@@ -2626,6 +2777,59 @@ mod tests {
         assert_ne!(mode_event_id, echo_event_id);
         assert_eq!(mode_event_id, "s-dup-1");
         assert_eq!(echo_event_id, "s-dup-2");
+    }
+
+    /// The production delegate sends MCP completion after session/new's
+    /// response, so the native pager has attached the new session's routing.
+    #[tokio::test]
+    async fn session_new_streams_exact_mcp_completion_after_the_live_response() {
+        let (_staging, service) = test_service().await;
+        let payload = request_payload(
+            "session/new",
+            json!({
+                "cwd": "/tmp",
+                "mcpServers": [],
+                "_meta": { "sessionId": "s-mcp-live" },
+            }),
+        );
+        let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel::<
+            crate::commands::grok_shim::protocol::ServerEnvelope,
+        >();
+
+        service
+            .handle_acp(&payload, AcpOutbound::for_frames(frames_tx))
+            .await
+            .expect("session/new dispatch");
+
+        let first = frames_rx.recv().await.expect("session/new response frame");
+        let crate::commands::grok_shim::protocol::ServerEnvelope::Acp { payload } = first else {
+            panic!("session/new emitted a non-ACP frame first");
+        };
+        let response = parse_response(&payload);
+        assert_eq!(response["id"], 1);
+        assert_eq!(response["result"]["sessionId"], "s-mcp-live");
+
+        let second = frames_rx.recv().await.expect("MCP completion frame");
+        let crate::commands::grok_shim::protocol::ServerEnvelope::Acp { payload } = second else {
+            panic!("session/new emitted a non-ACP completion frame");
+        };
+        assert_eq!(
+            parse_response(&payload),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "_x.ai/mcp_initialized",
+                "params": {
+                    "sessionId": "s-mcp-live",
+                    "mcpToolCount": 0,
+                    "elapsedMs": 0,
+                },
+            })
+        );
+
+        assert!(
+            frames_rx.try_recv().is_err(),
+            "session/new must emit exactly one notification and one response"
+        );
     }
 
     /// Gate 3: the live production path. A `session/set_mode` dispatched
