@@ -898,65 +898,66 @@ async fn register_client(
     frames: &FrameSender,
     lifecycle: &mut broadcast::Receiver<ServerEnvelope>,
 ) -> std::result::Result<Registration, ()> {
-    loop {
-        let frame = tokio::select! {
-            lifecycle_frame = lifecycle.recv() => {
-                let _ = lifecycle_frame;
-                // The leader is stopping before this client registered.
+    // Every branch below resolves the registration (or closes the
+    // connection), so a single select suffices — clippy's `never_loop` is
+    // right that the historical `loop` here never iterated.
+    let frame = tokio::select! {
+        lifecycle_frame = lifecycle.recv() => {
+            let _ = lifecycle_frame;
+            // The leader is stopping before this client registered.
+            return Err(());
+        }
+        frame = client_frames.recv() => match frame {
+            Some(frame) => frame,
+            None => return Err(()),
+        },
+    };
+    match frame {
+        Ok(ClientEnvelope::Register {
+            client_type,
+            mode,
+            capabilities,
+        }) => {
+            if let Err(reason) = validate_register(&client_type, &mode) {
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    client_type = %client_type,
+                    mode = %mode.wire_name(),
+                    reason = %format!("{reason:#}"),
+                    "grok shim leader rejected an invalid register frame"
+                );
+                let _ = frames.try_send(ServerEnvelope::Error {
+                    code: ENVELOPE_ERROR_INVALID_REQUEST,
+                    message: format!("{reason:#}"),
+                });
                 return Err(());
             }
-            frame = client_frames.recv() => match frame {
-                Some(frame) => frame,
-                None => return Err(()),
-            },
-        };
-        match frame {
-            Ok(ClientEnvelope::Register {
+            Ok(Registration {
                 client_type,
                 mode,
                 capabilities,
-            }) => {
-                if let Err(reason) = validate_register(&client_type, &mode) {
-                    tracing::warn!(
-                        target: LOG_TARGET,
-                        client_type = %client_type,
-                        mode = %mode.wire_name(),
-                        reason = %format!("{reason:#}"),
-                        "grok shim leader rejected an invalid register frame"
-                    );
-                    let _ = frames.try_send(ServerEnvelope::Error {
-                        code: ENVELOPE_ERROR_INVALID_REQUEST,
-                        message: format!("{reason:#}"),
-                    });
-                    return Err(());
-                }
-                return Ok(Registration {
-                    client_type,
-                    mode,
-                    capabilities,
-                });
-            }
-            Ok(_) => {
-                protocol_violation(
-                    frames,
-                    "the first frame on a leader connection must be register",
-                );
-                return Err(());
-            }
-            Err(error) if error.is_connection_closed() => {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    "grok shim leader connection closed before register"
-                );
-                return Err(());
-            }
-            Err(error) => {
-                protocol_violation(
-                    frames,
-                    &format!("undecodable leader frame before register: {error}"),
-                );
-                return Err(());
-            }
+            })
+        }
+        Ok(_) => {
+            protocol_violation(
+                frames,
+                "the first frame on a leader connection must be register",
+            );
+            Err(())
+        }
+        Err(error) if error.is_connection_closed() => {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "grok shim leader connection closed before register"
+            );
+            Err(())
+        }
+        Err(error) => {
+            protocol_violation(
+                frames,
+                &format!("undecodable leader frame before register: {error}"),
+            );
+            Err(())
         }
     }
 }
@@ -1025,9 +1026,8 @@ fn spawn_acp_dispatch(
 fn internal_error_response(payload: &str) -> Option<String> {
     let value: Value = serde_json::from_str(payload).ok()?;
     let id = value.get("id")?;
-    if value.get("method").is_none() {
-        return None;
-    }
+    // Only requests are answered; notifications expect no response.
+    value.get("method")?;
     Some(
         serde_json::json!({
             "jsonrpc": "2.0",
@@ -1748,13 +1748,72 @@ mod tests {
     /// a chain of plain directories, which is what production on a real
     /// (non-symlinked) runtime dir looks like.
     fn short_test_root() -> PathBuf {
+        // 1. The contract's explicit short root when it is actually writable
+        //    and genuinely short: `metadata`/`is_dir` alone accept an
+        //    unwritable or over-long mount, and a canonical absolute root
+        //    longer than [`MAX_SHORT_ROOT_BYTES`] leaves no room for the
+        //    near-limit `sun_path` exercises below.
         let explicit = Path::new("/tmp");
-        let chosen = if explicit.is_dir() {
-            explicit.to_path_buf()
-        } else {
-            std::env::temp_dir()
+        if is_short_writable_root(explicit) {
+            return std::fs::canonicalize(explicit).unwrap_or_else(|_| explicit.to_path_buf());
+        }
+        // 2. Sandbox escape hatch: a caller-provided short root (used when the
+        //    process cannot write `/tmp` at all, e.g. a seatbelt profile that
+        //    scopes writes to a workspace). Same writability and length bar.
+        if let Ok(override_root) = std::env::var("GENTS_TEST_ROOT") {
+            if !override_root.trim().is_empty() {
+                let override_root = PathBuf::from(override_root);
+                if is_short_writable_root(&override_root) {
+                    return std::fs::canonicalize(&override_root).unwrap_or(override_root);
+                }
+            }
+        }
+        // 3. The platform temp dir, under the same two bars. A TMPDIR pointed
+        //    into a deep sandboxed workspace is writable but longer than
+        //    `sun_path`, which would make every real `bind(2)` impossible.
+        let platform = std::env::temp_dir();
+        if is_short_writable_root(&platform) {
+            return std::fs::canonicalize(&platform).unwrap_or(platform);
+        }
+        // 4. A short *relative* root anchored at the process cwd.
+        //
+        //    Sandboxed CI checkouts can make every writable absolute location
+        //    longer than `sun_path` (104 bytes on macOS) — but `sun_path`
+        //    bounds the path *string* passed to bind, and a relative path
+        //    keeps that string short. The leader code path is identical for
+        //    relative and absolute paths (the parent walk, staging,
+        //    `rename(2)`, and connect all resolve against cwd), so near-limit
+        //    tests still exercise genuinely near-limit bind/connect strings.
+        let workspace = PathBuf::from(".tmp-test-root");
+        std::fs::create_dir_all(&workspace).expect("creating the workspace-local short test root");
+        workspace
+    }
+
+    /// Upper bound for an absolute short-root candidate so the near-limit
+    /// fixtures keep room to build deep parents and long filenames under it.
+    const MAX_SHORT_ROOT_BYTES: usize = 64;
+
+    /// A root is usable only when it exists, is a directory, this process can
+    /// actually create entries inside it, and its canonical form is short
+    /// enough to leave room for the near-limit path exercises.
+    fn is_short_writable_root(root: &Path) -> bool {
+        let Ok(canonical) = std::fs::canonicalize(root) else {
+            return false;
         };
-        std::fs::canonicalize(&chosen).unwrap_or(chosen)
+        if canonical.as_os_str().len() > MAX_SHORT_ROOT_BYTES || !canonical.is_dir() {
+            return false;
+        }
+        let probe = canonical.join(format!(
+            ".gents-root-probe-{}",
+            &Uuid::new_v4().simple().to_string()[..8]
+        ));
+        match std::fs::File::create(&probe) {
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     fn unique_test_root(label: &str) -> PathBuf {
@@ -1768,13 +1827,19 @@ mod tests {
     }
 
     /// A socket path whose *filename* is near the `sun_path` limit.
+    ///
+    /// Falls back to a plain short filename when the test root alone already
+    /// reaches the requested byte target, so the helper never underflows; the
+    /// near-limit property is then asserted by the caller.
     fn long_filename_socket_path(root: &Path, target_bytes: usize) -> PathBuf {
-        let file_name_len = target_bytes - root.as_os_str().len() - 1;
-        let stem_len = file_name_len - ".sock".len();
-        assert!(
-            stem_len > 8,
-            "the test root is too long to exercise a near-limit filename"
-        );
+        let file_name_len = target_bytes.saturating_sub(root.as_os_str().len() + 1);
+        let stem_len = file_name_len.saturating_sub(".sock".len());
+        if stem_len <= 8 {
+            // The root is too long to build a meaningful near-limit filename;
+            // return a plain short name and let the caller's own assertion
+            // decide whether the path really approached the limit.
+            return root.join("s.sock");
+        }
         root.join(format!("{}.sock", "f".repeat(stem_len)))
     }
 
