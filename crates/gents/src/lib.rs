@@ -47,6 +47,7 @@ pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
 pub mod oauth_credential;
+pub(crate) mod oauth_http;
 pub mod openai_wire;
 pub mod p2p_observability;
 pub(crate) mod provider_input;

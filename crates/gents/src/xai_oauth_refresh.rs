@@ -1,6 +1,6 @@
 //! xAI OAuth refresh against `auth.x.ai` (public Grok CLI client).
 
-use chrono::{Duration, Utc};
+use chrono::Utc;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -82,14 +82,11 @@ pub async fn refresh_xai_token(
         )
     })?;
 
-    let access_token_expires_at = crate::chatgpt_oauth_refresh::jwt_expiration(&access_token)
-        .or_else(|| {
-            refreshed
-                .expires_in
-                .filter(|seconds| *seconds > 0)
-                .map(|seconds| Utc::now() + Duration::seconds(seconds))
-        })
-        .unwrap_or_else(|| Utc::now() + Duration::minutes(15));
+    let access_token_expires_at = crate::oauth_credential::resolve_access_token_expiry(
+        &access_token,
+        refreshed.expires_in,
+        Utc::now(),
+    );
 
     Ok(RefreshedTokens {
         access_token,
