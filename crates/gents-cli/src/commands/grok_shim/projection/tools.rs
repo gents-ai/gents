@@ -54,7 +54,7 @@
 //! `AgentToolCall` query and one `AgentToolResult` query per request id,
 //! with no graph walks beyond the rows of the request being projected.
 
-use std::sync::Arc;
+use std::{char::REPLACEMENT_CHARACTER, sync::Arc};
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
@@ -92,12 +92,6 @@ pub(super) const TOOL_META_KIND_ACTIVE_AGENT_MESSAGE: &str = "ActiveAgentMessage
 /// Title the pager falls back to when recognizing
 /// `send_subagent_message` without canonical meta.
 pub(super) const SEND_SUBAGENT_MESSAGE_TITLE: &str = "send_subagent_message";
-
-/// The replacement character the runtime's lossy UTF-8 persistence of a
-/// live-output tail uses for bytes that did not yet decode: a running
-/// row's trailing one stands for an incomplete final sequence the next
-/// flush completes, so the streaming window holds it back.
-const REPLACEMENT_CHARACTER: char = '\u{FFFD}';
 
 /// Grok pager tool-call kinds, mapped from durable tool names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
