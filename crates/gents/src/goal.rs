@@ -2249,7 +2249,7 @@ pub async fn claim_retry_continuation(
 }
 
 /// Sum of tokens charged against the session's budget: the charged total,
-/// same as the request ledger (`crate::provider_usage::charged_usage_total`).
+/// same as the request ledger (`crate::provider_usage::sum_charged_from_persisted_parts`).
 pub async fn session_token_usage(
     node: &EmbeddedNode,
     agent_did: &str,

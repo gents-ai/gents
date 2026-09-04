@@ -24,6 +24,12 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   `RequestShowHeader.status`, `ChildRequestView.status`,
   `GraphRunRequestView.status`); read `lifecycle_state` instead.
 
+### Fixed
+
+- `Goal.tokens_used` now reports the charged total (input incl. cached +
+  output), matching the request ledger; `/self` utilization is measured
+  against the effective input budget.
+
 ## 0.15.0 - 2026-09-01
 
 ### Breaking changes
