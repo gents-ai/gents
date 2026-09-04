@@ -1,6 +1,6 @@
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
-use gents_chatgpt_login::{
+use gents_protocol::chatgpt_oauth::{
     CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID, REFRESH_TOKEN_URL, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
 };
 use serde::{Deserialize, Serialize};

@@ -12,6 +12,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+pub use gents_protocol::chatgpt_oauth::{
+    CLIENT_ID, DEFAULT_ISSUER, REFRESH_TOKEN_URL, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+};
 use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -19,18 +22,6 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Header, Response, Server, StatusCode as TinyStatusCode};
 use tokio::sync::{mpsc, Notify};
 use url::Url;
-
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-pub const DEFAULT_ISSUER: &str = "https://auth.openai.com";
-pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
-/// The refresh-token endpoint under [`DEFAULT_ISSUER`]. Kept as its own
-/// constant (rather than formatted at each call site) for callers — like
-/// `gents::chatgpt_oauth_refresh` — that only ever refresh against the
-/// default issuer; `refresh_tokens` in this crate still formats
-/// `{issuer}/oauth/token` directly since it supports a caller-supplied
-/// issuer. `refresh_token_url_matches_default_issuer` guards the two
-/// against drift.
-pub const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 
 const DEFAULT_PORT: u16 = 1455;
 const FALLBACK_PORT: u16 = 1457;
@@ -614,11 +605,6 @@ pub async fn complete_device_code_login(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn refresh_token_url_matches_default_issuer() {
-        assert_eq!(REFRESH_TOKEN_URL, format!("{DEFAULT_ISSUER}/oauth/token"));
-    }
 
     #[test]
     fn authorize_url_preserves_the_codex_compatible_contract() {

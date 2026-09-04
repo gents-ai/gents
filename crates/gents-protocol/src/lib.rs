@@ -1,5 +1,6 @@
 pub mod behavior_readiness;
 pub mod canonical;
+pub mod chatgpt_oauth;
 pub mod client_protocol;
 pub mod enrollment;
 pub mod graphql;
