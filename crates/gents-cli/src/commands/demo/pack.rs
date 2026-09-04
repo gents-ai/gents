@@ -5404,6 +5404,8 @@ mod tests {
                     .find("write_port_live_environment_proof")
                     .zip(live_prompt.find("write_port_live_result"))
                     .is_some_and(|(proof, result)| proof < result));
+                assert!(live_behavior.contains("Only after that\nstock proof"));
+                assert!(live_behavior.contains("subprocess, subagent, and cancel"));
                 let live_review =
                     std::fs::read_to_string(pack.join("tasks/port-live-review-task/prompt.md"))
                         .expect("live review prompt should load");
