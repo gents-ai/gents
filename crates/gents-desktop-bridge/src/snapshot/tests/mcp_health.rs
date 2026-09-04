@@ -7,7 +7,7 @@ use lean_vocab_test::lean_mcp_health_cases;
 use crate::commands::mcp_health::view_from_row;
 
 /// Translate an internal Lean `HealthState` name to the DefraDB-persisted
-/// string vocabulary used by `health_checker::HealthStateInternal::to_defradb`.
+/// string vocabulary used by `gents_protocol::tool_service_health::ToolServiceHealthState::as_str`.
 /// Identity for every internal state — the persisted vocabulary mirrors
 /// `Proofs/MCPHealth/State.lean :: HealthState.toDefraDB` exactly. The
 /// public `HealthStatus` collapse (degraded → stale, evicted+reconnecting
