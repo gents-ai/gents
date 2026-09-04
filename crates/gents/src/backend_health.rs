@@ -236,23 +236,27 @@ pub async fn probe_backends_cycle(
         }
         probed_ids.insert(backend.backend_id.clone());
 
-        let api_key = backend.resolved_api_key();
-        let probe_result = tokio::time::timeout(
-            options.probe_timeout,
-            crate::backend_provider::discover_models(
-                client,
-                backend.provider_kind,
-                &backend.endpoint,
-                api_key.as_deref(),
-                None,
-            ),
-        )
-        .await;
+        let (event, error_text) = match crate::config::resolve_backend_api_key(backend) {
+            Err(error) => (ProbeEvent::ProbeFail, Some(error.to_string())),
+            Ok(api_key) => {
+                let probe_result = tokio::time::timeout(
+                    options.probe_timeout,
+                    crate::backend_provider::discover_models(
+                        client,
+                        backend.provider_kind,
+                        &backend.endpoint,
+                        api_key.as_deref(),
+                        None,
+                    ),
+                )
+                .await;
 
-        let (event, error_text) = match probe_result {
-            Ok(Ok(_models)) => (ProbeEvent::ProbeSuccess, None),
-            Ok(Err(error)) => (ProbeEvent::ProbeFail, Some(error.to_string())),
-            Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
+                match probe_result {
+                    Ok(Ok(_models)) => (ProbeEvent::ProbeSuccess, None),
+                    Ok(Err(error)) => (ProbeEvent::ProbeFail, Some(error.to_string())),
+                    Err(_) => (ProbeEvent::ProbeFail, Some("probe timed out".to_string())),
+                }
+            }
         };
 
         let previous = health_map.get_model(&backend.backend_id).await;

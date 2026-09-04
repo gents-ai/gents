@@ -267,33 +267,22 @@ impl AgentBehavior {
         &self.principal.identity
     }
 
+    /// Resolve this behavior's backend API key. Delegates to
+    /// [`resolve_api_key`], the single owner of the resolution and
+    /// hard-error-on-missing-env-var semantics; a missing or empty
+    /// `backend_api_key_env_var` names both the backend and the behavior in
+    /// the error, since a behavior's own binding (not just the backend
+    /// document) is what's unusable.
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
-        if let Some(api_key) = normalize_optional_secret(self.backend_api_key.as_deref()) {
-            return Ok(Some(api_key.to_string()));
-        }
-
-        if let Some(env_var) = normalize_optional_env_var(self.backend_api_key_env_var.as_deref()) {
-            let value = std::env::var(env_var).with_context(|| {
-                format!(
-                    "backend {} for behavior {} requires environment variable {}",
-                    self.backend_id.as_deref().unwrap_or("<unbound>"),
-                    self.behavior_id,
-                    env_var
-                )
-            })?;
-            let value = value.trim();
-            if value.is_empty() {
-                anyhow::bail!(
-                    "backend {} for behavior {} resolved empty API key from environment variable {}",
-                    self.backend_id.as_deref().unwrap_or("<unbound>"),
-                    self.behavior_id,
-                    env_var
-                );
-            }
-            return Ok(Some(value.to_string()));
-        }
-
-        Ok(None)
+        resolve_api_key(
+            &format!(
+                "backend {} for behavior {}",
+                self.backend_id.as_deref().unwrap_or("<unbound>"),
+                self.behavior_id
+            ),
+            self.backend_api_key.as_deref(),
+            self.backend_api_key_env_var.as_deref(),
+        )
     }
 
     pub fn completion_client_api_key(&self) -> Result<String> {
@@ -301,6 +290,54 @@ impl AgentBehavior {
             .resolve_backend_api_key()?
             .unwrap_or_else(|| "no-key".to_string()))
     }
+}
+
+/// Resolve an [`crate::backend_registry::InferenceBackend`]'s API key
+/// independent of any behavior binding — used by the startup and periodic
+/// backend probers, which check reachability before any behavior claims the
+/// backend. Delegates to [`resolve_api_key`]; a missing or empty
+/// `api_key_env_var` is a hard error naming the backend, exactly as
+/// [`AgentBehavior::resolve_backend_api_key`] errors for a bound behavior —
+/// a backend whose configured env var isn't set must fail loudly, not probe
+/// silently with no key (previously [`InferenceBackend::resolved_api_key`]
+/// swallowed this into `None`).
+pub fn resolve_backend_api_key(
+    backend: &crate::backend_registry::InferenceBackend,
+) -> Result<Option<String>> {
+    resolve_api_key(
+        &format!("backend {}", backend.backend_id),
+        backend.api_key.as_deref(),
+        backend.api_key_env_var.as_deref(),
+    )
+}
+
+/// Single owner of "resolve an API key from a raw value or an environment
+/// variable name": prefer the raw value; otherwise, if an env var name is
+/// configured, its value must be set and non-blank or this hard-errors
+/// naming `subject` — a configured-but-unusable credential is a
+/// misconfiguration, not a silent no-key fallback. No env var configured at
+/// all is a legitimate no-key backend (e.g. an unauthenticated local
+/// endpoint) and resolves to `None`.
+fn resolve_api_key(
+    subject: &str,
+    api_key: Option<&str>,
+    api_key_env_var: Option<&str>,
+) -> Result<Option<String>> {
+    if let Some(api_key) = normalize_optional_secret(api_key) {
+        return Ok(Some(api_key.to_string()));
+    }
+
+    if let Some(env_var) = normalize_optional_env_var(api_key_env_var) {
+        let value = std::env::var(env_var)
+            .with_context(|| format!("{subject} requires environment variable {env_var}"))?;
+        let value = value.trim();
+        if value.is_empty() {
+            anyhow::bail!("{subject} resolved empty API key from environment variable {env_var}");
+        }
+        return Ok(Some(value.to_string()));
+    }
+
+    Ok(None)
 }
 
 fn normalize_optional_env_var(value: Option<&str>) -> Option<&str> {
@@ -365,6 +402,45 @@ mod tests {
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
         }
+    }
+
+    /// A behavior bound to a backend whose `backend_api_key_env_var` names an
+    /// environment variable that isn't actually set in the process must fail
+    /// loudly, naming both the backend and the behavior — never silently
+    /// build/run with no key (#1338).
+    #[test]
+    fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
+        let mut behavior = behavior_with_wire(OpenAiWireApi::ChatCompletions);
+        behavior.backend_api_key_env_var =
+            Some("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".to_string());
+
+        let error = behavior
+            .resolve_backend_api_key()
+            .expect_err("a named-but-unset env var must hard error");
+        let message = error.to_string();
+        assert!(
+            message.contains("backend-general"),
+            "error must name the backend: {message}"
+        );
+        assert!(
+            message.contains("general"),
+            "error must name the behavior: {message}"
+        );
+        assert!(
+            message.contains("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET"),
+            "error must name the environment variable: {message}"
+        );
+    }
+
+    #[test]
+    fn resolve_backend_api_key_none_when_no_env_var_configured() {
+        let behavior = behavior_with_wire(OpenAiWireApi::ChatCompletions);
+        assert_eq!(
+            behavior
+                .resolve_backend_api_key()
+                .expect("no key configured is not an error"),
+            None
+        );
     }
 
     #[test]

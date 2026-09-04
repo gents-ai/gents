@@ -40,6 +40,8 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 - `Goal.tokens_used` now reports the charged total (input incl. cached +
   output), matching the request ledger; `/self` utilization is measured
   against the effective input budget.
+- A backend whose API-key environment variable is unset now fails loudly on
+  every path (previously the builder and prober silently ran without a key).
 
 ## 0.15.0 - 2026-09-01
 

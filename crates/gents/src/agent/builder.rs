@@ -11,6 +11,7 @@ use super::{
 };
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
+#[cfg(test)]
 use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
@@ -556,46 +557,22 @@ impl PendingAgentBehavior {
         }
 
         let behavior_name = self.name.clone();
-        let resolved_backend_id = Some(backend.backend_id);
-        let provider_kind = backend.provider_kind;
-        let openai_wire_api = crate::OpenAiWireApi::effective_for_provider(
-            backend.provider_kind,
-            backend.openai_wire_api,
-            &backend_id,
-        );
-        let endpoint = backend.endpoint;
-        let api_key = backend.api_key;
-        let api_key_env_var = backend.api_key_env_var;
+        let backend_fields = backend.backend_fields();
         let tool_ceiling = tool_ceiling.clone();
 
         Ok(Box::new(move |principal| {
-            self.build_with_resolved_backend(
-                principal,
-                resolved_backend_id,
-                provider_kind,
-                openai_wire_api,
-                endpoint,
-                api_key,
-                api_key_env_var,
-                &tool_ceiling,
-            )
-            .map_err(|error| BehaviorBuildError {
-                behavior_id: behavior_name,
-                error,
-            })
+            self.build_with_resolved_backend(principal, backend_fields, &tool_ceiling)
+                .map_err(|error| BehaviorBuildError {
+                    behavior_id: behavior_name,
+                    error,
+                })
         }))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn build_with_resolved_backend(
         self,
         principal: Arc<AgentPrincipal>,
-        backend_id: Option<String>,
-        backend_provider_kind: BackendProviderKind,
-        openai_wire_api: crate::OpenAiWireApi,
-        backend_endpoint: String,
-        backend_api_key: Option<String>,
-        backend_api_key_env_var: Option<String>,
+        backend_fields: crate::backend_registry::BackendFields,
         tool_ceiling: &ToolCeiling,
     ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
@@ -607,18 +584,20 @@ impl PendingAgentBehavior {
             }),
             &crate::template::catalog::default_catalog(),
         )?;
-        self.sampling
-            .validate_for_provider(backend_provider_kind, openai_wire_api)?;
+        self.sampling.validate_for_provider(
+            backend_fields.backend_provider_kind,
+            backend_fields.openai_wire_api,
+        )?;
 
         Ok(AgentBehavior {
             behavior_id: self.name,
             principal,
-            backend_id,
-            backend_provider_kind,
-            openai_wire_api,
-            backend_endpoint,
-            backend_api_key,
-            backend_api_key_env_var,
+            backend_id: backend_fields.backend_id,
+            backend_provider_kind: backend_fields.backend_provider_kind,
+            openai_wire_api: backend_fields.openai_wire_api,
+            backend_endpoint: backend_fields.backend_endpoint,
+            backend_api_key: backend_fields.backend_api_key,
+            backend_api_key_env_var: backend_fields.backend_api_key_env_var,
             model_name: self.model_name,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
@@ -662,16 +641,18 @@ impl PendingAgentBehavior {
         });
         self.build_with_resolved_backend(
             principal,
-            backend_id,
-            BackendProviderKind::OpenAiCompatible,
-            crate::OpenAiWireApi::effective_for_provider(
-                BackendProviderKind::OpenAiCompatible,
-                None,
-                "<test>",
-            ),
-            backend_endpoint,
-            None,
-            None,
+            crate::backend_registry::BackendFields {
+                backend_id,
+                backend_provider_kind: BackendProviderKind::OpenAiCompatible,
+                openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
+                    BackendProviderKind::OpenAiCompatible,
+                    None,
+                    "<test>",
+                ),
+                backend_endpoint,
+                backend_api_key: None,
+                backend_api_key_env_var: None,
+            },
             &ToolCeiling::meta_only(),
         )
         .unwrap()
