@@ -67,12 +67,12 @@ if [[ "${mode}" != "build" ]]; then
   exit 2
 fi
 
-# The support shard deliberately reuses a non-incremental target directory
-# across checkouts. Cargo's mtime fast path can otherwise accept a stale local
-# crate when a checkout adds a new module, as happened when gents-protocol
-# became the ChatGPT OAuth vocabulary owner. Preserve downloaded dependencies
-# and sccache entries, but always rebuild workspace members in this shard.
-if [[ "${CARGO_INCREMENTAL:-}" == "0" ]]; then
+# The support shard deliberately reuses a target directory across checkouts.
+# Cargo's mtime fast path can otherwise accept a stale local crate when a
+# checkout adds a new module, as happened when gents-protocol became the
+# ChatGPT OAuth vocabulary owner. Preserve dependency artifacts, but always
+# rebuild workspace members in this shard with its direct rustc wrapper.
+if [[ "${suite}" == "support" ]]; then
   cargo clean --workspace
 fi
 

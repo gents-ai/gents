@@ -102,7 +102,14 @@ jobs:
       github.event.pull_request.stack.position == github.event.pull_request.stack.size
     needs: rename-guard
     runs-on:
-      [self-hosted, macOS, ARM64, studio, "${{ matrix.host }}", "${{ matrix.slot }}"]
+      [
+        self-hosted,
+        macOS,
+        ARM64,
+        studio,
+        "${{ matrix.host }}",
+        "${{ matrix.slot }}",
+      ]
     strategy:
       fail-fast: false
       matrix:
@@ -120,8 +127,12 @@ jobs:
           - suite: support
             host: studio-1
             slot: ci-support
-            cargo_incremental: "0"
-            rustc_wrapper: sccache
+            cargo_incremental: "1"
+            # Shared sccache can return a stale module graph when a checkout
+            # adds a Rust module. The persistent target still keeps external
+            # dependencies warm after the support script cleans workspace
+            # members, so compile local crates directly for correctness.
+            rustc_wrapper: .github/scripts/rustc-direct.sh
           - suite: desktop
             host: studio-2
             slot: ci-desktop
@@ -338,8 +349,7 @@ jobs:
       github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # Reuse the warm proof cache on studio-1's light support slot. This keeps
     # the runtime slot free once rename-guard releases the Rust matrix.
-    runs-on:
-      [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
+    runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
