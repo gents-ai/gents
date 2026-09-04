@@ -45,31 +45,58 @@ pub(crate) async fn enqueue_goal_continuation(
             &parent.agent_did,
             &parent.request_id,
         );
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id.clone(),
-        &parent.agent_did,
-        &parent.agent_did,
-        behavior_id,
-        &parent.session_id,
-        content,
-        "scheduled",
-        now,
+    let spec = crate::lifecycle::materialize::RequestSpec {
+        identity: crate::lifecycle::materialize::RequestIdentity {
+            request_id: request_id.clone(),
+            agent_did: parent.agent_did.clone(),
+            requester_did: None,
+            behavior_id,
+            session_id: parent.session_id.clone(),
+            content: content.to_string(),
+            execution_origin: ExecutionOrigin::Scheduled,
+            created_at: now,
+        },
         admission,
-    );
-    create.metadata = Some(metadata);
-    create.retry_key = Some(retry_key.clone());
-    create.caused_by_trigger_id = Some(goal_id.to_string());
-    create.caused_by_trigger_kind = Some("goal".to_string());
-    create.caused_by_correlation = parent.caused_by_correlation.clone();
-    create.caused_by_trigger_context = parent.caused_by_trigger_context.clone();
-    create.caused_by_parent_request_id = Some(parent.request_id.clone());
-    create.caused_by_parent_request_doc_id = Some(parent.doc_id.clone());
-    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-    create.subagent_depth = parent.subagent_depth;
-    create.workspace_id = parent.workspace_id.clone();
-    create.workspace_authority = parent.workspace_authority.clone();
-    create.workspace_owner_deployment_id = parent.workspace_owner_deployment_id.clone();
-    create.workspace_seal_hash = parent.workspace_seal_hash.clone();
+        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+        trigger_lineage: crate::lifecycle::TriggerLineage {
+            trigger_id: Some(goal_id.to_string()),
+            trigger_kind: Some("goal".to_string()),
+            source_doc_id: None,
+            correlation: parent.caused_by_correlation.clone(),
+            trigger_context: parent.caused_by_trigger_context.clone(),
+        },
+        trigger_doc_id: None,
+        workspace: Some(crate::lifecycle::WorkspaceLineage {
+            workspace_id: parent.workspace_id.clone(),
+            workspace_authority: parent.workspace_authority.clone(),
+            workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
+            workspace_seal_hash: parent.workspace_seal_hash.clone(),
+        }),
+        subagent: Some(crate::lifecycle::materialize::SubagentLink {
+            depth: parent.subagent_depth,
+            parent_request_id: parent.request_id.clone(),
+            parent_request_doc_id: parent.doc_id.clone(),
+            parent_tool_call_id: None,
+            parent_tool_call_doc_id: None,
+        }),
+        retry: None,
+        sampling: None,
+        metadata: Some(metadata),
+        retry_key: Some(retry_key.clone()),
+        valid_until: None,
+    };
+    // Signing happens before the dedupe lookup below (unlike the prior
+    // hand-rolled version, which peeked at the unsigned DTO first): the
+    // fingerprint compares only pre-signature fields
+    // (`GoalBackedRequestFingerprint` explicitly excludes
+    // `admission_signature` and `created_at`), so this costs one extra local
+    // Ed25519 signature on the redundant-continuation path in exchange for
+    // going through the single signed-request constructor.
+    let create = crate::lifecycle::materialize::build_signed_request(
+        spec,
+        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
+    )
+    .await?;
     let expected = crate::goal::GoalBackedRequestFingerprint::from_create(&create)?;
     if let Some(doc_id) = lookup_goal_continuation_by_retry_key(node, &retry_key, &expected).await?
     {
@@ -79,7 +106,6 @@ pub(crate) async fn enqueue_goal_continuation(
             session_id: parent.session_id.clone(),
         });
     }
-    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let response =
         session::execute_mutation_with_retry(node, &mutation, "enqueue_goal_continuation").await;

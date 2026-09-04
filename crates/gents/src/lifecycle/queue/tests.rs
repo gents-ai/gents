@@ -1,5 +1,6 @@
 use super::*;
 use crate::identity::AgentIdentity;
+use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
 use std::sync::Arc;
 use tempfile::TempDir;
 

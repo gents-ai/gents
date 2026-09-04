@@ -12,7 +12,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::{WorkspaceLineage, DEFAULT_REQUEST_MAX_RETRIES};
+use crate::lifecycle::WorkspaceLineage;
 use crate::session::execute_mutation_with_retry;
 
 use super::IllegalToolCallTransition;
@@ -332,39 +332,48 @@ async fn create_subagent_request_inner(
             )
         }
     };
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id.clone(),
-        agent_did.clone(),
-        agent_did.clone(),
-        behavior_id,
-        new_session_id,
-        prompt,
-        "interactive",
-        now,
+    let spec = crate::lifecycle::materialize::RequestSpec {
+        identity: crate::lifecycle::materialize::RequestIdentity {
+            request_id: request_id.clone(),
+            agent_did: agent_did.clone(),
+            requester_did: None,
+            behavior_id,
+            session_id: new_session_id,
+            content: prompt,
+            execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+            created_at: now,
+        },
         admission,
-    );
-    create.metadata = metadata;
-    create.valid_until =
-        deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-    create.subagent_depth = new_subagent_depth;
-    create.caused_by_parent_request_id = Some(parent_request_id);
-    create.caused_by_parent_request_doc_id = Some(parent_doc_ids.0);
-    create.caused_by_parent_tool_call_id = Some(parent_tool_call_id.clone());
-    create.caused_by_parent_tool_call_doc_id = Some(parent_doc_ids.1);
-    create.caused_by_trigger_id = Some(parent_tool_call_id);
-    create.caused_by_trigger_kind = Some("subagent".to_string());
-    create.caused_by_correlation = runtime_context
-        .as_ref()
-        .and_then(|context| context.correlation.clone());
-    create.caused_by_trigger_context = inherited_context_json;
-    if let Some(workspace) = workspace {
-        create.workspace_id = workspace.workspace_id;
-        create.workspace_authority = workspace.workspace_authority;
-        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id;
-        create.workspace_seal_hash = workspace.workspace_seal_hash;
-    }
-    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+        trigger_lineage: crate::lifecycle::TriggerLineage {
+            trigger_id: Some(parent_tool_call_id.clone()),
+            trigger_kind: Some("subagent".to_string()),
+            source_doc_id: None,
+            correlation: runtime_context
+                .as_ref()
+                .and_then(|context| context.correlation.clone()),
+            trigger_context: inherited_context_json,
+        },
+        trigger_doc_id: None,
+        workspace,
+        subagent: Some(crate::lifecycle::materialize::SubagentLink {
+            depth: new_subagent_depth,
+            parent_request_id: parent_request_id.clone(),
+            parent_request_doc_id: parent_doc_ids.0.clone(),
+            parent_tool_call_id: Some(parent_tool_call_id.clone()),
+            parent_tool_call_doc_id: Some(parent_doc_ids.1.clone()),
+        }),
+        retry: None,
+        sampling: None,
+        metadata,
+        retry_key: None,
+        valid_until: deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    };
+    let create = crate::lifecycle::materialize::build_signed_request(
+        spec,
+        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
+    )
+    .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
 
     execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;

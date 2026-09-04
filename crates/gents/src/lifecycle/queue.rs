@@ -14,7 +14,7 @@ use crate::session;
 use crate::watcher::AgentRequest;
 
 use super::materialize::EnqueuedAgentRequest;
-use super::{extract_single_doc_id, ExecutionOrigin, DEFAULT_REQUEST_MAX_RETRIES};
+use super::{extract_single_doc_id, ExecutionOrigin};
 
 mod atomic_inputs;
 mod coalescing;

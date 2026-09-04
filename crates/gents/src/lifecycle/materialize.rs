@@ -252,47 +252,40 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         }
         Some(kind) => anyhow::bail!("unsupported runtime request trigger kind {kind}"),
     };
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id,
-        agent_did,
-        agent_did,
-        behavior_id,
-        session_id,
-        content,
-        execution_origin.as_str(),
-        now,
-        admission,
-    );
-    create.metadata =
-        (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string());
-    create.retry_key = retry_key.map(str::to_owned);
-    create.initial_lifecycle_state = initial_lifecycle_state;
-    create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
-    create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
-    create.caused_by_trigger_doc_id = trigger_doc_id.map(str::to_owned);
-    create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
-    create.caused_by_correlation = trigger_lineage.correlation.clone();
-    create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
-    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-    if let Some(workspace) = workspace_lineage {
-        create.workspace_id = workspace.workspace_id.clone();
-        create.workspace_authority = workspace.workspace_authority.clone();
-        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id.clone();
-        create.workspace_seal_hash = workspace.workspace_seal_hash.clone();
-    }
     if requester_did.is_some_and(|did| did.trim() != agent_did) {
         tracing::debug!(
             target_agent_did = agent_did,
             "runtime trigger requester provenance remains in signed trigger context"
         );
     }
-    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
-    Ok(create)
+    let spec = RequestSpec {
+        identity: RequestIdentity {
+            request_id: request_id.to_string(),
+            agent_did: agent_did.to_string(),
+            requester_did: None,
+            behavior_id: behavior_id.to_string(),
+            session_id: session_id.to_string(),
+            content: content.to_string(),
+            execution_origin,
+            created_at: now,
+        },
+        admission,
+        initial_lifecycle_state,
+        trigger_lineage,
+        trigger_doc_id: trigger_doc_id.map(str::to_owned),
+        workspace: workspace_lineage.cloned(),
+        subagent: None,
+        retry: None,
+        sampling: None,
+        metadata: (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string()),
+        retry_key: retry_key.map(str::to_owned),
+        valid_until: None,
+    };
+    build_signed_request(spec, RequestSigner::RegisteredTarget).await
 }
 
 /// The identity fields every writer decides for a fresh `AgentRequest`:
 /// who it is for, what session it belongs to, and what it says.
-#[allow(dead_code)]
 pub(crate) struct RequestIdentity {
     pub request_id: String,
     pub agent_did: String,
@@ -306,7 +299,6 @@ pub(crate) struct RequestIdentity {
 
 /// Subagent parent linkage: the logical and physical identifiers of the
 /// tool call and request that spawned this child, plus its resulting depth.
-#[allow(dead_code)]
 pub(crate) struct SubagentLink {
     pub depth: u32,
     pub parent_request_id: String,
@@ -317,7 +309,6 @@ pub(crate) struct SubagentLink {
 
 /// Retry linkage: the failed request this one supersedes, the root of the
 /// retry chain, and the counters carried forward from it.
-#[allow(dead_code)]
 pub(crate) struct RetryLink {
     pub parent_request_id: String,
     pub parent_request_doc_id: String,
@@ -328,7 +319,6 @@ pub(crate) struct RetryLink {
 
 /// Sampling parameters and backend carried over from a prior request (used
 /// by background-wake redrive; unset for a fresh request).
-#[allow(dead_code)]
 pub(crate) struct SamplingCarryover {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -343,7 +333,6 @@ pub(crate) struct SamplingCarryover {
 /// signed. This is the single seam every production writer should build
 /// through; `build_signed_request` alone owns which of its fields become
 /// which stamped columns.
-#[allow(dead_code)]
 pub(crate) struct RequestSpec {
     pub identity: RequestIdentity,
     pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
@@ -368,7 +357,6 @@ pub(crate) struct RequestSpec {
 /// How the built `AgentRequestCreate` is signed: as the already-registered
 /// runtime principal named by `spec.identity.agent_did` (the common case for
 /// runtime-authored requests), or with an explicit caller-held identity.
-#[allow(dead_code)]
 pub(crate) enum RequestSigner<'a> {
     RegisteredTarget,
     Identity(&'a dyn crate::identity::AgentIdentity),
@@ -379,7 +367,6 @@ pub(crate) enum RequestSigner<'a> {
 /// stamped columns; every production writer should build through it rather
 /// than hand-rolling `AgentRequestCreate::base(...)` and stamping fields
 /// itself.
-#[allow(dead_code)]
 pub(crate) async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
@@ -614,25 +601,40 @@ impl RequestLifecycle {
         let session_id = uuid::Uuid::new_v4().to_string();
         validate_trigger_provenance(&trigger_lineage)?;
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-        let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-            request_id.clone(),
-            &agent_did,
-            &agent_did,
-            behavior_id.clone(),
-            session_id.clone(),
-            content,
-            execution_origin.as_str(),
-            created_at.clone(),
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did),
-        );
-        create.backend_id = (!backend_id.is_empty()).then(|| backend_id.clone());
-        create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
-        create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
-        create.caused_by_source_doc_id = trigger_lineage.source_doc_id.clone();
-        create.caused_by_correlation = trigger_lineage.correlation.clone();
-        create.caused_by_trigger_context = trigger_lineage.trigger_context.clone();
-        create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-        crate::sign_agent_request_create(identity.as_ref(), &mut create).await?;
+        let admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
+        let spec = RequestSpec {
+            identity: RequestIdentity {
+                request_id: request_id.clone(),
+                agent_did: agent_did.clone(),
+                requester_did: None,
+                behavior_id: behavior_id.clone(),
+                session_id: session_id.clone(),
+                content: content.to_string(),
+                execution_origin,
+                created_at: created_at.clone(),
+            },
+            admission,
+            initial_lifecycle_state: RequestLifecycleState::Pending,
+            trigger_lineage: trigger_lineage.clone(),
+            trigger_doc_id: None,
+            workspace: None,
+            subagent: None,
+            retry: None,
+            sampling: Some(SamplingCarryover {
+                temperature: None,
+                top_p: None,
+                top_k: None,
+                seed: None,
+                max_tokens: None,
+                max_total_tokens: None,
+                backend_id: (!backend_id.is_empty()).then(|| backend_id.clone()),
+            }),
+            metadata: None,
+            retry_key: None,
+            valid_until: None,
+        };
+        let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
         let resp = crate::graphql::graphql_mutation_with_transaction_retry(
             node.as_ref(),

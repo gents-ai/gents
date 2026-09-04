@@ -399,35 +399,66 @@ async fn redrive_mutation(
             &candidate.agent_did,
             &candidate.request_id,
         );
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id,
-        &candidate.agent_did,
-        &candidate.agent_did,
-        &candidate.behavior_id,
-        &candidate.session_id,
-        BACKGROUND_COMPLETION_WAKE_PROMPT,
-        "scheduled",
-        &now,
+    // Reused for both subagent_depth/parent linkage: a redrive successor is
+    // not a subagent, but it carries the same "linked to one parent request,
+    // at some depth" shape `SubagentLink` was built for.
+    let parent_link = crate::lifecycle::materialize::SubagentLink {
+        depth: candidate.subagent_depth.unwrap_or_default(),
+        parent_request_id: candidate.request_id.clone(),
+        parent_request_doc_id: candidate.doc_id.clone(),
+        parent_tool_call_id: None,
+        parent_tool_call_doc_id: None,
+    };
+    let spec = crate::lifecycle::materialize::RequestSpec {
+        identity: crate::lifecycle::materialize::RequestIdentity {
+            request_id: request_id.to_string(),
+            agent_did: candidate.agent_did.clone(),
+            requester_did: None,
+            behavior_id: candidate.behavior_id.clone(),
+            session_id: candidate.session_id.clone(),
+            content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
+            execution_origin: crate::lifecycle::ExecutionOrigin::Scheduled,
+            created_at: now.clone(),
+        },
         admission,
-    );
-    create.retry_parent_request = Some(candidate.request_id.clone());
-    create.retry_parent_request_doc_id = Some(candidate.doc_id.clone());
-    create.retry_root_request = Some(retry_root.to_string());
-    create.retry_key = Some(retry_key.to_string());
-    create.temperature = candidate.temperature;
-    create.top_p = candidate.top_p;
-    create.top_k = candidate.top_k;
-    create.seed = candidate.seed;
-    create.max_tokens = candidate.max_tokens;
-    create.max_total_tokens = candidate.max_total_tokens;
-    create.metadata = candidate.metadata.clone();
-    create.backend_id = candidate.backend_id.clone();
-    create.retry_count = candidate.retry_count + 1;
-    create.max_retries = candidate.max_retries;
-    create.subagent_depth = candidate.subagent_depth.unwrap_or_default();
-    create.caused_by_parent_request_id = Some(candidate.request_id.clone());
-    create.caused_by_parent_request_doc_id = Some(candidate.doc_id.clone());
-    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+        initial_lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::Pending,
+        trigger_lineage: crate::lifecycle::TriggerLineage::default(),
+        trigger_doc_id: None,
+        workspace: None,
+        subagent: Some(parent_link),
+        retry: Some(crate::lifecycle::materialize::RetryLink {
+            parent_request_id: candidate.request_id.clone(),
+            parent_request_doc_id: candidate.doc_id.clone(),
+            root_request_id: retry_root.to_string(),
+            retry_count: candidate.retry_count + 1,
+            max_retries: candidate.max_retries,
+        }),
+        sampling: Some(crate::lifecycle::materialize::SamplingCarryover {
+            temperature: candidate.temperature,
+            top_p: candidate.top_p,
+            top_k: candidate.top_k,
+            seed: candidate.seed,
+            max_tokens: candidate.max_tokens,
+            max_total_tokens: candidate.max_total_tokens,
+            // `backend_id` is normally never persisted as `Some("")` (the
+            // only production writer that sets it, materialize.rs's
+            // `materialize_claimed_with_execution_binding`, guards the same
+            // way), but this is a durable read of whatever is on the failed
+            // row, so normalize defensively rather than assume.
+            backend_id: candidate
+                .backend_id
+                .clone()
+                .filter(|value| !value.is_empty()),
+        }),
+        metadata: candidate.metadata.clone(),
+        retry_key: Some(retry_key.to_string()),
+        valid_until: None,
+    };
+    let create = crate::lifecycle::materialize::build_signed_request(
+        spec,
+        crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
+    )
+    .await?;
     let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;
     Ok(format!(
         r#"mutation {{
