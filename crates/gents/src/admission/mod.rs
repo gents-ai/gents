@@ -15,12 +15,10 @@ pub(crate) use client::{
 };
 pub(crate) use config::backend_admission_configs_from_backends;
 pub(crate) use config::BackendAvailability;
-pub use config::{document_available_from_fields, BackendAdmissionConfig};
+pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
-pub use slot_accounting::{
-    call_state_holds_backend_slot, reconstructed_running_slot_count, InferenceCallSlotRow,
-};
+pub use slot_accounting::call_state_holds_backend_slot;
 
 #[cfg(test)]
 mod tests;

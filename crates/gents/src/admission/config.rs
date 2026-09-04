@@ -87,14 +87,16 @@ pub(crate) enum BackendAvailability {
     MeasuredUnhealthy,
 }
 
-/// Document-only availability from raw `(enabled, probe_status)` fields —
-/// `BackendAdmissionConfig::availability` without a `measured_unhealthy`
-/// term, for the few callers outside the `gents` crate that only ever see a
-/// document (never this runtime's live `BackendHealthMap`): the codex
-/// shim's model list and `gents diagnose`, which work from a partially
-/// parsed config blob rather than a full `InferenceBackend`. This file
+/// Whether the *document* declares this backend enabled and healthy —
+/// operator/bootstrap intent from raw `(enabled, probe_status)` fields, not
+/// a live availability verdict: it has no `measured_unhealthy` term, so it
+/// says nothing about this runtime's `BackendHealthMap` (#640). The one
+/// caller is `gents diagnose`, which uses it to gate whether to even attempt
+/// its own live reachability probe against an offline-exported config
+/// blob (not a full `InferenceBackend`). Named "configured", not
+/// "available", so it isn't mistaken for an admission decision; this file
 /// stays the single owner of the `enabled`/`probe_status` comparison.
-pub fn document_available_from_fields(enabled: bool, probe_status: &str) -> bool {
+pub fn document_configured_from_fields(enabled: bool, probe_status: &str) -> bool {
     enabled && probe_status == HEALTHY_PROBE_STATUS
 }
 
