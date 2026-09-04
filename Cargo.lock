@@ -3750,6 +3750,7 @@ dependencies = [
  "events",
  "futures",
  "gents-callback-fixture-create-workspace",
+ "gents-chatgpt-login",
  "gents-fs-runner",
  "gents-lean-contract",
  "gents-migration",

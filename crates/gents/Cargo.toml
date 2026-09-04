@@ -40,6 +40,7 @@ chrono-tz.workspace = true
 crypto.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
+gents-chatgpt-login.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 gents-migration = { path = "../gents-migration" }

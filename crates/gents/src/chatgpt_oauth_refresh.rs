@@ -1,13 +1,12 @@
 use base64::Engine;
 use chrono::{DateTime, Duration, Utc};
+use gents_chatgpt_login::{
+    CLIENT_ID as CHATGPT_OAUTH_CLIENT_ID, REFRESH_TOKEN_URL, REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
-
-const REFRESH_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
-const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
-const CHATGPT_OAUTH_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct IdTokenClaims {
