@@ -1,6 +1,7 @@
 {
   "selection_id": "port-live-tools",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
+  "tool_policy_version": "tool-policy/v1",
   "display_name": "Live: run real GLM prompts through the Grok wire",
   "enable_file_tools": true,
   "file_tools_mode": "ReadWrite",
@@ -26,7 +27,6 @@
   "write_tools": [],
   "datastore_tool_surface_ids": ["port-live-io"],
   "subagent_spawn_enabled": true,
-  "orchestration_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,
   "subagent_default_await_mode": "foreground",

@@ -9,7 +9,7 @@
       "tool_name": "read_port_work_unit",
       "collection": "PortWorkUnit",
       "description": "Load prior attempts and the immutable logical-unit contract.",
-      "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "instructions", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "branch", "prior_work_unit_id", "repair_context", "expected_total"],
+      "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "instructions", "owned_paths", "grok_call_sites", "grok_wire", "gents_docs", "live_prompt", "live_expect", "evidence", "repository_id", "base_sha", "branch", "prior_work_unit_id", "repair_context", "expected_total"],
       "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
     },
     {
@@ -36,6 +36,7 @@
         {"name": "attempt", "required": true},
         {"name": "title", "required": true},
         {"name": "instructions", "required": true},
+        {"name": "owned_paths", "required": true},
         {"name": "grok_call_sites", "required": true},
         {"name": "grok_wire", "required": true},
         {"name": "gents_docs", "required": true},

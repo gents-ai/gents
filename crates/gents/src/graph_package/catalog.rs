@@ -166,10 +166,18 @@ fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
             crate::tool_surface::TOOL_POLICY_V1
         );
     }
-    for field in ["enable_goal_tools", "enable_goal_creation"] {
-        if object.get(field) != Some(&serde_json::Value::Bool(false)) {
-            anyhow::bail!("bundled tool selection asset {path:?} must explicitly disable {field}");
-        }
+    if !matches!(
+        object.get("enable_goal_tools"),
+        Some(serde_json::Value::Bool(_))
+    ) {
+        anyhow::bail!(
+            "bundled tool selection asset {path:?} must explicitly declare boolean enable_goal_tools"
+        );
+    }
+    if object.get("enable_goal_creation") != Some(&serde_json::Value::Bool(false)) {
+        anyhow::bail!(
+            "bundled tool selection asset {path:?} must explicitly disable enable_goal_creation"
+        );
     }
     Ok(())
 }

@@ -6,6 +6,14 @@
   "entries": [
     {
       "kind": "read",
+      "tool_name": "read_port_work_unit",
+      "collection": "PortWorkUnit",
+      "description": "Load the immutable structured path ownership for the exact work unit.",
+      "fields": ["work_unit_id", "logical_unit_id", "attempt", "owned_paths", "instructions"],
+      "filter_fields": [{"name": "run_id", "required": false, "fill": "correlation"}]
+    },
+    {
+      "kind": "read",
       "tool_name": "read_port_surface",
       "collection": "PortSurface",
       "description": "Load the mapped Grok wire packets for this run.",

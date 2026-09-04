@@ -35,6 +35,8 @@ GrokPortJob
   -> CallbackBinding CreateWorkspace per unit (8-way fanout)
        IsolatedWorkspace at <gents>/.gents/workspaces/gents-ws-<id>-<branch>
   -> implement ReadWrite -> host seal -> WorkspaceReceipt kind=writer
+       runner compares every receipt path to immutable structured owned_paths;
+       any unowned tracked or untracked artifact aborts the run
   -> per-slice review ReadOnly on each actual sealed dirty tree (parallel)
        receipt changed-files + direct untracked-file reads; mapped wire + tests
        zero material findings -> PortUnitClosure accepted

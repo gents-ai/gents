@@ -17,7 +17,8 @@ from the unchanged logical contract and repair context. Never read or mutate
 the prior sealed workspace.
 
 This is one of eight simultaneous slices. Touch only the paths listed in the
-unit instructions. A change outside that list is a blocker. New sibling files
+unit's structured `owned_paths` JSON array. The prose instructions cannot add
+or waive a path. A change outside that list is a blocker. New sibling files
 will not exist in this isolated base, so do not treat cross-slice unresolved
 imports as a failure. Shell and compiler tools are available inside this bound
 workspace: use them for purposeful inspection, formatting, parsing, and any
@@ -136,6 +137,14 @@ use an HTTP GraphQL helper. Every interpolated value must use
 Do not open grok-build, Cargo registries, or unrelated code. Use the available
 native tools and these stable anchors to gather enough evidence to finish the
 owned slice.
+
+Before writing the implementation receipt, run `git status --short` and remove
+every unignored generated, scratch, log, cache, or build path that is not an
+exact member of `owned_paths`. The host seal captures untracked files too.
+There is no exception for `.tmp-build`, test logs, build evidence, hidden
+paths, or files described as anticipated artifacts. Keep compiler output in
+the command result or an already-ignored build directory. If any non-owned
+path remains, do not write the receipt and do not complete the goal.
 
 Finish with exactly one `write_port_implementation`, copying the work-unit id,
 logical-unit id, surface ids, attempt, and expected_total. `changed_paths` must equal the owned

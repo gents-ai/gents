@@ -36,6 +36,7 @@
         {"name": "attempt", "required": true},
         {"name": "title", "required": true},
         {"name": "instructions", "required": true},
+        {"name": "owned_paths", "required": true},
         {"name": "grok_call_sites", "required": true},
         {"name": "grok_wire", "required": true},
         {"name": "gents_docs", "required": true},

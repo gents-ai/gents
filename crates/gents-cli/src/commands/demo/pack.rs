@@ -190,7 +190,17 @@ struct PackExpect {
     #[serde(default)]
     stage_tool_sequences: Vec<StageToolSequenceExpectation>,
     #[serde(default)]
+    workspace_receipt_paths: Option<WorkspaceReceiptPathExpectation>,
+    #[serde(default)]
     result_documents: Vec<ResultDocumentExpectation>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WorkspaceReceiptPathExpectation {
+    work_unit_collection: String,
+    correlation_field: String,
+    work_unit_id_field: String,
+    owned_paths_field: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -857,6 +867,16 @@ fn validate_manifest(manifest: &PackManifest) -> Result<()> {
                 expected.trigger_id,
                 expected.boundary_tool_name
             );
+        }
+    }
+    if let Some(expected) = &manifest.expect.workspace_receipt_paths {
+        validate_collection_identifier(&expected.work_unit_collection)?;
+        for field in [
+            &expected.correlation_field,
+            &expected.work_unit_id_field,
+            &expected.owned_paths_field,
+        ] {
+            gents::graphql::validate_graphql_name(field)?;
         }
     }
     if let Some(fan_in) = &manifest.expect.fan_in {
@@ -2259,17 +2279,126 @@ async fn sourced_trigger_request_count(
     Ok(expected)
 }
 
+async fn verify_workspace_receipt_paths(
+    graphql: &str,
+    expected: &WorkspaceReceiptPathExpectation,
+    correlation: &str,
+) -> Result<()> {
+    let escaped = escape_graphql_string(correlation);
+    let unit_query = format!(
+        r#"{{ {collection}(filter: {{ {correlation_field}: {{ _eq: "{escaped}" }} }}) {{ {work_unit_id_field} {owned_paths_field} }} }}"#,
+        collection = expected.work_unit_collection,
+        correlation_field = expected.correlation_field,
+        work_unit_id_field = expected.work_unit_id_field,
+        owned_paths_field = expected.owned_paths_field,
+    );
+    let unit_rows = graphql_rows(graphql, &expected.work_unit_collection, &unit_query).await?;
+    let receipt_query = format!(
+        r#"{{ WorkspaceReceipt(filter: {{ caused_by_correlation: {{ _eq: "{escaped}" }}, kind: {{ _eq: "writer" }} }}) {{ work_unit_id changed_files }} }}"#
+    );
+    let receipt_rows = graphql_rows(graphql, "WorkspaceReceipt", &receipt_query).await?;
+    validate_workspace_receipt_path_rows(expected, &unit_rows, &receipt_rows)
+}
+
+fn validate_workspace_receipt_path_rows(
+    expected: &WorkspaceReceiptPathExpectation,
+    unit_rows: &[Value],
+    receipt_rows: &[Value],
+) -> Result<()> {
+    let mut ownership = BTreeMap::<String, BTreeSet<String>>::new();
+    for row in unit_rows {
+        let work_unit_id = row
+            .get(&expected.work_unit_id_field)
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .with_context(|| {
+                format!(
+                    "{}.{} must be a non-empty string",
+                    expected.work_unit_collection, expected.work_unit_id_field
+                )
+            })?;
+        let encoded = row
+            .get(&expected.owned_paths_field)
+            .and_then(Value::as_str)
+            .with_context(|| {
+                format!(
+                    "{}.{} must be a JSON string array for {work_unit_id}",
+                    expected.work_unit_collection, expected.owned_paths_field
+                )
+            })?;
+        let paths: Vec<String> = serde_json::from_str(encoded).with_context(|| {
+            format!(
+                "{}.{} is not a JSON string array for {work_unit_id}",
+                expected.work_unit_collection, expected.owned_paths_field
+            )
+        })?;
+        let mut exact = BTreeSet::new();
+        for path in paths {
+            let canonical = !path.is_empty()
+                && path.trim() == path
+                && !Path::new(&path).is_absolute()
+                && !path.contains('\\')
+                && path
+                    .split('/')
+                    .all(|component| !component.is_empty() && !matches!(component, "." | ".."));
+            if !canonical || !exact.insert(path.clone()) {
+                bail!(
+                    "{}.{} contains an invalid, non-canonical, or duplicate path for {work_unit_id}",
+                    expected.work_unit_collection,
+                    expected.owned_paths_field
+                );
+            }
+        }
+        if ownership.insert(work_unit_id.to_string(), exact).is_some() {
+            bail!("duplicate work unit ownership declaration for {work_unit_id}");
+        }
+    }
+
+    for receipt in receipt_rows {
+        let work_unit_id = receipt
+            .get("work_unit_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .context("writer WorkspaceReceipt.work_unit_id must be a non-empty string")?;
+        let allowed = ownership.get(work_unit_id).with_context(|| {
+            format!("writer WorkspaceReceipt references unknown work unit {work_unit_id}")
+        })?;
+        let changed: Vec<String> = match receipt.get("changed_files") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(Value::String(encoded)) => serde_json::from_str(encoded).with_context(|| {
+                format!("WorkspaceReceipt.changed_files is not a JSON string array for {work_unit_id}")
+            })?,
+            Some(_) => bail!(
+                "WorkspaceReceipt.changed_files must be null or a JSON string array for {work_unit_id}"
+            ),
+        };
+        for path in changed {
+            if !allowed.contains(&path) {
+                bail!(
+                    "writer WorkspaceReceipt for {work_unit_id} changed out-of-scope path {path}; allowed paths: {}",
+                    allowed.iter().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn await_stages(
     graphql: &str,
     trigger_ids: &[String],
     trigger_request_counts: &BTreeMap<String, usize>,
     trigger_request_count_sources: &BTreeMap<String, TriggerRequestCountSource>,
     stage_tool_sequences: &[StageToolSequenceExpectation],
+    workspace_receipt_paths: Option<&WorkspaceReceiptPathExpectation>,
     correlation: &str,
     deadline: Duration,
 ) -> Result<Vec<StageResult>> {
     let started = Instant::now();
     loop {
+        if let Some(expected) = workspace_receipt_paths {
+            verify_workspace_receipt_paths(graphql, expected, correlation).await?;
+        }
         let mut done: Vec<StageResult> = Vec::new();
         let mut resolved_counts = BTreeMap::new();
         for trigger_id in trigger_ids {
@@ -3247,6 +3376,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
             &manifest.expect.trigger_request_counts,
             &manifest.expect.trigger_request_count_sources,
             &manifest.expect.stage_tool_sequences,
+            manifest.expect.workspace_receipt_paths.as_ref(),
             &job_id,
             Duration::from_secs(manifest.await_timeout_secs),
         )
@@ -3713,6 +3843,7 @@ mod tests {
                 background_completion: None,
                 tool_calls: Vec::new(),
                 stage_tool_sequences: Vec::new(),
+                workspace_receipt_paths: None,
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,
@@ -4800,6 +4931,8 @@ mod tests {
                     .unwrap_or_else(|error| {
                         panic!("port-{stage} tool selection should load: {error:#}")
                     });
+                    assert_eq!(tools["tool_policy_version"], "tool-policy/v1");
+                    assert!(tools.get("orchestration_enabled").is_none());
                     assert_eq!(tools["enable_goal_tools"], true);
                     assert_eq!(tools["enable_goal_creation"], false);
 
@@ -4909,6 +5042,19 @@ mod tests {
                     std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
                         .expect("route review prompt should load");
                 assert!(!route_review.contains("gents graph run code-review"));
+                assert!(route_review.contains("structured `owned_paths` JSON"));
+                assert!(route_review.contains("There are no exceptions for `.tmp-build`"));
+                let review_io = read_pack_json_defaults(
+                    &pack.join("datastore-tool-surfaces/port-review-io/object.json"),
+                )
+                .expect("port review IO should load");
+                assert!(review_io["entries"]
+                    .as_array()
+                    .is_some_and(|entries| entries.iter().any(|entry| entry["tool_name"]
+                        == "read_port_work_unit"
+                        && entry["fields"].as_array().is_some_and(|fields| fields
+                            .iter()
+                            .any(|field| field == "owned_paths")))));
                 let review_behavior =
                     read_pack_json_defaults(&pack.join("agent-behaviors/port-review/object.json"))
                         .expect("review behavior should load");
@@ -5054,6 +5200,17 @@ mod tests {
                         .expect("implement prompt should load");
                 assert!(implement_prompt.contains("Navigate by symbol, not line number"));
                 assert!(implement_prompt.contains("`grok_wire_continuation`"));
+                assert!(implement_prompt.contains("The host seal captures untracked files too"));
+                assert!(implement_prompt.contains("There is no exception for `.tmp-build`"));
+                let work_unit_schema =
+                    std::fs::read_to_string(pack.join("schemas/port_work_unit.graphql"))
+                        .expect("PortWorkUnit schema should load");
+                assert!(work_unit_schema.contains("owned_paths: String @immutable"));
+                let receipt_paths = experiment["expect"]["workspace_receipt_paths"]
+                    .as_object()
+                    .expect("workspace receipt path verification should be configured");
+                assert_eq!(receipt_paths["work_unit_collection"], "PortWorkUnit");
+                assert_eq!(receipt_paths["owned_paths_field"], "owned_paths");
                 let implement_behavior = read_pack_json_defaults(
                     &pack.join("agent-behaviors/port-implement/object.json"),
                 )
@@ -5481,6 +5638,43 @@ mod tests {
     }
 
     #[test]
+    fn workspace_receipt_paths_reject_unowned_build_artifacts() {
+        let expected = WorkspaceReceiptPathExpectation {
+            work_unit_collection: "PortWorkUnit".into(),
+            correlation_field: "run_id".into(),
+            work_unit_id_field: "work_unit_id".into(),
+            owned_paths_field: "owned_paths".into(),
+        };
+        let units = vec![json!({
+            "work_unit_id": "run:unit-08:attempt-1",
+            "owned_paths": "[\"crates/gents-cli/src/commands/serve.rs\"]"
+        })];
+        let clean = vec![json!({
+            "work_unit_id": "run:unit-08:attempt-1",
+            "changed_files": "[\"crates/gents-cli/src/commands/serve.rs\"]"
+        })];
+        validate_workspace_receipt_path_rows(&expected, &units, &clean)
+            .expect("an exact owned path should pass");
+
+        let contaminated = vec![json!({
+            "work_unit_id": "run:unit-08:attempt-1",
+            "changed_files": "[\".tmp-build/test-build.log\"]"
+        })];
+        let error = validate_workspace_receipt_path_rows(&expected, &units, &contaminated)
+            .expect_err("an unowned build log must fail the run independently of model review");
+        assert!(error.to_string().contains("out-of-scope path"));
+        assert!(error.to_string().contains(".tmp-build/test-build.log"));
+
+        let traversal = vec![json!({
+            "work_unit_id": "run:unit-08:attempt-1",
+            "owned_paths": "[\"../outside.rs\"]"
+        })];
+        let error = validate_workspace_receipt_path_rows(&expected, &traversal, &[])
+            .expect_err("ownership paths must be canonical repository-relative names");
+        assert!(error.to_string().contains("invalid, non-canonical"));
+    }
+
+    #[test]
     fn background_completion_expectation_requires_the_whole_delivery_path() {
         let expected = BackgroundCompletionExpectation {
             min_completed_subagent_requests: 2,
@@ -5613,6 +5807,7 @@ mod tests {
                 background_completion: None,
                 tool_calls: Vec::new(),
                 stage_tool_sequences: Vec::new(),
+                workspace_receipt_paths: None,
                 result_documents: Vec::new(),
             },
             await_timeout_secs: 1,

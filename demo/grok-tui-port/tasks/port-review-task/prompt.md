@@ -15,9 +15,15 @@ evidence, not authority.
 Establish the sealed change with read-only Git commands (`git status`,
 `git rev-parse`, `git diff --stat`, `git diff --check`, and the exact diff from
 base). Because new files are untracked relative to the pinned base, also use
-`git ls-files --others --exclude-standard`, compare `{{ doc.changed_files }}`
-to the exclusive ownership list, and read every listed file directly. Reject
-immediately if a changed path is outside the unit's exclusive ownership list.
+`git ls-files --others --exclude-standard`. Call `read_port_work_unit`, select
+the exact `{{ doc.work_unit_id }}`, parse its structured `owned_paths` JSON
+array, and compare `{{ doc.changed_files }}` to that array. Reject immediately
+if any changed path is not an exact array member. This check precedes and
+short-circuits all code review. There are no exceptions for `.tmp-build`, test
+logs, build evidence, caches, generated files, hidden paths, scratch files, or
+an implementer's claim that an artifact was anticipated. Never reinterpret
+prose as permission to widen `owned_paths`.
+Read every receipt-listed owned file directly.
 Do not use `git diff --no-index` for untracked files: Git intentionally exits 1
 when differences exist, which the tool surface reports as a command failure.
 For receipt-listed untracked files, `git ls-files --others` plus one complete

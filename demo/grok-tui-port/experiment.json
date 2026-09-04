@@ -129,7 +129,7 @@
       },
       {
         "task_id": "port-review-task",
-        "required_tool_names": ["read_port_surface", "read_port_implementation", "write_port_review", "write_port_unit_closure"]
+        "required_tool_names": ["read_port_work_unit", "read_port_surface", "read_port_implementation", "write_port_review", "write_port_unit_closure"]
       },
       {
         "task_id": "port-retry-task",
@@ -170,6 +170,12 @@
         "allowed_at_or_after_boundary": ["write_port_surface", "get_goal", "update_goal"]
       }
     ],
+    "workspace_receipt_paths": {
+      "work_unit_collection": "PortWorkUnit",
+      "correlation_field": "run_id",
+      "work_unit_id_field": "work_unit_id",
+      "owned_paths_field": "owned_paths"
+    },
     "source_edges": [],
     "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
     "collection_counts": {
@@ -202,7 +208,7 @@
       {
         "collection": "PortWorkUnit",
         "correlation_field": "run_id",
-        "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "prior_work_unit_id", "repair_context", "expected_total"]
+        "fields": ["work_unit_id", "logical_unit_id", "surface_ids", "area", "verdict", "status", "attempt", "title", "owned_paths", "prior_work_unit_id", "repair_context", "expected_total"]
       },
       {
         "collection": "PortReview",

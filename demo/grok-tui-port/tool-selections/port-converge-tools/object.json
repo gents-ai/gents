@@ -1,6 +1,7 @@
 {
   "selection_id": "port-converge-tools",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
+  "tool_policy_version": "tool-policy/v1",
   "display_name": "Converge: operator checkout semantic merge and gates",
   "enable_file_tools": true,
   "file_tools_mode": "ReadWrite",
@@ -24,7 +25,6 @@
   "write_tools": [],
   "datastore_tool_surface_ids": ["port-converge-io"],
   "subagent_spawn_enabled": false,
-  "orchestration_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,
   "subagent_default_await_mode": null,

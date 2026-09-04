@@ -1,6 +1,7 @@
 {
   "selection_id": "port-recon-tools",
   "agent_did": "did:key:zGrokTuiPortAgentPlaceholder00000000000000000000000",
+  "tool_policy_version": "tool-policy/v1",
   "display_name": "Recon: read audited ledger, write PortSurface",
   "enable_file_tools": true,
   "file_tools_mode": "ReadOnly",
@@ -24,7 +25,6 @@
   "write_tools": [],
   "datastore_tool_surface_ids": ["port-recon-writes"],
   "subagent_spawn_enabled": false,
-  "orchestration_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,
   "subagent_default_await_mode": null,

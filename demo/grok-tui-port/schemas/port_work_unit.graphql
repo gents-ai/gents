@@ -9,6 +9,7 @@ type PortWorkUnit {
   attempt: String @immutable
   title: String @immutable
   instructions: String @immutable
+  owned_paths: String @immutable
   grok_call_sites: String @immutable
   grok_wire: String @immutable
   gents_docs: String @immutable
