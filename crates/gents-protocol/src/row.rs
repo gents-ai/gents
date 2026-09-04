@@ -202,6 +202,8 @@ pub struct AgentConversationRow {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRequestRow {
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     pub request_id: String,
     #[serde(default)]
     pub agent_did: Option<String>,
@@ -1195,6 +1197,7 @@ mod tests {
     #[test]
     fn agent_request_row_roundtrips() {
         let json = r#"{
+            "_docID": "doc-1",
             "request_id": "req-1",
             "agent_did": "did:test:amy",
             "behavior_id": "amy-code",
@@ -1218,6 +1221,7 @@ mod tests {
             "max_retries": 3
         }"#;
         let row: AgentRequestRow = serde_json::from_str(json).expect("parse");
+        assert_eq!(row.doc_id.as_deref(), Some("doc-1"));
         assert_eq!(row.request_id, "req-1");
         assert_eq!(row.retry_count, Some(0));
         assert_eq!(row.temperature, Some(0.0));
@@ -1230,8 +1234,16 @@ mod tests {
         assert!(row.is_claimable());
         assert!(!row.is_terminal());
         let re: String = serde_json::to_string(&row).expect("serialize");
+        assert!(!re.contains("_docID"));
         let round: AgentRequestRow = serde_json::from_str(&re).expect("reparse");
-        assert_eq!(row, round);
+        assert_eq!(round.doc_id, None);
+        assert_eq!(
+            AgentRequestRow {
+                doc_id: None,
+                ..row
+            },
+            round
+        );
     }
 
     #[test]
