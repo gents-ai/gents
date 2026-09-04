@@ -13,4 +13,5 @@ pub mod row;
 pub mod schemas;
 pub mod session_hydration;
 pub mod timeline;
+pub mod tool_service_health;
 pub mod transcript;
