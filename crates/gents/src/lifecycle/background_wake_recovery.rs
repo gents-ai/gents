@@ -439,6 +439,7 @@ async fn redrive_mutation(
         ..Default::default()
     };
     let identity = RequestIdentity {
+        requester_did: None,
         request_id: request_id.to_string(),
         agent_did: agent_did.to_string(),
         behavior_id: behavior_id.to_string(),
@@ -450,8 +451,8 @@ async fn redrive_mutation(
     let spec = RequestSpec {
         subagent: Some(parent_link),
         retry: Some(RetryLink {
-            parent_request_id: candidate.request_id.clone(),
-            parent_request_doc_id: doc_id.to_string(),
+            parent_request_id: Some(candidate.request_id.clone()),
+            parent_request_doc_id: Some(doc_id.to_string()),
             root_request_id: retry_root.to_string(),
             retry_count: retry_count + 1,
             max_retries,
@@ -552,6 +553,7 @@ mod pin_tests {
             );
         let spec = crate::lifecycle::materialize::RequestSpec {
             identity: crate::lifecycle::materialize::RequestIdentity {
+                requester_did: None,
                 request_id: request_id.clone(),
                 agent_did: candidate.agent_did.clone().unwrap(),
                 behavior_id: candidate.behavior_id.clone().unwrap(),
@@ -579,8 +581,8 @@ mod pin_tests {
                 parent_tool_call_doc_id: None,
             }),
             retry: Some(crate::lifecycle::materialize::RetryLink {
-                parent_request_id: candidate.request_id.clone(),
-                parent_request_doc_id: candidate.doc_id.clone().unwrap(),
+                parent_request_id: Some(candidate.request_id.clone()),
+                parent_request_doc_id: candidate.doc_id.clone(),
                 root_request_id: retry_root,
                 retry_count: candidate.retry_count.unwrap() + 1,
                 max_retries: candidate.max_retries.unwrap(),

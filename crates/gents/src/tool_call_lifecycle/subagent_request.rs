@@ -340,6 +340,7 @@ async fn create_subagent_request_inner(
         }
     };
     let identity = RequestIdentity {
+        requester_did: None,
         request_id: request_id.clone(),
         agent_did: agent_did.clone(),
         behavior_id,
@@ -592,6 +593,7 @@ mod pin_tests {
         // directly.
         let spec = crate::lifecycle::materialize::RequestSpec {
             identity: crate::lifecycle::materialize::RequestIdentity {
+                requester_did: None,
                 request_id: request_id.clone(),
                 agent_did: agent_did.clone(),
                 behavior_id,

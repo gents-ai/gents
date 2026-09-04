@@ -238,23 +238,33 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
     let (content, metadata) = content_and_metadata_with_prompt_selected_skill_ids(None, &content);
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id.clone(),
-        agent_did.clone(),
-        agent_did.clone(),
-        behavior_id.clone(),
-        session_id.clone(),
-        content.clone(),
-        "interactive",
-        now.clone(),
-        admission,
-    );
-    create.metadata = metadata.clone();
-    create.caused_by_trigger_kind = Some("manual".to_string());
-    create.retry_key = goal_identity
-        .as_ref()
-        .map(|identity| identity.retry_key.clone());
-    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let create = gents::build_signed_request(
+        gents::RequestSpec {
+            metadata: metadata.clone(),
+            trigger_lineage: gents::lifecycle::TriggerLineage {
+                trigger_kind: Some("manual".to_string()),
+                ..Default::default()
+            },
+            retry_key: goal_identity
+                .as_ref()
+                .map(|identity| identity.retry_key.clone()),
+            ..gents::RequestSpec::new(
+                gents::RequestIdentity {
+                    request_id: request_id.clone(),
+                    agent_did: agent_did.clone(),
+                    requester_did: None,
+                    behavior_id: behavior_id.clone(),
+                    session_id: session_id.clone(),
+                    content: content.clone(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: now.clone(),
+                },
+                admission,
+            )
+        },
+        gents::RequestSigner::RegisteredTarget,
+    )
+    .await?;
     let doc_id = if let Some(objective) = rendered_goal_objective.as_deref() {
         gents::goal::submit_goal_backed_request(
             &access,

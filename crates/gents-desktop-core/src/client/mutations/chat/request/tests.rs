@@ -1,4 +1,6 @@
 use anyhow::{bail, Context, Result};
+use gents::AgentIdentity;
+use gents_protocol::request_admission::AgentRequestCreate;
 use serde::Deserialize;
 
 use super::*;
@@ -1037,17 +1039,34 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     .await?;
     core.add_local_standard_peer_for_test(core.principal().did())
         .await?;
-    let requester_did = core.principal().did().to_string();
+    let requester = gents::KeyIdentity::load_or_create(tempdir.path().join("requester.key"), None)?;
+    let requester_did = requester.did().to_string();
     let agent_did = core.principal().did();
+    assert_ne!(requester_did, agent_did);
     let session_id = Uuid::new_v4().to_string();
-    let submitted = core
-        .submit_request(
-            &session_id,
+    let snapshot = core.store().snapshot();
+    // Test the desktop mutation's caller-held enrollment identity directly;
+    // local-standard routing intentionally selects the target's own signer.
+    let submitted = super::submit_request(
+        core.node(),
+        &snapshot,
+        &session_id,
+        agent_did,
+        &requester_did,
+        &requester,
+        AgentRequestAdmissionRecord::enrollment(
+            &requester_did,
+            "enrollment",
+            "digest",
             agent_did,
-            "requester route regression",
-            Some(RECOVERY_BEHAVIOR_ID),
-        )
-        .await?;
+            1,
+            "2030-01-01T00:00:00Z",
+        ),
+        "requester route regression",
+        Some(RECOVERY_BEHAVIOR_ID),
+        SubmitRequestOptions::default(),
+    )
+    .await?;
 
     let session_id = escape_graphql_string(&session_id);
     let request_id = escape_graphql_string(&submitted.request_id);
@@ -1058,6 +1077,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
                     AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                         agent_did
                         requester_did
+                        admission_signer_did
                     }}
                     AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
                         agent_did
@@ -1088,6 +1108,7 @@ async fn desktop_chat_seed_rows_are_scoped_to_the_requester_principal() -> Resul
     for (field, expected) in [
         ("agent_did", agent_did),
         ("requester_did", requester_did.as_str()),
+        ("admission_signer_did", requester_did.as_str()),
     ] {
         let row = data
             .get("AgentRequest")

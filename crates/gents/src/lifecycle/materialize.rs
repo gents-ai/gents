@@ -253,6 +253,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         );
     }
     let identity = RequestIdentity {
+        requester_did: None,
         request_id: request_id.to_string(),
         agent_did: agent_did.to_string(),
         behavior_id: behavior_id.to_string(),
@@ -275,7 +276,9 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 
 /// The identity fields every writer decides for a fresh `AgentRequest`:
 /// who it is for, what session it belongs to, and what it says.
-pub(crate) struct RequestIdentity {
+pub struct RequestIdentity {
+    /// Defaults to the target agent when omitted.
+    pub requester_did: Option<String>,
     pub request_id: String,
     pub agent_did: String,
     pub behavior_id: String,
@@ -291,7 +294,7 @@ pub(crate) struct RequestIdentity {
 /// requests that are simply linked to one parent at some depth (a control
 /// continuation, a background-wake redrive successor).
 #[derive(Default)]
-pub(crate) struct ParentLink {
+pub struct ParentLink {
     pub depth: u32,
     pub parent_request_id: String,
     pub parent_request_doc_id: String,
@@ -301,9 +304,9 @@ pub(crate) struct ParentLink {
 
 /// Retry linkage: the failed request this one supersedes, the root of the
 /// retry chain, and the counters carried forward from it.
-pub(crate) struct RetryLink {
-    pub parent_request_id: String,
-    pub parent_request_doc_id: String,
+pub struct RetryLink {
+    pub parent_request_id: Option<String>,
+    pub parent_request_doc_id: Option<String>,
     pub root_request_id: String,
     pub retry_count: i64,
     pub max_retries: i64,
@@ -312,7 +315,7 @@ pub(crate) struct RetryLink {
 /// Sampling parameters and backend carried over from a prior request (used
 /// by background-wake redrive; unset for a fresh request).
 #[derive(Default)]
-pub(crate) struct SamplingCarryover {
+pub struct SamplingCarryover {
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
     pub top_k: Option<i64>,
@@ -326,7 +329,7 @@ pub(crate) struct SamplingCarryover {
 /// signed. This is the single seam every production writer should build
 /// through; `build_signed_request` alone owns which of its fields become
 /// which stamped columns.
-pub(crate) struct RequestSpec {
+pub struct RequestSpec {
     pub identity: RequestIdentity,
     pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     pub initial_lifecycle_state: RequestLifecycleState,
@@ -354,7 +357,7 @@ impl RequestSpec {
     /// or sampling-carried-over request. Callers set only what they need
     /// via struct-update syntax:
     /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(identity, admission) }`.
-    pub(crate) fn new(
+    pub fn new(
         identity: RequestIdentity,
         admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     ) -> Self {
@@ -378,7 +381,7 @@ impl RequestSpec {
 /// How the built `AgentRequestCreate` is signed: as the already-registered
 /// runtime principal named by `spec.identity.agent_did` (the common case for
 /// runtime-authored requests), or with an explicit caller-held identity.
-pub(crate) enum RequestSigner<'a> {
+pub enum RequestSigner<'a> {
     RegisteredTarget,
     Identity(&'a dyn crate::identity::AgentIdentity),
 }
@@ -417,7 +420,7 @@ pub(crate) fn build_request(
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         identity.request_id,
         identity.agent_did,
-        agent_did,
+        identity.requester_did.unwrap_or(agent_did),
         identity.behavior_id,
         identity.session_id,
         identity.content,
@@ -465,8 +468,8 @@ pub(crate) fn build_request(
         });
     create.retry_count = retry.as_ref().map_or(0, |link| link.retry_count);
     if let Some(link) = retry {
-        create.retry_parent_request = Some(link.parent_request_id);
-        create.retry_parent_request_doc_id = Some(link.parent_request_doc_id);
+        create.retry_parent_request = link.parent_request_id;
+        create.retry_parent_request_doc_id = link.parent_request_doc_id;
     }
 
     if let Some(sampling) = sampling {
@@ -504,7 +507,7 @@ pub(crate) async fn sign_request(
 /// to `build_request` followed by `sign_request`; use the two-step form
 /// directly when the built DTO must be inspected (e.g. fingerprinted for a
 /// dedupe lookup) before a signature is worth computing.
-pub(crate) async fn build_signed_request(
+pub async fn build_signed_request(
     spec: RequestSpec,
     signer: RequestSigner<'_>,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
@@ -681,6 +684,7 @@ impl RequestLifecycle {
         let admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
         let request_identity = RequestIdentity {
+            requester_did: None,
             request_id: request_id.clone(),
             agent_did: agent_did.clone(),
             behavior_id: behavior_id.clone(),
@@ -1116,6 +1120,7 @@ mod pin_tests {
         };
 
         let request_identity = RequestIdentity {
+            requester_did: None,
             request_id: "req-materialize-claimed".to_string(),
             agent_did: agent_did.clone(),
             behavior_id: "agent-name-1".to_string(),
