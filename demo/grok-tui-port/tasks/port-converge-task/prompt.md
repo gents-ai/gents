@@ -43,6 +43,13 @@ escaped GraphQL strings, and bound model/context configuration.
 
 Run formatting and focused compilation/tests, fixing every real diagnostic:
 
+Use `spawn_process` with `tool_name: "bash_unrestricted"` for any cargo command
+that may exceed the foreground bash timeout, then use
+`wait_process`/`read_process` until that exact managed process is terminal. Do
+not use `nohup`, shell `&`, or an untracked log file as a substitute for the
+managed process lifecycle. A managed process is green only when its terminal
+result reports exit code zero.
+
 1. `cargo fmt --all --check` (run `cargo fmt --all` and recheck if needed)
 2. `RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo test -p gents-cli --lib grok_shim`
 3. `RUSTC_WRAPPER= TMPDIR="$PWD/target" cargo check -p gents-cli --all-targets`

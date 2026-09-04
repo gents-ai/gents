@@ -49,6 +49,11 @@ At most two full review rounds are allowed. Before green, run the repository
 foundation gates `cargo test -p gents` and
 `cargo check --workspace --all-targets`, require zero confirmed findings and a
 clean tracked worktree, and record exact HEAD. Never push, open a PR, or merge.
+Use `spawn_process` with `tool_name: "bash_unrestricted"` for any cargo command
+that may exceed the foreground bash timeout, then use
+`wait_process`/`read_process` until that exact managed process is terminal. Do
+not use `nohup`, shell `&`, or untracked gate logs. Require the managed process
+terminal result to report exit code zero.
 
 Call `write_port_final_review_report` exactly once. Use `status=green` only
 when the durable review and both gates pass; otherwise block with honest round,

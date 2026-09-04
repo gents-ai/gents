@@ -5252,7 +5252,15 @@ mod tests {
                     );
                     assert_eq!(tools["bash_mode"], "Unrestricted");
                     assert_eq!(tools["file_tools_mode"], "ReadWrite");
-                    assert_eq!(tools["command_execution_policy"], "workspace_write");
+                    let expected_execution_policy = if selection == "port-converge-tools" {
+                        "unrestricted"
+                    } else {
+                        "workspace_write"
+                    };
+                    assert_eq!(
+                        tools["command_execution_policy"], expected_execution_policy,
+                        "convergence must run the full foundation suite outside a nested Seatbelt"
+                    );
                     let expected_network_mode = if selection == "port-converge-tools" {
                         "enabled"
                     } else {
@@ -5261,6 +5269,15 @@ mod tests {
                     assert_eq!(
                         tools["command_network_mode"], expected_network_mode,
                         "convergence must be allowed to bind the loopback listeners and Unix sockets exercised by the required Grok shim gate"
+                    );
+                    let expected_backgroundable = if selection == "port-converge-tools" {
+                        json!(["bash_unrestricted"])
+                    } else {
+                        json!([])
+                    };
+                    assert_eq!(
+                        tools["backgroundable_tool_names"], expected_backgroundable,
+                        "long convergence gates must use the managed background-process lifecycle"
                     );
                     assert!(
                         tools["command_allowed_argv_prefixes"]
@@ -5286,11 +5303,16 @@ mod tests {
                 assert_eq!(final_review_tools["file_tools_mode"], "ReadWrite");
                 assert_eq!(
                     final_review_tools["command_execution_policy"],
-                    "workspace_write"
+                    "unrestricted"
                 );
                 assert_eq!(
                     final_review_tools["command_network_mode"], "enabled",
                     "final review must reach the local orchestrator GraphQL endpoint"
+                );
+                assert_eq!(
+                    final_review_tools["backgroundable_tool_names"],
+                    json!(["bash_unrestricted"]),
+                    "long final-review gates must use the managed background-process lifecycle"
                 );
                 for selection in ["port-live-tools", "port-publish-tools"] {
                     let tools = read_pack_json_defaults(
