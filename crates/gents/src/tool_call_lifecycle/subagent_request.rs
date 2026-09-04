@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::materialize::{
-    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 use crate::session::execute_mutation_with_retry;
@@ -338,7 +338,6 @@ async fn create_subagent_request_inner(
     let identity = RequestIdentity {
         request_id: request_id.clone(),
         agent_did: agent_did.clone(),
-        requester_did: None,
         behavior_id,
         session_id: new_session_id,
         content: prompt,
@@ -356,7 +355,7 @@ async fn create_subagent_request_inner(
             ..Default::default()
         },
         workspace,
-        subagent: Some(SubagentLink {
+        subagent: Some(ParentLink {
             depth: new_subagent_depth,
             parent_request_id: parent_request_id.clone(),
             parent_request_doc_id: parent_doc_ids.0.clone(),
@@ -508,23 +507,7 @@ mod tests {
 #[cfg(test)]
 mod pin_tests {
     use super::*;
-    use crate::identity::AgentIdentity;
-
-    const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
-    const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-
-    fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
-        let key_bytes: Vec<u8> = (0..PIN_FIXED_KEY_HEX.len())
-            .step_by(2)
-            .map(|offset| u8::from_str_radix(&PIN_FIXED_KEY_HEX[offset..offset + 2], 16).unwrap())
-            .collect();
-        let path = dir.join("pinning.key");
-        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
-        assert_eq!(identity.did(), PIN_FIXED_DID);
-        identity
-    }
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn pin_create_subagent_request_inner_dto_construction() {
@@ -593,7 +576,6 @@ mod pin_tests {
             identity: crate::lifecycle::materialize::RequestIdentity {
                 request_id: request_id.clone(),
                 agent_did: agent_did.clone(),
-                requester_did: None,
                 behavior_id,
                 session_id: new_session_id,
                 content: prompt,
@@ -614,7 +596,7 @@ mod pin_tests {
             },
             trigger_doc_id: None,
             workspace,
-            subagent: Some(crate::lifecycle::materialize::SubagentLink {
+            subagent: Some(crate::lifecycle::materialize::ParentLink {
                 depth: new_subagent_depth,
                 parent_request_id: parent_request_id.clone(),
                 parent_request_doc_id: parent_doc_ids.0.clone(),

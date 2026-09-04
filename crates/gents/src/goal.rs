@@ -1480,6 +1480,26 @@ pub async fn submit_goal_backed_request(
     }
 }
 
+/// The `Goal`/`GoalCreationClaim` selection shared by
+/// `goal_backed_request_recovery_query` (combined with an `AgentRequest`
+/// selection in one round trip) and `goal_creation_claim_recovery_query`
+/// (issued alone, after a separate `AgentRequest` retry-key match) — same
+/// filters and fields, so this selection text exists exactly once.
+fn goal_creation_claim_selection(agent_did: &str, session_id: &str) -> String {
+    format!(
+        r#"Goal(
+            filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
+            order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
+        ) {{ {GOAL_FIELDS} }}
+        GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
+            goal_id agent_did session_id objective token_budget
+        }}"#,
+        escape_graphql_string(agent_did),
+        escape_graphql_string(session_id),
+        escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id)),
+    )
+}
+
 fn goal_backed_request_recovery_query(
     agent_did: &str,
     session_id: &str,
@@ -1494,18 +1514,10 @@ fn goal_backed_request_recovery_query(
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}, limit: 2) {{
                 _docID {GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS}
             }}
-            Goal(
-                filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
-                order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
-            ) {{ {GOAL_FIELDS} }}
-            GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
-                goal_id agent_did session_id objective token_budget
-            }}
+            {}
         }}"#,
         escape_graphql_string(retry_key),
-        escape_graphql_string(agent_did),
-        escape_graphql_string(session_id),
-        escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id)),
+        goal_creation_claim_selection(agent_did, session_id),
     ))
 }
 
@@ -1687,21 +1699,21 @@ async fn load_goal_backed_request_by_retry_key_from_access(
 
 fn goal_creation_claim_recovery_query(agent_did: &str, session_id: &str) -> String {
     format!(
-        r#"{{
-            Goal(
-                filter: {{ agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }} }},
-                order: [{{ created_at: ASC }}, {{ goal_id: ASC }}]
-            ) {{ {GOAL_FIELDS} }}
-            GoalCreationClaim(filter: {{ creation_key: {{ _eq: "{}" }} }}, limit: 2) {{
-                goal_id agent_did session_id objective token_budget
-            }}
-        }}"#,
-        escape_graphql_string(agent_did),
-        escape_graphql_string(session_id),
-        escape_graphql_string(&deterministic_goal_creation_key(agent_did, session_id)),
+        "{{ {} }}",
+        goal_creation_claim_selection(agent_did, session_id)
     )
 }
 
+/// Recover a goal-backed request by its retry key after an ambiguous local
+/// commit, using two round trips instead of `load_goal_backed_request_by_retry_key_from_access`'s
+/// one: first the shared `load_agent_request_by_retry_key` AgentRequest
+/// match, then — only once that matches — the `Goal`/`GoalCreationClaim`
+/// cross-check. This is safe to split because `stage_goal_backed_request`
+/// commits the goal, its creation claim, and the request in one durable
+/// transaction: if the `AgentRequest` row is visible with this retry key,
+/// the `Goal` and `GoalCreationClaim` rows committed alongside it are
+/// visible too, so there is no window where the first query could observe
+/// a match the second query then fails to find.
 async fn load_goal_backed_request_by_retry_key(
     node: &EmbeddedNode,
     agent_did: &str,

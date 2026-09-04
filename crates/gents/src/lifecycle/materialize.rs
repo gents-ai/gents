@@ -261,7 +261,6 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     let identity = RequestIdentity {
         request_id: request_id.to_string(),
         agent_did: agent_did.to_string(),
-        requester_did: None,
         behavior_id: behavior_id.to_string(),
         session_id: session_id.to_string(),
         content: content.to_string(),
@@ -285,7 +284,6 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
 pub(crate) struct RequestIdentity {
     pub request_id: String,
     pub agent_did: String,
-    pub requester_did: Option<String>,
     pub behavior_id: String,
     pub session_id: String,
     pub content: String,
@@ -293,10 +291,13 @@ pub(crate) struct RequestIdentity {
     pub created_at: String,
 }
 
-/// Subagent parent linkage: the logical and physical identifiers of the
-/// tool call and request that spawned this child, plus its resulting depth.
+/// Parent-request linkage: the logical and physical identifiers of the
+/// request (and, for a subagent spawn, the tool call) that caused this one,
+/// plus its resulting depth. Used both for subagent spawns and for other
+/// requests that are simply linked to one parent at some depth (a control
+/// continuation, a background-wake redrive successor).
 #[derive(Default)]
-pub(crate) struct SubagentLink {
+pub(crate) struct ParentLink {
     pub depth: u32,
     pub parent_request_id: String,
     pub parent_request_doc_id: String,
@@ -342,7 +343,7 @@ pub(crate) struct RequestSpec {
     pub trigger_lineage: TriggerLineage,
     pub trigger_doc_id: Option<String>,
     pub workspace: Option<WorkspaceLineage>,
-    pub subagent: Option<SubagentLink>,
+    pub subagent: Option<ParentLink>,
     /// `None` means this is not a retry: `retry_root_request` defaults to
     /// this request's own id and `max_retries` to `DEFAULT_REQUEST_MAX_RETRIES`.
     pub retry: Option<RetryLink>,
@@ -392,7 +393,7 @@ pub(crate) enum RequestSigner<'a> {
 /// owner of the mapping from a writer's decisions (`RequestSpec`) to the
 /// DTO's stamped columns; every production writer should build through it
 /// (or `build_signed_request`, below) rather than hand-rolling
-/// `AgentRequestCreate::base(...)` and stamping fields itself.
+/// `AgentRequestCreate::base` (see below) and stamping fields itself.
 ///
 /// Split out from signing so a caller that needs to inspect the built DTO
 /// before deciding whether to persist it (e.g. a retry-key dedupe lookup
@@ -417,15 +418,12 @@ pub(crate) fn build_request(
     } = spec;
 
     let request_id = identity.request_id.clone();
-    let requester_did = identity
-        .requester_did
-        .clone()
-        .unwrap_or_else(|| identity.agent_did.clone());
+    let agent_did = identity.agent_did.clone();
 
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
         identity.request_id,
         identity.agent_did,
-        requester_did,
+        agent_did,
         identity.behavior_id,
         identity.session_id,
         identity.content,
@@ -658,7 +656,6 @@ impl RequestLifecycle {
         let request_identity = RequestIdentity {
             request_id: request_id.clone(),
             agent_did: agent_did.clone(),
-            requester_did: None,
             behavior_id: behavior_id.clone(),
             session_id: session_id.clone(),
             content: content.to_string(),
@@ -936,7 +933,8 @@ mod pin_tests {
     //! Pins today's `AgentRequestCreate::graphql_input_fields()` output for
     //! each production writer, per fixed inputs, before the writers are
     //! switched onto `build_signed_request` (#1336 Task 2). Every test here
-    //! uses a deterministic signing identity (a hardcoded raw Ed25519 key)
+    //! uses a deterministic signing identity (a hardcoded raw Ed25519 key,
+    //! shared with the other pinning modules via `lifecycle::test_support`)
     //! so the emitted `admission_signature` is stable across runs; the only
     //! other source of nondeterminism in these writers is an internally
     //! generated `created_at` (and, at the subagent site, an internally
@@ -953,29 +951,7 @@ mod pin_tests {
 
     use super::*;
     use crate::identity::AgentIdentity;
-
-    /// Raw 64-byte (seed || public key) Ed25519 identity material, captured
-    /// once so every pinning test signs with the same registered DID and
-    /// therefore produces the same signature bytes for the same payload.
-    const FIXED_TEST_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
-    const FIXED_TEST_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-
-    fn fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
-        let key_bytes: Vec<u8> = (0..FIXED_TEST_KEY_HEX.len())
-            .step_by(2)
-            .map(|offset| u8::from_str_radix(&FIXED_TEST_KEY_HEX[offset..offset + 2], 16).unwrap())
-            .collect();
-        let path = dir.join("pinning.key");
-        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
-        assert_eq!(
-            identity.did(),
-            FIXED_TEST_DID,
-            "fixed pinning key derives a stable DID"
-        );
-        identity
-    }
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     /// Replace the internally generated `created_at` and `admission_signature`
     /// field text with stable placeholders, so the rest of the field set can
@@ -1000,50 +976,35 @@ mod pin_tests {
     }
 
     // --- Site 1: materialize.rs `build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title` ---
-    // Driven through `build_signed_request` with the equivalent `RequestSpec`
-    // (the same inputs the production function would derive its stamping
-    // from); still asserts against the output pinned by directly calling the
-    // production function. `created_at`/`admission_signature` are chosen by
-    // the caller here (the writer, in production, would still generate them
-    // from `Utc::now()`), so they are normalized out for the comparison.
+    // Pure and public; called directly. `created_at`/`admission_signature`
+    // are internally generated (`Utc::now()`), so they are normalized out.
 
     #[tokio::test]
     async fn pin_materialize_pending_manual_trigger() {
         let tempdir = tempfile::tempdir().unwrap();
-        let _identity = fixed_signing_identity(tempdir.path());
+        let _identity = pin_fixed_signing_identity(tempdir.path());
 
-        let spec = RequestSpec {
-            identity: RequestIdentity {
-                request_id: "req-materialize-pending-manual".to_string(),
-                agent_did: FIXED_TEST_DID.to_string(),
-                requester_did: None,
-                behavior_id: "behavior-1".to_string(),
-                session_id: "sess-materialize-pending-manual".to_string(),
-                content: "hello agent".to_string(),
-                execution_origin: ExecutionOrigin::Interactive,
-                created_at: "2030-01-01T00:00:00Z".to_string(),
-            },
-            admission: gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                FIXED_TEST_DID,
-            ),
-            initial_lifecycle_state: RequestLifecycleState::Pending,
-            trigger_lineage: TriggerLineage {
-                trigger_id: None,
-                trigger_kind: Some("manual".to_string()),
-                source_doc_id: None,
-                correlation: None,
-                trigger_context: None,
-            },
-            trigger_doc_id: None,
-            workspace: None,
-            subagent: None,
-            retry: None,
-            sampling: None,
-            metadata: Some(r#"{"conversation_title":"My Conversation"}"#.to_string()),
-            retry_key: None,
-            valid_until: None,
-        };
-        let create = build_signed_request(spec, RequestSigner::RegisteredTarget)
+        let create =
+            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                PIN_FIXED_DID,
+                "behavior-1",
+                "hello agent",
+                ExecutionOrigin::Interactive,
+                TriggerLineage {
+                    trigger_id: None,
+                    trigger_kind: Some("manual".to_string()),
+                    source_doc_id: None,
+                    correlation: None,
+                    trigger_context: None,
+                },
+                Some("My Conversation"),
+                None,
+                "req-materialize-pending-manual",
+                "sess-materialize-pending-manual",
+                None,
+                None,
+                None,
+            )
             .await
             .expect("build signed pending manual request");
 
@@ -1058,7 +1019,7 @@ mod pin_tests {
     #[tokio::test]
     async fn pin_materialize_pending_event_trigger_with_workspace() {
         let tempdir = tempfile::tempdir().unwrap();
-        let _identity = fixed_signing_identity(tempdir.path());
+        let _identity = pin_fixed_signing_identity(tempdir.path());
 
         let trigger_lineage = TriggerLineage {
             trigger_id: Some("trigger-1".to_string()),
@@ -1074,34 +1035,21 @@ mod pin_tests {
             workspace_seal_hash: Some("seal-1".to_string()),
         };
 
-        let spec = RequestSpec {
-            identity: RequestIdentity {
-                request_id: "req-materialize-pending-event".to_string(),
-                agent_did: FIXED_TEST_DID.to_string(),
-                requester_did: None,
-                behavior_id: "behavior-1".to_string(),
-                session_id: "sess-materialize-pending-event".to_string(),
-                content: "hello agent".to_string(),
-                execution_origin: ExecutionOrigin::Scheduled,
-                created_at: "2030-01-01T00:00:00Z".to_string(),
-            },
-            admission:
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_automated_trigger(
-                    FIXED_TEST_DID,
-                    "trigger-1",
-                ),
-            initial_lifecycle_state: RequestLifecycleState::WorkspaceBindingPending,
-            trigger_lineage,
-            trigger_doc_id: Some("trigger-doc-1".to_string()),
-            workspace: Some(workspace_lineage),
-            subagent: None,
-            retry: None,
-            sampling: None,
-            metadata: Some(r#"{"conversation_title":"My Conversation"}"#.to_string()),
-            retry_key: Some("retry-key-1".to_string()),
-            valid_until: None,
-        };
-        let create = build_signed_request(spec, RequestSigner::RegisteredTarget)
+        let create =
+            build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
+                PIN_FIXED_DID,
+                "behavior-1",
+                "hello agent",
+                ExecutionOrigin::Scheduled,
+                trigger_lineage,
+                Some("My Conversation"),
+                Some(&workspace_lineage),
+                "req-materialize-pending-event",
+                "sess-materialize-pending-event",
+                Some("retry-key-1"),
+                None,
+                Some("trigger-doc-1"),
+            )
             .await
             .expect("build signed pending event-triggered workspace-bound request");
 
@@ -1124,7 +1072,7 @@ mod pin_tests {
     #[tokio::test]
     async fn pin_materialize_claimed_with_execution_binding() {
         let tempdir = tempfile::tempdir().unwrap();
-        let identity = fixed_signing_identity(tempdir.path());
+        let identity = pin_fixed_signing_identity(tempdir.path());
 
         let agent_did = identity.did().to_string();
         let trigger_lineage = TriggerLineage {
@@ -1135,38 +1083,24 @@ mod pin_tests {
             trigger_context: Some(r#"{"k":"v"}"#.to_string()),
         };
 
+        let request_identity = RequestIdentity {
+            request_id: "req-materialize-claimed".to_string(),
+            agent_did: agent_did.clone(),
+            behavior_id: "agent-name-1".to_string(),
+            session_id: "sess-materialize-claimed".to_string(),
+            content: "resume the run".to_string(),
+            execution_origin: ExecutionOrigin::Scheduled,
+            created_at: "2030-01-01T00:00:00Z".to_string(),
+        };
+        let admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
         let spec = RequestSpec {
-            identity: RequestIdentity {
-                request_id: "req-materialize-claimed".to_string(),
-                agent_did: agent_did.clone(),
-                requester_did: None,
-                behavior_id: "agent-name-1".to_string(),
-                session_id: "sess-materialize-claimed".to_string(),
-                content: "resume the run".to_string(),
-                execution_origin: ExecutionOrigin::Scheduled,
-                created_at: "2030-01-01T00:00:00Z".to_string(),
-            },
-            admission: gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
-                &agent_did,
-            ),
-            initial_lifecycle_state: RequestLifecycleState::Pending,
             trigger_lineage,
-            trigger_doc_id: None,
-            workspace: None,
-            subagent: None,
-            retry: None,
             sampling: Some(SamplingCarryover {
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
                 backend_id: Some("backend-1".to_string()),
+                ..Default::default()
             }),
-            metadata: None,
-            retry_key: None,
-            valid_until: None,
+            ..RequestSpec::new(request_identity, admission)
         };
         let create = build_signed_request(spec, RequestSigner::Identity(&identity))
             .await

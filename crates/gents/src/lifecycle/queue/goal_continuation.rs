@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::lifecycle::materialize::{
-    build_request, sign_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+    build_request, sign_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
@@ -53,7 +53,6 @@ pub(crate) async fn enqueue_goal_continuation(
     let identity = RequestIdentity {
         request_id: request_id.clone(),
         agent_did: parent.agent_did.clone(),
-        requester_did: None,
         behavior_id,
         session_id: parent.session_id.clone(),
         content: content.to_string(),
@@ -74,7 +73,7 @@ pub(crate) async fn enqueue_goal_continuation(
             workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
             workspace_seal_hash: parent.workspace_seal_hash.clone(),
         }),
-        subagent: Some(SubagentLink {
+        subagent: Some(ParentLink {
             depth: parent.subagent_depth,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),

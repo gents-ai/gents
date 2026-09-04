@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::lifecycle::materialize::{
-    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, SubagentLink,
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::lifecycle::TriggerLineage;
 
@@ -27,7 +27,6 @@ pub(super) async fn session_request_create_mutation(
     let identity = RequestIdentity {
         request_id: request_id.to_string(),
         agent_did: parent.agent_did.clone(),
-        requester_did: None,
         behavior_id: behavior_id.to_string(),
         session_id: parent.session_id.clone(),
         content: content.to_string(),
@@ -40,7 +39,7 @@ pub(super) async fn session_request_create_mutation(
             trigger_context: parent.caused_by_trigger_context.clone(),
             ..Default::default()
         },
-        subagent: Some(SubagentLink {
+        subagent: Some(ParentLink {
             depth: parent.subagent_depth,
             parent_request_id: parent.request_id.clone(),
             parent_request_doc_id: parent.doc_id.clone(),

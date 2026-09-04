@@ -8,8 +8,8 @@ use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::materialize::{
-    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
-    SamplingCarryover, SubagentLink,
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec, RetryLink,
+    SamplingCarryover,
 };
 use crate::lifecycle::ExecutionOrigin;
 
@@ -404,8 +404,7 @@ async fn redrive_mutation(
             &candidate.agent_did,
             &candidate.request_id,
         );
-    // Not a subagent, but the same "one parent request, at some depth" shape.
-    let parent_link = SubagentLink {
+    let parent_link = ParentLink {
         depth: candidate.subagent_depth.unwrap_or_default(),
         parent_request_id: candidate.request_id.clone(),
         parent_request_doc_id: candidate.doc_id.clone(),
@@ -414,7 +413,6 @@ async fn redrive_mutation(
     let identity = RequestIdentity {
         request_id: request_id.to_string(),
         agent_did: candidate.agent_did.clone(),
-        requester_did: None,
         behavior_id: candidate.behavior_id.clone(),
         session_id: candidate.session_id.clone(),
         content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
@@ -437,12 +435,7 @@ async fn redrive_mutation(
             seed: candidate.seed,
             max_tokens: candidate.max_tokens,
             max_total_tokens: candidate.max_total_tokens,
-            // Durable read of a possibly-legacy row; normalize Some("")
-            // the same way materialize.rs's writer does.
-            backend_id: candidate
-                .backend_id
-                .clone()
-                .filter(|value| !value.is_empty()),
+            backend_id: candidate.backend_id.clone(),
         }),
         metadata: candidate.metadata.clone(),
         retry_key: Some(retry_key.to_string()),
@@ -483,23 +476,7 @@ async fn redrive_mutation(
 #[cfg(test)]
 mod pin_tests {
     use super::*;
-    use crate::identity::AgentIdentity;
-
-    const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
-    const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-
-    fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
-        let key_bytes: Vec<u8> = (0..PIN_FIXED_KEY_HEX.len())
-            .step_by(2)
-            .map(|offset| u8::from_str_radix(&PIN_FIXED_KEY_HEX[offset..offset + 2], 16).unwrap())
-            .collect();
-        let path = dir.join("pinning.key");
-        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
-        assert_eq!(identity.did(), PIN_FIXED_DID);
-        identity
-    }
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     #[tokio::test]
     async fn pin_redrive_mutation_dto_construction() {
@@ -548,7 +525,6 @@ mod pin_tests {
             identity: crate::lifecycle::materialize::RequestIdentity {
                 request_id: request_id.clone(),
                 agent_did: candidate.agent_did.clone(),
-                requester_did: None,
                 behavior_id: candidate.behavior_id.clone(),
                 session_id: candidate.session_id.clone(),
                 content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
@@ -561,7 +537,7 @@ mod pin_tests {
             trigger_lineage: crate::lifecycle::TriggerLineage::default(),
             trigger_doc_id: None,
             workspace: None,
-            subagent: Some(crate::lifecycle::materialize::SubagentLink {
+            subagent: Some(crate::lifecycle::materialize::ParentLink {
                 depth: candidate.subagent_depth.unwrap_or_default(),
                 parent_request_id: candidate.request_id.clone(),
                 parent_request_doc_id: candidate.doc_id.clone(),

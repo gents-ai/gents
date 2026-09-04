@@ -252,29 +252,9 @@ mod metadata;
 /// where `created_at` is generated internally).
 mod pin_tests {
     use super::*;
-    use crate::identity::AgentIdentity;
+    use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
     use gents_protocol::request_lifecycle::RequestLifecycleState;
-
-    /// Same fixed Ed25519 identity material as
-    /// `lifecycle::materialize::pin_tests`, duplicated here rather than
-    /// shared so each pinning module stays a self-contained fixture (this
-    /// crate's existing convention: see `test_db` above).
-    const PIN_FIXED_KEY_HEX: &str = "4cbf8c1186d2fcb70559342fd142650a5ec5938d26a187d87e2c061b530d7be46edb79d5f548207182f7911b55709c9e4b9961c709486e5ce920e306470fe6d6";
-    const PIN_FIXED_DID: &str = "did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7";
-
-    fn pin_fixed_signing_identity(dir: &std::path::Path) -> crate::identity::KeyIdentity {
-        let key_bytes: Vec<u8> = (0..PIN_FIXED_KEY_HEX.len())
-            .step_by(2)
-            .map(|offset| u8::from_str_radix(&PIN_FIXED_KEY_HEX[offset..offset + 2], 16).unwrap())
-            .collect();
-        let path = dir.join("pinning.key");
-        std::fs::write(&path, &key_bytes).expect("write fixed pinning key");
-        let identity =
-            crate::identity::KeyIdentity::load_or_create(&path, None).expect("load fixed identity");
-        assert_eq!(identity.did(), PIN_FIXED_DID);
-        identity
-    }
 
     fn pin_parent_request() -> AgentRequest {
         let mut parent = parent_request(PIN_FIXED_DID, "sess-pin-parent");
@@ -287,10 +267,9 @@ mod pin_tests {
     }
 
     // --- Site 3: `lifecycle::queue::mutation::session_request_create_mutation` ---
-    // Driven through `build_signed_request` with the equivalent `RequestSpec`,
-    // asserting against the output pinned by calling the production function
-    // directly (which is pure and returns the full mutation string built
-    // from `create.graphql_mutation()`).
+    // Pure (no node) and already returns the full mutation string built
+    // from `create.graphql_mutation()`; the input fields are extracted from
+    // that known wrapper.
 
     #[tokio::test]
     async fn pin_session_request_create_mutation() {
@@ -298,53 +277,23 @@ mod pin_tests {
         let _identity = pin_fixed_signing_identity(tempdir.path());
 
         let parent = pin_parent_request();
-        let spec = crate::lifecycle::materialize::RequestSpec {
-            identity: crate::lifecycle::materialize::RequestIdentity {
-                request_id: "req-session-mutation-1".to_string(),
-                agent_did: parent.agent_did.clone(),
-                requester_did: None,
-                behavior_id: "behavior-1".to_string(),
-                session_id: parent.session_id.clone(),
-                content: "steering content".to_string(),
-                execution_origin: ExecutionOrigin::Interactive,
-                created_at: "2030-01-01T00:00:00Z".to_string(),
-            },
-            admission:
-                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-                    &parent.agent_did,
-                    &parent.request_id,
-                ),
-            initial_lifecycle_state: RequestLifecycleState::Pending,
-            trigger_lineage: TriggerLineage {
-                trigger_id: None,
-                trigger_kind: None,
-                source_doc_id: None,
-                correlation: parent.caused_by_correlation.clone(),
-                trigger_context: parent.caused_by_trigger_context.clone(),
-            },
-            trigger_doc_id: None,
-            workspace: None,
-            subagent: Some(crate::lifecycle::materialize::SubagentLink {
-                depth: parent.subagent_depth,
-                parent_request_id: parent.request_id.clone(),
-                parent_request_doc_id: parent.doc_id.clone(),
-                parent_tool_call_id: None,
-                parent_tool_call_doc_id: None,
-            }),
-            retry: None,
-            sampling: None,
-            metadata: Some(r#"{"queue":{"source":"steering"}}"#.to_string()),
-            retry_key: Some("retry-key-session-1".to_string()),
-            valid_until: None,
-        };
-        let create = crate::lifecycle::materialize::build_signed_request(
-            spec,
-            crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
+        let mutation = session_request_create_mutation(
+            &parent,
+            "behavior-1",
+            "steering content",
+            ExecutionOrigin::Interactive,
+            r#"{"queue":{"source":"steering"}}"#,
+            "req-session-mutation-1",
+            "2030-01-01T00:00:00Z",
+            Some("retry-key-session-1"),
         )
         .await
-        .expect("build session request create");
+        .expect("build session request create mutation");
 
-        let fields = create.graphql_input_fields().expect("graphql_input_fields");
+        let fields = mutation
+            .strip_prefix("mutation { create_AgentRequest(input: { ")
+            .and_then(|rest| rest.strip_suffix(" }) { _docID } }"))
+            .expect("mutation wraps create_AgentRequest input fields");
 
         assert_eq!(
             fields,
@@ -413,7 +362,6 @@ mod pin_tests {
             identity: crate::lifecycle::materialize::RequestIdentity {
                 request_id: request_id.clone(),
                 agent_did: parent.agent_did.clone(),
-                requester_did: None,
                 behavior_id,
                 session_id: parent.session_id.clone(),
                 content: content.to_string(),
@@ -436,7 +384,7 @@ mod pin_tests {
                 workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
                 workspace_seal_hash: parent.workspace_seal_hash.clone(),
             }),
-            subagent: Some(crate::lifecycle::materialize::SubagentLink {
+            subagent: Some(crate::lifecycle::materialize::ParentLink {
                 depth: parent.subagent_depth,
                 parent_request_id: parent.request_id.clone(),
                 parent_request_doc_id: parent.doc_id.clone(),
