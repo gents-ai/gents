@@ -1028,13 +1028,13 @@ pub struct ToolServiceRegistryRow {
 }
 
 /// Persisted snapshot of one MCP service's health, written by the agent's
-/// `health_checker` on every probe cycle. `status` carries the precise
-/// `HealthStateInternal` projection ("healthy" / "stale" / "evicted" /
-/// "reconnecting") so the operator UI can distinguish back-off from
-/// in-flight retry without going through the collapsed three-state
-/// `HealthStatus`. `failure_count` / `k_max` / `backoff_until` give the
-/// K-model context per the design in
-/// `Proofs/MCPHealth/{State,Transition}.lean`.
+/// `health_checker` on every probe cycle. `status` carries the raw
+/// `ToolServiceHealthState` vocabulary ("healthy" / "degraded" / "evicted" /
+/// "reconnecting"; see `tool_service_health::ToolServiceHealthState`) so the
+/// operator UI can distinguish back-off from in-flight retry without going
+/// through the collapsed three-state `ToolServiceHealthProjection`.
+/// `failure_count` / `k_max` / `backoff_until` give the K-model context per
+/// the design in `Proofs/MCPHealth/{State,Transition}.lean`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolServiceHealthStateRow {
     pub service_id: String,

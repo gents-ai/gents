@@ -6,6 +6,12 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Added
+
+- Desktop bridge 6.2: `MCPServiceHealthView.displayState` (`healthy | stale |
+  unreachable`) is the only MCP health classification; the desktop's
+  synthetic `stuck` state is removed.
+
 ### Breaking changes
 
 - `AgentRequest.status` is removed; `lifecycle_state` is the only request
