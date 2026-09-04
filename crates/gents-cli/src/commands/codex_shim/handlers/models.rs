@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 use gents::{
     backend_registry::list_enabled_backends, list_agent_behaviors, load_agent_behavior,
@@ -7,7 +5,8 @@ use gents::{
 };
 use gents_codex_protocol as codex;
 use gents_protocol::row::{
-    project_behavior_readiness_summary, BehaviorReadinessState, ProjectedBehaviorReadinessSummary,
+    project_behavior_readiness_summary, BehaviorReadinessUnavailableReason,
+    ProjectedBehaviorReadinessSummary,
 };
 use serde_json::{json, Value};
 
@@ -81,22 +80,15 @@ pub(super) async fn load_bound_behavior(state: &ShimState) -> Result<AgentBehavi
 }
 
 pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<InferenceBackend>> {
+    // The model list is a *configuration* surface — pick a backend to bind a
+    // behavior to — not an admission decision, so it starts from the
+    // document's configured intent (`enabled` backends, as before #1332)
+    // and must keep working before this runtime has published any
+    // readiness at all (fresh stores, config-only sessions, a backend that
+    // has no behavior bound to it yet). It only drops a backend on an
+    // *explicit* readiness veto; `fleet_slots.rs`/`healthz` are the
+    // admission-reporting surfaces and keep their fail-closed behavior.
     let mut backends = list_enabled_backends(state.node.as_ref()).await?;
-    let accepting = backend_admission_from_local_readiness(state).await?;
-    backends.retain(|backend| accepting.get(&backend.backend_id).copied().unwrap_or(false));
-    backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
-    Ok(backends)
-}
-
-/// Per-backend "accepting admission" from this agent's own behavior
-/// readiness projection — never from `InferenceBackend`'s
-/// `enabled`/`probe_status` (measured health stays unpersisted; #640, see
-/// `backend_health.rs`). Mirrors `fleet_slots.rs::backend_admission_from_readiness`:
-/// a backend accepts once any locally bound behavior is reported `Ready`;
-/// with no such signal it fails closed to not-accepting.
-async fn backend_admission_from_local_readiness(
-    state: &ShimState,
-) -> Result<BTreeMap<String, bool>> {
     let behaviors = list_agent_behaviors(state.node.as_ref(), state.agent_did.as_ref())
         .await
         .context("listing agent behaviors for model selection")?;
@@ -106,45 +98,69 @@ async fn backend_admission_from_local_readiness(
     )
     .await
     .context("loading behavior readiness for model selection")?;
-    Ok(backend_admission_from_readiness_row(
-        &behaviors,
-        readiness_row.as_ref(),
-        state.agent_did.as_ref(),
-        chrono::Utc::now(),
-    ))
+    let observed_at = chrono::Utc::now();
+    backends.retain(|backend| {
+        !backend_vetoed_by_readiness(
+            &backend.backend_id,
+            &behaviors,
+            readiness_row.as_ref(),
+            state.agent_did.as_ref(),
+            observed_at,
+        )
+    });
+    backends.sort_by(|left, right| left.backend_id.cmp(&right.backend_id));
+    Ok(backends)
 }
 
-/// Pure core of `backend_admission_from_local_readiness`, split out so it is
-/// testable without a live `EmbeddedNode`/`ShimState`.
-fn backend_admission_from_readiness_row(
+/// Whether the readiness projection *explicitly* vetoes `backend_id` — never
+/// a "we don't know" signal. True only when a readiness row exists for this
+/// agent and every behavior currently bound to `backend_id` is reported
+/// `Unavailable` with a backend-related reason (`BackendDisabled` or
+/// `BackendTemporarilyUnavailable`). No readiness row, no behaviors bound
+/// yet, or at least one bound behavior that's `Ready` or unavailable for an
+/// unrelated reason — all read as "not vetoed."
+fn backend_vetoed_by_readiness(
+    backend_id: &str,
     behaviors: &[AgentBehaviorDocument],
     readiness_row: Option<&gents_protocol::row::AgentBehaviorReadinessRow>,
     agent_did: &str,
     observed_at: chrono::DateTime<chrono::Utc>,
-) -> BTreeMap<String, bool> {
-    let projected = project_behavior_readiness_summary(readiness_row, agent_did, observed_at);
-    let mut accepting = BTreeMap::<String, bool>::new();
-    for behavior in behaviors {
-        let Some(backend_id) = behavior
-            .backend_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
+) -> bool {
+    let Some(readiness_row) = readiness_row else {
+        return false;
+    };
+    let summary =
+        match project_behavior_readiness_summary(Some(readiness_row), agent_did, observed_at) {
+            ProjectedBehaviorReadinessSummary::Observed(summary) => summary,
+            ProjectedBehaviorReadinessSummary::Unknown(_) => return false,
         };
-        let ready = matches!(
-            &projected,
-            ProjectedBehaviorReadinessSummary::Observed(summary)
-                if summary.snapshot.behaviors.iter().any(|entry| {
-                    entry.behavior_id == behavior.behavior_id
-                        && entry.state == BehaviorReadinessState::Ready
-                })
-        );
-        let entry = accepting.entry(backend_id.to_string()).or_insert(false);
-        *entry = *entry || ready;
+
+    let bound_behavior_ids = behaviors
+        .iter()
+        .filter(|behavior| {
+            behavior
+                .backend_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                == Some(backend_id)
+        })
+        .map(|behavior| behavior.behavior_id.as_str())
+        .collect::<Vec<_>>();
+
+    if bound_behavior_ids.is_empty() {
+        return false;
     }
-    accepting
+
+    bound_behavior_ids.into_iter().all(|behavior_id| {
+        matches!(
+            summary.unavailable_behaviors.get(behavior_id),
+            Some(
+                BehaviorReadinessUnavailableReason::BackendDisabled
+                    | BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
+            )
+        )
+    })
 }
 
 pub(super) fn model_list_entries(
@@ -272,7 +288,7 @@ mod tests {
     use super::*;
     use gents_protocol::row::{
         AgentBehaviorReadinessRow, BehaviorReadinessEntry, BehaviorReadinessProcessState,
-        BehaviorReadinessSnapshot, BehaviorReadinessUnavailableReason,
+        BehaviorReadinessSnapshot, BehaviorReadinessState, BehaviorReadinessUnavailableReason,
         BEHAVIOR_READINESS_FORMAT_VERSION,
     };
 
@@ -335,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_vetoed_by_readiness_is_not_offered_even_though_document_is_healthy() {
+    fn backend_vetoed_when_every_bound_behavior_is_explicitly_vetoed() {
         // `available_model_backends` starts from `list_enabled_backends`, so
         // this exercises the case that matters: the `InferenceBackend`
         // document itself would read enabled+healthy, but this runtime's
@@ -352,19 +368,21 @@ mod tests {
         );
         let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
-        let accepting =
-            backend_admission_from_readiness_row(&behaviors, Some(&row), agent_did, observed_at);
-
-        assert_eq!(
-            accepting.get("backend-a").copied(),
-            Some(false),
+        assert!(
+            backend_vetoed_by_readiness(
+                "backend-a",
+                &behaviors,
+                Some(&row),
+                agent_did,
+                observed_at
+            ),
             "a backend the local prober vetoed via readiness must not be offered for \
              selection even though the InferenceBackend document itself would read healthy"
         );
     }
 
     #[test]
-    fn ready_behavior_offers_its_backend() {
+    fn backend_not_vetoed_when_bound_behavior_is_ready() {
         let agent_did = "did:test:codex-shim";
         let behaviors = vec![behavior("default", "backend-a")];
         let row = readiness_row(
@@ -375,21 +393,55 @@ mod tests {
         );
         let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
-        let accepting =
-            backend_admission_from_readiness_row(&behaviors, Some(&row), agent_did, observed_at);
-
-        assert_eq!(accepting.get("backend-a").copied(), Some(true));
+        assert!(!backend_vetoed_by_readiness(
+            "backend-a",
+            &behaviors,
+            Some(&row),
+            agent_did,
+            observed_at
+        ));
     }
 
     #[test]
-    fn missing_readiness_row_fails_closed() {
+    fn missing_readiness_row_leaves_configured_backend_offered() {
+        // The model list is a configuration surface (choose a backend to
+        // configure a behavior with) and must work before this runtime has
+        // published any readiness at all — a fresh store, a config-only
+        // session. Absence of a readiness row is not a veto.
         let agent_did = "did:test:codex-shim";
         let behaviors = vec![behavior("default", "backend-a")];
         let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
 
-        let accepting =
-            backend_admission_from_readiness_row(&behaviors, None, agent_did, observed_at);
+        assert!(!backend_vetoed_by_readiness(
+            "backend-a",
+            &behaviors,
+            None,
+            agent_did,
+            observed_at
+        ));
+    }
 
-        assert_eq!(accepting.get("backend-a").copied(), Some(false));
+    #[test]
+    fn backend_with_no_bound_behaviors_is_not_vetoed() {
+        // A brand-new backend with no `AgentBehavior` bound to it yet (the
+        // exact shape of a backend just created for configuration) has
+        // nothing in the readiness projection to veto it with.
+        let agent_did = "did:test:codex-shim";
+        let behaviors = vec![behavior("default", "backend-a")];
+        let row = readiness_row(
+            agent_did,
+            "default",
+            vec![("default", true)],
+            "2026-09-03T11:59:50Z",
+        );
+        let observed_at = "2026-09-03T12:00:00Z".parse().unwrap();
+
+        assert!(!backend_vetoed_by_readiness(
+            "backend-b",
+            &behaviors,
+            Some(&row),
+            agent_did,
+            observed_at
+        ));
     }
 }
