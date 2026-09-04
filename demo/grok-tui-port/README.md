@@ -137,6 +137,10 @@ after submission, and require a second distinct completed turn to prove the
 return to the idle/input UI. The checked-in
 `scripts/grok_stock_pty_probe.py` enforces those boundaries and emits the
 structured `PortLiveEnvironmentProof` that independent live review requires.
+A deep worktree can make the absolute socket exceed the platform Unix-socket
+pathname ceiling; both probes retain the job's exact socket identity in
+evidence but bridge `connect(2)` through a short alias inside a private
+temporary directory.
 A local input echo is not model-response evidence.
 
 Do not manually seal or integrate an abandoned workspace. Those transitions

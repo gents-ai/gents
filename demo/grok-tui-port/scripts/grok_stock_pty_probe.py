@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 from urllib.parse import urlparse
 
+from grok_probe_common import PortableSocketPath, self_test_portable_socket_path
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -475,7 +477,6 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
     socket_path = Path(args.socket)
     require(socket_path.exists(), "leader socket does not exist")
     require(stat.S_ISSOCK(socket_path.stat().st_mode), "leader path is not a socket")
-
     challenge, expected, prompt_bytes = challenge_prompt()
     expected_bytes = expected.encode()
     idle_challenge, idle_expected, idle_prompt_bytes = challenge_prompt()
@@ -483,8 +484,11 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
 
     master_fd, slave_fd = pty.openpty()
     process: subprocess.Popen[bytes] | None = None
+    pager_socket: PortableSocketPath | None = None
     slave_open = True
     try:
+        with blocked_signal(signal.SIGALRM):
+            pager_socket = PortableSocketPath(args.socket)
         set_pty_size(slave_fd)
         env = os.environ.copy()
         env.setdefault("TERM", "xterm-256color")
@@ -494,7 +498,7 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
                     args.grok_bin,
                     "--leader",
                     "--leader-socket",
-                    str(socket_path),
+                    pager_socket.connect_path,
                     "--cwd",
                     args.cwd,
                     "--no-alt-screen",
@@ -581,10 +585,16 @@ def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, 
                 except OSError as error:
                     if error.errno != errno.EBADF:
                         raise
-            if process is not None:
-                terminate_client(process, master_fd)
-                client_guard.process = None
-            os.close(master_fd)
+            try:
+                if process is not None:
+                    terminate_client(process, master_fd)
+                    client_guard.process = None
+            finally:
+                try:
+                    if pager_socket is not None:
+                        pager_socket.cleanup()
+                finally:
+                    os.close(master_fd)
 
     proof: dict[str, Any] = {
         "version": 1,
@@ -678,6 +688,8 @@ def self_test() -> dict[str, int]:
             rejected += 1
             return
         raise AssertionError("negative live-gate fixture unexpectedly passed")
+
+    self_test_portable_socket_path()
 
     read_fd, write_fd = os.pipe()
 

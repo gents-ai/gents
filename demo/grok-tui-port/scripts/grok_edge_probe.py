@@ -15,6 +15,8 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from grok_probe_common import PortableSocketPath, self_test_portable_socket_path
+
 
 DEFAULT_MODEL = "GLM-5.3-Flash-NVFP4"
 DEFAULT_CONTEXT_WINDOW = 262_144
@@ -74,7 +76,20 @@ class LeaderClient:
     def __init__(self, path: str, timeout: float, model: str) -> None:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(timeout)
-        self.sock.connect(path)
+        bridge: PortableSocketPath | None = None
+        try:
+            bridge = PortableSocketPath(path)
+            self.sock.connect(bridge.connect_path)
+        except BaseException:
+            self.sock.close()
+            raise
+        finally:
+            if bridge is not None:
+                try:
+                    bridge.cleanup()
+                except BaseException:
+                    self.sock.close()
+                    raise
         self.next_id = 1
         self.model = model
 
@@ -1322,7 +1337,11 @@ def self_test_subagent_lifecycle_validators() -> dict[str, int]:
     - exact spawned/progress good fixtures pass their validators, while
       camelCase casing, unknown extras, missing required fields, and
       wrong field types fail them.
+    - an over-limit published Unix socket remains connectable through the
+      same private short-alias bridge used by the live probe.
     """
+
+    self_test_portable_socket_path()
 
     # Every wrapper increments a counter for every real-validator accept and
     # reject, and every live-outcome rejection. The returned evidence is the

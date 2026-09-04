@@ -40,6 +40,10 @@ Wait for both HTTP readiness and socket readiness. Record the PID of the
 actual process listening on `live_graphql`, not a wrapper shell PID, verify it
 belongs to the launched run-owned server, and clean up only that PID when
 probes finish. Require the listener and socket to be gone afterward.
+The checked-in probes preserve and report the job's exact `live_socket`
+identity while bridging an over-limit Unix `connect(2)` pathname through a
+short absolute alias in a private temporary directory; do not bypass that
+portable-path handling in a deep worktree.
 
 Immediately after readiness, run
 `demo/grok-tui-port/scripts/grok_stock_pty_probe.py run` against the stock

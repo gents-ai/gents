@@ -5403,6 +5403,7 @@ mod tests {
                 assert!(live_prompt.contains("do not wrap it in another timeout"));
                 assert!(live_prompt.contains("pipe its output"));
                 assert!(live_prompt.contains("zero process exit"));
+                assert!(live_prompt.contains("connect(2)"));
                 assert!(live_prompt.contains("write_port_live_environment_proof"));
                 assert!(live_prompt
                     .find("write_port_live_environment_proof")
@@ -5415,6 +5416,7 @@ mod tests {
                 assert!(live_behavior_words.contains("Only after that stock proof"));
                 assert!(live_behavior_words.contains("subprocess, subagent, and cancel"));
                 assert!(live_behavior.contains("--total-timeout 95"));
+                assert!(live_behavior_words.contains("private short Unix-socket alias"));
                 assert!(
                     live_behavior_words.contains("never pipe or otherwise mask its exit status")
                 );
