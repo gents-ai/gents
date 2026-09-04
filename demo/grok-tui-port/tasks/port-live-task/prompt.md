@@ -23,11 +23,21 @@ run-owned GraphQL port and socket, explicitly binding Grok turns to the
 context window are `live_model` and 524288 before accepting the catalog
 advertisement. Discover the exact launch flags from the integrated `--help`
 and implementation; do not invent a protocol substitute.
-Wait for both HTTP readiness and socket readiness, track the exact child PID,
-and clean up only that PID when probes finish.
+Every `gents demo provision` or `gents config apply` invocation used to build
+the live home must export
+`GENTS_GROK_PORT_ENDPOINT_1="<job live_endpoint>"`. Never use the obsolete
+`GENTS_GROK_PORT_ENDPOINT` name and never rely on the pack's localhost
+fallback. Before starting the server, run
+`grok_stock_pty_probe.py preflight` for `live_graphql` and `live_socket` and
+save its fresh vacancy proof under the run directory.
+Wait for both HTTP readiness and socket readiness. Record the PID of the
+actual process listening on `live_graphql`, not a wrapper shell PID, verify it
+belongs to the launched run-owned server, and clean up only that PID when
+probes finish. Require the listener and socket to be gone afterward.
 
 First run `demo/grok-tui-port/scripts/grok_edge_probe.py --edge offline` and
-require its embedded lifecycle-validator self-test to pass without a socket.
+`demo/grok-tui-port/scripts/grok_stock_pty_probe.py self-test`; require both
+embedded validator matrices to pass without a socket.
 Then run the probe against `live_socket` and `live_graphql`, passing `--model
 live_model`, one edge at a time: handshake, prompt, tool, subprocess, subagent,
 and cancel. The probe must pass its wire and
@@ -46,11 +56,20 @@ child, optional `error`/`output`, never `parent_session_id`), the terminal
 `tool_call_update` reusing the same
 toolCallId, and — via `live_graphql` — the durable parent/child AgentRequest
 linkage (`caused_by_parent_request_id`) plus the persisted child
-AgentToolCall/AgentMessage rows for the spawned child session. Also launch
-stock interactive `grok --leader --leader-socket <live_socket>` in a PTY,
-submit one short prompt, wait for the terminal response/idle state, and only
-then exit it. `grok -p` bypasses leader mode and is never evidence for this
-port.
+AgentToolCall/AgentMessage rows for the spawned child session. Run
+`demo/grok-tui-port/scripts/grok_stock_pty_probe.py run` against the stock
+`grok` binary and `live_socket`, passing the exact job endpoint,
+backend ID `grok-port-backend-ws1`, run-owned live home, preflight JSON,
+actual listener PID, GraphQL URL, and repository cwd, and save its structured
+JSON under the run directory. The script queries the live-home
+`InferenceBackend` itself and requires its endpoint to equal the job endpoint.
+It launches stock interactive
+`grok --leader --leader-socket <live_socket>` in a PTY, uses a fresh random
+challenge whose expected transformed response does not occur in the prompt,
+separates pre-submit from post-Enter bytes, then proves a stable idle/input
+transition with a second distinct challenge and two distinct completed
+`AgentRequest` rows. The local terminal echo is not evidence. `grok -p`
+bypasses leader mode and is never evidence for this port.
 
 Map those observed edges to every surface whose verdict is `implement` or
 `shaped-stub`. A shaped stub passes only when its explicit error/not-found
@@ -58,6 +77,17 @@ contract and absence of fabricated documents match `live_expect`. Do not treat
 fixture replay, direct provider HTTP, or the outer orchestration server as a
 pass. Query `live_graphql` for the correlated Gents documents required by each
 `live_expect`.
+
+After all probes, stop the script-verified actual listener PID. Run
+`grok_stock_pty_probe.py cleanup` against the saved proof and require both the
+listener/port and socket to be absent. Then call
+`write_port_live_environment_proof` exactly once from the final structured
+JSON, with `final_review_head` set to the reviewed HEAD and all proof booleans
+true. Preserve the complete JSON under the datastore string ceiling by
+splitting the compact JSON verbatim between `proof_json` and
+`proof_json_continuation`, with each non-empty half at most 2,000 bytes;
+concatenation must reproduce the original JSON exactly. Write this singleton
+before any surface result so the grouped reviewer cannot start without it.
 
 Call `write_port_live_result` once per non-ignore surface (or one sentinel
 `surface_id=none` / `status=blocked` if none exist). The runtime fills

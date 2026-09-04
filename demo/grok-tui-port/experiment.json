@@ -149,11 +149,11 @@
       },
       {
         "task_id": "port-live-task",
-        "required_tool_names": ["read_grok_port_job", "read_port_final_review_report", "read_port_surface", "write_port_live_result"]
+        "required_tool_names": ["read_grok_port_job", "read_port_final_review_report", "read_port_surface", "write_port_live_environment_proof", "write_port_live_result"]
       },
       {
         "task_id": "port-live-review-task",
-        "required_tool_names": ["read_port_final_review_report", "read_port_surface", "read_port_live_result", "write_port_live_report"]
+        "required_tool_names": ["read_grok_port_job", "read_port_final_review_report", "read_port_surface", "read_port_live_result", "read_port_live_environment_proof", "write_port_live_report"]
       },
       {
         "task_id": "port-publish-task",
@@ -185,6 +185,7 @@
       "PortIntegrateResult": 8,
       "PortConvergenceReport": 1,
       "PortFinalReviewReport": 1,
+      "PortLiveEnvironmentProof": 1,
       "PortLiveResult": 1,
       "PortLiveReport": 1,
       "PortPullRequest": 1
@@ -234,6 +235,11 @@
         "collection": "PortFinalReviewReport",
         "correlation_field": "run_id",
         "fields": ["status", "review_rounds", "confirmed_findings", "head_sha", "implement_surface_count", "live_result_count", "summary"]
+      },
+      {
+        "collection": "PortLiveEnvironmentProof",
+        "correlation_field": "run_id",
+        "fields": ["final_review_head", "preflight_nonce", "preflight_port_vacant", "preflight_socket_absent", "expected_endpoint", "applied_endpoint", "backend_id", "live_home", "live_graphql", "live_socket", "endpoint_env_name", "endpoint_verified", "listener_pid", "listener_command", "listener_verified", "pty_challenge", "pty_expected", "pty_prompt_sha256", "pty_pre_submit_bytes", "pty_post_submit_match_offset", "pty_session_id", "pty_terminal_request_id", "pty_idle_challenge", "pty_idle_expected", "pty_idle_match_offset", "pty_idle_probe_request_id", "pty_idle_transition", "pty_verified", "cleanup_listener_absent", "cleanup_socket_absent", "proof_json", "proof_json_continuation"]
       },
       {
         "collection": "PortLiveResult",

@@ -5132,6 +5132,44 @@ mod tests {
                         .count(),
                     12
                 );
+                let tracker_surface = audited_surfaces
+                    .iter()
+                    .find(|surface| {
+                        surface["surface_id"]
+                            .as_str()
+                            .is_some_and(|id| id.ends_with(":tool_call:tracker-stream"))
+                    })
+                    .expect("audited tool tracker surface should exist");
+                let tracker_wire = tracker_surface["grok_wire"]
+                    .as_str()
+                    .expect("tool tracker wire should be text");
+                let tracker_expect = tracker_surface["live_expect"]
+                    .as_str()
+                    .expect("tool tracker live expectation should be text");
+                assert!(tracker_wire.contains("When canonical tool metadata is present"));
+                assert!(tracker_wire.contains("task remains on the standard ACP rail"));
+                assert!(tracker_wire.contains("pager owns task suppression"));
+                assert!(tracker_expect.contains("optional `_meta`"));
+                assert!(tracker_expect.contains("explicit `_meta.subagentBackground` boolean"));
+                let subprocess_surface = audited_surfaces
+                    .iter()
+                    .find(|surface| {
+                        surface["surface_id"]
+                            .as_str()
+                            .is_some_and(|id| id.ends_with(":subprocess:terminal-acp"))
+                    })
+                    .expect("audited subprocess surface should exist");
+                let subprocess_docs = subprocess_surface["gents_docs"]
+                    .as_str()
+                    .expect("subprocess document contract should be text");
+                let subprocess_expect = subprocess_surface["live_expect"]
+                    .as_str()
+                    .expect("subprocess live expectation should be text");
+                assert!(
+                    subprocess_docs.contains("AgentToolCall` (execute kind) is the authoritative")
+                );
+                assert!(subprocess_docs.contains("AgentToolResult` is an optional spill"));
+                assert!(subprocess_expect.contains("a spill row is not required"));
                 let subagent_surface = audited_surfaces
                     .iter()
                     .find(|surface| {
@@ -5325,6 +5363,70 @@ mod tests {
                     assert_eq!(tools["command_execution_policy"], "unrestricted");
                     assert_eq!(tools["command_network_mode"], "enabled");
                 }
+                let live_io = read_pack_json_defaults(
+                    &pack.join("datastore-tool-surfaces/port-live-io/object.json"),
+                )
+                .expect("port-live-io should load");
+                let live_io_text = live_io.to_string();
+                assert!(live_io_text.contains("write_port_live_environment_proof"));
+                assert!(live_io_text.contains("cleanup_listener_absent"));
+                assert!(live_io_text.contains("pty_post_submit_match_offset"));
+                assert!(live_io_text.contains("pty_session_id"));
+                assert!(live_io_text.contains("proof_json_continuation"));
+                let live_review_io = read_pack_json_defaults(
+                    &pack.join("datastore-tool-surfaces/port-live-review-io/object.json"),
+                )
+                .expect("port-live-review-io should load");
+                let live_review_io_text = live_review_io.to_string();
+                assert!(live_review_io_text.contains("read_grok_port_job"));
+                assert!(live_review_io_text.contains("read_port_live_environment_proof"));
+                let live_prompt =
+                    std::fs::read_to_string(pack.join("tasks/port-live-task/prompt.md"))
+                        .expect("live prompt should load");
+                let live_behavior = std::fs::read_to_string(
+                    pack.join("agent-behaviors/port-live/system_prompt.md"),
+                )
+                .expect("live behavior prompt should load");
+                for prompt in [&live_prompt, &live_behavior] {
+                    assert!(prompt.contains("GENTS_GROK_PORT_ENDPOINT_1"));
+                    assert!(prompt.contains("obsolete"));
+                    assert!(prompt.contains("wrapper shell"));
+                    assert!(prompt.contains("post-Enter"));
+                    assert!(prompt.contains("echo is not evidence"));
+                }
+                assert!(live_prompt.contains("InferenceBackend"));
+                assert!(live_prompt.contains("expected transformed response does not occur"));
+                assert!(live_prompt.contains("grok_stock_pty_probe.py self-test"));
+                assert!(live_prompt.contains("grok_stock_pty_probe.py run"));
+                assert!(live_prompt.contains("grok_stock_pty_probe.py cleanup"));
+                assert!(live_prompt.contains("write_port_live_environment_proof"));
+                assert!(live_prompt
+                    .find("write_port_live_environment_proof")
+                    .zip(live_prompt.find("write_port_live_result"))
+                    .is_some_and(|(proof, result)| proof < result));
+                let live_review =
+                    std::fs::read_to_string(pack.join("tasks/port-live-review-task/prompt.md"))
+                        .expect("live review prompt should load");
+                let live_review_words =
+                    live_review.split_whitespace().collect::<Vec<_>>().join(" ");
+                assert!(live_review_words.contains("Require exactly one environment proof"));
+                assert!(live_review_words.contains("reverse of the non-empty random challenge"));
+                assert!(live_review_words.contains("every duplicated value"));
+                assert!(live_review_words.contains("coverage_complete=false"));
+                assert!(live_review_words.contains("two terminal request IDs"));
+                let live_proof_schema = std::fs::read_to_string(
+                    pack.join("schemas/port_live_environment_proof.graphql"),
+                )
+                .expect("live environment proof schema should load");
+                assert!(live_proof_schema.contains("run_id: String @index(unique: true)"));
+                assert!(live_proof_schema.contains("endpoint_verified: Boolean @immutable"));
+                assert!(live_proof_schema.contains("pty_verified: Boolean @immutable"));
+                assert!(live_proof_schema.contains("cleanup_socket_absent: Boolean @immutable"));
+                assert!(live_proof_schema.contains("proof_json_continuation: String @immutable"));
+                assert_eq!(
+                    experiment["expect"]["collection_counts"]["PortLiveEnvironmentProof"],
+                    1
+                );
                 let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));

@@ -126,6 +126,19 @@ reactivate paused goals. Requests retain the tool-policy snapshot they were
 created with, so a policy correction takes effect on a continuation request,
 not an already-processing request.
 
+In particular, every live-home `demo provision` or `config apply` command must
+set `GENTS_GROK_PORT_ENDPOINT_1` to the immutable job `live_endpoint`; the
+obsolete unsuffixed variable is not consumed by this pack. Query the resulting
+`InferenceBackend.endpoint` and require exact equality before launching the
+live probes. Run the checked-in vacancy preflight before launching the live
+server. For stock-pager PTY evidence, use a fresh transform challenge
+whose expected response is absent from the input, inspect only bytes received
+after submission, and require a second distinct completed turn to prove the
+return to the idle/input UI. The checked-in
+`scripts/grok_stock_pty_probe.py` enforces those boundaries and emits the
+structured `PortLiveEnvironmentProof` that independent live review requires.
+A local input echo is not model-response evidence.
+
 Do not manually seal or integrate an abandoned workspace. Those transitions
 belong to the host: a stage output without its writer receipt must remain
 incomplete until runtime recovery has terminalized the request and produced a

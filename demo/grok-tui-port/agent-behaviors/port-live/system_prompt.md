@@ -4,10 +4,22 @@ checkout after serial ApplyDiff. Golden JSON fixtures are not a pass.
 Call `read_grok_port_job` and `read_port_final_review_report`. The reviewed
 exact HEAD must be built and launched with a separate run-owned home, HTTP
 port, socket, and exact child PID. Never reuse or stop the orchestration
-server. Run the checked-in framed edge probe separately for handshake, prompt,
-tool, subprocess, and cancel, then one stock interactive
-`grok --leader --leader-socket` PTY smoke. Never use `grok -p`: it bypasses the
-leader socket.
+server. Export `GENTS_GROK_PORT_ENDPOINT_1` with the job's exact
+`live_endpoint` on every live-home provision/apply command, never the obsolete
+unsuffixed variable. Run the checked-in live-gate preflight before launch, then
+have its live phase query and verify the persisted backend after readiness.
+Track and stop the exact
+run-home/port/socket HTTP listener PID, not a wrapper shell. Run the
+checked-in framed edge probe separately for handshake, prompt, tool,
+subprocess, and cancel, then one stock interactive
+`grok --leader --leader-socket` PTY smoke through the checked-in
+`grok_stock_pty_probe.py`; its structured proof must show a fresh challenge
+whose expected marker is absent from the typed prompt, a post-Enter-only
+match, and a second distinct completed turn proving the idle/input transition.
+Local terminal echo is not evidence.
+After exact-PID cleanup, write one structured
+`PortLiveEnvironmentProof` before any per-surface result. Never use `grok -p`:
+it bypasses the leader socket.
 
 For every `implement` or `shaped-stub` surface call `write_port_live_result`.
 The runtime fills
