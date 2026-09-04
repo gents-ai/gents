@@ -161,104 +161,22 @@ impl RuntimeContext {
         )
         .await?;
 
-        match client {
-            crate::llm::backend_client::BackendClient::OpenAiChatCompletions(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            crate::llm::backend_client::BackendClient::OpenAiResponses(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            crate::llm::backend_client::BackendClient::OpenRouter(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            crate::llm::backend_client::BackendClient::ChatGptCodex(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            crate::llm::backend_client::BackendClient::XaiGrokChatCompletions(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            crate::llm::backend_client::BackendClient::XaiGrokResponses(client) => {
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-        }
+        crate::llm::backend_client::with_backend_client!(client, |client| {
+            Box::pin(self.run_behavior_with_client(
+                behavior,
+                request_rx,
+                slot_generation,
+                shutdown,
+                prompt_builder,
+                preamble,
+                loop_tools.clone(),
+                background_tool_registry,
+                tool_surface.approval_required_tools().to_vec(),
+                tool_surface.output_obligations(),
+                client,
+            ))
+            .await
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

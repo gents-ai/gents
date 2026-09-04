@@ -411,6 +411,10 @@ mod tests {
     #[test]
     fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
         let mut behavior = behavior_with_wire(OpenAiWireApi::ChatCompletions);
+        // Deliberately not a substring of `backend-general` (the fixture's
+        // backend id) so the two assertions below can't pass vacuously off
+        // one shared match.
+        behavior.behavior_id = "behavior-alpha".to_string();
         behavior.backend_api_key_env_var =
             Some("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".to_string());
 
@@ -423,7 +427,7 @@ mod tests {
             "error must name the backend: {message}"
         );
         assert!(
-            message.contains("general"),
+            message.contains("behavior-alpha"),
             "error must name the behavior: {message}"
         );
         assert!(

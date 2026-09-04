@@ -191,6 +191,28 @@ pub(crate) async fn build_backend_client(
     }
 }
 
+/// Dispatch a built `BackendClient` to `$body`, binding the unwrapped
+/// concrete client to `$c`. Single owner of the six-arm match every caller
+/// otherwise has to repeat: each `BackendProviderKind` × wire-API
+/// combination produces a distinct concrete `rig` client type, and `$body`
+/// is typically a call into a `CompletionClient`-generic continuation
+/// (`run_behavior_with_client` / `run_oneshot_with_completion_client`) that
+/// Rust monomorphizes once per concrete type it's invoked with — so the
+/// match itself can't become a plain function, only written once.
+macro_rules! with_backend_client {
+    ($client:expr, |$c:ident| $body:expr) => {
+        match $client {
+            $crate::llm::backend_client::BackendClient::OpenAiChatCompletions($c) => $body,
+            $crate::llm::backend_client::BackendClient::OpenAiResponses($c) => $body,
+            $crate::llm::backend_client::BackendClient::OpenRouter($c) => $body,
+            $crate::llm::backend_client::BackendClient::ChatGptCodex($c) => $body,
+            $crate::llm::backend_client::BackendClient::XaiGrokChatCompletions($c) => $body,
+            $crate::llm::backend_client::BackendClient::XaiGrokResponses($c) => $body,
+        }
+    };
+}
+pub(crate) use with_backend_client;
+
 #[cfg(test)]
 mod tests {
     use super::*;

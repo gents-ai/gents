@@ -64,92 +64,20 @@ pub async fn run_openai_oneshot_with_tools(
     )
     .await?;
 
-    match client {
-        crate::llm::backend_client::BackendClient::OpenAiChatCompletions(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        crate::llm::backend_client::BackendClient::OpenAiResponses(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        crate::llm::backend_client::BackendClient::OpenRouter(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        crate::llm::backend_client::BackendClient::ChatGptCodex(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        crate::llm::backend_client::BackendClient::XaiGrokChatCompletions(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        crate::llm::backend_client::BackendClient::XaiGrokResponses(client) => {
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-    }
+    crate::llm::backend_client::with_backend_client!(client, |client| {
+        run_oneshot_with_completion_client(
+            node,
+            behavior,
+            prompt,
+            prompt_builder,
+            preamble,
+            tools,
+            background_tool_registry,
+            lsp_pool.clone(),
+            client,
+        )
+        .await
+    })
 }
 
 async fn run_oneshot_with_completion_client<C>(
