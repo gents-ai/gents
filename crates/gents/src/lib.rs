@@ -198,8 +198,7 @@ pub use document_config::{
     wide_open_tool_selection_id_for_agent, AgentBehavior as AgentBehaviorDocument,
     ChainKeyBindingDocument, ConfigReferences, DatastoreToolSurfaceDocument, EthToolDocument,
     InferenceProfile, MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget,
-    SurfaceToolDecl,
-    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
     WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{

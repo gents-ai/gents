@@ -311,10 +311,7 @@ fn inference_backend_validate_rejects_non_positive_max_queue_depth() {
 #[test]
 fn inference_backend_validate_no_lockout_rejects_dropping_the_current_model() {
     let backend = base_backend(); // models: ["d4f"]
-    let error = backend
-        .validate(Some("gone"))
-        .unwrap_err()
-        .to_string();
+    let error = backend.validate(Some("gone")).unwrap_err().to_string();
     assert!(
         error.contains("would drop the current model \"gone\""),
         "{error}"

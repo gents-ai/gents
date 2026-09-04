@@ -169,7 +169,10 @@ impl InferenceBackend {
         }
         if let Some(current_model) = current_model.map(str::trim).filter(|v| !v.is_empty()) {
             if !self.models.is_empty()
-                && !self.models.iter().any(|model| model.trim() == current_model)
+                && !self
+                    .models
+                    .iter()
+                    .any(|model| model.trim() == current_model)
             {
                 anyhow::bail!(
                     "backend {} models would drop the current model {current_model:?}; no-lockout guard",

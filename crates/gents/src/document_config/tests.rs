@@ -1215,10 +1215,7 @@ fn inference_profile_validate_rejects_reasoning_effort_outside_the_vocabulary() 
     let mut profile = base_profile("bad-effort");
     profile.reasoning_effort = Some("extreme".to_string());
     let error = profile.validate().unwrap_err().to_string();
-    assert!(
-        error.contains("reasoning_effort must be one of"),
-        "{error}"
-    );
+    assert!(error.contains("reasoning_effort must be one of"), "{error}");
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,7 +1284,10 @@ fn agent_behavior_validate_references_rejects_missing_backend() {
     behavior.backend_id = Some("ghost".to_string());
     let refs = ConfigReferences::default();
     let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(error.contains("references missing backend_id ghost"), "{error}");
+    assert!(
+        error.contains("references missing backend_id ghost"),
+        "{error}"
+    );
 }
 
 #[test]

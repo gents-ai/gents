@@ -8,8 +8,8 @@ use gents::{
     UNKNOWN_PROBE_STATUS,
 };
 
-use super::super::{DesiredAgentBehavior, DesiredInferenceBackend, DesiredInferenceProfile};
 use super::super::DesiredStateManifest;
+use super::super::{DesiredAgentBehavior, DesiredInferenceBackend, DesiredInferenceProfile};
 use super::storage::non_empty;
 
 /// Decode a manifest backend into the document type `InferenceBackend::validate`

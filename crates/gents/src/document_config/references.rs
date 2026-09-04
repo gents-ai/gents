@@ -72,7 +72,10 @@ async fn list_backend_id_models(node: &EmbeddedNode) -> Result<BTreeMap<String, 
         }"#;
     let resp = node.execute(query).await;
     if resp.has_errors() {
-        anyhow::bail!("list InferenceBackend (id/models) failed: {:?}", resp.errors);
+        anyhow::bail!(
+            "list InferenceBackend (id/models) failed: {:?}",
+            resp.errors
+        );
     }
     let rows = resp
         .data
