@@ -504,9 +504,9 @@ impl ClientCore {
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch.request_row(request_id).is_some_and(|row| {
-            RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref())
-        });
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| row.is_terminal());
         let version = self.store.merge_chat_patch(patch);
         tracing::debug!(
             target: "gents_desktop_core::replication",
@@ -1754,7 +1754,8 @@ struct LocalHydrationStartEvidence {
 
 #[derive(Deserialize)]
 struct HydrationLifecycleRow {
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 fn should_start_session_hydration_request(
@@ -1802,7 +1803,10 @@ async fn load_local_hydration_start_evidence(
     let nonterminal_request_present =
         gents::graphql::rows::<HydrationLifecycleRow>(&response, "AgentRequest")?
             .iter()
-            .any(|row| !RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()));
+            .any(|row| {
+                !row.lifecycle_state
+                    .is_some_and(RequestLifecycleState::is_terminal)
+            });
     Ok(LocalHydrationStartEvidence {
         owned_session_present,
         nonterminal_request_present,

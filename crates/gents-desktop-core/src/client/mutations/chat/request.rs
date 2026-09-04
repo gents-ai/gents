@@ -657,15 +657,11 @@ fn ensure_retry_parent_eligible(
     // `AgentRequestRow`; on this desktop surface it is represented by requiring
     // the parent to be terminal failed. Non-terminal rows, including rows
     // still waiting on admission, fail this lifecycle gate.
-    let lifecycle_state = normalize_required(
-        "lifecycle_state",
-        parent
-            .lifecycle_state
-            .as_deref()
-            .context("retry parent request must have a lifecycle_state")?,
-    )?;
+    let lifecycle_state = parent
+        .lifecycle_state
+        .context("retry parent request must have a lifecycle_state")?;
 
-    if lifecycle_state != RequestLifecycleState::Failed.as_str() {
+    if lifecycle_state != RequestLifecycleState::Failed {
         bail!("retry parent request must be failed, got lifecycle_state={lifecycle_state}");
     }
     if execution_origin != "interactive" {

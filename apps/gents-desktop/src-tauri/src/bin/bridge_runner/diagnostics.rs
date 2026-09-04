@@ -318,7 +318,7 @@ async fn build_request_diagnostics(
             .find(|row| row.session_id == session_id)
             .and_then(|row| row.updated_at.clone()),
         request: request.map(|row| RequestRowDiagnostics {
-            lifecycle_state: row.lifecycle_state.clone(),
+            lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
             failure_reason: row.failure_reason.clone(),
             created_at: row.created_at.clone(),
             claimed_at: row.claimed_at.clone(),

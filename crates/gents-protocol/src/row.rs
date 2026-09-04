@@ -200,7 +200,7 @@ pub struct AgentConversationRow {
     pub latest_request_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRequestRow {
     pub request_id: String,
     #[serde(default)]

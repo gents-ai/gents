@@ -457,7 +457,8 @@ fn request_row_from_response(response: &Value, request_id: &str) -> Result<Reque
         request_id: string_field(row, "request_id").unwrap_or_else(|| request_id.to_string()),
         agent_did: string_field(row, "agent_did"),
         session_id: string_field(row, "session_id"),
-        lifecycle_state: string_field(row, "lifecycle_state"),
+        lifecycle_state: string_field(row, "lifecycle_state")
+            .and_then(|value| RequestLifecycleState::parse(&value).ok()),
         interrupt_requested_at: string_field(row, "interrupt_requested_at"),
         parent_request_id: string_field(row, "caused_by_parent_request_id"),
         parent_tool_call_id: string_field(row, "caused_by_parent_tool_call_id"),
@@ -589,7 +590,7 @@ struct RequestRow {
     request_id: String,
     agent_did: Option<String>,
     session_id: Option<String>,
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     interrupt_requested_at: Option<String>,
     parent_request_id: Option<String>,
     parent_tool_call_id: Option<String>,
@@ -600,7 +601,7 @@ impl RequestRow {
         RequestCancelSnapshot {
             request_id: self.request_id,
             agent_did: self.agent_did,
-            lifecycle_state: self.lifecycle_state,
+            lifecycle_state: self.lifecycle_state.map(|state| state.as_str().to_string()),
             interrupt_requested_at: self.interrupt_requested_at,
         }
     }

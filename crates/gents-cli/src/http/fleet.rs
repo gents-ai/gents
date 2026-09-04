@@ -37,7 +37,7 @@ struct RequestRow {
     #[serde(default)]
     agent_did: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 pub(crate) async fn load_fleet_snapshot(graphql: &str) -> Result<FleetSnapshot> {
@@ -86,9 +86,11 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
             continue;
         }
         let entry = counts.entry(agent_did).or_default();
-        match request.lifecycle_state.as_deref().map(str::trim) {
-            Some("claimed" | "processing") => entry.0 += 1,
-            Some("pending") => entry.1 += 1,
+        match request.lifecycle_state {
+            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing) => {
+                entry.0 += 1
+            }
+            Some(RequestLifecycleState::Pending) => entry.1 += 1,
             _ => {}
         }
     }

@@ -570,7 +570,10 @@ async fn create_request(node: &EmbeddedNode, row: &TimelineRequestRow) -> Result
             string_field("session_id", row.session_id.as_deref()),
             string_field("content", row.content.as_deref()),
             string_field("metadata", row.metadata.as_deref()),
-            string_field("lifecycle_state", row.lifecycle_state.as_deref()),
+            string_field(
+                "lifecycle_state",
+                row.lifecycle_state.map(|state| state.as_str()),
+            ),
             string_field("backend_id", row.backend_id.as_deref()),
             string_field("failure_reason", row.failure_reason.as_deref()),
             string_field("created_at", row.created_at.as_deref()),

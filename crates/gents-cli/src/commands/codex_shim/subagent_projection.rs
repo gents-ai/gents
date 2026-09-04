@@ -100,7 +100,7 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     superseded_by_request: Option<String>,
     #[serde(default)]
@@ -742,7 +742,7 @@ fn resolve_authorized_subagent_threads(
                 model: None,
                 nickname,
                 client_projection: project_persisted_attempt(
-                    nonempty(child.lifecycle_state.as_deref()).unwrap_or(""),
+                    child.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
                     nonempty(child.superseded_by_request.as_deref()).is_some(),
                     None,
                 ),
@@ -806,7 +806,7 @@ fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestRow) {
     link.latest_request_content = latest.content.clone();
     link.latest_request_created_at = latest.created_at.clone();
     link.client_projection = project_persisted_attempt(
-        nonempty(latest.lifecycle_state.as_deref()).unwrap_or(""),
+        latest.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
         nonempty(latest.superseded_by_request.as_deref()).is_some(),
         None,
     );
@@ -1071,14 +1071,11 @@ mod tests {
             session_id: session_id.to_string(),
             agent_did: if depth == 0 { "did:root" } else { "did:child" }.to_string(),
             behavior_id: Some(if depth == 0 { "root" } else { "reviewer" }.to_string()),
-            lifecycle_state: Some(
-                if depth == 0 {
-                    "processing"
-                } else {
-                    "completed"
-                }
-                .to_string(),
-            ),
+            lifecycle_state: Some(if depth == 0 {
+                RequestLifecycleState::Processing
+            } else {
+                RequestLifecycleState::Completed
+            }),
             superseded_by_request: None,
             failure_reason: None,
             created_at: None,
@@ -1194,10 +1191,10 @@ mod tests {
             Some("spawn-call"),
         );
         child.created_at = Some("2026-01-01T00:00:01Z".to_string());
-        child.lifecycle_state = Some("completed".to_string());
+        child.lifecycle_state = Some(RequestLifecycleState::Completed);
         let mut followup = request("child-followup", &child_session, 1, None, None);
         followup.created_at = Some("2026-01-01T00:00:02Z".to_string());
-        followup.lifecycle_state = Some("processing".to_string());
+        followup.lifecycle_state = Some(RequestLifecycleState::Processing);
         let requests = vec![
             request("root-request", &root_session, 0, None, None),
             child,
@@ -1240,10 +1237,10 @@ mod tests {
             Some("spawn-call"),
         );
         canonical.created_at = Some("2026-01-01T00:00:01Z".to_string());
-        canonical.lifecycle_state = Some("completed".to_string());
+        canonical.lifecycle_state = Some(RequestLifecycleState::Completed);
         let mut timestamp_fallback = request("child-followup", &child_session, 1, None, None);
         timestamp_fallback.created_at = Some("2026-01-01T00:00:02Z".to_string());
-        timestamp_fallback.lifecycle_state = Some("processing".to_string());
+        timestamp_fallback.lifecycle_state = Some(RequestLifecycleState::Processing);
         let requests = vec![
             request("root-request", &root_session, 0, None, None),
             canonical,

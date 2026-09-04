@@ -42,7 +42,7 @@ struct BackgroundContinuationRequest {
     #[serde(default)]
     metadata: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     created_at: Option<String>,
 }
@@ -140,7 +140,7 @@ async fn watch_loaded_root_continuations(
         let requests = load_background_continuation_requests(state, thread_id).await?;
         let mut projected_request = false;
         for request in requests {
-            let lifecycle_state = request.lifecycle_state.as_deref().unwrap_or("");
+            let lifecycle_state = request.lifecycle_state;
             if observed.contains(&request.request_id) {
                 continue;
             }
@@ -148,23 +148,21 @@ async fn watch_loaded_root_continuations(
             if !continuation_request_has_started(lifecycle_state) {
                 continue;
             }
-            if RequestLifecycleState::parse_opt(Some(lifecycle_state))
-                == Some(RequestLifecycleState::Superseded)
-            {
+            if lifecycle_state == Some(RequestLifecycleState::Superseded) {
                 observed.insert(request.request_id);
                 continue;
             }
 
             let baseline_turn = baseline_turns.remove(&request.request_id);
             if baseline_turn_is_terminal(baseline_turn.as_ref())
-                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
+                && lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
             {
                 observed.insert(request.request_id);
                 continue;
             }
             if !initialized
                 && suppress_existing_terminal
-                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
+                && lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
             {
                 observed.insert(request.request_id);
                 continue;
@@ -438,9 +436,9 @@ pub(super) fn is_background_completion_metadata(metadata: Option<&str>) -> bool 
         })
 }
 
-fn continuation_request_has_started(lifecycle_state: &str) -> bool {
+fn continuation_request_has_started(lifecycle_state: Option<RequestLifecycleState>) -> bool {
     !matches!(
-        RequestLifecycleState::parse_opt(Some(lifecycle_state.trim())),
+        lifecycle_state,
         None | Some(
             RequestLifecycleState::Pending | RequestLifecycleState::WorkspaceBindingPending
         )
@@ -479,10 +477,18 @@ mod tests {
 
     #[test]
     fn pending_wakes_are_not_announced_before_the_runtime_claims_them() {
-        assert!(!continuation_request_has_started("pending"));
-        assert!(!continuation_request_has_started("workspaceBindingPending"));
-        assert!(continuation_request_has_started("claimed"));
-        assert!(continuation_request_has_started("processing"));
+        assert!(!continuation_request_has_started(Some(
+            RequestLifecycleState::Pending
+        )));
+        assert!(!continuation_request_has_started(Some(
+            RequestLifecycleState::WorkspaceBindingPending
+        )));
+        assert!(continuation_request_has_started(Some(
+            RequestLifecycleState::Claimed
+        )));
+        assert!(continuation_request_has_started(Some(
+            RequestLifecycleState::Processing
+        )));
         assert!(RequestLifecycleState::is_terminal_str(Some("completed")));
         assert!(RequestLifecycleState::is_terminal_str(Some("interrupted")));
     }

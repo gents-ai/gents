@@ -18,6 +18,7 @@ use gents::trace_export::{
     analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -510,9 +511,12 @@ fn build_records(
                 behavior_id: behavior_id.map(ToOwned::to_owned),
                 session_id: tool_call.session_id.clone(),
                 request_id: request.map(|request| request.request_id.clone()),
-                request_status: request.and_then(|request| request.lifecycle_state.clone()),
+                request_status: request
+                    .and_then(|request| request.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 request_lifecycle_state: request
-                    .and_then(|request| request.lifecycle_state.clone()),
+                    .and_then(|request| request.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 request_failure_reason: request.and_then(|request| request.failure_reason.clone()),
                 response_status: response.and_then(|response| response.status.clone()),
                 response_error_message: response
@@ -933,7 +937,7 @@ fn combined_request_failure_text(
 ) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(request) = request {
-        push_nonempty(&mut parts, request.lifecycle_state.as_deref());
+        push_nonempty(&mut parts, request.lifecycle_state.map(|s| s.as_str()));
         push_nonempty(&mut parts, request.failure_reason.as_deref());
     }
     if let Some(response) = response {
@@ -1067,7 +1071,7 @@ struct RequestRow {
     #[serde(default)]
     metadata: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     backend_id: Option<String>,
     #[serde(default)]

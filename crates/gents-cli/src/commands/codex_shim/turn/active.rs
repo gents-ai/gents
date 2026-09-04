@@ -20,20 +20,19 @@ pub(super) struct ActiveCodexTurn {
 pub(super) struct NextSteeringRequest {
     pub(super) request_id: String,
     pub(super) created_at: String,
-    lifecycle_state: String,
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 impl NextSteeringRequest {
     pub(super) fn is_pending(&self) -> bool {
-        RequestLifecycleState::try_from(self.lifecycle_state.as_str())
-            .is_ok_and(|state| state == RequestLifecycleState::Pending)
+        self.lifecycle_state == Some(RequestLifecycleState::Pending)
     }
 }
 
 #[derive(Clone, Debug)]
 struct RequestRow {
     request_id: String,
-    lifecycle_state: String,
+    lifecycle_state: Option<RequestLifecycleState>,
     superseded_by_request: Option<String>,
     response_status: Option<String>,
     metadata: Option<String>,
@@ -457,8 +456,7 @@ fn decode_request_row(row: Value) -> Result<RequestRow> {
     let lifecycle_state = row
         .get("lifecycle_state")
         .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+        .and_then(|value| RequestLifecycleState::parse(value).ok());
     let superseded_by_request = row
         .get("superseded_by_request")
         .and_then(Value::as_str)
@@ -580,7 +578,7 @@ fn steering_parent_id(row: &RequestRow) -> Option<String> {
 impl RequestRow {
     fn is_effectively_active(&self) -> bool {
         project_persisted_attempt(
-            &self.lifecycle_state,
+            self.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
             self.superseded_by_request.is_some(),
             self.response_status.as_deref(),
         )
@@ -606,7 +604,7 @@ mod tests {
         });
         RequestRow {
             request_id: request_id.to_string(),
-            lifecycle_state: lifecycle_state.to_string(),
+            lifecycle_state: RequestLifecycleState::parse(lifecycle_state).ok(),
             superseded_by_request: None,
             response_status: None,
             metadata,
@@ -688,7 +686,7 @@ mod tests {
         let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
 
         assert_eq!(next.request_id, "steer-1");
-        assert_eq!(next.lifecycle_state, "completed");
+        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Completed));
         assert!(!next.is_pending());
     }
 
@@ -703,6 +701,6 @@ mod tests {
         let next = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
 
         assert_eq!(next.request_id, "steer-1");
-        assert_eq!(next.lifecycle_state, "failed");
+        assert_eq!(next.lifecycle_state, Some(RequestLifecycleState::Failed));
     }
 }

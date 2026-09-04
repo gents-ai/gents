@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
 fn session_timeline_pages_are_bounded_and_cursor_stable() {
@@ -393,7 +394,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("processing".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -417,6 +418,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
@@ -485,7 +487,7 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
     rows.responses.clear();
     rows.requests[0].content =
         Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string());
-    rows.requests[0].lifecycle_state = Some("completed".to_string());
+    rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
     rows.requests[0].execution_origin = Some("scheduled".to_string());
     rows.requests[0].metadata = Some(
         r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:sess-1","queued_after_request_id":"parent-1"},"background_completion_wake_version":1}"#
@@ -701,7 +703,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -725,6 +727,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -743,7 +746,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -767,6 +770,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         messages: vec![AgentMessageRow {
@@ -927,7 +931,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("failed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Failed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: Some("request deadline exceeded".to_string()),
@@ -951,6 +955,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
@@ -1046,7 +1051,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -1070,6 +1075,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -1088,7 +1094,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -1112,6 +1118,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         messages: vec![
@@ -1218,7 +1225,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("processing".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -1242,6 +1249,7 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),

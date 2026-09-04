@@ -342,7 +342,7 @@ async fn drive_session_recovery_case_with_core(
     }
     if case.pre_failed_exists {
         assert_eq!(
-            pre.parent.lifecycle_state.as_deref(),
+            pre.parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),
             "pre failed request state must match Lean witness for {}",
             case.name
@@ -476,7 +476,7 @@ async fn seed_session_recovery_pre_state(
     let parent = if case.pre_failed_exists {
         let parent = request_from_store_for_test(core, &failed_request_id)?;
         assert_eq!(
-            parent.lifecycle_state.as_deref(),
+            parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),
             "seeded retry parent lifecycle must match Lean witness for {}",
             case.name
@@ -584,7 +584,7 @@ fn synthetic_missing_retry_parent(
         max_tokens: None,
         max_total_tokens: None,
         metadata: None,
-        lifecycle_state: Some(case.pre_failed_state.clone()),
+        lifecycle_state: RequestLifecycleState::parse(&case.pre_failed_state).ok(),
         backend_id: Some(case.pre_backend.clone()),
         execution_origin: Some(case.pre_origin.clone()),
         caused_by_trigger_id: None,
@@ -608,6 +608,7 @@ fn synthetic_missing_retry_parent(
         workspace_authority: None,
         workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
+        ..Default::default()
     }
 }
 
@@ -1155,7 +1156,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
         .await?;
-    parent.lifecycle_state = Some("failed".to_string());
+    parent.lifecycle_state = Some(RequestLifecycleState::Failed);
     parent.deadline = Some(deadline.to_rfc3339());
     parent.retry_count = Some(0);
     parent.max_retries = Some(i64::from(DEFAULT_REQUEST_MAX_RETRIES));

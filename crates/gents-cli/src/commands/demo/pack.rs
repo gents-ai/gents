@@ -1055,7 +1055,7 @@ async fn wait_http_ok(url: &str, deadline: Duration) -> Result<()> {
 struct StageResult {
     trigger_id: String,
     request_id: String,
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
     caused_by_source_doc_id: Option<String>,
 }
 
@@ -1830,7 +1830,7 @@ async fn await_stages(
                     done.push(StageResult {
                         trigger_id: trigger_id.clone(),
                         request_id: request_id.to_string(),
-                        lifecycle_state: state.to_string(),
+                        lifecycle_state: RequestLifecycleState::Completed,
                         caused_by_source_doc_id: row
                             .get("caused_by_source_doc_id")
                             .and_then(Value::as_str)
@@ -2812,7 +2812,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
                 |request_id| StageResult {
                     trigger_id: "background_completion".to_string(),
                     request_id: request_id.clone(),
-                    lifecycle_state: "completed".to_string(),
+                    lifecycle_state: RequestLifecycleState::Completed,
                     caused_by_source_doc_id: None,
                 },
             ));
@@ -2881,9 +2881,7 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     };
     let mut failures: Vec<String> = Vec::new();
     for stage in &stages {
-        if RequestLifecycleState::parse_opt(Some(stage.lifecycle_state.as_str()))
-            != Some(RequestLifecycleState::Completed)
-        {
+        if stage.lifecycle_state != RequestLifecycleState::Completed {
             failures.push(format!(
                 "{} ended {}",
                 stage.trigger_id, stage.lifecycle_state

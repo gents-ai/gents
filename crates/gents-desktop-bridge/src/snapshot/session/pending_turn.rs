@@ -7,7 +7,7 @@ pub(super) fn project_retry_eligibility(request: Option<&AgentRequestRow>) -> Re
             denial_reason: Some("requestNotObserved".to_string()),
         };
     };
-    if request.lifecycle_state.as_deref() != Some(RequestLifecycleState::Failed.as_str()) {
+    if request.lifecycle_state != Some(RequestLifecycleState::Failed) {
         return RetryEligibilityView {
             eligible: false,
             denial_reason: Some("notFailed".to_string()),
@@ -82,7 +82,9 @@ pub(super) fn build_pending_turn(
         return None;
     }
 
-    let lifecycle_state = normalize_optional(request.lifecycle_state.as_deref());
+    let lifecycle_state = request
+        .lifecycle_state
+        .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
     // Pending ownership is session state, not visible-page state. A materialized
     // user row outside the current window must still suppress the request-owned

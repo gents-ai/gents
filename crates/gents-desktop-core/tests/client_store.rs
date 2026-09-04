@@ -6,6 +6,7 @@ use gents_desktop_core::client::{
     DesktopPaths,
 };
 use gents_protocol::client_protocol::ClientTurnState;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
     AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow,
     AgentRuntimeRow, AgentSessionRow, AgentToolCallRow,
@@ -99,7 +100,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: None,
                 failure_reason: None,
@@ -123,6 +124,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -141,7 +143,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: None,
                 failure_reason: None,
@@ -165,6 +167,7 @@ fn store_derives_turn_from_retry_chain_tip() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         responses: vec![
@@ -253,7 +256,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: None,
                 failure_reason: None,
@@ -277,6 +280,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-a-complete".to_string(),
@@ -295,7 +299,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: None,
                 failure_reason: None,
@@ -319,6 +323,7 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         responses: vec![AgentResponseRow {
@@ -447,7 +452,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: None,
             caused_by_trigger_id: None,
@@ -471,6 +476,7 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "session-1:1".to_string(),

@@ -170,7 +170,7 @@ pub async fn run_schedule_config(
         session_id: row.session_id.unwrap_or_default(),
         agent_did: row.agent_did.unwrap_or_default(),
         behavior_id: row.behavior_id.unwrap_or_default(),
-        lifecycle_state: row.lifecycle_state,
+        lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
     })
 }
 
@@ -242,7 +242,7 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         session_id: row.session_id.unwrap_or_default(),
         agent_did: row.agent_did.unwrap_or_default(),
         behavior_id: row.behavior_id.unwrap_or_default(),
-        lifecycle_state: row.lifecycle_state,
+        lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
     })
 }
 

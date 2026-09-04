@@ -75,7 +75,7 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -256,7 +256,11 @@ fn build_subagent_dispatch_snapshot(
             let dispatch_state = clean_optional_string(bridge.lifecycle_state.as_deref())
                 .or_else(|| clean_optional_string(bridge.status.as_deref()))
                 .or_else(|| {
-                    child.and_then(|child| clean_optional_string(child.lifecycle_state.as_deref()))
+                    child.and_then(|child| {
+                        child
+                            .lifecycle_state
+                            .map(|state| state.as_str().to_string())
+                    })
                 })
                 .unwrap_or_else(|| "unknown".to_string());
             let started_at = clean_optional_string(bridge.started_at.as_deref())

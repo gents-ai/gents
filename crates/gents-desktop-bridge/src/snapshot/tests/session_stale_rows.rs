@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
 fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
@@ -34,7 +35,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -58,6 +59,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![
             AgentMessageRow {
@@ -153,7 +155,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("processing".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -177,6 +179,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -251,7 +254,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -275,6 +278,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+            ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -293,7 +297,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -317,6 +321,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+            ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-3".to_string(),
@@ -335,7 +340,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -359,6 +364,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+            ..Default::default()
             },
         ],
         responses: vec![

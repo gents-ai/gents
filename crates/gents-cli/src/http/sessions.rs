@@ -87,7 +87,7 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<gents_protocol::request_lifecycle::RequestLifecycleState>,
     #[serde(default)]
     created_at: Option<String>,
 }
@@ -277,7 +277,8 @@ fn build_session_history_snapshot(
                 ended_at: session.and_then(|row| clean(row.ended.as_deref())),
                 latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_deref())),
                 latest_request_lifecycle_state: latest_request
-                    .and_then(|row| clean(row.lifecycle_state.as_deref())),
+                    .and_then(|row| row.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 latest_request_created_at: latest_request
                     .and_then(|row| clean(row.created_at.as_deref())),
                 request_count: requests.len() as i64,
@@ -351,21 +352,27 @@ mod tests {
                 request_id: Some("req-newer".to_string()),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                lifecycle_state: Some("terminal".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
+                ),
                 created_at: Some("2026-06-05T10:00:00Z".to_string()),
             },
             RequestRow {
                 request_id: Some("req-other".to_string()),
                 session_id: Some("session-b".to_string()),
                 behavior_id: Some("behavior-b".to_string()),
-                lifecycle_state: Some("running".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                ),
                 created_at: Some("2026-06-05T09:00:00Z".to_string()),
             },
             RequestRow {
                 request_id: Some("req-older".to_string()),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                lifecycle_state: Some("terminal".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
+                ),
                 created_at: Some("2026-06-05T08:00:00Z".to_string()),
             },
         ];

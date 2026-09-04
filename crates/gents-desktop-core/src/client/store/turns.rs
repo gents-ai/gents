@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
 use gents_protocol::client_protocol::{
-    derive_turn as derive_client_turn, AttemptView, RequestLifecycleState, RequestSnapshot,
-    ResponseSnapshot, ResponseStatus,
+    derive_turn as derive_client_turn, AttemptView, RequestSnapshot, ResponseSnapshot,
+    ResponseStatus,
 };
 use gents_protocol::row::AgentResponseRow;
 
@@ -97,8 +97,7 @@ fn attempt_chain_for_request_for_agent(
 
 fn attempt_for_request(store: &ClientStore, index: usize) -> Option<AttemptView> {
     let row = &store.requests[index];
-    let lifecycle =
-        RequestLifecycleState::try_from(row.lifecycle_state.as_deref().unwrap_or_default()).ok()?;
+    let lifecycle = row.lifecycle_state?;
 
     let response = store
         .latest_response_by_request_id
@@ -123,8 +122,7 @@ fn attempt_for_request_for_agent(
     agent_did: &str,
 ) -> Option<AttemptView> {
     let row = &store.requests[index];
-    let lifecycle =
-        RequestLifecycleState::try_from(row.lifecycle_state.as_deref().unwrap_or_default()).ok()?;
+    let lifecycle = row.lifecycle_state?;
     let response = store
         .latest_response_for_request_for_agent(&row.request_id, agent_did)
         .and_then(response_status)
