@@ -247,7 +247,7 @@ impl DefraWatcher {
 
         let active_blocker = rows
             .iter()
-            .any(|candidate| candidate.doc_id != row.doc_id && candidate.is_active_non_pending());
+            .any(|candidate| candidate.doc_id != row.doc_id && !candidate.is_pending());
         if active_blocker {
             return Ok(false);
         }
@@ -334,7 +334,7 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
     // to malformed live work in the same session.
     let blocked_sessions = rows
         .iter()
-        .filter(|row| row.is_active_non_pending())
+        .filter(|row| !row.is_pending())
         .map(|row| row.session_id.clone())
         .collect::<HashSet<_>>();
     let rows = rows

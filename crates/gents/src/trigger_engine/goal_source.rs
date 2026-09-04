@@ -73,7 +73,7 @@ struct RequestRow {
     #[serde(default)]
     execution_origin: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     created_at: String,
     #[serde(default)]
@@ -104,13 +104,12 @@ struct RequestRow {
 
 impl RequestRow {
     fn is_active(&self) -> bool {
-        RequestLifecycleState::parse_opt(self.lifecycle_state.as_deref())
+        self.lifecycle_state
             .is_some_and(RequestLifecycleState::is_active_runtime)
     }
 
-    fn terminal(&self) -> Option<&str> {
-        let state = self.lifecycle_state.as_deref()?;
-        RequestLifecycleState::is_terminal_str(Some(state)).then_some(state)
+    fn terminal(&self) -> Option<RequestLifecycleState> {
+        self.lifecycle_state.filter(|state| state.is_terminal())
     }
 
     fn into_agent_request(self) -> AgentRequest {
@@ -282,10 +281,11 @@ impl GoalSource {
         let Some(latest) = self.latest_request_when_session_idle(&goal).await? else {
             return Ok(None);
         };
-        let Some(terminal_name) = latest.terminal().map(ToOwned::to_owned) else {
+        let Some(terminal_state) = latest.terminal() else {
             return Ok(None);
         };
-        let Some(terminal) = GoalRequestTerminal::parse(&terminal_name) else {
+        let terminal_name = terminal_state.as_str().to_string();
+        let Some(terminal) = GoalRequestTerminal::from_state(terminal_state) else {
             return Ok(None);
         };
         let status = goal

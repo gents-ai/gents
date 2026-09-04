@@ -7,6 +7,7 @@ use gents::{
     build_run_timeline, AgentIdentity, Gents, RunTimeline, RunTimelineRows,
     TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
@@ -102,7 +103,7 @@ async fn backend_restart_cluster_recovers() {
             .iter()
             .map(|(_, request_id, _)| request_id.as_str())
             .collect::<Vec<_>>(),
-        "completed",
+        RequestLifecycleState::Completed,
     )
     .await;
     assert_eq!(failed_count, 0, "all clustered restart requests recover");
@@ -675,12 +676,12 @@ async fn build_timeline(node: &EmbeddedNode, request_id: &str) -> RunTimeline {
 async fn count_requests_not_in_state(
     node: &EmbeddedNode,
     request_ids: &[&str],
-    expected_state: &str,
+    expected_state: RequestLifecycleState,
 ) -> usize {
     let mut count = 0;
     for request_id in request_ids {
         let row = fetch_timeline_request(node, request_id).await;
-        if row.lifecycle_state.as_deref() != Some(expected_state) {
+        if row.lifecycle_state != Some(expected_state) {
             count += 1;
         }
     }

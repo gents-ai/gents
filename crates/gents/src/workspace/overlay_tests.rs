@@ -332,16 +332,30 @@ fn live_tree_hash_drift_fails_closed() {
 
 #[test]
 fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
-    assert!(super::request_lifecycle_is_live(Some("processing")));
     assert!(super::request_lifecycle_is_live(Some(
-        RequestLifecycleState::InputRequired.as_str()
+        RequestLifecycleState::Processing
     )));
-    assert!(super::request_lifecycle_is_live(Some("claimed")));
-    assert!(!super::request_lifecycle_is_live(Some("completed")));
-    assert!(!super::request_lifecycle_is_live(Some("failed")));
-    assert!(!super::request_lifecycle_is_live(Some("dead")));
-    assert!(!super::request_lifecycle_is_live(Some("interrupted")));
-    assert!(!super::request_lifecycle_is_live(Some("superseded")));
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::InputRequired
+    )));
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Claimed
+    )));
+    assert!(!super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Completed
+    )));
+    assert!(!super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Failed
+    )));
+    assert!(!super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Dead
+    )));
+    assert!(!super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Interrupted
+    )));
+    assert!(!super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Superseded
+    )));
     assert!(!super::request_lifecycle_is_live(None));
 }
 

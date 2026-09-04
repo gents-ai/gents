@@ -761,7 +761,7 @@ pub async fn handle_read_subagent(
             None => {
                 let state = row
                     .lifecycle_state
-                    .filter(|state| !state.trim().is_empty())
+                    .map(|state| state.as_str().to_string())
                     .ok_or_else(|| anyhow!("child request has no authoritative lifecycle state"))?;
                 (false, state)
             }
@@ -1363,10 +1363,11 @@ pub(crate) async fn pending_automated_wakeup_request_ids(
 }
 
 fn child_terminal_state_name(row: &ChildRequestTerminalRow) -> Option<String> {
+    let as_string = || row.lifecycle_state.map(|state| state.as_str().to_string());
     if child_request_completed(row) {
-        return row.lifecycle_state.clone();
+        return as_string();
     }
-    project_child_terminal(row).and_then(|_| row.lifecycle_state.clone())
+    project_child_terminal(row).and_then(|_| as_string())
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -2154,12 +2155,13 @@ fn render_assistant_message_text(content: &str) -> Result<String> {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ChildRequestTerminalRow {
-    pub lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub lifecycle_state: Option<RequestLifecycleState>,
     pub failure_reason: Option<String>,
 }
 
 pub(crate) fn project_child_terminal(row: &ChildRequestTerminalRow) -> Option<ChildTerminal> {
-    match RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref()) {
+    match row.lifecycle_state {
         Some(RequestLifecycleState::Completed) => None,
         Some(RequestLifecycleState::Failed) => Some(ChildTerminal::Failed {
             reason: non_empty_string(row.failure_reason.as_deref())
@@ -2209,8 +2211,7 @@ pub(crate) fn child_terminal_reason(terminal: &ChildTerminal) -> (String, Failur
 }
 
 pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
-    RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref())
-        == Some(RequestLifecycleState::Completed)
+    row.lifecycle_state == Some(RequestLifecycleState::Completed)
 }
 
 pub(crate) fn subagent_tool_not_allowed_payload(
@@ -2419,7 +2420,7 @@ mod tests {
     fn project_child_terminal_maps_child_states() {
         assert_eq!(
             project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("failed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Failed),
                 failure_reason: Some("bad output".to_string()),
             }),
             Some(ChildTerminal::Failed {
@@ -2429,28 +2430,28 @@ mod tests {
         );
         assert_eq!(
             project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("dead".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Dead),
                 failure_reason: None,
             }),
             Some(ChildTerminal::Dead)
         );
         assert_eq!(
             project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("interrupted".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Interrupted),
                 failure_reason: None,
             }),
             Some(ChildTerminal::Interrupted)
         );
         assert_eq!(
             project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("superseded".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Superseded),
                 failure_reason: None,
             }),
             Some(ChildTerminal::Superseded)
         );
         assert_eq!(
             project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 failure_reason: None,
             }),
             None

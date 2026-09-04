@@ -63,7 +63,8 @@ pub(super) struct AgentRequestRow {
     pub(super) workspace_owner_deployment_id: Option<String>,
     #[serde(default)]
     pub(super) workspace_seal_hash: Option<String>,
-    pub(super) lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub(super) lifecycle_state: Option<RequestLifecycleState>,
     pub(super) interrupt_requested_at: Option<String>,
     pub(super) valid_until: Option<String>,
 }
@@ -72,26 +73,19 @@ pub(super) struct AgentRequestRow {
 pub(super) struct SessionQueueRow {
     #[serde(rename = "_docID")]
     pub(super) doc_id: String,
-    pub(super) lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub(super) lifecycle_state: Option<RequestLifecycleState>,
 }
 
 impl SessionQueueRow {
     pub(super) fn is_pending(&self) -> bool {
-        self.lifecycle_state.as_deref() == Some(RequestLifecycleState::Pending.as_str())
-    }
-
-    pub(super) fn is_active_non_pending(&self) -> bool {
-        !self.is_pending()
+        self.lifecycle_state == Some(RequestLifecycleState::Pending)
     }
 }
 
 impl AgentRequestRow {
     pub(super) fn is_pending(&self) -> bool {
-        self.lifecycle_state.as_deref() == Some(RequestLifecycleState::Pending.as_str())
-    }
-
-    pub(super) fn is_active_non_pending(&self) -> bool {
-        !self.is_pending()
+        self.lifecycle_state == Some(RequestLifecycleState::Pending)
     }
 
     /// Pre-claim disposition from `interrupt_requested_at` and `valid_until`,

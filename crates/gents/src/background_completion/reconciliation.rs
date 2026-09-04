@@ -26,7 +26,8 @@ struct CancelPendingBridgeRow {
 
 #[derive(Debug, Deserialize)]
 struct ChildAckProbeRow {
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     interrupt_requested_at: Option<String>,
 }
 
@@ -275,7 +276,8 @@ async fn load_child_ack_probe(
 }
 
 fn request_terminal_or_interrupted(row: &ChildAckProbeRow) -> bool {
-    RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref())
+    row.lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
         || row.interrupt_requested_at.is_some()
 }
 

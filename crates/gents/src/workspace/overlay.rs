@@ -476,11 +476,11 @@ pub(super) async fn previous_exclusive_is_stale(
     Ok(!request_is_live(node, &active.request_id).await?)
 }
 
-fn request_lifecycle_is_live(lifecycle_state: Option<&str>) -> bool {
-    let Some(state) = optional_id(lifecycle_state) else {
+fn request_lifecycle_is_live(lifecycle_state: Option<RequestLifecycleState>) -> bool {
+    let Some(state) = lifecycle_state else {
         return false;
     };
-    !RequestLifecycleState::is_terminal_str(Some(state))
+    !state.is_terminal()
 }
 
 async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> {
@@ -497,7 +497,7 @@ async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> 
     let Some(row) = first_row::<RequestLivenessRow>(&response, "AgentRequest")? else {
         return Ok(false);
     };
-    Ok(request_lifecycle_is_live(row.lifecycle_state.as_deref()))
+    Ok(request_lifecycle_is_live(row.lifecycle_state))
 }
 
 pub(super) async fn load_workspace_bindings_for(
@@ -590,7 +590,8 @@ pub(super) async fn persist_workspace_binding_docs(
 
 #[derive(Deserialize)]
 struct RequestLivenessRow {
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 #[derive(Deserialize)]

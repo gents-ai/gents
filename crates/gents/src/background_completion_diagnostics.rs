@@ -62,7 +62,8 @@ struct WakeRow {
     session_id: String,
     retry_root_request: Option<String>,
     metadata: Option<String>,
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     failure_reason: Option<String>,
     created_at: Option<String>,
     claimed_at: Option<String>,
@@ -418,7 +419,7 @@ fn wake_rank(wake: &WakeRow) -> (i64, &str, &str) {
 }
 
 fn wake_lifecycle_state(wake: &WakeRow) -> Option<RequestLifecycleState> {
-    RequestLifecycleState::parse_opt(wake.lifecycle_state.as_deref())
+    wake.lifecycle_state
 }
 
 fn request_completed(wake: &WakeRow) -> bool {
@@ -472,7 +473,9 @@ mod tests {
             session_id: "session-1".to_string(),
             retry_root_request: root.map(ToOwned::to_owned),
             metadata: Some(METADATA.to_string()),
-            lifecycle_state: Some(state.to_string()),
+            lifecycle_state: Some(
+                RequestLifecycleState::parse(state).expect("valid test lifecycle state"),
+            ),
             failure_reason: (state == "failed").then(|| "provider unavailable".to_string()),
             created_at: Some(format!("2026-08-12T00:00:0{retry_count}Z")),
             claimed_at: (state != "pending").then(|| "2026-08-12T00:00:03Z".to_string()),

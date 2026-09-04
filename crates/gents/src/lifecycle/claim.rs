@@ -238,7 +238,7 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("interrupted"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Interrupted))
             {
                 return Ok(());
             }
@@ -247,7 +247,8 @@ impl RequestLifecycle {
                 self.request.request_id,
                 request_view
                     .as_ref()
-                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .and_then(|row| row.lifecycle_state)
+                    .map(RequestLifecycleState::as_str)
                     .unwrap_or("missing")
             );
         }
@@ -290,7 +291,7 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("dead"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Dead))
             {
                 return Ok(());
             }
@@ -299,7 +300,8 @@ impl RequestLifecycle {
                 self.request.request_id,
                 request_view
                     .as_ref()
-                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .and_then(|row| row.lifecycle_state)
+                    .map(RequestLifecycleState::as_str)
                     .unwrap_or("missing")
             );
         }
@@ -407,14 +409,15 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if !request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("failed"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Failed))
             {
                 anyhow::bail!(
                     "request {} could not reject admission from lifecycle_state={}",
                     self.request.request_id,
                     request_view
                         .as_ref()
-                        .and_then(|row| row.lifecycle_state.as_deref())
+                        .and_then(|row| row.lifecycle_state)
+                        .map(RequestLifecycleState::as_str)
                         .unwrap_or("missing")
                 );
             }

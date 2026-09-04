@@ -343,7 +343,8 @@ fn import_langgraph_capture(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         metadata: Some(root_metadata),
-        lifecycle_state: Some(status.clone()),
+        lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
+            .ok(),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
         retry_count: Some(0),
@@ -354,7 +355,10 @@ fn import_langgraph_capture(
             request_id: child_request_id.clone(),
             session_id: Some(session_id.clone()),
             content: Some("Imported LangGraph child request boundary".to_string()),
-            lifecycle_state: Some(status.clone()),
+            lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::parse(
+                &status,
+            )
+            .ok(),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
             retry_count: Some(0),
@@ -870,7 +874,8 @@ fn import_multi_agent_capture(
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
         metadata: Some(root_metadata(capture, mapping)?),
-        lifecycle_state: Some(status.clone()),
+        lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
+            .ok(),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
         retry_count: Some(0),
@@ -900,7 +905,10 @@ fn import_multi_agent_capture(
                 .map(participant_metadata)
                 .transpose()
                 .context("serializing child request participant metadata")?,
-            lifecycle_state: Some(status.clone()),
+            lifecycle_state: gents_protocol::request_lifecycle::RequestLifecycleState::parse(
+                &status,
+            )
+            .ok(),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
             retry_count: Some(0),

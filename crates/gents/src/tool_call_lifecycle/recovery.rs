@@ -147,7 +147,8 @@ struct TerminalBackgroundToolRow {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ParentRequestRow {
-    lifecycle_state: String,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     subagent_depth: Option<i64>,
     #[serde(default)]
@@ -167,7 +168,8 @@ struct ChildRequestLivenessRow {
     #[serde(default)]
     request_id: String,
     agent_did: String,
-    lifecycle_state: String,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     deadline: Option<String>,
 }
@@ -709,7 +711,7 @@ mod tests {
     #[test]
     fn interrupted_parent_is_cancel_worthy_terminal_but_not_cleanly_completed() {
         let interrupted = ParentRequestRow {
-            lifecycle_state: "interrupted".to_string(),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             ..Default::default()
         };
         assert!(request_is_cancel_worthy_terminal(&interrupted));
@@ -720,7 +722,7 @@ mod tests {
     #[test]
     fn clean_completion_is_not_cancel_worthy_terminal() {
         let clean = ParentRequestRow {
-            lifecycle_state: "completed".to_string(),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             ..Default::default()
         };
         assert!(request_is_cleanly_completed(&clean));
@@ -1489,9 +1491,9 @@ async fn interrupt_queued_descendants_of_terminal_parents(
                 let terminal = load_request_liveness_row(node, parent_request_id)
                     .await?
                     .is_some_and(|parent| {
-                        RequestLifecycleState::is_terminal_str(Some(
-                            parent.lifecycle_state.as_str(),
-                        ))
+                        parent
+                            .lifecycle_state
+                            .is_some_and(RequestLifecycleState::is_terminal)
                     });
                 parent_terminal_cache.insert(parent_request_id.to_string(), terminal);
                 terminal
@@ -1714,7 +1716,10 @@ async fn terminalize_expired_child_with_row(
     if child.agent_did != agent_did {
         return Ok(false);
     }
-    if RequestLifecycleState::is_terminal_str(Some(child.lifecycle_state.as_str())) {
+    if child
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+    {
         return Ok(false);
     }
     let Some(deadline_at) = parse_datetime(child.deadline.as_deref()) else {
@@ -2241,15 +2246,13 @@ fn effective_deadline(
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
-    RequestLifecycleState::parse_opt(Some(parent.lifecycle_state.as_str()))
-        == Some(RequestLifecycleState::Interrupted)
+    parent.lifecycle_state == Some(RequestLifecycleState::Interrupted)
 }
 
 /// Parent reached a successful terminal state — not a cancel signal for
 /// linked background/cascade children.
 fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
-    RequestLifecycleState::parse_opt(Some(parent.lifecycle_state.as_str()))
-        == Some(RequestLifecycleState::Completed)
+    parent.lifecycle_state == Some(RequestLifecycleState::Completed)
 }
 
 /// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
@@ -2259,7 +2262,9 @@ fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    RequestLifecycleState::is_terminal_str(Some(parent.lifecycle_state.as_str()))
+    parent
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
 }
 
 fn child_request_id(row: &RunningToolCallRow) -> Option<&str> {

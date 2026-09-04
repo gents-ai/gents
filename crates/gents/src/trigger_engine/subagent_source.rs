@@ -136,13 +136,14 @@ struct ParentRequestRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentTerminalRow {
-    lifecycle_state: String,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 fn parent_reached_cancel_worthy_terminal(row: &ParentTerminalRow) -> bool {
-    let state = RequestLifecycleState::parse_opt(Some(row.lifecycle_state.as_str()));
-    state.is_some_and(RequestLifecycleState::is_terminal)
-        && state != Some(RequestLifecycleState::Completed)
+    row.lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
+        && row.lifecycle_state != Some(RequestLifecycleState::Completed)
 }
 
 #[derive(Debug, Deserialize)]

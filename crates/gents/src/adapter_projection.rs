@@ -1916,7 +1916,10 @@ fn build_openai_codex_run_trace(
     OpenAiCodexRunTraceProjection {
         run_id: timeline.request_id.clone(),
         thread_id: timeline.session_id.clone(),
-        status: timeline.request.lifecycle_state.clone(),
+        status: timeline
+            .request
+            .lifecycle_state
+            .map(|s| s.as_str().to_string()),
         items,
         child_run_ids: if timeline.descendant_edges.is_empty() {
             timeline.child_request_ids.clone()
@@ -2347,7 +2350,10 @@ fn build_multi_agent_task(
     MultiAgentTaskProjection {
         task_id: timeline.request_id.clone(),
         context_id: timeline.session_id.clone(),
-        status: timeline.request.lifecycle_state.clone(),
+        status: timeline
+            .request
+            .lifecycle_state
+            .map(|s| s.as_str().to_string()),
         participants,
         messages,
         delegations,

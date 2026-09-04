@@ -193,7 +193,9 @@ impl CrossDeploymentCancelMirror {
         if child.agent_did.as_deref() != Some(snapshot.local_did.as_str()) {
             return Ok(());
         }
-        if RequestLifecycleState::is_terminal_str(child.lifecycle_state.as_deref())
+        if child
+            .lifecycle_state
+            .is_some_and(RequestLifecycleState::is_terminal)
             || child.interrupt_requested_at.is_some()
         {
             self.mirrored.insert(dedupe_key);
@@ -374,7 +376,8 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 #[derive(Debug, Deserialize)]
 struct ChildRequestRow {
     agent_did: Option<String>,
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     interrupt_requested_at: Option<String>,
 }
 

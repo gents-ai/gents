@@ -283,7 +283,7 @@ async fn load_requests(
             let lifecycle_state = row
                 .get("lifecycle_state")
                 .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
+                .and_then(|value| RequestLifecycleState::parse(value).ok());
             let behavior_id = row
                 .get("behavior_id")
                 .and_then(Value::as_str)
@@ -305,10 +305,9 @@ async fn load_requests(
                     .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
                     .cloned(),
                 behavior_id,
-                terminal: RequestLifecycleState::is_terminal_str(lifecycle_state.as_deref()),
-                succeeded: RequestLifecycleState::parse_opt(lifecycle_state.as_deref())
-                    == Some(RequestLifecycleState::Completed),
-                lifecycle_state,
+                terminal: lifecycle_state.is_some_and(RequestLifecycleState::is_terminal),
+                succeeded: lifecycle_state == Some(RequestLifecycleState::Completed),
+                lifecycle_state: lifecycle_state.map(|state| state.as_str().to_string()),
                 failure_reason: row
                     .get("failure_reason")
                     .and_then(Value::as_str)

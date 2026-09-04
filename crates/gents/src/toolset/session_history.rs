@@ -5,6 +5,7 @@ use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -181,7 +182,7 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -626,7 +627,9 @@ fn build_session_investigation(
         .iter()
         .map(|request| SessionRequestEvent {
             request_id: clean(request.request_id.as_ref()).unwrap_or_default(),
-            lifecycle_state: clean(request.lifecycle_state.as_ref()),
+            lifecycle_state: request
+                .lifecycle_state
+                .map(|state| state.as_str().to_string()),
             created_at: clean(request.created_at.as_ref()),
             terminalized_at: clean(request.terminalized_at.as_ref()),
             failure_reason: clean(request.failure_reason.as_ref()),
@@ -928,7 +931,11 @@ fn build_session_rows(
                     .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_ref()))),
                 status: session
                     .and_then(|row| clean(row.status.as_ref()))
-                    .or_else(|| latest_request.and_then(|row| clean(row.lifecycle_state.as_ref()))),
+                    .or_else(|| {
+                        latest_request
+                            .and_then(|row| row.lifecycle_state)
+                            .map(|state| state.as_str().to_string())
+                    }),
                 created_at: started_at
                     .clone()
                     .or_else(|| latest_request_created_at.clone()),
@@ -936,7 +943,8 @@ fn build_session_rows(
                 ended_at: session.and_then(|row| clean(row.ended.as_ref())),
                 latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_ref())),
                 latest_request_lifecycle_state: latest_request
-                    .and_then(|row| clean(row.lifecycle_state.as_ref())),
+                    .and_then(|row| row.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 latest_request_created_at,
                 request_count: aggregate
                     .map(|aggregate| aggregate.request_count)

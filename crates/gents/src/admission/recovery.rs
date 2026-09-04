@@ -25,7 +25,8 @@ struct StaleInferenceCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestRow {
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
 }
 
 enum InferenceRecoveryOutcome {
@@ -195,10 +196,11 @@ async fn recover_inference_call_row(
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
-    RequestLifecycleState::parse_opt(parent.lifecycle_state.as_deref())
-        == Some(RequestLifecycleState::Interrupted)
+    parent.lifecycle_state == Some(RequestLifecycleState::Interrupted)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    RequestLifecycleState::is_terminal_str(parent.lifecycle_state.as_deref())
+    parent
+        .lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
 }

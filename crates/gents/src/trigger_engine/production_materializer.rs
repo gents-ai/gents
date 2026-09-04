@@ -179,9 +179,9 @@ fn row_gates_serial_fire(row: &serde_json::Value, now: chrono::DateTime<chrono::
     let state = row
         .get("lifecycle_state")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
+        .and_then(|value| RequestLifecycleState::parse(value).ok());
     if !matches!(
-        RequestLifecycleState::parse_opt(Some(state)),
+        state,
         Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
     ) {
         return true;

@@ -19,18 +19,15 @@ pub(super) struct DedupRow {
     #[serde(rename = "_docID")]
     pub(super) doc_id: String,
     pub(super) request_id: String,
-    pub(super) lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub(super) lifecycle_state: Option<RequestLifecycleState>,
     #[allow(dead_code)]
     pub(super) created_at: String,
 }
 
 impl DedupRow {
     pub(super) fn is_pending(&self) -> bool {
-        self.lifecycle_state.as_deref() == Some(RequestLifecycleState::Pending.as_str())
-    }
-
-    pub(super) fn is_active_non_pending(&self) -> bool {
-        !self.is_pending()
+        self.lifecycle_state == Some(RequestLifecycleState::Pending)
     }
 }
 
@@ -50,7 +47,8 @@ pub(super) struct ResponseTerminalRow {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(super) struct RequestViewRow {
-    pub(super) lifecycle_state: Option<String>,
+    #[serde(default)]
+    pub(super) lifecycle_state: Option<RequestLifecycleState>,
     #[allow(dead_code)]
     pub(super) backend_id: Option<String>,
     #[allow(dead_code)]

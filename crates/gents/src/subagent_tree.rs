@@ -96,7 +96,7 @@ struct RequestRow {
     #[serde(default)]
     behavior_id: Option<String>,
     #[serde(default)]
-    lifecycle_state: Option<String>,
+    lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
     subagent_depth: Option<i64>,
     #[serde(default)]
@@ -287,7 +287,7 @@ fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
         session_id: clean_optional_string(row.session_id.as_deref()),
         agent_did: clean_optional_string(row.agent_did.as_deref()),
         behavior_id: clean_optional_string(row.behavior_id.as_deref()),
-        lifecycle_state: clean_optional_string(row.lifecycle_state.as_deref()),
+        lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
         subagent_depth: row.subagent_depth,
         caused_by_parent_request_id: clean_optional_string(
             row.caused_by_parent_request_id.as_deref(),

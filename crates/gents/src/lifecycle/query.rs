@@ -38,7 +38,7 @@ impl RequestLifecycle {
 
         let active_blocker = rows
             .iter()
-            .find(|row| row.doc_id != self.request.doc_id && row.is_active_non_pending());
+            .find(|row| row.doc_id != self.request.doc_id && !row.is_pending());
         let first_pending = rows.iter().find(|row| row.is_pending());
         let is_earliest = active_blocker.is_none()
             && first_pending.is_some_and(|row| row.doc_id == self.request.doc_id);
