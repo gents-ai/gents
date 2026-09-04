@@ -43,14 +43,38 @@ class ProbeDeadlineExceeded(TimeoutError):
     pass
 
 
+class ClientGuard:
+    """Publish the isolated pager process to the hard-deadline handler."""
+
+    def __init__(self) -> None:
+        self.process: subprocess.Popen[bytes] | None = None
+
+    def emergency_kill(self) -> None:
+        """Kill without waiting so an asynchronous deadline cannot orphan the pager."""
+        process = self.process
+        if process is None or process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def raise_probe_deadline(timeout: float, emergency_kill: Callable[[], None]) -> None:
+    emergency_kill()
+    raise ProbeDeadlineExceeded(f"stock pager probe exceeded {timeout:g}s")
+
+
 @contextlib.contextmanager
-def hard_deadline(timeout: float) -> Iterator[None]:
+def hard_deadline(
+    timeout: float, emergency_kill: Callable[[], None] = lambda: None
+) -> Iterator[None]:
     """Bound the whole probe while leaving time for its deterministic teardown."""
     require(timeout > 0, "total probe timeout must be positive")
     previous_handler = signal.getsignal(signal.SIGALRM)
 
     def expire(_signum: int, _frame: Any) -> None:
-        raise ProbeDeadlineExceeded(f"stock pager probe exceeded {timeout:g}s")
+        raise_probe_deadline(timeout, emergency_kill)
 
     signal.signal(signal.SIGALRM, expire)
     signal.setitimer(signal.ITIMER_REAL, timeout)
@@ -417,8 +441,7 @@ def challenge_prompt() -> tuple[str, str, bytes]:
     return challenge, expected, prompt
 
 
-def run_probe(args: argparse.Namespace) -> dict[str, Any]:
-    require(args.total_timeout > 0, "total probe timeout must be positive")
+def run_probe(args: argparse.Namespace, client_guard: ClientGuard) -> dict[str, Any]:
     overall_deadline = time.monotonic() + args.total_timeout
     expected_endpoint = args.expected_endpoint
     preflight = load_preflight(args.preflight, graphql=args.graphql, socket_path=args.socket)
@@ -473,6 +496,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             env=env,
             start_new_session=True,
         )
+        client_guard.process = process
         os.close(slave_fd)
         slave_open = False
         pre_submit, ready_quiet = read_until_quiet(
@@ -546,6 +570,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                     raise
         if process is not None:
             terminate_client(process, master_fd)
+            client_guard.process = None
         os.close(master_fd)
 
     proof: dict[str, Any] = {
@@ -686,6 +711,32 @@ def self_test() -> dict[str, int]:
         pass
     else:
         raise AssertionError("hard probe deadline did not fire")
+
+    class FakeProcess:
+        pid = 4242
+
+        @staticmethod
+        def poll() -> None:
+            return None
+
+    guarded = ClientGuard()
+    guarded.process = FakeProcess()  # type: ignore[assignment]
+    killed: list[tuple[int, signal.Signals]] = []
+    original_killpg = os.killpg
+    os.killpg = lambda pid, sig: killed.append((pid, sig))  # type: ignore[assignment]
+    try:
+        try:
+            raise_probe_deadline(7, guarded.emergency_kill)
+        except ProbeDeadlineExceeded:
+            pass
+        else:
+            raise AssertionError("deadline helper did not raise")
+    finally:
+        os.killpg = original_killpg
+    require(
+        killed == [(4242, signal.SIGKILL)],
+        "deadline did not kill the guarded pager before raising",
+    )
 
     transient_calls = 0
 
@@ -877,12 +928,20 @@ def main() -> int:
         elif args.command == "preflight":
             write_json(preflight_probe(args), args.output)
         elif args.command == "run":
-            with hard_deadline(args.total_timeout):
-                proof = run_probe(args)
+            client_guard = ClientGuard()
+            with hard_deadline(args.total_timeout, client_guard.emergency_kill):
+                proof = run_probe(args, client_guard)
             write_json(proof, args.output)
         else:
             write_json(cleanup_probe(args), args.output)
-    except (AssertionError, OSError, ValueError, KeyError, json.JSONDecodeError) as error:
+    except (
+        AssertionError,
+        OSError,
+        ValueError,
+        KeyError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ) as error:
         print(json.dumps({"ok": False, "error": str(error)}, sort_keys=True), file=sys.stderr)
         return 1
     return 0
