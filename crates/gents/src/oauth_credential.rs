@@ -48,6 +48,7 @@ pub const XAI_OAUTH_PRODUCT: OAuthProduct = OAuthProduct {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OAuthRefreshKind {
     ChatGpt,
+    Claude,
     Xai,
 }
 
@@ -679,6 +680,9 @@ impl DbCredentialBearer {
             OAuthRefreshKind::ChatGpt => {
                 crate::chatgpt_oauth_refresh::refresh_chatgpt_token(refresh_token, &self.http).await
             }
+            OAuthRefreshKind::Claude => {
+                crate::claude_oauth_refresh::refresh_claude_token(refresh_token, &self.http).await
+            }
             OAuthRefreshKind::Xai => {
                 crate::xai_oauth_refresh::refresh_xai_token(refresh_token, &self.http).await
             }
@@ -959,5 +963,108 @@ mod tests {
             "tier gate should not push re-login as the fix: {msg}"
         );
         assert!(msg.contains("api.x.ai"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use chrono::{DateTime, Utc};
+    use defra_node::EmbeddedNode;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    /// In-memory node with the gents schemas loaded.
+    pub(crate) async fn test_node() -> EmbeddedNode {
+        let node = EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node");
+        crate::schema::ensure_runtime_schemas(&node)
+            .await
+            .expect("schemas");
+        node
+    }
+
+    pub(crate) async fn seed_credential(
+        node: &EmbeddedNode,
+        agent_did: &str,
+        provider: &str,
+        expires_at: DateTime<Utc>,
+    ) {
+        seed_credential_with_refresh_token(node, agent_did, provider, expires_at, "refresh-TEST")
+            .await;
+    }
+
+    pub(crate) async fn seed_credential_with_refresh_token(
+        node: &EmbeddedNode,
+        agent_did: &str,
+        provider: &str,
+        expires_at: DateTime<Utc>,
+        refresh_token: &str,
+    ) {
+        let credential = crate::oauth_credential::OAuthCredential {
+            doc_id: None,
+            credential_id: crate::oauth_credential::oauth_credential_id(agent_did, provider),
+            agent_did: agent_did.to_string(),
+            provider: provider.to_string(),
+            access_token: "access-TEST".into(),
+            refresh_token: refresh_token.into(),
+            id_token: None,
+            account_id: None,
+            chatgpt_plan_type: None,
+            is_fedramp: false,
+            access_token_expires_at: expires_at,
+            last_refresh: Some(Utc::now()),
+            enabled: true,
+        };
+        crate::oauth_credential::upsert_oauth_credential(node, &credential)
+            .await
+            .expect("seed credential");
+    }
+
+    /// Accepts exactly one HTTP request, returns its body, and answers with `status` + `body`.
+    pub(crate) async fn one_shot_token_server(
+        status: u16,
+        body: &'static str,
+    ) -> (String, tokio::task::JoinHandle<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}/v1/oauth/token", listener.local_addr().unwrap());
+        let handle = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = socket.read(&mut chunk).await.expect("read");
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf);
+                if let Some(idx) = text.find("\r\n\r\n") {
+                    let headers = &text[..idx];
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|line| {
+                            line.strip_prefix("content-length: ")
+                                .or_else(|| line.strip_prefix("Content-Length: "))
+                        })
+                        .and_then(|value| value.trim().parse().ok())
+                        .unwrap_or(0);
+                    if buf.len() >= idx + 4 + content_length {
+                        break;
+                    }
+                }
+                if n == 0 {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&buf).into_owned();
+            let response = format!(
+                "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(response.as_bytes()).await.expect("write");
+            socket.shutdown().await.ok();
+            request
+        });
+        (url, handle)
     }
 }
