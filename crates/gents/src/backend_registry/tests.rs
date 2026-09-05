@@ -188,27 +188,57 @@ fn backend_with_keys(api_key: Option<&str>, env_var: Option<&str>) -> InferenceB
 }
 
 #[test]
-fn resolved_api_key_prefers_raw_key() {
+fn resolve_backend_api_key_prefers_raw_key() {
     let backend = backend_with_keys(Some("raw-key"), Some("BACKEND_REGISTRY_TEST_KEY_UNUSED"));
-    assert_eq!(backend.resolved_api_key().as_deref(), Some("raw-key"));
+    assert_eq!(
+        crate::config::resolve_backend_api_key(&backend)
+            .expect("raw key resolves")
+            .as_deref(),
+        Some("raw-key")
+    );
 }
 
 #[test]
-fn resolved_api_key_falls_back_to_env() {
+fn resolve_backend_api_key_falls_back_to_env() {
     let var = "BACKEND_REGISTRY_TEST_KEY_FALLBACK";
     std::env::set_var(var, "env-key");
     let backend = backend_with_keys(None, Some(var));
-    assert_eq!(backend.resolved_api_key().as_deref(), Some("env-key"));
+    assert_eq!(
+        crate::config::resolve_backend_api_key(&backend)
+            .expect("env key resolves")
+            .as_deref(),
+        Some("env-key")
+    );
     std::env::remove_var(var);
 }
 
 #[test]
-fn resolved_api_key_none_when_unset() {
+fn resolve_backend_api_key_none_when_no_env_var_configured() {
     let backend = backend_with_keys(None, None);
-    assert_eq!(backend.resolved_api_key(), None);
-    // Env var named but unset in the environment.
-    let backend = backend_with_keys(None, Some("BACKEND_REGISTRY_TEST_KEY_MISSING"));
-    assert_eq!(backend.resolved_api_key(), None);
+    assert_eq!(
+        crate::config::resolve_backend_api_key(&backend)
+            .expect("no key configured is not an error"),
+        None
+    );
+}
+
+/// A backend whose `api_key_env_var` names an environment variable that
+/// isn't actually set must fail loudly, naming the backend — never silently
+/// probe or build with no key (#1338).
+#[test]
+fn resolve_backend_api_key_errors_when_env_var_named_but_unset() {
+    let backend = backend_with_keys(None, Some("BACKEND_REGISTRY_TEST_KEY_MISSING_1338"));
+    let error = crate::config::resolve_backend_api_key(&backend)
+        .expect_err("a named-but-unset env var must hard error");
+    let message = error.to_string();
+    assert!(
+        message.contains(&backend.backend_id),
+        "error must name the backend: {message}"
+    );
+    assert!(
+        message.contains("BACKEND_REGISTRY_TEST_KEY_MISSING_1338"),
+        "error must name the environment variable: {message}"
+    );
 }
 
 // ---------------------------------------------------------------------------

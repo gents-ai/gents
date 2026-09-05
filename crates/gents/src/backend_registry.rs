@@ -14,6 +14,20 @@ pub const DEFAULT_MAX_QUEUE_DEPTH: i64 = 100;
 pub const HEALTHY_PROBE_STATUS: &str = "healthy";
 pub const UNKNOWN_PROBE_STATUS: &str = "unknown";
 
+/// An `InferenceBackend`'s contribution to an `AgentBehavior`: everything a
+/// behavior needs to know about the backend it's bound to, with
+/// `openai_wire_api` already resolved to its effective value. See
+/// [`InferenceBackend::backend_fields`].
+#[derive(Debug, Clone)]
+pub struct BackendFields {
+    pub backend_id: Option<String>,
+    pub backend_provider_kind: BackendProviderKind,
+    pub openai_wire_api: OpenAiWireApi,
+    pub backend_endpoint: String,
+    pub backend_api_key: Option<String>,
+    pub backend_api_key_env_var: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct InferenceBackend {
     pub backend_id: String,
@@ -96,15 +110,25 @@ impl InferenceBackend {
         })
     }
 
-    pub fn resolved_api_key(&self) -> Option<String> {
-        if let Some(key) = self.api_key.as_ref() {
-            return Some(key.clone());
+    /// The subset of this backend that becomes an `AgentBehavior`'s
+    /// backend-scoped fields. Single owner of that field mapping —
+    /// `agent.rs`'s document-driven assembler and `agent/builder.rs`'s
+    /// embedder assembler (`PendingAgentBehavior::into_factory`) used to
+    /// duplicate it independently, including the `openai_wire_api`
+    /// effective-value computation.
+    pub fn backend_fields(&self) -> BackendFields {
+        BackendFields {
+            backend_id: Some(self.backend_id.clone()),
+            backend_provider_kind: self.provider_kind,
+            openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
+                self.provider_kind,
+                self.openai_wire_api,
+                &self.backend_id,
+            ),
+            backend_endpoint: self.endpoint.clone(),
+            backend_api_key: self.api_key.clone(),
+            backend_api_key_env_var: self.api_key_env_var.clone(),
         }
-        self.api_key_env_var
-            .as_ref()
-            .and_then(|var| std::env::var(var).ok())
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
     }
 
     pub fn display_state(&self) -> &'static str {
@@ -485,7 +509,18 @@ pub async fn probe_and_promote_enabled_backends(node: &EmbeddedNode) {
             continue;
         }
         async {
-            let api_key = backend.resolved_api_key();
+            let api_key = match crate::config::resolve_backend_api_key(&backend) {
+                Ok(api_key) => api_key,
+                Err(error) => {
+                    tracing::warn!(
+                        backend_id = %backend.backend_id,
+                        endpoint = %backend.endpoint,
+                        error = %error,
+                        "startup backend probe: could not resolve API key, leaving probe_status unchanged"
+                    );
+                    return;
+                }
+            };
             match crate::backend_provider::discover_models(
                 &client,
                 backend.provider_kind,

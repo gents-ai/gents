@@ -24,5 +24,7 @@ mod goal_controller;
 mod legacy_authority_absence;
 #[path = "misc/log_rate_filter.rs"]
 mod log_rate_filter;
+#[path = "misc/oneshot_admission_exemption.rs"]
+mod oneshot_admission_exemption;
 #[path = "misc/startup_readiness_barrier.rs"]
 mod startup_readiness_barrier;

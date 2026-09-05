@@ -115,6 +115,25 @@ pub fn classify_chatgpt_auth_error(
     classify_oauth_auth_error(&CHATGPT_OAUTH_PRODUCT, agent_did, provider, problem)
 }
 
+/// Single owner of the OAuth access-token expiry fallback chain xAI's
+/// device-code login and refresh both used to duplicate: prefer the JWT's own
+/// `exp` claim (authoritative when present), fall back to a positive
+/// `expires_in` (seconds) added to `now`, and default to a conservative
+/// 15-minute window when neither is present or valid.
+pub fn resolve_access_token_expiry(
+    access_token: &str,
+    expires_in: Option<i64>,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
+    crate::chatgpt_oauth_refresh::jwt_expiration(access_token)
+        .or_else(|| {
+            expires_in
+                .filter(|seconds| *seconds > 0)
+                .map(|seconds| now + Duration::seconds(seconds))
+        })
+        .unwrap_or_else(|| now + Duration::minutes(15))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefreshedTokens {
     pub access_token: String,

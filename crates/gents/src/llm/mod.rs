@@ -14,6 +14,7 @@
 /// format is protocol vocabulary shared by every peer); re-exported here so
 /// crate paths read `crate::llm::message::Message`.
 pub use gents_protocol::message;
+pub(crate) mod backend_client;
 pub(crate) mod responses_normalize;
 pub mod rig_compat;
 pub mod tool;

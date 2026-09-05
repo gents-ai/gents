@@ -7,8 +7,8 @@
 //!
 //! | stack (outermost → innermost) | rewrite below the assembled request |
 //! |---|---|
-//! | `ChatGptCodexHttpClient` → *capture* → reqwest | hoists the first system text into `instructions` and strips system items from `input`, sets `store:false`/`stream:true`, deletes `max_output_tokens`/`temperature`/`top_p`, forces `strict:false` on every tool |
-//! | `XaiGrokOAuthHttpClient` → *capture* → reqwest | injects `store:false` |
+//! | `BearerAuthHttpClient<_, ChatGptCodexPolicy>` (aka `ChatGptCodexHttpClient`) → *capture* → reqwest | hoists the first system text into `instructions` and strips system items from `input`, sets `store:false`/`stream:true`, deletes `max_output_tokens`/`temperature`/`top_p`, forces `strict:false` on every tool |
+//! | `BearerAuthHttpClient<_, XaiGrokOAuthPolicy>` (aka `XaiGrokOAuthHttpClient`) → *capture* → reqwest | injects `store:false` |
 //! | `SessionTaggingHttpClient` → `ResponsesNormalizingHttpClient` → *capture* → reqwest | rewrites prior assistant items into typed, id-bearing, annotated Responses items |
 //! | `SessionTaggingHttpClient` → *capture* → reqwest (Chat Completions), openrouter → *capture* → reqwest | none |
 //!

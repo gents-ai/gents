@@ -1,21 +1,22 @@
 use std::future::Future;
 use std::sync::Arc;
-use std::{fmt, fmt::Formatter};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
 use rig::http_client::{
-    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
-    Response, StreamingResponse,
+    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
+#[cfg(test)]
+use rig::http_client::{MultipartForm, StreamingResponse};
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
 
+#[cfg(test)]
+use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
 use crate::oauth_credential::{
-    classify_chatgpt_auth_error, lookup_oauth_credential, oauth_credential_id, shared_bearer,
-    BearerSource, DbCredentialBearer, OAuthAuthProblem, OAuthCredential, OAuthRefreshKind,
+    oauth_credential_id, DbCredentialBearer, OAuthCredential, OAuthRefreshKind,
     CHATGPT_OAUTH_PRODUCT,
 };
 
@@ -122,98 +123,20 @@ pub fn chatgpt_codex_client_version() -> String {
 const CHATGPT_CODEX_CLIENT_VERSION: &str = "0.144.4";
 const CHATGPT_CODEX_CLIENT_VERSION_ENV: &str = "GENTS_CHATGPT_CODEX_CLIENT_VERSION";
 
-fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
-    match error {
-        http_client::Error::InvalidStatusCode(status)
-        | http_client::Error::InvalidStatusCodeWithMessage(status, _) => Some(status.as_u16()),
-        _ => None,
-    }
-}
+/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the ChatGPT Codex
+/// Responses transport: 401/403 kill the bearer, the `/responses` body needs
+/// the `instructions` hoist, and a buffered send must rewrite Codex's SSE
+/// body into the JSON `response.completed` shape rig expects. Codex's
+/// identity headers (`build_chatgpt_codex_headers`) ride as `http_headers`
+/// client-build defaults instead of a per-request merge, so this policy
+/// leaves `merge_identity_headers` at its no-op default.
+#[derive(Clone, Default)]
+pub struct ChatGptCodexPolicy;
 
-fn is_bearer_rejection(error: &http_client::Error) -> bool {
-    matches!(bearer_rejection_status(error), Some(401) | Some(403))
-}
+impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
+    const REJECTION_STATUSES: &'static [u16] = &[401, 403];
 
-pub struct ChatGptCodexHttpClient<S: BearerSource, H = ReqwestClient> {
-    inner: H,
-    bearer: Option<Arc<S>>,
-}
-
-impl<S: BearerSource, H: Clone> Clone for ChatGptCodexHttpClient<S, H> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            bearer: self.bearer.clone(),
-        }
-    }
-}
-
-impl<S: BearerSource, H: fmt::Debug> fmt::Debug for ChatGptCodexHttpClient<S, H> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ChatGptCodexHttpClient")
-            .field("inner", &self.inner)
-            .field("bearer_configured", &self.bearer.is_some())
-            .finish()
-    }
-}
-
-impl<S: BearerSource, H: Default> Default for ChatGptCodexHttpClient<S, H> {
-    fn default() -> Self {
-        Self {
-            inner: H::default(),
-            bearer: None,
-        }
-    }
-}
-
-impl<S: BearerSource> ChatGptCodexHttpClient<S, ReqwestClient> {
-    pub fn new(bearer: Arc<S>) -> Self {
-        Self {
-            inner: ReqwestClient::default(),
-            bearer: Some(bearer),
-        }
-    }
-}
-
-impl<S: BearerSource, H> ChatGptCodexHttpClient<S, H> {
-    pub fn with_inner(bearer: Arc<S>, inner: H) -> Self {
-        Self {
-            inner,
-            bearer: Some(bearer),
-        }
-    }
-
-    async fn fresh_auth_header(&self) -> http_client::Result<HeaderValue> {
-        let bearer = self.bearer.as_ref().ok_or_else(|| {
-            http_client::Error::Instance(
-                anyhow::anyhow!("ChatGptCodexHttpClient used without a configured BearerSource")
-                    .into(),
-            )
-        })?;
-        let token = bearer
-            .current_bearer()
-            .await
-            .map_err(|error| http_client::Error::Instance(error.into()))?;
-        HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
-    }
-
-    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
-        let req = Self::inject_required_instructions(req);
-        let value = self.fresh_auth_header().await?;
-        let (mut parts, body) = req.into_parts();
-        parts.headers.insert("authorization", value);
-        Ok(Request::from_parts(parts, body))
-    }
-
-    fn bearer_to_invalidate<X>(&self, result: &http_client::Result<X>) -> Option<Arc<S>> {
-        match result {
-            Err(error) if is_bearer_rejection(error) => self.bearer.clone(),
-            _ => None,
-        }
-    }
-
-    fn inject_required_instructions(req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
@@ -224,131 +147,48 @@ impl<S: BearerSource, H> ChatGptCodexHttpClient<S, H> {
         Request::from_parts(parts, body)
     }
 
-    #[cfg(test)]
-    pub async fn prepare_for_test(
+    fn send_via<T, U>(
         &self,
+        inner: &T,
         req: Request<Bytes>,
-    ) -> http_client::Result<Request<Bytes>> {
-        self.prepare(req).await
-    }
-}
-
-impl<S, H> HttpClientExt for ChatGptCodexHttpClient<S, H>
-where
-    S: BearerSource + 'static,
-    H: Clone + HttpClientExt + fmt::Debug + 'static,
-{
-    fn send<T, U>(
-        &self,
-        req: Request<T>,
     ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
     where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
+        T: Clone + HttpClientExt + 'static,
+        U: From<Bytes> + WasmCompatSend + 'static,
     {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        let (parts, body) = req.into_parts();
-        let req = Request::from_parts(parts, body.into());
+        let inner = inner.clone();
         async move {
-            let req = this.prepare(req).await?;
-            let result = send_inner(inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
-            }
-            result
-        }
-    }
+            let is_responses_request = req.uri().path().ends_with("/responses");
+            let request_body = req.body().clone();
+            let response = HttpClientExt::send::<Bytes, Bytes>(&inner, req).await?;
 
-    fn send_multipart<U>(
-        &self,
-        req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        async move {
-            let value = this.fresh_auth_header().await?;
-            let (mut parts, body) = req.into_parts();
-            parts.headers.insert("authorization", value);
-            let req = Request::from_parts(parts, body);
-            let result = HttpClientExt::send_multipart(&inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
-            }
-            result
-        }
-    }
+            let status = response.status();
+            let headers = response.headers().clone();
+            let response_body = response.into_body().await?;
+            let body = if is_responses_request {
+                let text = String::from_utf8_lossy(&response_body);
+                synthesize_completion_response(&request_body, &text)
+            } else {
+                response_body
+            };
 
-    fn send_streaming<T>(
-        &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        let (parts, body) = req.into_parts();
-        let req = Request::from_parts(parts, body.into());
-        async move {
-            let req = this.prepare(req).await?;
-            let result = HttpClientExt::send_streaming(&inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
+            let mut response_builder = Response::builder().status(status);
+            if let Some(response_headers) = response_builder.headers_mut() {
+                *response_headers = headers;
             }
-            let mut response = result?;
-            ensure_event_stream_content_type(response.headers_mut());
-            Ok(response)
+            let body: LazyBody<U> = Box::pin(async move { Ok(U::from(body)) });
+            response_builder
+                .body(body)
+                .map_err(http_client::Error::Protocol)
         }
     }
 }
 
-fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
-    if !headers.contains_key("content-type") {
-        headers.insert(
-            "content-type",
-            HeaderValue::from_static("text/event-stream"),
-        );
-    }
-}
-
-async fn send_inner<H, U>(
-    inner: H,
-    req: Request<Bytes>,
-) -> http_client::Result<Response<LazyBody<U>>>
-where
-    H: HttpClientExt,
-    U: From<Bytes>,
-    U: WasmCompatSend + 'static,
-{
-    let is_responses_request = req.uri().path().ends_with("/responses");
-    let request_body = req.body().clone();
-    let response = HttpClientExt::send::<Bytes, Bytes>(&inner, req).await?;
-
-    let status = response.status();
-    let headers = response.headers().clone();
-    let response_body = response.into_body().await?;
-    let body = if is_responses_request {
-        let text = String::from_utf8_lossy(&response_body);
-        synthesize_completion_response(&request_body, &text)
-    } else {
-        response_body
-    };
-
-    let mut response_builder = Response::builder().status(status);
-    if let Some(response_headers) = response_builder.headers_mut() {
-        *response_headers = headers;
-    }
-    let body: LazyBody<U> = Box::pin(async move { Ok(U::from(body)) });
-    response_builder
-        .body(body)
-        .map_err(http_client::Error::Protocol)
-}
+/// Codex's Responses transport: bearer auth, the `instructions` hoist, and
+/// the SSE→JSON response rewrite, layered over `crate::oauth_http`'s shared
+/// bearer-auth wrapper.
+pub type ChatGptCodexHttpClient<S, H = ReqwestClient> =
+    crate::oauth_http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
 
 pub(crate) fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     let mut value = serde_json::from_slice::<Value>(body).ok()?;
@@ -558,32 +398,17 @@ pub async fn build_responses_client(
     >,
 > {
     let provider = CHATGPT_CODEX_PROVIDER;
-    let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
-        .await
-        .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(classify_chatgpt_auth_error(
-                agent_did,
-                provider,
-                &OAuthAuthProblem::Missing,
-            ))
-        })?;
+    let (bearer, credential) = crate::oauth_http::bootstrap_oauth_client(
+        node,
+        agent_did,
+        provider,
+        OAuthRefreshKind::ChatGpt,
+        CHATGPT_OAUTH_PRODUCT,
+    )
+    .await?;
     let headers =
         build_chatgpt_codex_headers(credential.account_id.as_deref(), credential.is_fedramp)?;
     let endpoint = normalize_endpoint(endpoint);
-    let credential_id = credential.credential_id.clone();
-    let bearer = shared_bearer(&credential_id, || {
-        DbCredentialBearer::with_cache(
-            node,
-            agent_did,
-            provider,
-            credential_id.clone(),
-            true,
-            Some(credential.clone()),
-            OAuthRefreshKind::ChatGpt,
-            CHATGPT_OAUTH_PRODUCT,
-        )
-    });
     // The capture wrapper sits *below* the Codex wrapper, so it sees the body
     // after `patch_instructions_body` has hoisted `instructions`, stripped
     // system items, set `store`/`stream`, deleted the unsupported sampling
@@ -815,13 +640,16 @@ mod tests {
 
     #[test]
     fn bearer_rejection_only_for_401_and_403() {
-        assert!(is_bearer_rejection(&status_error("401")));
-        assert!(is_bearer_rejection(&status_error("403")));
-        assert!(!is_bearer_rejection(&status_error("500")));
-        assert!(!is_bearer_rejection(&status_error("429")));
-        assert!(!is_bearer_rejection(&http_client::Error::Instance(
-            anyhow::anyhow!("network down").into()
-        )));
+        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
+        let statuses = ChatGptCodexPolicy::REJECTION_STATUSES;
+        assert!(is_bearer_rejection(statuses, &status_error("401")));
+        assert!(is_bearer_rejection(statuses, &status_error("403")));
+        assert!(!is_bearer_rejection(statuses, &status_error("500")));
+        assert!(!is_bearer_rejection(statuses, &status_error("429")));
+        assert!(!is_bearer_rejection(
+            statuses,
+            &http_client::Error::Instance(anyhow::anyhow!("network down").into())
+        ));
     }
 
     async fn send_through(status: u16) -> Arc<CountingBearer> {
@@ -1071,28 +899,8 @@ mod tests {
         assert_eq!(credential.id_token.as_deref(), Some(id_token.as_str()));
     }
 
-    #[test]
-    fn event_stream_content_type_is_added_only_when_missing() {
-        let mut missing = HeaderMap::new();
-        ensure_event_stream_content_type(&mut missing);
-        assert_eq!(
-            missing
-                .get("content-type")
-                .and_then(|value| value.to_str().ok()),
-            Some("text/event-stream")
-        );
-
-        let mut present = HeaderMap::new();
-        present.insert("content-type", HeaderValue::from_static("application/json"));
-        ensure_event_stream_content_type(&mut present);
-        assert_eq!(
-            present
-                .get("content-type")
-                .and_then(|value| value.to_str().ok()),
-            Some("application/json"),
-            "backend-supplied content type should not be overwritten"
-        );
-    }
+    // `ensure_event_stream_content_type` is single-owned and unit-tested in
+    // `crate::oauth_http` now (`event_stream_content_type_is_added_only_when_missing`).
 
     #[test]
     fn streamed_output_prefers_deltas_over_done_text() {

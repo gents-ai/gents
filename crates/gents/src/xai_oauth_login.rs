@@ -253,15 +253,11 @@ pub fn credential_from_login_tokens(
 ) -> OAuthCredential {
     let agent_did = agent_did.into();
     let provider = provider.into();
-    let access_token_expires_at =
-        crate::chatgpt_oauth_refresh::jwt_expiration(&tokens.access_token)
-            .or_else(|| {
-                tokens
-                    .expires_in
-                    .filter(|seconds| *seconds > 0)
-                    .map(|seconds| now + chrono::Duration::seconds(seconds))
-            })
-            .unwrap_or_else(|| now + chrono::Duration::minutes(15));
+    let access_token_expires_at = crate::oauth_credential::resolve_access_token_expiry(
+        &tokens.access_token,
+        tokens.expires_in,
+        now,
+    );
 
     OAuthCredential {
         doc_id: None,

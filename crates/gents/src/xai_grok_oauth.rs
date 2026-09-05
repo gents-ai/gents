@@ -1,24 +1,28 @@
 //! Grok / xAI SuperGrok subscription OAuth provider (subscription proxy path).
 
-use std::future::Future;
 use std::sync::Arc;
-use std::{fmt, fmt::Formatter};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::EmbeddedNode;
 use futures::StreamExt as _;
 use rig::http_client::{
-    self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient,
-    Response, StreamingResponse,
+    self, HeaderMap, HeaderValue, Request, ReqwestClient, Response, StreamingResponse,
 };
+#[cfg(test)]
+use rig::http_client::{HttpClientExt, LazyBody, MultipartForm};
+#[cfg(test)]
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::Value;
 
+#[cfg(test)]
+use crate::oauth_credential::BearerSource;
 use crate::oauth_credential::{
-    classify_oauth_auth_error, lookup_oauth_credential, shared_bearer, BearerSource,
-    DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind, XAI_OAUTH_PRODUCT,
+    classify_oauth_auth_error, DbCredentialBearer, OAuthAuthProblem, OAuthRefreshKind,
+    XAI_OAUTH_PRODUCT,
 };
+#[cfg(test)]
+use std::future::Future;
 
 pub const XAI_OAUTH_PROVIDER: &str = "xai-oauth";
 
@@ -95,94 +99,24 @@ pub fn build_xai_grok_oauth_headers() -> Result<HeaderMap> {
     Ok(headers)
 }
 
-fn bearer_rejection_status(error: &http_client::Error) -> Option<u16> {
-    match error {
-        http_client::Error::InvalidStatusCode(status)
-        | http_client::Error::InvalidStatusCodeWithMessage(status, _) => Some(status.as_u16()),
-        _ => None,
-    }
-}
+/// [`crate::oauth_http::OAuthHttpPolicy`] policy for the Grok/xAI OAuth
+/// transport: only 401 kills the bearer (403 is the NotEntitled tier gate,
+/// which no refresh fixes — and with rotating refresh tokens a force-refresh
+/// loop would burn a rotation per request), identity headers ride
+/// per-request (the Chat Completions client builder has no default-header
+/// hook, unlike Responses), the `/responses` body needs `store:false`, and a
+/// streaming response needs its `usage` folded from `context_details`.
+#[derive(Clone, Default)]
+pub struct XaiGrokOAuthPolicy;
 
-// 403 is deliberately NOT a bearer rejection here (unlike Codex): the proxy
-// uses it for the NotEntitled tier gate, which no refresh fixes — and with
-// rotating refresh tokens a force-refresh loop would burn a rotation per
-// request.
-fn is_bearer_rejection(error: &http_client::Error) -> bool {
-    matches!(bearer_rejection_status(error), Some(401))
-}
+impl crate::oauth_http::OAuthHttpPolicy for XaiGrokOAuthPolicy {
+    const REJECTION_STATUSES: &'static [u16] = &[401];
 
-/// HTTP client that injects a fresh OAuth bearer and lightly shapes Responses bodies.
-pub struct XaiGrokOAuthHttpClient<S: BearerSource, H = ReqwestClient> {
-    inner: H,
-    bearer: Option<Arc<S>>,
-}
-
-impl<S: BearerSource, H: Clone> Clone for XaiGrokOAuthHttpClient<S, H> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-            bearer: self.bearer.clone(),
-        }
-    }
-}
-
-impl<S: BearerSource, H: fmt::Debug> fmt::Debug for XaiGrokOAuthHttpClient<S, H> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        f.debug_struct("XaiGrokOAuthHttpClient")
-            .field("inner", &self.inner)
-            .field("bearer_configured", &self.bearer.is_some())
-            .finish()
-    }
-}
-
-impl<S: BearerSource, H: Default> Default for XaiGrokOAuthHttpClient<S, H> {
-    fn default() -> Self {
-        Self {
-            inner: H::default(),
-            bearer: None,
-        }
-    }
-}
-
-impl<S: BearerSource> XaiGrokOAuthHttpClient<S, ReqwestClient> {
-    pub fn new(bearer: Arc<S>) -> Self {
-        Self {
-            inner: ReqwestClient::default(),
-            bearer: Some(bearer),
-        }
-    }
-}
-
-impl<S: BearerSource, H> XaiGrokOAuthHttpClient<S, H> {
-    pub fn with_inner(bearer: Arc<S>, inner: H) -> Self {
-        Self {
-            inner,
-            bearer: Some(bearer),
-        }
-    }
-
-    async fn fresh_auth_header(&self) -> http_client::Result<HeaderValue> {
-        let bearer = self.bearer.as_ref().ok_or_else(|| {
-            http_client::Error::Instance(
-                anyhow::anyhow!("XaiGrokOAuthHttpClient used without a configured BearerSource")
-                    .into(),
-            )
-        })?;
-        let token = bearer
-            .current_bearer()
-            .await
-            .map_err(|error| http_client::Error::Instance(error.into()))?;
-        HeaderValue::from_str(&format!("Bearer {token}"))
-            .map_err(|error| http_client::Error::Instance(anyhow::Error::from(error).into()))
-    }
-
-    /// Inject the bearer plus the Grok-CLI identity headers the proxy's auth
-    /// middleware and version gate expect on every request, regardless of wire
-    /// API or body shape. Callers (e.g. the Responses client builder) may
-    /// pre-set identity headers; those are never overwritten.
-    async fn apply_auth_and_identity(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
-        let value = self.fresh_auth_header().await?;
-        headers.insert("authorization", value);
+    /// Inject the Grok-CLI identity headers the proxy's auth middleware and
+    /// version gate expect on every request, regardless of wire API or body
+    /// shape. Callers (e.g. the Responses client builder) may pre-set
+    /// identity headers; those are never overwritten.
+    fn merge_identity_headers(&self, headers: &mut HeaderMap) -> http_client::Result<()> {
         let identity = build_xai_grok_oauth_headers()
             .map_err(|error| http_client::Error::Instance(error.into()))?;
         for (name, header_value) in identity.iter() {
@@ -193,21 +127,7 @@ impl<S: BearerSource, H> XaiGrokOAuthHttpClient<S, H> {
         Ok(())
     }
 
-    async fn prepare(&self, req: Request<Bytes>) -> http_client::Result<Request<Bytes>> {
-        let req = Self::patch_responses_body(req);
-        let (mut parts, body) = req.into_parts();
-        self.apply_auth_and_identity(&mut parts.headers).await?;
-        Ok(Request::from_parts(parts, body))
-    }
-
-    fn bearer_to_invalidate<X>(&self, result: &http_client::Result<X>) -> Option<Arc<S>> {
-        match result {
-            Err(error) if is_bearer_rejection(error) => self.bearer.clone(),
-            _ => None,
-        }
-    }
-
-    fn patch_responses_body(req: Request<Bytes>) -> Request<Bytes> {
+    fn patch_request_body(&self, req: Request<Bytes>) -> Request<Bytes> {
         let (parts, body) = req.into_parts();
         let mut body = body;
         if parts.uri.path().ends_with("/responses") {
@@ -218,97 +138,16 @@ impl<S: BearerSource, H> XaiGrokOAuthHttpClient<S, H> {
         Request::from_parts(parts, body)
     }
 
-    #[cfg(test)]
-    pub async fn prepare_for_test(
-        &self,
-        req: Request<Bytes>,
-    ) -> http_client::Result<Request<Bytes>> {
-        self.prepare(req).await
+    fn patch_streaming(&self, response: StreamingResponse) -> StreamingResponse {
+        normalize_xai_usage_stream(response)
     }
 }
 
-impl<S, H> HttpClientExt for XaiGrokOAuthHttpClient<S, H>
-where
-    S: BearerSource + 'static,
-    H: Clone + HttpClientExt + fmt::Debug + 'static,
-{
-    fn send<T, U>(
-        &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        T: Into<Bytes> + WasmCompatSend,
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        let (parts, body) = req.into_parts();
-        let req = Request::from_parts(parts, body.into());
-        async move {
-            let req = this.prepare(req).await?;
-            let result = HttpClientExt::send::<Bytes, U>(&inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
-            }
-            result
-        }
-    }
-
-    fn send_multipart<U>(
-        &self,
-        req: Request<MultipartForm>,
-    ) -> impl Future<Output = http_client::Result<Response<LazyBody<U>>>> + WasmCompatSend + 'static
-    where
-        U: From<Bytes>,
-        U: WasmCompatSend + 'static,
-    {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        async move {
-            let (mut parts, body) = req.into_parts();
-            this.apply_auth_and_identity(&mut parts.headers).await?;
-            let req = Request::from_parts(parts, body);
-            let result = HttpClientExt::send_multipart(&inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
-            }
-            result
-        }
-    }
-
-    fn send_streaming<T>(
-        &self,
-        req: Request<T>,
-    ) -> impl Future<Output = http_client::Result<StreamingResponse>> + WasmCompatSend
-    where
-        T: Into<Bytes>,
-    {
-        let inner = self.inner.clone();
-        let this = self.clone();
-        let (parts, body) = req.into_parts();
-        let req = Request::from_parts(parts, body.into());
-        async move {
-            let req = this.prepare(req).await?;
-            let result = HttpClientExt::send_streaming(&inner, req).await;
-            if let Some(bearer) = this.bearer_to_invalidate(&result) {
-                bearer.invalidate().await;
-            }
-            let mut response = result?;
-            ensure_event_stream_content_type(response.headers_mut());
-            Ok(normalize_xai_usage_stream(response))
-        }
-    }
-}
-
-fn ensure_event_stream_content_type(headers: &mut HeaderMap) {
-    if !headers.contains_key("content-type") {
-        headers.insert(
-            "content-type",
-            HeaderValue::from_static("text/event-stream"),
-        );
-    }
-}
+/// Grok's OAuth transport: bearer auth, per-request identity headers,
+/// `store:false` shaping, and streaming usage normalization, layered over
+/// `crate::oauth_http`'s shared bearer-auth wrapper.
+pub type XaiGrokOAuthHttpClient<S, H = ReqwestClient> =
+    crate::oauth_http::BearerAuthHttpClient<S, XaiGrokOAuthPolicy, H>;
 
 fn normalize_xai_usage_stream(response: StreamingResponse) -> StreamingResponse {
     let (parts, mut body) = response.into_parts();
@@ -465,29 +304,14 @@ async fn build_authenticated_http(
     agent_did: &str,
 ) -> Result<CapturingXaiGrokOAuthHttpClient> {
     let provider = XAI_OAUTH_PROVIDER;
-    let credential = lookup_oauth_credential(node.as_ref(), agent_did, provider)
-        .await
-        .with_context(|| format!("loading OAuthCredential for agent {agent_did}"))?
-        .ok_or_else(|| {
-            anyhow::anyhow!(classify_xai_auth_error(
-                agent_did,
-                provider,
-                &OAuthAuthProblem::Missing,
-            ))
-        })?;
-    let credential_id = credential.credential_id.clone();
-    let bearer = shared_bearer(&credential_id, || {
-        DbCredentialBearer::with_cache(
-            node,
-            agent_did,
-            provider,
-            credential_id.clone(),
-            true,
-            Some(credential.clone()),
-            OAuthRefreshKind::Xai,
-            XAI_OAUTH_PRODUCT,
-        )
-    });
+    let (bearer, _credential) = crate::oauth_http::bootstrap_oauth_client(
+        node,
+        agent_did,
+        provider,
+        OAuthRefreshKind::Xai,
+        XAI_OAUTH_PRODUCT,
+    )
+    .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
         bearer,
         crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
@@ -613,14 +437,16 @@ mod tests {
 
     #[test]
     fn only_401_invalidates_bearer_403_is_a_tier_gate() {
+        use crate::oauth_http::{is_bearer_rejection, OAuthHttpPolicy as _};
         // 401 = expired/revoked grant: refresh may fix it. 403 = NotEntitled
         // tier gate: refresh never fixes it, and with rotating refresh tokens
         // a force-refresh loop would burn a rotation per request.
+        let statuses = XaiGrokOAuthPolicy::REJECTION_STATUSES;
         let unauthorized =
             http_client::Error::InvalidStatusCode("401".parse().expect("valid status"));
         let forbidden = http_client::Error::InvalidStatusCode("403".parse().expect("valid status"));
-        assert!(is_bearer_rejection(&unauthorized));
-        assert!(!is_bearer_rejection(&forbidden));
+        assert!(is_bearer_rejection(statuses, &unauthorized));
+        assert!(!is_bearer_rejection(statuses, &forbidden));
     }
 
     #[test]

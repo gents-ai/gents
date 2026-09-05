@@ -3,13 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rig::client::CompletionClient;
 use tokio::sync::{mpsc, watch, Mutex};
 
 use crate::admission::AdmissionRegistry;
 use crate::agent::daemon::BehaviorDaemon;
-use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::build_admitted_model;
 use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry};
 use crate::prompt::LayeredPromptBuilder;
@@ -154,209 +153,30 @@ impl RuntimeContext {
             "building behavior runtime"
         );
 
-        match behavior.backend_provider_kind {
-            BackendProviderKind::OpenAiCompatible => {
-                let build_context = format!(
-                    "building OpenAI-compatible completion client for behavior {} against {}",
-                    behavior.behavior_id, behavior.backend_endpoint
-                );
-                if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                    let client: rig::providers::openai::CompletionsClient<
-                        crate::inference_http::SessionTaggingHttpClient<
-                            crate::rendered_request::RenderedRequestCapturingHttpClient,
-                        >,
-                    > = crate::inference_http::build_openai_chat_completions_client(
-                        &api_key,
-                        &behavior.backend_endpoint,
-                        crate::inference_http::SessionTaggingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
-                        ),
-                    )
-                    .with_context(|| build_context.clone())?;
-                    Box::pin(self.run_behavior_with_client(
-                        behavior,
-                        request_rx,
-                        slot_generation,
-                        shutdown,
-                        prompt_builder,
-                        preamble,
-                        loop_tools.clone(),
-                        background_tool_registry,
-                        tool_surface.approval_required_tools().to_vec(),
-                        tool_surface.output_obligations(),
-                        client,
-                    ))
-                    .await
-                } else {
-                    let client: rig::providers::openai::Client<
-                        crate::inference_http::SessionTaggingHttpClient<
-                            crate::inference_http::ResponsesNormalizingHttpClient<
-                                crate::rendered_request::RenderedRequestCapturingHttpClient,
-                            >,
-                        >,
-                    > = crate::inference_http::build_openai_responses_client(
-                        &api_key,
-                        &behavior.backend_endpoint,
-                        crate::inference_http::SessionTaggingHttpClient::new(
-                            crate::inference_http::ResponsesNormalizingHttpClient::new(
-                                crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
-                            ),
-                        ),
-                        Default::default(),
-                    )
-                    .with_context(|| build_context.clone())?;
-                    Box::pin(self.run_behavior_with_client(
-                        behavior,
-                        request_rx,
-                        slot_generation,
-                        shutdown,
-                        prompt_builder,
-                        preamble,
-                        loop_tools.clone(),
-                        background_tool_registry,
-                        tool_surface.approval_required_tools().to_vec(),
-                        tool_surface.output_obligations(),
-                        client,
-                    ))
-                    .await
-                }
-            }
-            BackendProviderKind::OpenRouter => {
-                let build_context = format!(
-                    "building OpenRouter completion client for behavior {} against {}",
-                    behavior.behavior_id, behavior.backend_endpoint
-                );
-                let client: rig::providers::openrouter::Client<
-                    crate::rendered_request::RenderedRequestCapturingHttpClient,
-                > = rig::providers::openrouter::Client::builder()
-                    .api_key(&api_key)
-                    .base_url(&behavior.backend_endpoint)
-                    .http_client(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
-                    )
-                    .build()
-                    .with_context(|| build_context.clone())?;
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            BackendProviderKind::ChatGptCodex => {
-                let client = tokio::time::timeout(
-                    self.startup_readiness.build_timeout,
-                    crate::chatgpt_codex::build_responses_client(
-                        self.node.clone(),
-                        behavior.agent_did(),
-                        &behavior.backend_endpoint,
-                    ),
-                )
-                .await
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                        "timed out after {:?} building the ChatGPT Codex completion client",
-                        self.startup_readiness.build_timeout
-                    )
-                })
-                .and_then(|result| result)
-                .with_context(|| {
-                    format!(
-                        "building ChatGPT Codex completion client for behavior {} against {}",
-                        behavior.behavior_id, behavior.backend_endpoint
-                    )
-                })?;
-                Box::pin(self.run_behavior_with_client(
-                    behavior,
-                    request_rx,
-                    slot_generation,
-                    shutdown,
-                    prompt_builder,
-                    preamble,
-                    loop_tools.clone(),
-                    background_tool_registry,
-                    tool_surface.approval_required_tools().to_vec(),
-                    tool_surface.output_obligations(),
-                    client,
-                ))
-                .await
-            }
-            BackendProviderKind::XaiGrokOAuth => {
-                let build_context = format!(
-                    "building Grok OAuth completion client for behavior {} against {}",
-                    behavior.behavior_id, behavior.backend_endpoint
-                );
-                let timeout_error = || {
-                    anyhow::anyhow!(
-                        "timed out after {:?} building the Grok OAuth completion client",
-                        self.startup_readiness.build_timeout
-                    )
-                };
-                if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                    let client = tokio::time::timeout(
-                        self.startup_readiness.build_timeout,
-                        crate::xai_grok_oauth::build_chat_completions_client(
-                            self.node.clone(),
-                            behavior.agent_did(),
-                            &behavior.backend_endpoint,
-                        ),
-                    )
-                    .await
-                    .map_err(|_| timeout_error())
-                    .and_then(|result| result)
-                    .with_context(|| build_context.clone())?;
-                    Box::pin(self.run_behavior_with_client(
-                        behavior,
-                        request_rx,
-                        slot_generation,
-                        shutdown,
-                        prompt_builder,
-                        preamble,
-                        loop_tools.clone(),
-                        background_tool_registry,
-                        tool_surface.approval_required_tools().to_vec(),
-                        tool_surface.output_obligations(),
-                        client,
-                    ))
-                    .await
-                } else {
-                    let client = tokio::time::timeout(
-                        self.startup_readiness.build_timeout,
-                        crate::xai_grok_oauth::build_responses_client(
-                            self.node.clone(),
-                            behavior.agent_did(),
-                            &behavior.backend_endpoint,
-                        ),
-                    )
-                    .await
-                    .map_err(|_| timeout_error())
-                    .and_then(|result| result)
-                    .with_context(|| build_context.clone())?;
-                    Box::pin(self.run_behavior_with_client(
-                        behavior,
-                        request_rx,
-                        slot_generation,
-                        shutdown,
-                        prompt_builder,
-                        preamble,
-                        loop_tools.clone(),
-                        background_tool_registry,
-                        tool_surface.approval_required_tools().to_vec(),
-                        tool_surface.output_obligations(),
-                        client,
-                    ))
-                    .await
-                }
-            }
-        }
+        let client = crate::llm::backend_client::build_backend_client(
+            self.node.clone(),
+            behavior.as_ref(),
+            &api_key,
+            self.startup_readiness.build_timeout,
+        )
+        .await?;
+
+        crate::llm::backend_client::with_backend_client!(client, |client| {
+            Box::pin(self.run_behavior_with_client(
+                behavior,
+                request_rx,
+                slot_generation,
+                shutdown,
+                prompt_builder,
+                preamble,
+                loop_tools.clone(),
+                background_tool_registry,
+                tool_surface.approval_required_tools().to_vec(),
+                tool_surface.output_obligations(),
+                client,
+            ))
+            .await
+        })
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -7,7 +7,6 @@ use defra_node::EmbeddedNode;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
 
-use crate::backend_provider::BackendProviderKind;
 use crate::completion_factory::loop_config;
 use crate::config::AgentBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
@@ -57,169 +56,28 @@ pub async fn run_openai_oneshot_with_tools(
         &tool_surface.background_tools().allowlist,
     );
 
-    match behavior.backend_provider_kind {
-        BackendProviderKind::OpenAiCompatible => {
-            let build_context = format!(
-                "building OpenAI-compatible completion client for behavior {} against {}",
-                behavior.behavior_id, behavior.backend_endpoint
-            );
-            if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                let client: rig::providers::openai::CompletionsClient<
-                    crate::inference_http::SessionTaggingHttpClient<
-                        crate::rendered_request::RenderedRequestCapturingHttpClient,
-                    >,
-                > = crate::inference_http::build_openai_chat_completions_client(
-                    &api_key,
-                    &behavior.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
-                    ),
-                )
-                .with_context(|| build_context.clone())?;
-                run_oneshot_with_completion_client(
-                    node,
-                    behavior,
-                    prompt,
-                    prompt_builder,
-                    preamble,
-                    tools,
-                    background_tool_registry,
-                    lsp_pool.clone(),
-                    client,
-                )
-                .await
-            } else {
-                let client: rig::providers::openai::Client<
-                    crate::inference_http::SessionTaggingHttpClient<
-                        crate::inference_http::ResponsesNormalizingHttpClient<
-                            crate::rendered_request::RenderedRequestCapturingHttpClient,
-                        >,
-                    >,
-                > = crate::inference_http::build_openai_responses_client(
-                    &api_key,
-                    &behavior.backend_endpoint,
-                    crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::inference_http::ResponsesNormalizingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
-                        ),
-                    ),
-                    Default::default(),
-                )
-                .with_context(|| build_context.clone())?;
-                run_oneshot_with_completion_client(
-                    node,
-                    behavior,
-                    prompt,
-                    prompt_builder,
-                    preamble,
-                    tools,
-                    background_tool_registry,
-                    lsp_pool.clone(),
-                    client,
-                )
-                .await
-            }
-        }
-        BackendProviderKind::OpenRouter => {
-            let build_context = format!(
-                "building OpenRouter completion client for behavior {} against {}",
-                behavior.behavior_id, behavior.backend_endpoint
-            );
-            let client: rig::providers::openrouter::Client<
-                crate::rendered_request::RenderedRequestCapturingHttpClient,
-            > = rig::providers::openrouter::Client::builder()
-                .api_key(&api_key)
-                .base_url(&behavior.backend_endpoint)
-                .http_client(crate::rendered_request::RenderedRequestCapturingHttpClient::default())
-                .build()
-                .with_context(|| build_context.clone())?;
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        BackendProviderKind::ChatGptCodex => {
-            let client = crate::chatgpt_codex::build_responses_client(
-                node.clone(),
-                behavior.agent_did(),
-                &behavior.backend_endpoint,
-            )
-            .await
-            .with_context(|| {
-                format!(
-                    "building ChatGPT Codex completion client for behavior {} against {}",
-                    behavior.behavior_id, behavior.backend_endpoint
-                )
-            })?;
-            run_oneshot_with_completion_client(
-                node,
-                behavior,
-                prompt,
-                prompt_builder,
-                preamble,
-                tools,
-                background_tool_registry,
-                lsp_pool.clone(),
-                client,
-            )
-            .await
-        }
-        BackendProviderKind::XaiGrokOAuth => {
-            let build_context = format!(
-                "building Grok OAuth completion client for behavior {} against {}",
-                behavior.behavior_id, behavior.backend_endpoint
-            );
-            if behavior.openai_wire_api == crate::OpenAiWireApi::ChatCompletions {
-                let client = crate::xai_grok_oauth::build_chat_completions_client(
-                    node.clone(),
-                    behavior.agent_did(),
-                    &behavior.backend_endpoint,
-                )
-                .await
-                .with_context(|| build_context.clone())?;
-                run_oneshot_with_completion_client(
-                    node,
-                    behavior,
-                    prompt,
-                    prompt_builder,
-                    preamble,
-                    tools,
-                    background_tool_registry,
-                    lsp_pool.clone(),
-                    client,
-                )
-                .await
-            } else {
-                let client = crate::xai_grok_oauth::build_responses_client(
-                    node.clone(),
-                    behavior.agent_did(),
-                    &behavior.backend_endpoint,
-                )
-                .await
-                .with_context(|| build_context.clone())?;
-                run_oneshot_with_completion_client(
-                    node,
-                    behavior,
-                    prompt,
-                    prompt_builder,
-                    preamble,
-                    tools,
-                    background_tool_registry,
-                    lsp_pool.clone(),
-                    client,
-                )
-                .await
-            }
-        }
-    }
+    let client = crate::llm::backend_client::build_backend_client(
+        node.clone(),
+        behavior,
+        &api_key,
+        crate::startup_readiness::StartupReadinessOptions::default().build_timeout,
+    )
+    .await?;
+
+    crate::llm::backend_client::with_backend_client!(client, |client| {
+        run_oneshot_with_completion_client(
+            node,
+            behavior,
+            prompt,
+            prompt_builder,
+            preamble,
+            tools,
+            background_tool_registry,
+            lsp_pool.clone(),
+            client,
+        )
+        .await
+    })
 }
 
 async fn run_oneshot_with_completion_client<C>(
@@ -238,6 +96,19 @@ where
     C::CompletionModel: 'static,
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
+    // exemption: one-shot does not wrap `model` in the daemon's
+    // `AdmissionRegistry`. Admission enforces a per-backend concurrency
+    // ceiling (`BackendAdmissionConfig`, built from the backend document's
+    // `max_concurrent`/`max_queue_depth`/`probe_status`) so multiple daemon
+    // slots sharing one backend stay bounded; it requires a registry that has
+    // been `reconcile()`-d with that config, which only the daemon's runtime
+    // reconciler drives. `AgentBehavior` here carries no such fields (by
+    // design — one-shot is a single ad hoc call, not a slot pool with
+    // contention to bound), so plugging in a fresh, never-reconciled registry
+    // would make every completion fail immediately with "BackendGone: backend
+    // admission controller is not active" rather than skip the ceiling.
+    // Pinned by `oneshot_completes_without_backend_admission_reconciliation`
+    // in `tests/misc/oneshot_admission_exemption.rs`.
     let model = client.completion_model(&behavior.model_name);
     let config = loop_config(
         behavior,
