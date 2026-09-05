@@ -612,6 +612,18 @@ pub async fn create_response_with_content_and_status(
 ) -> String {
     let response_key = escape_graphql_string(response_key);
     let request_id = escape_graphql_string(request_id);
+    let request_lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#)).await;
+    assert!(!request_lookup.has_errors(), "{:?}", request_lookup.errors);
+    let request_doc_id = request_lookup
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .map(|id| format!(r#"request_doc_id: "{}","#, escape_graphql_string(id)))
+        .unwrap_or_default();
     let session_id = escape_graphql_string(session_id);
     let content = escape_graphql_string(content);
     let completed_at = if matches!(status, "complete" | "error") {
@@ -624,6 +636,7 @@ pub async fn create_response_with_content_and_status(
             create_AgentResponse(input: {{
                 response_key: "{response_key}",
                 request_id: "{request_id}",
+                {request_doc_id}
                 agent_did: "{AGENT_DID}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{session_id}",
@@ -796,6 +809,9 @@ pub fn build_request(
         execution_origin: None,
         created_at,
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -1094,4 +1110,18 @@ where
         .map(|value| {
             serde_json::from_value(value).unwrap_or_else(|err| panic!("decode {key} failed: {err}"))
         })
+}
+
+/// Drive fixture requests through the production atomic begin transition.
+/// Fixtures that write streamed content must retain their own writer instead.
+pub async fn begin_owned_execution(
+    lifecycle: &mut gents::RequestLifecycle,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
+) -> anyhow::Result<String> {
+    let writer = gents::DefraStreamWriter::new(
+        node.clone(),
+        &lifecycle.request().agent_did,
+        std::time::Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await
 }

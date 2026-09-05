@@ -4,7 +4,7 @@ import Proofs.Recovery.Sweeps.Inference
 /-!
 # Startup recovery ordering: requests before inference calls (#1001)
 
-`inferenceCallRecoverySweep` is pinned `cadence := .startup`, but its Rust
+`inferenceCallRecoverySweep` runs at startup and periodically; its Rust
 implementation (`InferenceCall::recover_all`) is *parent-gated*: it skips any
 queued/running call whose linked `AgentRequest` is not interrupted or terminal.
 That gate is deliberate — a live parent means the call may still be owned by a
@@ -94,7 +94,7 @@ theorem inference_first_skips_crash_orphan
 /-- Issue #1001 defect 2, stated end to end: running the inference sweep
     before the request sweep leaves a crash-orphaned call in its live state —
     a running orphan still holds its backend slot after startup recovery, and
-    no later sweep runs at `.startup` cadence again. -/
+    without a later ordered pass the orphan remains live. -/
 theorem inference_before_request_leaves_call_live
     {s : OrphanedCallState} (h_crash : crashOrphaned s) :
     (requestSweep (gatedInferenceSweep s)).call.call.state = .queued ∨
@@ -173,5 +173,59 @@ theorem request_before_inference_converges
               HasTerminal.isTerminal, RequestState.instHasTerminal,
               InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
               InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
+
+/-- Lease-aware request recovery defers repair until the observed execution
+    deadline has expired. The ordered sweep abstracts the already-proved
+    generation-fenced request repair; it does not create a second owner. -/
+def leasedRequestSweep (now deadline : Nat) (s : OrphanedCallState) : OrphanedCallState :=
+  if deadline < now then requestSweep s else s
+
+/-- Both startup and periodic ticks run the same request-before-inference order. -/
+def leasedRecoveryPass (now deadline : Nat) (s : OrphanedCallState) : OrphanedCallState :=
+  gatedInferenceSweep (leasedRequestSweep now deadline s)
+
+/-- A restart before lease expiry must leave both the parent and its call live. -/
+theorem live_lease_defers_request_and_inference
+    {s : OrphanedCallState} (h_crash : crashOrphaned s)
+    {now deadline : Nat} (h_live : now ≤ deadline) :
+    leasedRecoveryPass now deadline s = s := by
+  have h_not_expired : ¬ deadline < now := Nat.not_lt_of_ge h_live
+  rcases h_crash with ⟨h_parent, _, _⟩
+  cases h_parent with
+  | inl h_claimed =>
+      simp [leasedRecoveryPass, leasedRequestSweep, h_not_expired,
+        gatedInferenceSweep, gatedInferenceCause, h_claimed]
+  | inr h_processing =>
+      simp [leasedRecoveryPass, leasedRequestSweep, h_not_expired,
+        gatedInferenceSweep, gatedInferenceCause, h_processing]
+
+/-- Equality is still a live lease, matching RequestExecutionLease.expire's
+    strict deadline comparison; recovery must not steal the boundary tick. -/
+theorem deadline_equality_preserves_request_and_inference
+    {s : OrphanedCallState} (h_crash : crashOrphaned s) (deadline : Nat) :
+    leasedRecoveryPass deadline deadline s = s :=
+  live_lease_defers_request_and_inference h_crash (Nat.le_refl deadline)
+
+/-- A later periodic pass after expiry converges the call skipped at startup.
+    This is a finite two-pass trace, conditional on expiry and a scheduled tick;
+    no scheduler fairness or wall-clock progress is assumed. Slot contribution
+    is the formal call-state projection, not the live process's counter. -/
+theorem deferred_startup_then_expired_periodic_converges
+    {s : OrphanedCallState} (h_crash : crashOrphaned s)
+    {startupNow periodicNow deadline : Nat}
+    (h_live : startupNow ≤ deadline) (h_expired : deadline < periodicNow) :
+    let s' := leasedRecoveryPass periodicNow deadline
+      (leasedRecoveryPass startupNow deadline s)
+    isTerminal s'.parent.request.state ∧
+      s'.parent.request.admission = .released ∧
+      isTerminal s'.call.call.state ∧
+      ∀ bid : BackendId, s'.call.call.slotContribution bid = 0 := by
+  rw [live_lease_defers_request_and_inference h_crash h_live]
+  simpa [leasedRecoveryPass, leasedRequestSweep, h_expired] using
+    request_before_inference_converges h_crash
+
+/-- The inference sweep must be eligible on the later periodic tick. -/
+theorem inference_recovery_has_periodic_cadence :
+    inferenceCallRecoverySweep.cadence = .periodic := rfl
 
 end Recovery

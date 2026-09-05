@@ -4,6 +4,7 @@ import Proofs.Persistence
 import Proofs.StorageObservation
 import Proofs.Scheduling
 import Proofs.Request
+import Proofs.RequestExecutionLease
 import Proofs.InferenceCall
 import Proofs.CrossMachineComposed
 import Proofs.Fleet
@@ -59,6 +60,7 @@ import Proofs.Skills
 import Proofs.EditMatch
 import Proofs.EventDelivery
 import Proofs.Conformance.EventDelivery
+import Proofs.Conformance.RequestExecutionLease
 import Proofs.GraphPipeline
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection

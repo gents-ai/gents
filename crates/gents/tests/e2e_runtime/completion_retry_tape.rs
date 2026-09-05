@@ -112,7 +112,7 @@ async fn backend_restart_cluster_recovers() {
 }
 
 #[tokio::test]
-async fn backoff_longer_than_liveness_timeout_recovers() {
+async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     let marker = "backoff-vs-liveness";
     let backend = MockStreamingBackend::start_with_plans(
         RETRY_MODEL,
@@ -122,7 +122,7 @@ async fn backoff_longer_than_liveness_timeout_recovers() {
                 StreamResponse::service_unavailable(
                     "HTTP status 503 forcing a backoff longer than the liveness timeout",
                 ),
-                StreamResponse::completes(marker, ["recovered despite long backoff"]),
+                StreamResponse::completes(marker, ["retry must not execute after lease expiry"]),
             ],
         )],
     )
@@ -134,31 +134,114 @@ async fn backoff_longer_than_liveness_timeout_recovers() {
         backend.endpoint(),
         1,
         60,
-        Some(1),
+        Some(30),
     )
     .await;
 
     let request_id = "req-backoff-vs-liveness";
-    let doc_id = create_runtime_request(
+    let doc_id = create_runtime_request_with_execution_origin(
         db.node.as_ref(),
         &agent.agent_did,
         RETRY_BEHAVIOR_ID,
         request_id,
         "session-backoff-vs-liveness",
+        "scheduled",
         &format!("recover across a long backoff {marker}"),
     )
     .await;
-    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "completed").await;
-
-    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
-    assert_retry_recovered(&calls, 1);
-    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    // Allow setup and the first real HTTP failure to finish before expiring
+    // the lease. Scheduled retry pacing leaves a backoff window; it must not
+    // count as semantic progress or grant the next provider call ownership.
+    tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+            if call_states(&calls) == vec!["failed"] {
+                break;
+            }
+            assert!(
+                calls.len() <= 1,
+                "retry started before the first failed-call observation: {calls:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first provider failure must be durably observed");
+    assert_eq!(backend.observed_requests(marker), 1);
+    let escaped_doc_id = escape_graphql_string(&doc_id);
+    let tuple = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }} ) {{
+        lifecycle_state execution_generation execution_lease_expires_at execution_progress_seq
+    }} }}"#
+        ))
+        .await;
+    assert!(!tuple.has_errors(), "{:?}", tuple.errors);
+    let observed = &tuple.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(observed["lifecycle_state"], "processing");
+    let generation = escape_graphql_string(observed["execution_generation"].as_str().unwrap());
+    let expiry = escape_graphql_string(observed["execution_lease_expires_at"].as_str().unwrap());
+    let progress = observed["execution_progress_seq"].as_i64().unwrap();
+    assert_eq!(
+        progress, 0,
+        "failed provider dispatch and backoff are not durable output progress"
+    );
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let mutation = format!(
+        r#"mutation {{ update_AgentRequest(
+        filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }}, lifecycle_state: {{ _eq: "processing" }},
+            execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }},
+            execution_progress_seq: {{ _eq: {progress} }} }},
+        input: {{ execution_lease_expires_at: "{}" }}
+    ) {{ _docID }} }}"#,
+        escape_graphql_string(&expired)
+    );
+    let expired = db.node.execute(&mutation).await;
+    assert!(!expired.has_errors(), "{:?}", expired.errors);
     assert!(
-        timeline.request.retry_summary.recovered,
-        "a backoff longer than the liveness timeout must not be misread as a dead stream"
+        expired
+            .data
+            .as_ref()
+            .and_then(|data| data.get("update_AgentRequest"))
+            .is_some_and(gents::graphql::response_has_documents),
+        "observed execution lease must be expired by the fixture"
     );
 
+    wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "failed").await;
+    let escaped_request_id = escape_graphql_string(request_id);
+    let rows = db.node.execute(&format!(r#"{{
+        AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ lifecycle_state execution_progress_seq }}
+        AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ status content }}
+    }}"#)).await;
+    assert!(!rows.has_errors(), "{:?}", rows.errors);
+    let rows = rows.data.as_ref().unwrap();
+    assert_eq!(rows["AgentRequest"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["AgentResponse"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        rows["AgentRequest"][0]["execution_progress_seq"].as_i64(),
+        Some(progress)
+    );
+    assert_eq!(rows["AgentResponse"][0]["status"], "error");
+    assert!(!rows["AgentResponse"][0]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("retry must not execute after lease expiry"));
+    let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
+    assert_eq!(call_states(&calls), vec!["failed"]);
+    let timeline = build_timeline(db.node.as_ref(), request_id).await;
+    assert!(!timeline.request.retry_summary.recovered);
+    let repeated = gents::RequestLifecycle::recover_all(db.node.as_ref(), &agent.agent_did)
+        .await
+        .unwrap();
+    assert_eq!(repeated.requests_recovered, 0);
+    assert_eq!(repeated.responses_recovered, 0);
     agent.shutdown().await;
+    assert_eq!(
+        backend.observed_requests(marker),
+        1,
+        "expired execution must not dispatch the planned successful retry"
+    );
 }
 
 #[tokio::test]

@@ -571,6 +571,15 @@ pub async fn activate_workspace_bound_request(
 }
 
 impl RequestLifecycle {
+    pub fn set_execution_lease_duration(&mut self, duration: std::time::Duration) {
+        assert_eq!(
+            self.state,
+            LocalLifecycleState::Pending,
+            "execution lease duration must be configured before claim"
+        );
+        self.execution_lease_duration_secs = duration.as_secs().max(1);
+    }
+
     pub fn new_with_agent_did(
         node: Arc<EmbeddedNode>,
         agent_name: &str,
@@ -616,11 +625,43 @@ impl RequestLifecycle {
             background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Pending,
             valid_until_at_claim: None,
+            execution_lease: None,
+            execution_lease_duration_secs: crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
     pub async fn materialize_claimed_with_execution_binding(
+        node: Arc<EmbeddedNode>,
+        agent_name: &str,
+        identity: Arc<dyn crate::identity::AgentIdentity>,
+        content: &str,
+        deadline_duration_secs: u64,
+        execution_origin: ExecutionOrigin,
+        backend_id: impl Into<String>,
+        trigger_lineage: TriggerLineage,
+    ) -> Result<Self> {
+        let mut lifecycle = Self::materialize_pending_with_execution_binding(
+            node,
+            agent_name,
+            identity,
+            content,
+            deadline_duration_secs,
+            execution_origin,
+            backend_id,
+            trigger_lineage,
+        )
+        .await?;
+        match lifecycle.claim_with_identity().await? {
+            ClaimOutcome::Claimed => Ok(lifecycle),
+            outcome => {
+                anyhow::bail!("newly materialized signed AgentRequest was not claimed: {outcome:?}")
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn materialize_pending_with_execution_binding(
         node: Arc<EmbeddedNode>,
         agent_name: &str,
         identity: Arc<dyn crate::identity::AgentIdentity>,
@@ -692,6 +733,9 @@ impl RequestLifecycle {
             execution_origin: Some(execution_origin.as_str().to_string()),
             created_at,
             deadline: None,
+            execution_generation: None,
+            execution_lease_expires_at: None,
+            execution_progress_seq: 0,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
@@ -714,7 +758,7 @@ impl RequestLifecycle {
             agent_name,
         )
         .await?;
-        let mut lifecycle = Self::new_with_execution_binding(
+        let lifecycle = Self::new_with_execution_binding(
             node,
             agent_name,
             &agent_did,
@@ -723,12 +767,7 @@ impl RequestLifecycle {
             execution_origin,
             backend_id,
         );
-        match lifecycle.claim_with_identity().await? {
-            ClaimOutcome::Claimed => Ok(lifecycle),
-            outcome => {
-                anyhow::bail!("newly materialized signed AgentRequest was not claimed: {outcome:?}")
-            }
-        }
+        Ok(lifecycle)
     }
 
     pub fn request(&self) -> &AgentRequest {
@@ -737,6 +776,13 @@ impl RequestLifecycle {
 
     pub fn response_doc_id(&self) -> Option<&str> {
         self.response_doc_id.as_deref()
+    }
+
+    pub(crate) fn execution_generation(&self) -> anyhow::Result<&str> {
+        self.execution_lease
+            .as_ref()
+            .map(|lease| lease.generation.as_str())
+            .ok_or_else(|| anyhow::anyhow!("request has no active execution generation"))
     }
 
     pub fn backend_id(&self) -> &str {

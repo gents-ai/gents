@@ -1,4 +1,5 @@
 use super::*;
+use gents::lifecycle::RequestTerminalOutcome;
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -90,8 +91,14 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Claimed);
 
-    // The sweep only repairs a stuck request whose durable response already
-    // reached a terminal outcome; without one it reports `awaiting_outcome`.
+    // This recovery edge preserves an already-complete response after its
+    // execution lease expires; a live owner remains authoritative.
+    let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let result = db.node.execute(&format!(
+        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&doc_id), escape_graphql_string(&expiry),
+    )).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
     create_response_with_status(
         &db.node,
         &format!("resp-{request_id}"),
@@ -121,59 +128,29 @@ async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTra
     );
 }
 
-/// `complete()` accepts a persisted from-set of `{claimed, processing}`, so the
-/// ORDINARY writer can also take `claimed -> completed` — an edge the contract
-/// describes as recovery-only.
-///
-/// This is pinned as a deliberate, visible fact rather than left implicit. The
-/// wide from-set is INTENDED and should stay: a crash between `begin_execution`'s
-/// write and the completion would otherwise strand the row, and the project
-/// prefers defensive behaviour around anything that can deadlock a request.
-/// Narrowing it would trade a benign extra edge for a liveness hazard.
-///
-/// The consequence is that the edge is not exclusively a recovery concern, which
-/// is why it is published as `recoveryReachable` rather than folded into the legal
-/// transition relation.
 #[tokio::test]
-async fn ordinary_complete_also_takes_the_claimed_to_completed_edge() {
+async fn ordinary_completion_rejects_claimed_without_execution() {
     let db = test_db("ordinary-complete-from-claimed").await;
     let request_id = uuid::Uuid::new_v4().to_string();
     let session_id = uuid::Uuid::new_v4().to_string();
     let created_at = chrono::Utc::now().to_rfc3339();
     let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle = request_lifecycle_for_case(
-        &db,
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at.clone(),
-    );
-
-    // No begin_execution: the row stays persisted `claimed`.
+    let mut lifecycle =
+        request_lifecycle_for_case(&db, doc_id.clone(), request_id, session_id, created_at);
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle.complete().await.unwrap();
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state,
-        RequestLifecycleState::Completed,
-        "complete() from a persisted claimed row should still complete it"
+        lifecycle
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .await
+            .unwrap(),
+        gents::lifecycle::TerminalizeResult::Lost,
     );
-    let session_id = escape_graphql_string(&session_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"{{ AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 1) {{
-                latest_request_id status
-            }} }}"#
-        ))
-        .await;
-    let conversation = support::first_row::<serde_json::Value>(&response, "AgentConversation");
     assert_eq!(
-        conversation["latest_request_id"].as_str(),
-        Some(request_id.as_str())
+        fetch_request_snapshot(&db.node, &doc_id)
+            .await
+            .lifecycle_state,
+        RequestLifecycleState::Claimed
     );
-    assert_eq!(conversation["status"].as_str(), Some("completed"));
 }
 
 #[tokio::test]
@@ -334,7 +311,13 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         "advance conversation projection matched no document"
     );
 
-    first.complete().await.unwrap();
+    crate::support::begin_owned_execution(&mut first, &db.node)
+        .await
+        .unwrap();
+    first
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
     assert_eq!(
         fetch_request_snapshot(&db.node, &first_doc_id)
             .await
@@ -460,35 +443,43 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         }
         "beginInference" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.begin_execution().await.unwrap();
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
         }
         "advance" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.begin_execution().await.unwrap();
-            let response_doc_id = create_response_with_status(
-                &db.node,
-                &format!("resp-{request_id}"),
-                &request_id,
-                &session_id,
-                "streaming",
-            )
-            .await;
-            lifecycle.set_response_doc_id(&response_doc_id);
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
             lifecycle.advance().await.unwrap();
         }
         "finish" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.begin_execution().await.unwrap();
-            lifecycle.complete().await.unwrap();
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
+            lifecycle
+                .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                .await
+                .unwrap();
         }
         "fail" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.begin_execution().await.unwrap();
-            lifecycle.fail().await.unwrap();
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
+            lifecycle
+                .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                .await
+                .unwrap();
         }
         "failBeforeStream" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.fail().await.unwrap();
+            lifecycle
+                .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                .await
+                .unwrap();
         }
         "expire" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
@@ -502,14 +493,28 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-            lifecycle.transition_to_interrupted().await.unwrap();
+            lifecycle
+                .terminalize_owned_without_stream(
+                    RequestTerminalOutcome::Interrupted,
+                    Some("interrupted"),
+                )
+                .await
+                .unwrap();
         }
         "interruptProcessing" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-            lifecycle.begin_execution().await.unwrap();
+            crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                .await
+                .unwrap();
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-            lifecycle.transition_to_interrupted().await.unwrap();
+            lifecycle
+                .terminalize_owned_without_stream(
+                    RequestTerminalOutcome::Interrupted,
+                    Some("interrupted"),
+                )
+                .await
+                .unwrap();
         }
         other => panic!(
             "generated Request transition {} has unsupported action {other:?}",
@@ -774,10 +779,11 @@ async fn production_request_writers_only_reach_contracted_edges() {
         "interrupted",
         "workspaceBindingPending",
     ];
-    const WRITERS: [&str; 11] = [
+    const WRITERS: [&str; 12] = [
         "claim",
         "admission_reject",
         "claim_after_ttl_lapse",
+        "claim_after_interrupt",
         "begin_execution",
         "complete",
         "fail",
@@ -821,29 +827,45 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 created_at.clone(),
             );
 
-            // Put the lifecycle in the LOCAL state this writer requires, so its
-            // in-memory `ensure_state` guard always passes and the persisted CAS
-            // filter is the only thing that can reject the write. Deriving the
-            // local state from the START STATE instead would let the guard
-            // short-circuit before any mutation was issued — a widened CAS
-            // admitting an illegal edge would then pass unnoticed.
-            //
-            //   claim / claim_after_ttl_lapse -> local Pending  (claim.rs:195)
-            //   begin_execution               -> local Claimed  (claim.rs:70)
-            //   complete / fail               -> local Claimed | Streaming
-            //   interrupt                     -> no local guard
-            //   repair_terminal_requests      -> associated fn, no local state
+            // Give post-claim writers a real generation before pinning the
+            // persisted start state. Their database authorization must reject
+            // illegal edges even when the caller once owned this request.
             match writer {
                 "claim"
                 | "admission_reject"
                 | "claim_after_ttl_lapse"
-                | "repair_terminal_requests"
+                | "claim_after_interrupt"
                 | "coalesce_pending"
-                | "subagent_liveness"
                 | "bind_workspace" => {}
                 _ => {
                     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
                 }
+            }
+
+            // Terminal owner authorization includes the response/request pair.
+            // Supply a real streaming response for processing cases while keeping
+            // claimed cases response-free. Recovery repair gets its terminal row below.
+            if start == "processing"
+                && matches!(
+                    writer,
+                    "complete" | "fail" | "interrupt" | "subagent_liveness"
+                )
+            {
+                crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+                    .await
+                    .unwrap();
+            }
+            if writer == "claim_after_interrupt" {
+                set_interrupt_requested_at(&db.node, &doc_id, &chrono::Utc::now().to_rfc3339())
+                    .await;
+            }
+            if writer == "repair_terminal_requests" {
+                let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+                let result = db.node.execute(&format!(
+                    r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+                    escape_graphql_string(&doc_id), escape_graphql_string(&expiry),
+                )).await;
+                assert!(!result.has_errors(), "{:?}", result.errors);
             }
 
             // Auxiliary rows the sweep writers act on. Built before the start
@@ -912,7 +934,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             );
 
             match writer {
-                "claim" => {
+                "claim" | "claim_after_interrupt" => {
                     let _ = lifecycle.claim().await;
                 }
                 "admission_reject" => {
@@ -924,16 +946,25 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let _ = lifecycle.claim().await;
                 }
                 "begin_execution" => {
-                    let _ = lifecycle.begin_execution().await;
+                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
                 }
                 "complete" => {
-                    let _ = lifecycle.complete().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                        .await;
                 }
                 "fail" => {
-                    let _ = lifecycle.fail().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                        .await;
                 }
                 "interrupt" => {
-                    let _ = lifecycle.transition_to_interrupted().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(
+                            RequestTerminalOutcome::Interrupted,
+                            Some("interrupted"),
+                        )
+                        .await;
                 }
                 "repair_terminal_requests" => {
                     let _ = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID).await;
@@ -1114,16 +1145,25 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                     let _ = lifecycle.reject_admission("projection rejected").await;
                 }
                 "begin_execution" => {
-                    let _ = lifecycle.begin_execution().await;
+                    let _ = crate::support::begin_owned_execution(&mut lifecycle, &db.node).await;
                 }
                 "complete" => {
-                    let _ = lifecycle.complete().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                        .await;
                 }
                 "fail" => {
-                    let _ = lifecycle.fail().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                        .await;
                 }
                 "interrupt" => {
-                    let _ = lifecycle.transition_to_interrupted().await;
+                    let _ = lifecycle
+                        .terminalize_owned_without_stream(
+                            RequestTerminalOutcome::Interrupted,
+                            Some("interrupted"),
+                        )
+                        .await;
                 }
                 "repair_terminal_requests" => {
                     let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
@@ -1265,17 +1305,10 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle.begin_execution().await.unwrap();
+    let response_doc_id = crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+        .await
+        .unwrap();
     assert_lean_transition_is_legal("Request", "claimed", "processing");
-    let response_doc_id = create_response_with_status(
-        &db.node,
-        &format!("resp-{request_id}"),
-        &request_id,
-        &session_id,
-        "streaming",
-    )
-    .await;
-    lifecycle.set_response_doc_id(&response_doc_id);
     lifecycle.advance().await.unwrap();
     assert_lean_transition_is_legal("Request", "processing", "processing");
 
@@ -1351,7 +1384,10 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    lifecycle.fail().await.unwrap();
+    lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+        .await
+        .unwrap();
     assert_lean_transition_is_legal("Request", "claimed", "failed");
 
     assert_eq!(
@@ -2595,7 +2631,13 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
     let pre = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
     assert_pre_queue_snapshot(case, &pre);
 
-    active_lifecycle.complete().await.unwrap();
+    crate::support::begin_owned_execution(&mut active_lifecycle, &db.node)
+        .await
+        .unwrap();
+    active_lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
 
     let pending_request = request_from_parts(
         pending_doc_id,

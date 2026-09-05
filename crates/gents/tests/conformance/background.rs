@@ -3,6 +3,7 @@
 //! graph, and R4c background-work observable shapes.
 
 use super::*;
+use gents::lifecycle::RequestTerminalOutcome;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -380,45 +381,6 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
         .and_then(|value| value.as_array())
         .map(Vec::len)
         .unwrap_or(0)
-}
-
-async fn fetch_background_theorem_child_request(
-    node: &EmbeddedNode,
-    child_request_id: &str,
-) -> AgentRequestRow {
-    let child_request_id = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{child_request_id}" }} }}
-                limit: 1
-            ) {{
-                _docID
-                request_id
-                agent_did
-                requester_did
-                behavior_id
-                session_id
-                content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
-                metadata
-                execution_origin
-                created_at
-                deadline
-                subagent_depth
-                caused_by_parent_request_id
-                caused_by_parent_request_doc_id
-                caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id
-                lifecycle_state
-            }}
-        }}"#
-    );
-    first_row(&node.execute(&query).await, "AgentRequest")
 }
 
 async fn fetch_background_theorem_child_request_optional(
@@ -1235,9 +1197,13 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         child_lifecycle.claim_with_identity().await.unwrap(),
         ClaimOutcome::Claimed
     );
-    child_lifecycle.begin_execution().await.unwrap();
+    crate::support::begin_owned_execution(&mut child_lifecycle, &db.node)
+        .await
+        .unwrap();
     let child_pre =
-        fetch_background_theorem_child_request(db.node.as_ref(), &child_request_id).await;
+        fetch_background_theorem_child_request_optional(db.node.as_ref(), &child_request_id)
+            .await
+            .expect("processing child");
     assert_eq!(
         child_pre.lifecycle_state,
         Some(
@@ -1245,7 +1211,6 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
                 .expect("Lean request lifecycle state")
         )
     );
-
     let mut lifecycle =
         ToolCallLifecycle::load(db.node.clone(), &session_id, "internal-theorem-cascade")
             .await
@@ -1256,18 +1221,16 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         .await
         .expect("cancel bridge with cascade dispatch")
         .expect("cascade dispatch");
-    let CascadeDispatch::Local(intent) = dispatch else {
+    let gents::tool_call_lifecycle::CascadeDispatch::Local(intent) = dispatch else {
         panic!("local child must use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
-
     interrupt_request(db.node.as_ref(), &intent.child_request_id)
         .await
         .expect("interrupt child request");
-    // This isolated consumer has no daemon observer running, so explicitly
-    // drive the same request-lifecycle interrupt arm used by the daemon.
+    // This isolated consumer has no daemon observer running; use its terminal owner.
     child_lifecycle
-        .transition_to_interrupted()
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
         .await
         .expect("drive child interrupt_processing transition");
 

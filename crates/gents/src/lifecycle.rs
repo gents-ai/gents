@@ -11,6 +11,13 @@ use crate::watcher::AgentRequest;
 mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
+mod execution_lease;
+pub(crate) mod execution_policy;
+pub(crate) use execution_lease::{
+    recover_execution_generation, revoke_execution_generation, ExecutionWriteFence,
+    ExecutionWriteKind, RequestExecutionLease,
+};
+pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 mod lookup;
 pub mod manual;
 pub(crate) mod materialize;
@@ -406,6 +413,8 @@ pub struct RequestLifecycle {
     background_completion_input_through_sequence: Option<u32>,
     state: LocalLifecycleState,
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
+    execution_lease: Option<RequestExecutionLease>,
+    execution_lease_duration_secs: u64,
 }
 
 impl RequestLifecycle {
@@ -774,81 +783,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn projection_statement_error_falls_back_to_request_only_terminal_commit() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let node = Arc::new(
-            EmbeddedNode::builder()
-                .data_path(tempdir.path())
-                .build()
-                .await
-                .unwrap(),
-        );
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
-            node.clone(),
-            "default",
-            materialization_identity(),
-            "hello",
-            60,
-            ExecutionOrigin::Interactive,
-            "backend",
-            TriggerLineage::default(),
-        )
-        .await
-        .unwrap();
-        lifecycle.begin_execution().await.unwrap();
-        let doc_id = escape_graphql_string(&lifecycle.request().doc_id);
-        let request_mutation = format!(
-            r#"mutation {{
-                update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                    input: {{ lifecycle_state: "completed" }}
-                ) {{ _docID }}
-            }}"#
-        );
-        let response = transition::execute_request_projection_transaction(
-            node.as_ref(),
-            &request_mutation,
-            "mutation { invalid_conversation_projection_field }",
-            "test_projection_error_fallback",
-        )
-        .await
-        .unwrap();
-        assert!(response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentRequest"))
-            .is_some_and(response_has_documents));
-
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ lifecycle_state }} }}"#
-        );
-        let persisted = node.execute(&query).await;
-        assert!(!persisted.has_errors(), "{:?}", persisted.errors);
-        assert_eq!(
-            persisted.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
-            "completed"
-        );
-    }
-
-    #[test]
-    fn retryable_projection_conflict_preserves_the_atomic_attempt() {
-        let conflict = anyhow::anyhow!(
-            "graphql returned errors: transaction conflict while updating AgentConversation"
-        );
-        assert!(transition::projection_error_requires_atomic_retry(
-            &conflict
-        ));
-
-        let deterministic = anyhow::anyhow!(
-            "graphql returned errors: field invalid_conversation_projection_field does not exist"
-        );
-        assert!(!transition::projection_error_requires_atomic_retry(
-            &deterministic
-        ));
-    }
-
-    #[tokio::test]
     async fn error_response_terminalizes_an_existing_streaming_response() {
         let tempdir = tempfile::tempdir().unwrap();
         let node = Arc::new(
@@ -871,27 +805,14 @@ mod tests {
         )
         .await
         .unwrap();
-        lifecycle.begin_execution().await.unwrap();
-        let request = lifecycle.request().clone();
         let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
             "did:test:test",
             std::time::Duration::ZERO,
         );
-        let response_doc_id = writer
-            .begin_with_requester_did(
-                &request.session_id,
-                &request.request_id,
-                Some(&request.doc_id),
-                lifecycle.behavior_id(),
-                None,
-            )
-            .await
-            .unwrap();
-        lifecycle.set_response_doc_id(&response_doc_id);
-        lifecycle.fail_with_reason("setup failed").await.unwrap();
+        let response_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
         lifecycle
-            .ensure_error_response("setup failed")
+            .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, Some("setup failed"))
             .await
             .unwrap();
 
@@ -904,7 +825,7 @@ mod tests {
         assert!(!persisted.has_errors(), "{:?}", persisted.errors);
         let response = &persisted.data.as_ref().unwrap()["AgentResponse"][0];
         assert_eq!(response["status"], "error");
-        assert_eq!(response["content"], "Error: setup failed");
+        assert_eq!(response["content"], "");
         assert_eq!(response["error_message"], "setup failed");
     }
 }

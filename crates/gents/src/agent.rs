@@ -37,7 +37,7 @@ pub mod persona_presets;
 pub(crate) mod principal_assembly;
 mod reconcile;
 mod runtime;
-mod stream_processor;
+pub(crate) mod stream_processor;
 #[cfg(test)]
 mod supervision;
 #[cfg(test)]

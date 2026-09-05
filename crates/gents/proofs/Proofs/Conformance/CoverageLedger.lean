@@ -107,6 +107,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
     , deferred := []
     }
+  , { feature := "request-execution-lease"
+    , required := [Surface.agentFacing, Surface.runtimeInternal]
+    , deferred := []
+    }
   , { feature := "process-lifecycle"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -512,6 +516,21 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_request_transition_cases_cover_lifecycle_policy")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "provider_eof_cases"
+      "ProviderEofCases"
+      "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "request_execution_lease_cases"
+      "RequestExecutionLeaseCases"
+      "Production begin/progress/finalize/revocation guards consume the applicable generated cases in lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy. Abstract claim freshness and recovery effects still require generated database consumer coverage.")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "request_execution_lease_trace_cases"
+      "RequestExecutionLeaseTraceCases"
+      "Lean-first #1341 race contract. Runtime recovery tests must consume these generated expiry/drop, stale-owner, and single terminal-effect traces when the lease is implemented.")
+      "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "lifecycle_transition_cases"
       "ProcessTransitions"
       "runtime_status::tests::generated_process_transition_cases_match_runtime_status_policy")
@@ -805,6 +824,8 @@ def caseCoverage : List CoverageEntry :=
       "QueueDeadlineConformanceCases"
       "conformance::generated_queue_deadline_cases_pin_r4a_contract_rows")
       "request-lifecycle" [Surface.agentFacing, Surface.runtimeInternal]
+  -- Inference cases include periodic cadence: startup may defer a live execution
+  -- lease, so the same existing call owner must run after later request repair.
   , tagged (consumerCoverage
       "recovery_sweep_cases"
       "RecoverySweepCases"

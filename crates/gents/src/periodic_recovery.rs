@@ -8,6 +8,7 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 
+use crate::admission::{InferenceCall, InferenceCallRecoveryReport};
 use crate::lifecycle::{RequestLifecycle, TerminalRepairReport};
 use crate::llm::tool::BoxFuture;
 use crate::tool_call_lifecycle::{
@@ -26,6 +27,7 @@ const ORPHANED_BACKGROUND_TOOL_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_orphaned_background_tools"];
 const BACKGROUND_COMPLETION_SIDE_EFFECT_SWEEP_IDS: &[&str] =
     &["tool_call_lifecycle_reconcile_background_completion_side_effects"];
+const INFERENCE_CALL_SWEEP_IDS: &[&str] = &["inference_call_recover_all_stale_calls"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PeriodicRecoverySweepMetadata {
@@ -41,6 +43,7 @@ pub enum PeriodicRecoverySweepOutcome {
     TerminalParentTools(TerminalParentToolReport),
     OrphanedBackgroundTools(OrphanedBackgroundToolReport),
     BackgroundCompletionSideEffects(BackgroundCompletionSideEffectReport),
+    InferenceCalls(InferenceCallRecoveryReport),
 }
 
 impl PeriodicRecoverySweepOutcome {
@@ -51,6 +54,7 @@ impl PeriodicRecoverySweepOutcome {
             Self::TerminalParentTools(report) => report.is_noop(),
             Self::OrphanedBackgroundTools(report) => report.is_noop(),
             Self::BackgroundCompletionSideEffects(report) => report.is_noop(),
+            Self::InferenceCalls(report) => report.calls_recovered == 0,
         }
     }
 }
@@ -99,6 +103,12 @@ const PERIODIC_RECOVERY_SWEEP_METADATA: &[PeriodicRecoverySweepMetadata] = &[
         sweep_ids: BACKGROUND_COMPLETION_SIDE_EFFECT_SWEEP_IDS,
         rust_function: "ToolCallLifecycle::reconcile_background_completion_side_effects",
     },
+    // Parent-gated recovery must observe terminal parents from earlier sweeps,
+    // including requests whose execution leases were still live at startup.
+    PeriodicRecoverySweepMetadata {
+        sweep_ids: INFERENCE_CALL_SWEEP_IDS,
+        rust_function: "InferenceCall::recover_all",
+    },
 ];
 
 const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
@@ -121,6 +131,10 @@ const PERIODIC_RECOVERY_SWEEP_EXECUTORS: &[PeriodicRecoverySweepExecutor] = &[
     PeriodicRecoverySweepExecutor {
         metadata_index: 4,
         run: reconcile_background_completion_side_effects,
+    },
+    PeriodicRecoverySweepExecutor {
+        metadata_index: 5,
+        run: recover_inference_calls,
     },
 ];
 
@@ -212,5 +226,17 @@ fn repair_terminal_requests<'a>(
         RequestLifecycle::repair_terminal_requests(node, agent_did)
             .await
             .map(PeriodicRecoverySweepOutcome::RequestTerminalRepair)
+    })
+}
+
+fn recover_inference_calls<'a>(
+    node: &'a EmbeddedNode,
+    agent_did: &'a str,
+    _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
+) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
+    Box::pin(async move {
+        InferenceCall::recover_all(node, agent_did)
+            .await
+            .map(PeriodicRecoverySweepOutcome::InferenceCalls)
     })
 }

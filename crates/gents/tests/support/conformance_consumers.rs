@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs",
+            module_path: "lean_vocab_test::request_execution_lease_policy",
+            function: "generated_provider_eof_cases_fence_production_policy",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate",
             package: "gents",
             source_path: "crates/gents/tests/conformance/graph_pipeline.rs",

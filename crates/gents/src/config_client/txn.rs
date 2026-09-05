@@ -54,6 +54,35 @@ enum TxnBackend<'a> {
 
 pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
+    rollback_on_drop: Option<LocalRollback>,
+}
+
+/// The registry owns open transactions independently of their handles. Keep
+/// cleanup armed across awaits, including a cancelled commit/discard future.
+/// Remove this shim after upstream adoption: https://github.com/gents-ai/gents/issues/1372.
+struct LocalRollback {
+    runner: std::sync::Arc<dyn query::QueryExecutor>,
+    handle: Option<TransactionHandle>,
+    write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+}
+
+impl Drop for LocalRollback {
+    fn drop(&mut self) {
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let runner = self.runner.clone();
+        let write_guard = self.write_guard.take();
+        runtime.spawn(async move {
+            let _write_guard = write_guard;
+            if let Err(error) = runner.rollback_txn(&handle).await {
+                tracing::debug!(%error, transaction = %handle, "dropped transaction was already finalized or rollback failed");
+            }
+        });
+    }
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -66,12 +95,34 @@ impl<'a> ConfigApplyTxn<'a> {
     /// the node DID; HTTP access needs bearer authentication for a caller ACP
     /// identity even though the server node signs its commits.
     pub async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
-        let handle = node
-            .runner()
-            .begin_txn(false)
-            .await
-            .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+        let write_guard = crate::graphql::mutation_write_gate(node).lock_owned().await;
+        let runner = node.runner().clone();
+        // Native begin registers an independently owned transaction. Let it
+        // finish even if this caller is cancelled, so the returned rollback
+        // guard cleans up the handle before releasing the shared write gate.
+        let rollback = tokio::spawn(async move {
+            let mut rollback = LocalRollback {
+                runner,
+                handle: None,
+                write_guard: Some(write_guard),
+            };
+            let handle = rollback
+                .runner
+                .begin_txn(false)
+                .await
+                .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+            rollback.handle = Some(handle);
+            Ok::<_, anyhow::Error>(rollback)
+        })
+        .await
+        .context("begin embedded transaction task")??;
+        let handle = rollback
+            .handle
+            .as_ref()
+            .expect("successful begin has a handle")
+            .clone();
         Ok(Self {
+            rollback_on_drop: Some(rollback),
             backend: TxnBackend::Local {
                 node,
                 handle,
@@ -185,8 +236,8 @@ impl<'a> ConfigApplyTxn<'a> {
     }
 
     /// Commit the transaction. Apply is durable after this returns Ok.
-    pub async fn commit(self) -> Result<()> {
-        match self.backend {
+    pub async fn commit(mut self) -> Result<()> {
+        let result = match self.backend {
             TxnBackend::Graphql {
                 endpoint,
                 id,
@@ -220,14 +271,20 @@ impl<'a> ConfigApplyTxn<'a> {
                 .commit_txn(&handle)
                 .await
                 .map_err(|error| anyhow::anyhow!("commit_txn: {error}")),
+        };
+        if result.is_ok() {
+            if let Some(guard) = self.rollback_on_drop.as_mut() {
+                guard.handle = None;
+            }
         }
+        result
     }
 
     /// Discard the transaction. Returns the underlying error if the explicit
     /// round-trip fails; callers are expected to log and swallow that error so
     /// the original apply error remains what surfaces to the operator.
-    pub async fn discard(self) -> Result<()> {
-        match self.backend {
+    pub async fn discard(mut self) -> Result<()> {
+        let result = match self.backend {
             TxnBackend::Graphql {
                 endpoint,
                 id,
@@ -261,7 +318,13 @@ impl<'a> ConfigApplyTxn<'a> {
                 .rollback_txn(&handle)
                 .await
                 .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
+        };
+        if result.is_ok() {
+            if let Some(guard) = self.rollback_on_drop.as_mut() {
+                guard.handle = None;
+            }
         }
+        result
     }
 }
 
@@ -270,6 +333,165 @@ mod tests {
     use super::*;
     use crate::identity::commit_signer_identity_for_did;
     use crate::{AgentIdentity, KeyIdentity};
+
+    struct AfterFinalization<'a> {
+        entered: std::sync::atomic::AtomicBool,
+        node: &'a EmbeddedNode,
+        handle: TransactionHandle,
+    }
+
+    impl crate::graphql::GraphqlExecution for AfterFinalization<'_> {
+        async fn execute(
+            &self,
+            graphql: &str,
+            policy: defra_node::ExecuteRetryPolicy,
+        ) -> defra_node::QueryResponse {
+            self.entered
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            // This runs only after the ordinary mutation has acquired the
+            // shared gate. Cleanup must have finished before it enters.
+            let old_transaction = self
+                .node
+                .execute_request_in_txn(
+                    QueryRequest::new("{ GatedTransactionFact { value } }"),
+                    &self.handle,
+                )
+                .await;
+            assert!(
+                old_transaction.has_errors(),
+                "write entered before native transaction finalized"
+            );
+            self.node.execute_with_retry(graphql, policy).await
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_transaction_excludes_ordinary_writes_until_commit_discard_or_abort() {
+        use std::future::Future;
+        for finish in ["commit", "discard", "abort"] {
+            let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+            node.add_schema("type GatedTransactionFact { value: String }")
+                .await
+                .unwrap();
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+            let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+            let worker_node = node.clone();
+            let worker = tokio::spawn(async move {
+                let txn = ConfigApplyTxn::begin_local(&worker_node, None)
+                    .await
+                    .unwrap();
+                txn.execute(r#"mutation { create_GatedTransactionFact(input: {value: "explicit"}) { _docID } }"#).await.unwrap();
+                let TxnBackend::Local { handle, .. } = &txn.backend else {
+                    unreachable!()
+                };
+                ready_tx.send(handle.clone()).unwrap();
+                finish_rx.await.unwrap();
+                match finish {
+                    "commit" => txn.commit().await.unwrap(),
+                    "discard" => txn.discard().await.unwrap(),
+                    _ => unreachable!(),
+                }
+            });
+            let handle = ready_rx.await.unwrap();
+            let executor = AfterFinalization {
+                entered: std::sync::atomic::AtomicBool::new(false),
+                node: &node,
+                handle,
+            };
+            let mut ordinary_write = Box::pin(
+                crate::graphql::graphql_mutation_with_transaction_retry_using(
+                    &node,
+                    &executor,
+                    r#"mutation { create_GatedTransactionFact(input: {value: "ordinary"}) { _docID } }"#,
+                    "write after explicit transaction",
+                ),
+            );
+            // Poll the actual writer into the gate wait; no timing assumption.
+            std::future::poll_fn(|cx| {
+                assert!(ordinary_write.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
+            assert!(
+                !executor.entered.load(std::sync::atomic::Ordering::SeqCst),
+                "ordinary executor entered while explicit transaction held the gate"
+            );
+            if finish == "abort" {
+                worker.abort();
+                assert!(worker.await.unwrap_err().is_cancelled());
+            } else {
+                finish_tx.send(()).unwrap();
+                worker.await.unwrap();
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(5), ordinary_write)
+                .await
+                .expect("write gate remained held after finalization")
+                .unwrap();
+            assert!(executor.entered.load(std::sync::atomic::Ordering::SeqCst));
+            let response = node.execute("{ GatedTransactionFact { value } }").await;
+            let rows = crate::graphql::rows::<Value>(&response, "GatedTransactionFact").unwrap();
+            assert_eq!(rows.len(), if finish == "commit" { 2 } else { 1 });
+            assert!(rows.iter().any(|row| row["value"] == "ordinary"));
+            node.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn aborted_local_transaction_is_removed_from_registry_without_committing() {
+        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        node.add_schema("type CancelledTransactionFact { value: String }")
+            .await
+            .unwrap();
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let worker_node = node.clone();
+        let worker = tokio::spawn(async move {
+            let txn = ConfigApplyTxn::begin_local(&worker_node, None)
+                .await
+                .unwrap();
+            txn.execute(r#"mutation { create_CancelledTransactionFact(input: {value: "uncommitted"}) { _docID } }"#)
+                .await.unwrap();
+            let TxnBackend::Local { handle, .. } = &txn.backend else {
+                unreachable!()
+            };
+            ready_tx.send(handle.clone()).unwrap();
+            std::future::pending::<()>().await;
+            txn.commit().await.unwrap();
+        });
+        let handle = ready_rx.await.unwrap();
+        worker.abort();
+        assert!(worker.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let response = node
+                    .execute_request_in_txn(
+                        QueryRequest::new("{ CancelledTransactionFact { value } }"),
+                        &handle,
+                    )
+                    .await;
+                if response.has_errors() {
+                    assert!(
+                        response
+                            .errors
+                            .iter()
+                            .any(|error| error.message == format!("transaction '{handle}' not found or has been committed/rolled back")),
+                        "unexpected transaction query error: {:?}",
+                        response.errors
+                    );
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted transaction remained in registry");
+        let response = node.execute("{ CancelledTransactionFact { value } }").await;
+        assert!(!response.has_errors());
+        assert_eq!(
+            response.data.unwrap()["CancelledTransactionFact"],
+            json!([])
+        );
+        node.shutdown().await;
+    }
 
     #[tokio::test]
     async fn local_transaction_is_signed_by_the_node_identity() {
@@ -379,6 +601,7 @@ impl ConfigAccess {
                     })
                     .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
                 Ok(ConfigApplyTxn {
+                    rollback_on_drop: None,
                     backend: TxnBackend::Graphql {
                         endpoint,
                         id,
@@ -386,20 +609,7 @@ impl ConfigAccess {
                     },
                 })
             }
-            ConfigAccess::Local(node) => {
-                let handle = node
-                    .runner()
-                    .begin_txn(false)
-                    .await
-                    .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
-                Ok(ConfigApplyTxn {
-                    backend: TxnBackend::Local {
-                        node,
-                        handle,
-                        identity: None,
-                    },
-                })
-            }
+            ConfigAccess::Local(node) => ConfigApplyTxn::begin_local(node, None).await,
         }
     }
 }

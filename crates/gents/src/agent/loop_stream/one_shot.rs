@@ -15,7 +15,7 @@ where
     let stream = run_loop_stream(model, hook.clone(), prompt, history, tools, config);
     futures::pin_mut!(stream);
     let mut accumulator = AssistantTurnAccumulator::default();
-    let mut final_text = String::new();
+    let mut final_text = None;
     let mut last_attempt_error: Option<InferenceError> = None;
 
     while let Some(item) = stream.next().await {
@@ -109,13 +109,15 @@ where
                             )?;
                         }
                     }
-                    final_text = final_response.response().to_string();
+                    final_text = Some(final_response.response().to_string());
                 }
                 _ => {}
             },
         }
     }
-    Ok(final_text)
+    final_text.ok_or_else(|| {
+        anyhow::anyhow!("provider stream ended without an explicit terminal response")
+    })
 }
 
 /// Runs a typed completion without surrendering the runtime's owned-loop

@@ -302,6 +302,12 @@ pub struct AgentRequestRow {
     #[serde(default)]
     pub claimed_at: Option<String>,
     #[serde(default)]
+    pub execution_generation: Option<String>,
+    #[serde(default)]
+    pub execution_lease_expires_at: Option<String>,
+    #[serde(default)]
+    pub execution_progress_seq: Option<i64>,
+    #[serde(default)]
     pub background_completion_input_through_sequence: Option<i64>,
     #[serde(default)]
     pub background_completion_notification_keys_json: Option<String>,

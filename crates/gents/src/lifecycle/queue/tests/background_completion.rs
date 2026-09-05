@@ -1,4 +1,5 @@
 use super::*;
+use crate::lifecycle::RequestTerminalOutcome;
 
 fn root_parent(agent_did: &str, session_id: &str) -> AgentRequest {
     let mut parent = parent_request(agent_did, session_id);
@@ -46,6 +47,9 @@ fn wake_agent_request(
         caused_by_trigger_context: None,
         created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         deadline: None,
+        execution_generation: None,
+        execution_lease_expires_at: None,
+        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: Some(parent.request_id.clone()),
         caused_by_parent_request_doc_id: Some(parent.doc_id.clone()),
@@ -350,7 +354,16 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
         lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    lifecycle.complete().await.unwrap();
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        db.agent_did(),
+        std::time::Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
 
     let after = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node),
@@ -398,30 +411,33 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
         lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    lifecycle.begin_execution().await.unwrap();
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        db.agent_did(),
+        std::time::Duration::ZERO,
+    );
+    let response_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
 
+    // Simulate an interrupted older terminal write: the response committed,
+    // while the owning request remains processing with an expired lease.
     let response = node
         .execute(&format!(
             r#"mutation {{
-                create_AgentResponse(input: {{
-                    response_key: "{}", request_id: "{}", request_doc_id: "{}",
-                    agent_did: "{}", behavior_id: "{TEST_BEHAVIOR_ID}",
-                    session_id: "{}", content: "integrated notification",
-                    status: "complete", token_count: 1, progress_seq: 1,
-                    created_at: "2026-08-12T00:00:00Z",
-                    completed_at: "2026-08-12T00:00:01Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&enqueued.request.request_id),
-            escape_graphql_string(&enqueued.request.request_id),
-            escape_graphql_string(&enqueued.request.doc_id),
-            escape_graphql_string(db.agent_did()),
-            escape_graphql_string(&parent.session_id),
+        update_AgentResponse(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+            content: "integrated notification", status: "complete", token_count: 1,
+            progress_seq: 1, completed_at: "2026-08-12T00:00:01Z"
+        }}) {{ _docID }}
+        update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
+            execution_lease_expires_at: "2000-01-01T00:00:00Z"
+        }}) {{ _docID }}
+    }}"#,
+            escape_graphql_string(&response_doc_id),
+            escape_graphql_string(&enqueued.request.doc_id)
         ))
         .await;
     assert!(
         !response.has_errors(),
-        "persist terminal response: {:?}",
+        "persist interrupted terminal write: {:?}",
         response.errors
     );
 
@@ -547,7 +563,10 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         "unrelated transcript writes must not advance the queue-local generation"
     );
     first_lifecycle
-        .fail_with_reason("injected provider failure")
+        .terminalize_owned_without_stream(
+            RequestTerminalOutcome::Failed,
+            Some("injected provider failure"),
+        )
         .await
         .unwrap();
 
@@ -570,7 +589,19 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         second_lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    second_lifecycle.complete().await.unwrap();
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        db.agent_did(),
+        std::time::Duration::ZERO,
+    );
+    second_lifecycle
+        .begin_owned_execution(&writer)
+        .await
+        .unwrap();
+    second_lifecycle
+        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .await
+        .unwrap();
 
     let access = crate::config_client::ConfigAccess::Local(node);
     let diagnostics = crate::load_background_completion_diagnostics(&access, db.agent_did())

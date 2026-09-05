@@ -15,6 +15,7 @@
 /// crate paths read `crate::llm::message::Message`.
 pub use gents_protocol::message;
 pub(crate) mod backend_client;
+pub(crate) mod provider_stream;
 pub(crate) mod responses_normalize;
 pub mod rig_compat;
 pub mod tool;

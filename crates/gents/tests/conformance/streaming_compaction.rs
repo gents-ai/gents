@@ -22,7 +22,7 @@ const IDLE_TIMEOUT_MODEL: &str = "default";
 const IDLE_TIMEOUT_BACKEND_ID: &str = "backend-streaming-response-idle-timeout";
 const IDLE_TIMEOUT_MARKER: &str = "streaming-response-idle-timeout";
 const IDLE_TIMEOUT_PARTIAL: &str = "partial before idle timeout ";
-const IDLE_TIMEOUT_CONFIGURED_SECS: u64 = 5;
+const IDLE_TIMEOUT_CONFIGURED_SECS: u64 = 300;
 
 #[derive(Debug, Deserialize)]
 struct StreamingResponseRow {
@@ -31,7 +31,6 @@ struct StreamingResponseRow {
     status: String,
     error_message: Option<String>,
     token_count: i64,
-    progress_seq: i64,
     materialized_message_sequence: Option<i64>,
     interrupted_at: Option<String>,
     completed_at: Option<String>,
@@ -115,33 +114,23 @@ pub(super) async fn generated_streaming_response_interrupt_flow_cases_drive_daem
     }
 }
 
-pub(super) async fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
-    let case = lean_response_transition_cases()
+pub(super) async fn generated_execution_lease_expiry_case_drives_daemon_recovery_contract() {
+    use lean_vocab_test::{
+        LeanRequestExecutionRequestPhase as RequestPhase,
+        LeanRequestExecutionResponsePhase as ResponsePhase,
+    };
+    let case = lean_vocab_test::lean_request_execution_lease_cases()
         .iter()
-        .find(|case| case.name == "finalize_error_idle_timeout_requires_deadline")
-        .expect("Lean idle-timeout response transition case should be emitted");
-
-    assert!(case.legal);
-    assert_eq!(case.group, "normal");
-    assert_eq!(case.action, "finalize_error");
-    assert_eq!(case.pre_status, "streaming");
-    assert_eq!(case.post_status, "error");
-    assert_eq!(case.pre_live_tail, "nonEmpty");
-    assert_eq!(case.post_live_tail, "empty");
-    assert_eq!(case.error_reason.as_deref(), Some("streamIdleTimeout"));
-    assert_eq!(case.expected_request_state.as_deref(), Some("failed"));
-    assert_eq!(
-        case.expected_request_persistence.as_deref(),
-        Some("committed")
-    );
-
-    drive_streaming_response_idle_timeout_case(case).await;
-}
-
-async fn drive_streaming_response_idle_timeout_case(
-    case: &lean_vocab_test::LeanResponseTransitionCase,
-) {
-    let db = test_db(&format!("streaming-idle-timeout-{}", case.name)).await;
+        .find(|case| case.name == "recovery_failure_is_atomic_and_single_effect")
+        .expect("generated execution recovery case");
+    assert_eq!(case.pre.request, RequestPhase::Processing);
+    assert_eq!(case.pre.response, ResponsePhase::Streaming);
+    let expected = case.expected.as_ref().expect("legal recovery transition");
+    assert_eq!(expected.request, RequestPhase::Failed);
+    assert_eq!(expected.response, ResponsePhase::Failed);
+    // Continuation/token effects have their own production consumers; this
+    // daemon consumer fences the request/response pair and generation takeover.
+    let db = test_db(&format!("semantic-lease-{}", case.name)).await;
     let backend = MockStreamingBackend::start(
         IDLE_TIMEOUT_MODEL,
         vec![StreamScript::paused(
@@ -149,110 +138,101 @@ async fn drive_streaming_response_idle_timeout_case(
             [IDLE_TIMEOUT_PARTIAL],
         )],
     )
-    .expect("start mock streaming backend");
+    .unwrap();
     let agent = boot_streaming_idle_timeout_agent(&db, &case.name, backend.endpoint()).await;
-
     let request_id = format!("{}-{}", case.name, uuid::Uuid::new_v4());
-    let session_id = format!("session-{}", uuid::Uuid::new_v4());
+    let session_id = uuid::Uuid::new_v4().to_string();
     let request_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        agent.agent_did.as_str(),
+        &db.node,
+        &agent.agent_did,
         AGENT_NAME,
         &request_id,
         &session_id,
         IDLE_TIMEOUT_MARKER,
     )
     .await;
-
     wait_for_backend_chunks_realtime(&backend, IDLE_TIMEOUT_MARKER, 1).await;
-    let response_doc_id = wait_for_response_doc_id_realtime(db.node.as_ref(), &request_id).await;
-    let pre_response = wait_for_response_content_contains_realtime(
-        db.node.as_ref(),
+    let response_doc_id = wait_for_response_doc_id_realtime(&db.node, &request_id).await;
+    let before = wait_for_response_content_contains_realtime(
+        &db.node,
         &response_doc_id,
         IDLE_TIMEOUT_PARTIAL,
     )
     .await;
-    assert_eq!(pre_response.status, case.pre_status);
-    assert_eq!(live_tail_shape(&pre_response), case.pre_live_tail);
-    assert!(pre_response.token_count > 0);
-
-    let _pre_request =
-        wait_for_request_lifecycle_state_realtime(db.node.as_ref(), &request_doc_id, "processing")
-            .await;
-    let pre_call =
-        wait_for_latest_inference_call_state_realtime(db.node.as_ref(), &request_id, "running")
-            .await;
-    assert!(!inference_call_state_is_terminal(&pre_call.call_state));
-
-    // The progress write above is the final operation for the first stream
-    // item. Give the processor a turn to install its next-poll idle deadline,
-    // then cross that deadline exactly once. Repeated virtual-time advances
-    // while terminal persistence is running can incorrectly exhaust DefraDB's
-    // own query timeout under host load.
-    tokio::time::pause();
-    for _ in 0..10 {
-        tokio::task::yield_now().await;
-    }
-    tokio::time::advance(Duration::from_secs(IDLE_TIMEOUT_CONFIGURED_SECS + 1)).await;
-    tokio::task::yield_now().await;
-
-    let post_response =
-        wait_for_response_status_realtime(db.node.as_ref(), &response_doc_id, &case.post_status)
-            .await;
-    assert_eq!(live_tail_shape(&post_response), case.post_live_tail);
-    assert_eq!(post_response.token_count, pre_response.token_count);
-    assert!(
-        post_response
-            .error_message
-            .as_deref()
-            .is_some_and(|message| message.contains(&format!(
-                "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
-            ))),
-        "{}: response error should preserve stream liveness timeout reason; actual={:?}",
-        case.name,
-        post_response.error_message
+    assert_eq!(before.status, "streaming");
+    assert!(before.token_count > 0);
+    wait_for_latest_inference_call_state_realtime(&db.node, &request_id, "running").await;
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ execution_generation execution_progress_seq }} }}"#,
+        escape_graphql_string(&request_doc_id)
     );
-    assert!(post_response
+    let before_lease = db.node.execute(&query).await;
+    assert!(!before_lease.has_errors(), "{:?}", before_lease.errors);
+    let before_lease = before_lease.data.unwrap()["AgentRequest"][0].clone();
+    assert!(before_lease["execution_progress_seq"].as_i64().unwrap() > 0);
+    // Change only the persisted deadline after observing durable progress.
+    // This is deterministic and exercises the production wall-clock lease poll.
+    let mutation = format!(
+        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&request_doc_id)
+    );
+    let expired = db.node.execute(&mutation).await;
+    assert!(!expired.has_errors(), "{:?}", expired.errors);
+    let after = wait_for_response_status_realtime(&db.node, &response_doc_id, "error").await;
+    assert_eq!(
+        after.content,
+        format!(
+            "{}\n\n[Response interrupted — daemon restarted]",
+            before.content
+        ),
+        "recovery preserves the durable partial tail and appends its recovery marker"
+    );
+    assert_eq!(after.token_count, before.token_count);
+    assert!(after
         .completed_at
         .as_deref()
         .is_some_and(|value| !value.is_empty()));
-
-    let post_request = wait_for_request_lifecycle_state_realtime(
-        db.node.as_ref(),
-        &request_doc_id,
-        case.expected_request_state
-            .as_deref()
-            .expect("idle timeout case should project a request state"),
-    )
-    .await;
-    assert_eq!(post_request.backend_id, IDLE_TIMEOUT_BACKEND_ID);
-    assert!(request_state_is_terminal(&post_request.lifecycle_state));
-    assert!(
-        post_request.failure_reason.contains(&format!(
-            "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
-        )),
-        "{}: request failure should preserve stream liveness timeout reason; actual={:?}",
-        case.name,
-        post_request.failure_reason
+    let request =
+        wait_for_request_lifecycle_state_realtime(&db.node, &request_doc_id, "failed").await;
+    assert_eq!(request.backend_id, IDLE_TIMEOUT_BACKEND_ID);
+    wait_for_latest_inference_call_state_realtime(&db.node, &request_id, "failed").await;
+    let after_lease = db.node.execute(&query).await;
+    assert!(!after_lease.has_errors(), "{:?}", after_lease.errors);
+    let after_lease = after_lease.data.unwrap()["AgentRequest"][0].clone();
+    assert_ne!(
+        after_lease["execution_generation"],
+        before_lease["execution_generation"]
     );
-
-    let post_call =
-        wait_for_latest_inference_call_state_realtime(db.node.as_ref(), &request_id, "failed")
-            .await;
-    assert!(inference_call_state_is_terminal(&post_call.call_state));
-    assert!(
-        post_call
-            .failure_reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains(&format!(
-                "no data received for {IDLE_TIMEOUT_CONFIGURED_SECS}s"
-            ))),
-        "{}: inference call failure should preserve stream liveness timeout reason; actual={:?}",
-        case.name,
-        post_call.failure_reason
+    assert_eq!(
+        after_lease["execution_progress_seq"],
+        before_lease["execution_progress_seq"]
     );
-
-    drop(agent);
+    let responses = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentResponse(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            escape_graphql_string(&request_doc_id)
+        ))
+        .await;
+    assert!(!responses.has_errors(), "{:?}", responses.errors);
+    assert_eq!(
+        responses.data.unwrap()["AgentResponse"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        RequestLifecycle::recover_all(&db.node, &agent.agent_did)
+            .await
+            .unwrap()
+            .requests_recovered,
+        0
+    );
+    let repeated = load_streaming_response_row(&db.node, &response_doc_id).await;
+    assert_eq!(repeated.content, after.content);
+    assert_eq!(repeated.completed_at, after.completed_at);
+    agent.shutdown().await;
 }
 
 async fn wait_for_response_doc_id_realtime(node: &EmbeddedNode, request_id: &str) -> String {
@@ -308,7 +288,9 @@ async fn wait_for_response_content_contains_realtime(
     let started = std::time::Instant::now();
     loop {
         let row = load_streaming_response_row(node, response_doc_id).await;
-        if row.content.contains(expected) && row.progress_seq >= 2 {
+        // The request's execution_progress_seq owns semantic lease progress.
+        // Durable response text need not advance the transcript projection counter.
+        if row.content.contains(expected) {
             return row;
         }
         assert_ne!(
@@ -558,19 +540,8 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
     let request_id = format!("{}-{}", case.name, uuid::Uuid::new_v4());
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
     let created_at = chrono::Utc::now().to_rfc3339();
-    let request_status = if case.pre_status == "complete" {
-        "completed"
-    } else {
-        "processing"
-    };
-    let request_doc_id = create_request(
-        &db.node,
-        &request_id,
-        &session_id,
-        request_status,
-        &created_at,
-    )
-    .await;
+    let request_doc_id =
+        create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
     create_agent_session(&db.node, &session_id, AGENT_NAME, &created_at).await;
     upsert_conversation(
         &db.node,
@@ -580,27 +551,45 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
         "processing",
     )
     .await;
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        db.node.clone(),
+        AGENT_NAME,
+        AGENT_DID,
+        build_request(
+            request_doc_id.clone(),
+            request_id.clone(),
+            session_id.clone(),
+            created_at.clone(),
+        ),
+        60,
+    );
+    lifecycle.claim().await.expect("claim execution lease");
     let writer = DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::from_millis(0));
 
-    let doc_id = if case.pre_status == "complete" {
-        create_manual_response(
+    let doc_id = lifecycle
+        .begin_owned_execution(&writer)
+        .await
+        .expect("begin atomic execution");
+    if case.pre_status != "complete" {
+        seed_streaming_tail(&writer, &doc_id, case.pre_token_count, &case.pre_live_tail).await;
+    }
+
+    if case.pre_status == "complete" {
+        lifecycle
+            .terminalize_owned_without_stream(
+                gents::lifecycle::RequestTerminalOutcome::Completed,
+                None,
+            )
+            .await
+            .expect("seed completed request");
+        seed_terminal_response_shape(
             &db.node,
             &request_id,
-            &session_id,
-            &case.pre_status,
             case.pre_token_count,
             case.pre_materialized_seq,
         )
-        .await
-    } else {
-        let doc_id = writer
-            .begin(&session_id, &request_id, AGENT_NAME)
-            .await
-            .expect("begin streaming response");
-        seed_streaming_tail(&writer, &doc_id, case.pre_token_count, &case.pre_live_tail).await;
-        doc_id
-    };
-
+        .await;
+    }
     assert_streaming_response_shape(&db.node, &doc_id, case, ResponsePhase::Pre).await;
 
     match case.action.as_str() {
@@ -637,7 +626,18 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                 mark_materialized(db.node.clone(), &request_id, sequence as u32).await;
             }
             writer
-                .finalize(&doc_id, gents::streaming::StreamStatus::Complete)
+                .flush_pending(&doc_id)
+                .await
+                .expect("flush final tail");
+            writer
+                .reset_tail(&doc_id)
+                .await
+                .expect("clear materialized tail");
+            lifecycle
+                .terminalize_owned_without_stream(
+                    gents::lifecycle::RequestTerminalOutcome::Completed,
+                    None,
+                )
                 .await
                 .expect("finalize complete");
         }
@@ -649,11 +649,27 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                     .expect("set error reason");
             }
             writer
-                .finalize(&doc_id, gents::streaming::StreamStatus::Error)
+                .flush_pending(&doc_id)
+                .await
+                .expect("flush error tail");
+            writer
+                .reset_tail(&doc_id)
+                .await
+                .expect("clear materialized error tail");
+            lifecycle
+                .terminalize_owned_without_stream(
+                    gents::lifecycle::RequestTerminalOutcome::Failed,
+                    case.error_reason.as_deref(),
+                )
                 .await
                 .expect("finalize error");
         }
         "recover_interrupted" => {
+            let expired = db.node.execute(&format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#,
+                gents::graphql::escape_graphql_string(&request_doc_id),
+            )).await;
+            assert!(!expired.has_errors(), "{:?}", expired.errors);
             let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
                 .await
                 .expect("recover streaming response");
@@ -661,8 +677,11 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
             assert_eq!(report.requests_recovered, 1, "{}", case.name);
         }
         "observe_idempotent_finalize" => {
-            writer
-                .finalize(&doc_id, gents::streaming::StreamStatus::Complete)
+            lifecycle
+                .terminalize_owned_without_stream(
+                    gents::lifecycle::RequestTerminalOutcome::Completed,
+                    None,
+                )
                 .await
                 .expect("idempotent finalize");
         }
@@ -827,45 +846,24 @@ fn tokens(count: usize) -> String {
         .join(" ")
 }
 
-async fn create_manual_response(
+async fn seed_terminal_response_shape(
     node: &EmbeddedNode,
     request_id: &str,
-    session_id: &str,
-    status: &str,
     token_count: usize,
     materialized_sequence: Option<usize>,
 ) -> String {
     let now = chrono::Utc::now().to_rfc3339();
-    let completed_at = if matches!(status, "complete" | "error") {
-        now.as_str()
-    } else {
-        ""
-    };
     let materialized_fields = materialized_sequence
         .map(|sequence| {
             format!(r#"materialized_message_sequence: {sequence}, materialized_at: "{now}","#)
         })
         .unwrap_or_default();
     let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let status = escape_graphql_string(status);
     let mutation = format!(
         r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{request_id}",
-                request_id: "{request_id}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{AGENT_NAME}",
-                session_id: "{session_id}",
-                content: "",
-                reasoning: "",
-                status: "{status}",
-                error_message: "",
+            update_AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, input: {{
                 token_count: {token_count},
-                progress_seq: 0,
                 {materialized_fields}
-                created_at: "{now}",
-                completed_at: "{completed_at}"
             }}) {{ _docID }}
         }}"#
     );
@@ -922,7 +920,6 @@ async fn load_streaming_response_row(node: &EmbeddedNode, doc_id: &str) -> Strea
                 status
                 error_message
                 token_count
-                progress_seq
                 materialized_message_sequence
                 interrupted_at
                 completed_at

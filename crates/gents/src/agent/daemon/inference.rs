@@ -12,7 +12,7 @@ use crate::compaction::{ReductionEngine, ReductionOptions};
 use crate::config::AgentBehavior;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
-use crate::streaming::{StreamStatus, StreamWriter};
+use crate::streaming::StreamWriter;
 use crate::watcher::AgentRequest;
 
 type RequestDeadline = Option<DateTime<Utc>>;
@@ -453,24 +453,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     inference_token.clone(),
                     terminal_failure_reason.clone(),
                     async {
-                        let liveness_timeout = self.behavior.stream_liveness_timeout;
-
                         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
                             &self.stream_writer,
                             lifecycle,
                             doc_id,
                         );
+                        let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
+                        lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                         let mut stream_error = None;
-                        // A retry's backoff sleep runs *inside* the loop
-                        // generator, spanning the next `stream.next()` poll. The
-                        // liveness timeout wraps that poll, so a backoff longer
-                        // than `liveness_timeout` would otherwise be misread as a
-                        // dead stream and turned into a spurious terminal
-                        // "stream liveness timeout", defeating the retry (#648).
-                        // Carry the pending backoff forward and add it to the
-                        // next poll's liveness budget.
-                        let mut pending_backoff = std::time::Duration::ZERO;
 
                         loop {
                             let item = match tokio::select! {
@@ -481,6 +472,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
                                     {
@@ -515,6 +507,32 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     }
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
+                                _ = lease_poll.tick() => {
+                                    if let Err(error) = processor.validate_execution().await {
+                                        let reason = format!("request execution lease: {error:#}");
+                                        admission::set_terminal_failure_reason(
+                                            &terminal_failure_reason,
+                                            reason.clone(),
+                                        );
+                                        drop(stream);
+                                        if let Err(tool_error) = persistence_hook
+                                            .fail_in_flight_tool_calls(
+                                                &reason,
+                                                crate::tool_call_lifecycle::FailureClass::External,
+                                            )
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                %request_id,
+                                                error = %tool_error,
+                                                "failed to close in-flight tool calls after losing execution lease"
+                                            );
+                                        }
+                                        return Err(error);
+                                    }
+                                    lease_poll.reset();
+                                    continue;
+                                }
                                 result = await_with_request_deadline(
                                     request_deadline,
                                     crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_trigger_context(
@@ -526,16 +544,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                         trigger_correlation.clone(),
                                         trigger_context.source_fields.clone(),
                                         false,
-                                        tokio::time::timeout(
-                                            liveness_timeout.saturating_add(pending_backoff),
-                                            stream.next(),
-                                        ),
+                                        stream.next(),
                                     ),
                                     "waiting for inference stream item",
                                 ) => {
                                     match result {
                                         Ok(item) => item,
                                         Err(error) => {
+                                            admission::set_terminal_failure_reason(
+                                                &terminal_failure_reason,
+                                                error.to_string(),
+                                            );
+                                            drop(stream);
                                             if let Err(sweep_error) =
                                                 persistence_hook.timeout_expired_tool_calls().await
                                             {
@@ -551,53 +571,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     }
                                 }
                             } {
-                                Ok(Some(item)) => item,
-                                Ok(None) => break,
-                                Err(_) => {
-                                    if let Err(error) = persistence_hook
-                                        .fail_in_flight_tool_calls(
-                                            "stream liveness timeout while tool call was running",
-                                            crate::tool_call_lifecycle::FailureClass::External,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to mark in-flight tool calls failed after stream liveness timeout"
-                                        );
-                                    }
-                                    let timeout_reason = format!(
-                                        "stream liveness timeout: no data received for {}s",
-                                        liveness_timeout.as_secs()
-                                    );
-                                    admission::set_terminal_failure_reason(
-                                        &terminal_failure_reason,
-                                        timeout_reason.clone(),
-                                    );
-                                    stream_error = Some(rig::agent::StreamingError::Completion(
-                                        rig::completion::CompletionError::ProviderError(
-                                            timeout_reason,
-                                        ),
-                                    ));
-                                    break;
-                                }
-                            };
-                            // The generator sleeps this backoff before its next
-                            // yield, so extend the *next* poll's liveness budget
-                            // by it (reset to zero for any non-retry item).
-                            pending_backoff = match &item {
-                                Ok(crate::agent::loop_stream::LoopStreamItem::AttemptFailed {
-                                    backoff,
-                                    will_retry: true,
-                                    ..
-                                })
-                                | Ok(crate::agent::loop_stream::LoopStreamItem::TurnRetracted {
-                                    backoff,
-                                    ..
-                                }) => *backoff,
-                                _ => std::time::Duration::ZERO,
+                                Some(item) => item,
+                                None => break,
                             };
                             match processor.process_item(item).await {
                                 Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
@@ -610,6 +585,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             }
                         }
 
+                        drop(stream);
                         if let Some(error) = stream_error {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
@@ -627,12 +603,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             }
 
                             let error_reason = format!("agent stream failed: {}", error);
-                            self.stream_writer
-                                .finalize_error(doc_id, &error_reason)
-                                .await?;
-
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 error_reason
+                            )));
+                        }
+
+                        if processor.final_text.is_none() {
+                            return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
+                                "provider stream ended without an explicit terminal response"
                             )));
                         }
 
@@ -658,10 +636,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         ) {
                             let error_reason =
                                 "agent stream completed without producing any visible response content";
-                            self.stream_writer
-                                .finalize_error(doc_id, error_reason)
-                                .await?;
-
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 error_reason
                             )));
@@ -671,10 +645,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             request_deadline,
                             "finalizing inference response",
                         )?;
-                        self.stream_writer
-                            .finalize(doc_id, StreamStatus::Complete)
-                            .await?;
-
                         Ok(HandleRequestOutcome::Completed)
                     },
                 )
@@ -723,34 +693,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         .await?;
 
         Ok(outcome)
-    }
-
-    pub(super) async fn write_error_response(
-        &self,
-        request: &crate::watcher::AgentRequest,
-        behavior_id: &str,
-        error: &anyhow::Error,
-    ) -> Result<()> {
-        let doc_id = self
-            .stream_writer
-            .begin_with_requester_did(
-                &request.session_id,
-                &request.request_id,
-                Some(&request.doc_id),
-                behavior_id,
-                request.requester_did.as_deref(),
-            )
-            .await?;
-        let error_reason = error.to_string();
-        let error_text = format!("Error: {}", error_reason);
-        let _ = self
-            .stream_writer
-            .write_tokens(&doc_id, &error_text)
-            .await?;
-        self.stream_writer
-            .finalize_error(&doc_id, &error_reason)
-            .await?;
-        Ok(())
     }
 }
 
@@ -1381,4 +1323,5 @@ mod tests {
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(data_path);
     }
+    include!("execution_lease_regression_tests.rs");
 }

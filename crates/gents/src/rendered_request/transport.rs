@@ -297,6 +297,8 @@ where
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
+        let protocol =
+            crate::llm::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
         let decision = decide(
             parts.uri.path(),
             provider_endpoint_of(
@@ -307,7 +309,10 @@ where
         async move {
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);
-            HttpClientExt::send_streaming(&inner, req).await
+            let response = HttpClientExt::send_streaming(&inner, req).await?;
+            Ok(crate::llm::provider_stream::guard_response(
+                response, protocol,
+            ))
         }
     }
 }

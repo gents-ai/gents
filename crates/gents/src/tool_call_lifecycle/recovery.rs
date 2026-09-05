@@ -147,14 +147,6 @@ struct TerminalBackgroundToolRow {
 }
 
 #[derive(Debug, Deserialize)]
-struct StreamingChildResponseRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    #[serde(default)]
-    content: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct SpawnArgs {
     name: String,
     agent_did: String,
@@ -1705,7 +1697,6 @@ async fn terminalize_expired_child_with_row(
     if !mark_child_request_dead(node, child, &reason).await? {
         return Ok(false);
     }
-    finalize_streaming_child_response(node, child_request_id, &reason).await?;
     tracing::info!(
         doc_id = %row.doc_id,
         request_id = row.request_id.as_deref().unwrap_or(""),
@@ -1733,6 +1724,12 @@ async fn load_request_liveness_row(
                 request_id
                 agent_did
                 lifecycle_state
+                session_id
+                behavior_id
+                requester_did
+                execution_generation
+                execution_lease_expires_at
+                execution_progress_seq
                 deadline
             }}
         }}"#
@@ -1777,6 +1774,12 @@ async fn load_child_liveness_rows(
                 request_id
                 agent_did
                 lifecycle_state
+                session_id
+                behavior_id
+                requester_did
+                execution_generation
+                execution_lease_expires_at
+                execution_progress_seq
                 deadline
             }}
         }}"#
@@ -1806,7 +1809,20 @@ async fn mark_child_request_dead(
     child: &AgentRequestRow,
     reason: &str,
 ) -> Result<bool> {
-    let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
+    match child.lifecycle_state {
+        Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing) => {
+            return Ok(crate::lifecycle::revoke_execution_generation(
+                node,
+                child,
+                crate::lifecycle::RequestTerminalOutcome::Dead,
+                reason,
+            )
+            .await?
+                == crate::lifecycle::TerminalizeResult::Won);
+        }
+        Some(RequestLifecycleState::Pending) => {}
+        _ => return Ok(false),
+    }
     let escaped_doc_id = escape_graphql_string(
         child
             .doc_id
@@ -1827,7 +1843,7 @@ async fn mark_child_request_dead(
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _in: {active_runtime_states} }}
+                    lifecycle_state: {{ _eq: "pending" }}
                 }},
                 input: {{
                     lifecycle_state: "dead",
@@ -1849,68 +1865,6 @@ async fn mark_child_request_dead(
         .as_ref()
         .and_then(|data| data.get("update_AgentRequest"))
         .is_some_and(response_has_documents))
-}
-
-async fn finalize_streaming_child_response(
-    node: &EmbeddedNode,
-    child_request_id: &str,
-    reason: &str,
-) -> Result<()> {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{
-                    request_id: {{ _eq: "{escaped_child_request_id}" }},
-                    status: {{ _eq: "streaming" }}
-                }}
-            ) {{
-                _docID
-                content
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query streaming child AgentResponse {child_request_id} failed: {:?}",
-            response.errors
-        );
-    }
-    let rows: Vec<StreamingChildResponseRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-    let now = Utc::now().to_rfc3339();
-    let escaped_reason = escape_graphql_string(reason);
-    for row in rows {
-        let content = row.content.unwrap_or_default();
-        let final_content = if content.trim().is_empty() {
-            format!("Error: {reason}")
-        } else {
-            format!("{content}\n\n[Response interrupted - {reason}]")
-        };
-        let escaped_doc_id = escape_graphql_string(&row.doc_id);
-        let escaped_content = escape_graphql_string(&final_content);
-        let escaped_now = escape_graphql_string(&now);
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                    input: {{
-                        content: "{escaped_content}",
-                        status: "error",
-                        error_message: "{escaped_reason}",
-                        completed_at: "{escaped_now}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-        execute_mutation_with_retry(node, &mutation, "finalize_expired_child_response").await?;
-    }
-    Ok(())
 }
 
 async fn load_child_completion_result(

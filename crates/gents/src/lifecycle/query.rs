@@ -68,7 +68,7 @@ impl RequestLifecycle {
     }
 
     pub(super) async fn request_view(&self) -> Result<Option<AgentRequestRow>> {
-        let doc_id = &self.request.doc_id;
+        let doc_id = escape_graphql_string(&self.request.doc_id);
         let query = format!(
             r#"{{
                 AgentRequest(
@@ -78,6 +78,9 @@ impl RequestLifecycle {
                     request_id
                     lifecycle_state
                     backend_id
+                    execution_generation
+                    execution_lease_expires_at
+                    execution_progress_seq
                     execution_origin
                 }}
             }}"#,

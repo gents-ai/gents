@@ -32,6 +32,7 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.GraphPipeline
+import Proofs.Conformance.RequestExecutionLease
 
 namespace Conformance.Contracts
 
@@ -52,6 +53,12 @@ def snapshotJson : String :=
       ++ Conformance.GraphPipelineContracts.runTerminalCasesJson ++ ","
     ++ "\"request_transition_cases\":"
       ++ jsonArray (requestTransitionCases.map lifecycleTransitionCaseJson) ++ ","
+    ++ "\"provider_eof_cases\":"
+      ++ Conformance.RequestExecutionLeaseContracts.providerEofCasesJson ++ ","
+    ++ "\"request_execution_lease_cases\":"
+      ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
+    ++ "\"request_execution_lease_trace_cases\":"
+      ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
     ++ "\"process_transition_cases\":"
       ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"trigger_dispatch_case_count\":"

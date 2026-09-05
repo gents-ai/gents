@@ -343,6 +343,8 @@ async fn create_request(
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
+                behavior_id: "general",
+                session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
                 caused_by_trigger_id: "{trigger_id}",
@@ -892,4 +894,80 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
         1,
         "{rows:?}"
     );
+}
+
+#[tokio::test]
+async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically() {
+    let (node, materializer) = materializer_with_node().await;
+    let agent_did = "did:key:z-execution-owner";
+    for state in ["claimed", "processing"] {
+        let request_id = format!("live-{state}");
+        let expiry = (Utc::now() + ChronoDuration::minutes(5)).to_rfc3339();
+        create_request(
+            &node,
+            &request_id,
+            agent_did,
+            state,
+            "latest",
+            TriggerKind::Event,
+            state,
+        )
+        .await;
+        let result = node.execute(&format!(r#"mutation {{ update_AgentRequest(
+            filter: {{ request_id: {{ _eq: "{request_id}" }} }},
+            input: {{ execution_generation: "original", execution_lease_expires_at: "{expiry}", execution_progress_seq: 7 }}
+        ) {{ _docID }} }}"#)).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        let request_doc_id = result.data.as_ref().unwrap()["update_AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        if state == "processing" {
+            let result = node.execute(&format!(r#"mutation {{ create_AgentResponse(input: {{
+                response_key: "{request_id}", request_id: "{request_id}", request_doc_id: "{request_doc_id}",
+                agent_did: "{agent_did}", session_id: "{request_id}", behavior_id: "general",
+                status: "streaming", content: "durable partial text", reasoning: "durable reasoning"
+            }}) {{ _docID }} }}"#)).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
+        assert_eq!(
+            materializer
+                .supersede_active_runtime_requests_for_trigger(
+                    agent_did,
+                    "latest",
+                    TriggerKind::Event,
+                    Some(state),
+                    None,
+                )
+                .await
+                .unwrap(),
+            1
+        );
+        let result = node.execute(&format!(r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state execution_generation }}
+            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ status content reasoning }}
+        }}"#)).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        let data = result.data.as_ref().unwrap();
+        assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "superseded");
+        assert_ne!(data["AgentRequest"][0]["execution_generation"], "original");
+        assert_eq!(data["AgentResponse"].as_array().unwrap().len(), 1);
+        assert_eq!(data["AgentResponse"][0]["status"], "error");
+        if state == "processing" {
+            assert_eq!(data["AgentResponse"][0]["content"], "durable partial text");
+            assert_eq!(data["AgentResponse"][0]["reasoning"], "durable reasoning");
+        }
+        assert_eq!(
+            materializer
+                .supersede_active_runtime_requests_for_trigger(
+                    agent_did,
+                    "latest",
+                    TriggerKind::Event,
+                    Some(state),
+                    None,
+                )
+                .await
+                .unwrap(),
+            0
+        );
+    }
 }

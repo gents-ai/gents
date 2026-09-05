@@ -76,6 +76,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             Module("conformance/rendered_capture.rs"),
         ),
         ("Request", Module("conformance/request_lifecycle.rs")),
+        (
+            "RequestExecutionLease",
+            WorkspaceTest("crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs"),
+        ),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
         ("Scheduling", Module("conformance/scheduling.rs")),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),

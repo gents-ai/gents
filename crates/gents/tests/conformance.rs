@@ -16,8 +16,8 @@ use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::{HookAction, ToolCallHookAction};
 use gents::tool_call_lifecycle::{
-    AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
-    ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
+    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallLifecycle,
+    MAX_SUBAGENT_DEPTH,
 };
 use gents::{
     fetch_interrupt_requested_at, interrupt_request, upsert_agent_behavior, upsert_tool_selection,
@@ -346,7 +346,7 @@ fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract() {
 }
 
 #[test]
-fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
+fn generated_execution_lease_expiry_case_drives_daemon_recovery_contract() {
     std::thread::Builder::new()
         .name("streaming-idle-timeout-conformance".into())
         .stack_size(16 * 1024 * 1024)
@@ -356,7 +356,7 @@ fn generated_streaming_response_idle_timeout_case_drives_daemon_contract() {
                 .build()
                 .expect("build streaming idle-timeout runtime")
                 .block_on(async {
-                    streaming_compaction::generated_streaming_response_idle_timeout_case_drives_daemon_contract()
+                    streaming_compaction::generated_execution_lease_expiry_case_drives_daemon_recovery_contract()
                         .await;
                 });
         })

@@ -13,6 +13,8 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
+- request execution leases with opaque generations, semantic-progress renewal,
+  atomic request/response terminalization, and recovery race exclusion (#1341)
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
@@ -91,7 +93,7 @@ lake env lean --run Proofs/Conformance/Contracts.lean
 
 ## What Is Proven
 
-The current proof suite covers nineteen practical areas:
+The current proof suite covers twenty practical areas:
 
 1. Request/process/persistence state transitions
 2. Daemon storage-observation assumptions that refine persistence
@@ -132,6 +134,11 @@ The current proof suite covers nineteen practical areas:
     dismissal, at-most-one open item per owner/source tuple, fresh occurrence
     allocation after terminal rows, terminal-state immutability, deadline
     expiry, and proof that mailbox close states do not create graph edges
+20. Request execution leases (#1341): opaque fresh ownership generations,
+    claim deadlines, renewal only from persisted semantic response/tool/
+    transcript progress, expiry/drop recovery, matching-generation terminal
+    CAS, atomic request/response agreement, and at-most-one winner-owned goal
+    continuation/token-charge effect
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -190,6 +197,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/DescendantGraph.lean` | Canonical descendant-edge visibility/read/control authorization, materialization and scope properties (#836) |
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
+| `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
 | `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
@@ -215,7 +223,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
-| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
@@ -239,6 +247,7 @@ Semantic submodules:
 | Barrel | Submodules |
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
+| `Proofs.RequestExecutionLease` | `State`, `Transition`, `Properties` |
 | `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
@@ -280,6 +289,14 @@ predicates, executable `step?` functions, and finite witness contexts. It
 currently covers:
 
 - `Request`
+- `RequestExecutionLease` one-step and recovery/race traces: 34 one-step cases
+  cover live authorization and exact-observation Dead/Superseded revocation.
+  `generated_request_execution_lease_cases_fence_production_policy` exercises
+  the production authorization seam for begin, progress, finalize, and revocation.
+  Two generated provider-EOF cases also fence the production requirement for an
+  explicit provider final event before successful turn completion.
+  Abstract claim/recovery and database race traces retain explicit coverage
+  follow-ups; no standalone Rust reference machine is counted as a consumer.
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`
@@ -569,6 +586,14 @@ queued rows contribute zero slots, running rows contribute one slot on their
 `backend_id`, terminal rows contribute zero slots, permit-drop terminalization
 cannot leave a row counted, and live linked queued/running calls have a model
 path to a non-slot-holding terminal state.
+
+`Proofs/InferenceCall/Persistence.lean` refines the database writer guards:
+start requires the current row to be queued; completion/failure require running;
+cancellation accepts queued/running. A terminal winner preserves its outcome
+and stamp against later lifecycle writes, while late provider usage can update
+the usage observation without reopening the call. Usage observation does not
+itself charge the aggregate budget. These laws support the admission persistence
+reverse-race regressions; no new legal lifecycle transitions are introduced.
 
 ### Session Recovery
 

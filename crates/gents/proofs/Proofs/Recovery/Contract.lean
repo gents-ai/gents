@@ -4,6 +4,7 @@ namespace Recovery
 
 inductive RecoveryCadence where
   | startup
+  /-- Included at startup and repeated by the periodic recovery registry. -/
   | periodic
   deriving DecidableEq, Repr
 

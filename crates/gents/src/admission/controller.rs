@@ -215,9 +215,9 @@ impl BackendAdmissionController {
             }
         };
         drop(queued_guard.disarm());
-        // A failure here leaves the durable row `queued` with no terminal
-        // write; that is intentional — queued rows hold no reconstructed slot
-        // and the startup inference-call sweep terminalizes them.
+        // Only the queued row can acquire this running state. If recovery has
+        // already terminalized it, release the permit before provider dispatch.
+        // Other persistence failures leave a queued row for ordered recovery.
         if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
             // Permit before in-flight release, as in `start_permit`.
             drop(permit);

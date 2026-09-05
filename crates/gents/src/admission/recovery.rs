@@ -8,7 +8,7 @@ use gents_protocol::row::AgentRequestRow;
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
     pub calls_recovered: usize,
 }
@@ -46,15 +46,19 @@ impl InferenceCall {
                 continue;
             };
 
-            if let Err(error) = recover_inference_call_row(node, &row, outcome).await {
-                tracing::warn!(
-                    call_id = %row.call_id,
-                    request_id = %row.request_id,
-                    call_state = %row.call_state,
-                    error = %error,
-                    "failed to recover stale inference call"
-                );
-                continue;
+            match recover_inference_call_row(node, &row, outcome).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    tracing::warn!(
+                        call_id = %row.call_id,
+                        request_id = %row.request_id,
+                        call_state = %row.call_state,
+                        error = %error,
+                        "failed to recover stale inference call"
+                    );
+                    continue;
+                }
             }
 
             calls_recovered += 1;
@@ -160,8 +164,9 @@ async fn recover_inference_call_row(
     node: &EmbeddedNode,
     row: &StaleInferenceCallRow,
     outcome: InferenceRecoveryOutcome,
-) -> Result<()> {
+) -> Result<bool> {
     let escaped_doc_id = escape_graphql_string(&row.doc_id);
+    let observed_call_state = escape_graphql_string(&row.call_state);
     let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
     let (call_state, failure_reason) = match outcome {
         InferenceRecoveryOutcome::Cancelled => ("cancelled", "Cancelled"),
@@ -170,7 +175,10 @@ async fn recover_inference_call_row(
     let mutation = format!(
         r#"mutation {{
             update_InferenceCall(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                filter: {{
+                    _docID: {{ _eq: "{escaped_doc_id}" }},
+                    call_state: {{ _eq: "{observed_call_state}" }}
+                }},
                 input: {{
                     call_state: "{call_state}",
                     failure_reason: "{failure_reason}",
@@ -180,10 +188,13 @@ async fn recover_inference_call_row(
         }}"#,
     );
 
-    execute_mutation_with_retry(node, &mutation, "recover_inference_call")
+    // Recovery must consume the observed live state. InferenceCall's terminal
+    // states have no outgoing transitions; a delayed sweep cannot overwrite
+    // a completion or a later queued-to-running transition.
+    let response = execute_mutation_with_retry(node, &mutation, "recover_inference_call")
         .await
         .context("recover inference call mutation")?;
-    Ok(())
+    Ok(!crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty())
 }
 
 fn request_is_interrupted(parent: &AgentRequestRow) -> bool {
@@ -195,3 +206,7 @@ fn request_is_terminal(parent: &AgentRequestRow) -> bool {
         .lifecycle_state
         .is_some_and(RequestLifecycleState::is_terminal)
 }
+
+#[cfg(test)]
+#[path = "recovery_tests.rs"]
+mod tests;

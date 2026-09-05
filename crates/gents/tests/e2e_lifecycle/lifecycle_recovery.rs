@@ -11,9 +11,8 @@ use crate::support::snapshots::{
     fetch_message_snapshots_for_session, fetch_tool_call_snapshots_for_session,
 };
 use crate::support::{
-    create_agent_session, create_request, create_request_for_agent_with_signed_fields,
-    create_response_with_content_and_status, create_response_with_status, first_row, test_db,
-    upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
+    create_agent_session, create_request, create_request_for_agent_with_signed_fields, first_row,
+    test_db, upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
 };
 
 type StatusRow = AgentRequestRow;
@@ -297,15 +296,102 @@ async fn seed_accepted_request_projection(
     upsert_conversation(node, session_id, request_id, "stuck request", "active").await;
 }
 
+async fn set_execution_lease(
+    node: &gents::defra_node::EmbeddedNode,
+    request_doc_id: &str,
+    generation: &str,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    progress_seq: u64,
+) {
+    let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let generation = gents::graphql::escape_graphql_string(generation);
+    let expires_at = gents::graphql::escape_graphql_string(&expires_at.to_rfc3339());
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }},
+                input: {{
+                    execution_generation: "{generation}",
+                    execution_lease_expires_at: "{expires_at}",
+                    execution_progress_seq: {progress_seq}
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set execution lease failed: {:?}",
+        response.errors
+    );
+}
+
+async fn create_response_for_request(
+    node: &gents::defra_node::EmbeddedNode,
+    response_key: &str,
+    request_id: &str,
+    request_doc_id: &str,
+    session_id: &str,
+    content: &str,
+    status: &str,
+) {
+    let response_key = gents::graphql::escape_graphql_string(response_key);
+    let request_id = gents::graphql::escape_graphql_string(request_id);
+    let request_doc_id = gents::graphql::escape_graphql_string(request_doc_id);
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let content = gents::graphql::escape_graphql_string(content);
+    let escaped_agent_did = gents::graphql::escape_graphql_string(AGENT_DID);
+    let escaped_agent_name = gents::graphql::escape_graphql_string(AGENT_NAME);
+    let completed_at = if matches!(status, "complete" | "error") {
+        "2026-03-23T00:01:00Z"
+    } else {
+        ""
+    };
+    let status = gents::graphql::escape_graphql_string(status);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentResponse(input: {{
+                response_key: "{response_key}",
+                request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{escaped_agent_name}",
+                session_id: "{session_id}",
+                content: "{content}",
+                status: "{status}",
+                token_count: 0,
+                progress_seq: 0,
+                reasoning_progress_seq: 0,
+                created_at: "2026-03-23T00:00:00Z",
+                completed_at: "{completed_at}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "create request-bound response failed: {:?}",
+        response.errors
+    );
+}
+
 #[tokio::test]
 async fn recover_all_marks_requests_as_error() {
     let db = test_db("lifecycle-recover-error").await;
-    create_request(
+    let request_doc_id = create_request(
         &db.node,
         "stuck-1",
         "session-1",
         "processing",
         "2026-03-23T00:00:00Z",
+    )
+    .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "expired-generation",
+        chrono::Utc::now() - chrono::Duration::minutes(1),
+        3,
     )
     .await;
     seed_accepted_request_projection(&db.node, "session-1", "stuck-1").await;
@@ -322,20 +408,23 @@ async fn recover_all_marks_requests_as_error() {
                 AgentRequest(
                     filter: { request_id: { _eq: "stuck-1" } },
                     limit: 1
-                ) { request_id lifecycle_state }
+                ) { request_id lifecycle_state execution_generation }
             }"#,
         )
         .await;
-    assert_eq!(
-        first_row::<StatusRow>(&resp, "AgentRequest").lifecycle_state,
-        Some(RequestLifecycleState::Failed)
+    let request = first_row::<StatusRow>(&resp, "AgentRequest");
+    assert_eq!(request.lifecycle_state, Some(RequestLifecycleState::Failed));
+    assert_ne!(
+        request.execution_generation.as_deref(),
+        Some("expired-generation"),
+        "recovery must take ownership with a fresh generation"
     );
 }
 
 #[tokio::test]
-async fn recover_all_preserves_completed_response() {
+async fn recover_all_preserves_completed_response_after_lease_expiry() {
     let db = test_db("lifecycle-recover-complete").await;
-    create_request(
+    let request_doc_id = create_request(
         &db.node,
         "stuck-complete",
         "session-complete",
@@ -343,12 +432,22 @@ async fn recover_all_preserves_completed_response() {
         "2026-03-23T00:00:00Z",
     )
     .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "expired-completed-generation",
+        chrono::Utc::now() - chrono::Duration::minutes(1),
+        2,
+    )
+    .await;
     seed_accepted_request_projection(&db.node, "session-complete", "stuck-complete").await;
-    create_response_with_status(
+    create_response_for_request(
         &db.node,
         "stuck-complete",
         "stuck-complete",
+        &request_doc_id,
         "session-complete",
+        "",
         "complete",
     )
     .await;
@@ -372,12 +471,27 @@ async fn recover_all_preserves_completed_response() {
         first_row::<StatusRow>(&request_resp, "AgentRequest").lifecycle_state,
         Some(RequestLifecycleState::Completed)
     );
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentResponse(
+                    filter: { response_key: { _eq: "stuck-complete" } },
+                    limit: 1
+                ) { status content }
+            }"#,
+        )
+        .await;
+    let response = first_row::<ResponseStatusRow>(&response, "AgentResponse");
+    assert_eq!(response.status, "complete");
+    assert_eq!(response.content, "", "completed content must be preserved");
 }
 
 #[tokio::test]
 async fn recover_all_marks_partial_streams_error() {
     let db = test_db("lifecycle-recover-partial").await;
-    create_request(
+    let request_doc_id = create_request(
         &db.node,
         "stuck-partial",
         "session-partial",
@@ -385,11 +499,20 @@ async fn recover_all_marks_partial_streams_error() {
         "2026-03-23T00:00:00Z",
     )
     .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "expired-partial-generation",
+        chrono::Utc::now() - chrono::Duration::minutes(1),
+        7,
+    )
+    .await;
     seed_accepted_request_projection(&db.node, "session-partial", "stuck-partial").await;
-    create_response_with_content_and_status(
+    create_response_for_request(
         &db.node,
         "stuck-partial",
         "stuck-partial",
+        &request_doc_id,
         "session-partial",
         "partial reply",
         "streaming",
@@ -420,12 +543,20 @@ async fn recover_all_marks_partial_streams_error() {
 #[tokio::test]
 async fn recover_all_creates_error_response_when_response_doc_is_missing() {
     let db = test_db("lifecycle-recover-missing").await;
-    create_request(
+    let request_doc_id = create_request(
         &db.node,
         "stuck-missing",
         "session-missing",
         "processing",
         "2026-03-23T00:00:00Z",
+    )
+    .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "expired-missing-generation",
+        chrono::Utc::now() - chrono::Duration::minutes(1),
+        0,
     )
     .await;
     seed_accepted_request_projection(&db.node, "session-missing", "stuck-missing").await;
@@ -451,6 +582,159 @@ async fn recover_all_creates_error_response_when_response_doc_is_missing() {
     assert!(response
         .content
         .contains("daemon restarted before response could be generated"));
+}
+
+#[tokio::test]
+async fn recover_all_leaves_live_execution_lease_untouched() {
+    let db = test_db("lifecycle-recover-live-lease").await;
+    let request_doc_id = create_request(
+        &db.node,
+        "live-request",
+        "live-session",
+        "processing",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "live-generation",
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        4,
+    )
+    .await;
+    seed_accepted_request_projection(&db.node, "live-session", "live-request").await;
+    create_response_for_request(
+        &db.node,
+        "live-request",
+        "live-request",
+        &request_doc_id,
+        "live-session",
+        "still running",
+        "streaming",
+    )
+    .await;
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.responses_recovered, 0);
+    assert_eq!(report.requests_recovered, 0);
+
+    let request_response = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(filter: { request_id: { _eq: "live-request" } }, limit: 1) {
+                    request_id lifecycle_state execution_generation execution_progress_seq
+                }
+            }"#,
+        )
+        .await;
+    let request = first_row::<StatusRow>(&request_response, "AgentRequest");
+    assert_eq!(
+        request.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
+    );
+    assert_eq!(
+        request.execution_generation.as_deref(),
+        Some("live-generation")
+    );
+    assert_eq!(request.execution_progress_seq, Some(4));
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentResponse(filter: { response_key: { _eq: "live-request" } }, limit: 1) {
+                    status content
+                }
+            }"#,
+        )
+        .await;
+    let response = first_row::<ResponseStatusRow>(&response, "AgentResponse");
+    assert_eq!(response.status, "streaming");
+    assert_eq!(response.content, "still running");
+}
+
+#[tokio::test]
+async fn recover_all_interrupts_an_expired_lease_with_a_durable_interrupt() {
+    let db = test_db("lifecycle-recover-expired-interrupt").await;
+    let request_doc_id = create_request(
+        &db.node,
+        "interrupted-request",
+        "interrupted-session",
+        "processing",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+    set_execution_lease(
+        &db.node,
+        &request_doc_id,
+        "expired-interrupt-generation",
+        chrono::Utc::now() - chrono::Duration::minutes(1),
+        1,
+    )
+    .await;
+    seed_accepted_request_projection(&db.node, "interrupted-session", "interrupted-request").await;
+    let interrupt_requested_at = chrono::Utc::now().to_rfc3339();
+    let escaped_request_doc_id = gents::graphql::escape_graphql_string(&request_doc_id);
+    let escaped_interrupt_requested_at =
+        gents::graphql::escape_graphql_string(&interrupt_requested_at);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
+                input: {{ interrupt_requested_at: "{escaped_interrupt_requested_at}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = db.node.execute(&mutation).await;
+    assert!(
+        !response.has_errors(),
+        "set durable interrupt failed: {:?}",
+        response.errors
+    );
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(report.requests_recovered, 1);
+    assert_eq!(report.responses_recovered, 1);
+
+    let request_response = db
+        .node
+        .execute(
+            r#"{
+                AgentRequest(
+                    filter: { request_id: { _eq: "interrupted-request" } },
+                    limit: 1
+                ) { request_id lifecycle_state failure_reason }
+            }"#,
+        )
+        .await;
+    let request = first_row::<StatusRow>(&request_response, "AgentRequest");
+    assert_eq!(
+        request.lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+    assert_eq!(request.failure_reason.as_deref(), Some("interrupted"));
+
+    let response = db
+        .node
+        .execute(
+            r#"{
+                AgentResponse(
+                    filter: { response_key: { _eq: "interrupted-request" } },
+                    limit: 1
+                ) { status content }
+            }"#,
+        )
+        .await;
+    assert_eq!(
+        first_row::<ResponseStatusRow>(&response, "AgentResponse").status,
+        "error"
+    );
 }
 
 #[tokio::test]

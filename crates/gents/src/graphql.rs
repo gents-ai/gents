@@ -56,10 +56,10 @@ impl GraphqlExecution for EmbeddedNode {
 }
 
 /// DefraDB commits auto-committed mutations at a database-wide revision
-/// boundary. Keep all ordinary writes for one embedded node on the same gate;
+/// boundary. Keep ordinary writes and explicit transactions on the same gate;
 /// the retry policy below then covers conflicts with transactions outside this
 /// process instead of making in-process writers race until one exhausts it.
-fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
+pub(crate) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
 
     let node_key = node as *const EmbeddedNode as usize;

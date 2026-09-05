@@ -75,13 +75,25 @@ pub(super) async fn persist_existing_call_running(
     call: &InferenceCallRecord,
 ) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    let mutation = upsert_call_running_mutation(call, &now);
-    graphql_mutation_with_transaction_retry(
+    let call_id = escape_graphql_string(&call.call_id);
+    let started_at = escape_graphql_string(&now);
+    let mutation = format!(
+        r#"mutation {{ update_InferenceCall(
+            filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {{ _eq: "queued" }} }},
+            input: {{ call_state: "running", started_at: "{started_at}" }}
+        ) {{ _docID }} }}"#
+    );
+    let response = graphql_mutation_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing running InferenceCall",
     )
     .await?;
+    anyhow::ensure!(
+        !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty(),
+        "InferenceCall {} is no longer queued or is missing",
+        call.call_id
+    );
     Ok(())
 }
 
@@ -118,14 +130,70 @@ pub(super) async fn persist_existing_call_terminal(
     failure_reason: Option<&str>,
     usage: Option<Usage>,
 ) -> Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = upsert_call_terminal_mutation(call, call_state, failure_reason, &now, usage);
-    graphql_mutation_with_transaction_retry(
+    // Proofs/InferenceCall/Persistence.lean: only an existing legal source
+    // may install the first terminal outcome; later observations are usage only.
+    let live_source = match call_state {
+        "completed" | "failed" => r#"{ _eq: "running" }"#,
+        "cancelled" => r#"{ _in: ["queued", "running"] }"#,
+        _ => anyhow::bail!("invalid terminal InferenceCall state: {call_state}"),
+    };
+    let call_id = escape_graphql_string(&call.call_id);
+    let ended_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let failure_reason = optional_graphql_string("failure_reason", failure_reason);
+    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
+    let mutation = format!(
+        r#"mutation {{ update_InferenceCall(
+            filter: {{ call_id: {{ _eq: "{call_id}" }}, call_state: {live_source} }},
+            input: {{ call_state: "{call_state}", {failure_reason} ended_at: "{ended_at}",
+                {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
+        ) {{ _docID }} }}"#
+    );
+    let response = graphql_mutation_with_transaction_retry(
         node.as_ref(),
         &mutation,
         "persist existing terminal InferenceCall",
     )
     .await?;
+    if !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty() {
+        return Ok(());
+    }
+
+    let terminal_filter = format!(
+        r#"call_id: {{ _eq: "{call_id}" }}, call_state: {{ _in: ["completed", "failed", "cancelled"] }}"#
+    );
+    let exists = if usage.is_some() {
+        // Recovery may win while a provider response is in flight. Record its
+        // observed usage without changing the winning outcome, reason or stamp.
+        let mutation = format!(
+            r#"mutation {{ update_InferenceCall(
+                filter: {{ {terminal_filter} }},
+                input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
+            ) {{ _docID }} }}"#
+        );
+        let response = graphql_mutation_with_transaction_retry(
+            node.as_ref(),
+            &mutation,
+            "persist late InferenceCall usage",
+        )
+        .await?;
+        !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty()
+    } else {
+        // An already terminal row is an idempotent success. A missing row or
+        // illegal live source is a durability failure, never an implicit insert.
+        let query = format!(r#"{{ InferenceCall(filter: {{ {terminal_filter} }}) {{ _docID }} }}"#);
+        let response = crate::graphql::graphql_with_transaction_retry(
+            node.as_ref(),
+            &query,
+            "confirm terminal InferenceCall",
+        )
+        .await?;
+        !crate::graphql::rows::<serde_json::Value>(&response, "InferenceCall")?.is_empty()
+    };
+    anyhow::ensure!(
+        exists,
+        "InferenceCall {} is missing or cannot transition to {call_state}",
+        call.call_id
+    );
     Ok(())
 }
 
@@ -194,121 +262,6 @@ fn add_call_mutation(
     )
 }
 
-fn upsert_call_running_mutation(call: &InferenceCallRecord, started_at: &str) -> String {
-    format!(
-        r#"mutation {{
-            upsert_InferenceCall(
-                filter: {{ call_id: {{ _eq: "{call_id}" }} }},
-                add: {{
-                    call_id: "{call_id}",
-                    runtime_instance_id: "{runtime_instance_id}",
-                    request_id: "{request_id}",
-                    request_doc_id: "{request_doc_id}",
-                    call_seq: {call_seq},
-                    backend_id: "{backend_id}",
-                    behavior_id: "{behavior_id}",
-                    agent_did: "{agent_did}",
-                    call_kind: "{call_kind}",
-                    attempt: {attempt},
-                    call_state: "running",
-                    queued_at: "{started_at}",
-                    started_at: "{started_at}",
-                    priority: 0,
-                    queue_depth_at_enqueue: {queue_depth_at_enqueue},
-                    controller_generation: {controller_generation},
-                    backend_config_fingerprint: "{backend_config_fingerprint}"
-                }},
-                update: {{
-                    call_state: "running",
-                    started_at: "{started_at}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        call_id = escape_graphql_string(&call.call_id),
-        runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
-        request_id = escape_graphql_string(&call.request_id),
-        request_doc_id = escape_graphql_string(&call.request_doc_id),
-        call_seq = call.call_seq,
-        backend_id = escape_graphql_string(&call.backend_id),
-        behavior_id = escape_graphql_string(&call.behavior_id),
-        agent_did = escape_graphql_string(&call.agent_did),
-        call_kind = call.call_kind.as_str(),
-        attempt = call.attempt,
-        started_at = escape_graphql_string(started_at),
-        queue_depth_at_enqueue = call.queue_depth_at_enqueue,
-        controller_generation = call.controller_generation,
-        backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
-    )
-}
-
-fn upsert_call_terminal_mutation(
-    call: &InferenceCallRecord,
-    call_state: &str,
-    failure_reason: Option<&str>,
-    ended_at: &str,
-    usage: Option<Usage>,
-) -> String {
-    let failure_reason = optional_graphql_string("failure_reason", failure_reason);
-    let (prompt_tokens, completion_tokens, cached_input_tokens) = usage_fields(usage);
-    format!(
-        r#"mutation {{
-            upsert_InferenceCall(
-                filter: {{ call_id: {{ _eq: "{call_id}" }} }},
-                add: {{
-                    call_id: "{call_id}",
-                    runtime_instance_id: "{runtime_instance_id}",
-                    request_id: "{request_id}",
-                    request_doc_id: "{request_doc_id}",
-                    call_seq: {call_seq},
-                    backend_id: "{backend_id}",
-                    behavior_id: "{behavior_id}",
-                    agent_did: "{agent_did}",
-                    call_kind: "{call_kind}",
-                    attempt: {attempt},
-                    call_state: "{call_state}",
-                    {failure_reason}
-                    queued_at: "{ended_at}",
-                    ended_at: "{ended_at}",
-                    priority: 0,
-                    queue_depth_at_enqueue: {queue_depth_at_enqueue},
-                    controller_generation: {controller_generation},
-                    backend_config_fingerprint: "{backend_config_fingerprint}"
-                    {prompt_tokens}
-                    {completion_tokens}
-                    {cached_input_tokens}
-                }},
-                update: {{
-                    call_state: "{call_state}",
-                    {failure_reason}
-                    ended_at: "{ended_at}"
-                    {prompt_tokens}
-                    {completion_tokens}
-                    {cached_input_tokens}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        call_id = escape_graphql_string(&call.call_id),
-        runtime_instance_id = escape_graphql_string(&call.runtime_instance_id),
-        request_id = escape_graphql_string(&call.request_id),
-        request_doc_id = escape_graphql_string(&call.request_doc_id),
-        call_seq = call.call_seq,
-        backend_id = escape_graphql_string(&call.backend_id),
-        behavior_id = escape_graphql_string(&call.behavior_id),
-        agent_did = escape_graphql_string(&call.agent_did),
-        call_kind = call.call_kind.as_str(),
-        attempt = call.attempt,
-        call_state = call_state,
-        failure_reason = failure_reason,
-        ended_at = escape_graphql_string(ended_at),
-        queue_depth_at_enqueue = call.queue_depth_at_enqueue,
-        controller_generation = call.controller_generation,
-        backend_config_fingerprint = escape_graphql_string(&call.backend_config_fingerprint),
-        prompt_tokens = prompt_tokens,
-        completion_tokens = completion_tokens,
-        cached_input_tokens = cached_input_tokens,
-    )
-}
-
 fn optional_graphql_string(field: &str, value: Option<&str>) -> String {
     value
         .map(|value| format!(r#"{field}: "{}","#, escape_graphql_string(value)))
@@ -362,8 +315,24 @@ mod tests {
                 None,
                 None,
             ),
-            upsert_call_running_mutation(&call, "2026-08-09T00:00:01Z"),
-            upsert_call_terminal_mutation(&call, "completed", None, "2026-08-09T00:00:02Z", None),
+            add_call_mutation(
+                &call,
+                "running",
+                None,
+                Some("2026-08-09T00:00:01Z"),
+                Some("2026-08-09T00:00:01Z"),
+                None,
+                None,
+            ),
+            add_call_mutation(
+                &call,
+                "failed",
+                Some("QueueFull"),
+                Some("2026-08-09T00:00:02Z"),
+                None,
+                Some("2026-08-09T00:00:02Z"),
+                None,
+            ),
         ];
 
         for mutation in mutations {

@@ -427,13 +427,18 @@ async fn set_child_processing_deadline(
 ) {
     let request_id = escape_graphql_string(request_id);
     let deadline = escape_graphql_string(&deadline.to_rfc3339());
+    let lease_expiry =
+        escape_graphql_string(&(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
                     lifecycle_state: "processing",
-                    deadline: "{deadline}"
+                    deadline: "{deadline}",
+                    execution_generation: "child-deadline-owner",
+                    execution_lease_expires_at: "{lease_expiry}",
+                    execution_progress_seq: 1
                 }}
             ) {{ _docID }}
         }}"#
@@ -453,6 +458,8 @@ async fn create_streaming_child_response(
     content: &str,
 ) {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let request_doc_id =
+        escape_graphql_string(&crate::support::exact_request_doc_id(node, child_request_id).await);
     let escaped_child_session_id = escape_graphql_string(child_session_id);
     let escaped_content = escape_graphql_string(content);
     let escaped_agent_did = escape_graphql_string(&request_agent_did(node, child_request_id).await);
@@ -463,6 +470,7 @@ async fn create_streaming_child_response(
             create_AgentResponse(input: {{
                 response_key: "{escaped_child_request_id}",
                 request_id: "{escaped_child_request_id}",
+                request_doc_id: "{request_doc_id}",
                 agent_did: "{escaped_agent_did}",
                 behavior_id: "{escaped_behavior_id}",
                 session_id: "{escaped_child_session_id}",
@@ -1074,15 +1082,25 @@ async fn recovery_terminalizes_expired_background_child_before_projection() {
 
     let response = fetch_response_state(db.node.as_ref(), &child_request_id).await;
     assert_eq!(response.status.as_deref(), Some("error"));
-    assert!(
-        response
-            .content
-            .as_deref()
-            .is_some_and(|content| content.contains("partial child output")
-                && content.contains("Response interrupted")),
-        "streaming child response should be finalized with prior content: {:?}",
-        response.content
+    assert_eq!(response.content.as_deref(), Some("partial child output"));
+    let request_doc_id = crate::support::exact_request_doc_id(&db.node, &child_request_id).await;
+    let owner = db
+        .node
+        .execute(&format!(
+            r#"{{
+            AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ execution_generation }}
+            AgentResponse(filter: {{ request_doc_id: {{ _eq: "{doc_id}" }} }}) {{ _docID }}
+        }}"#,
+            doc_id = escape_graphql_string(&request_doc_id),
+        ))
+        .await;
+    assert!(!owner.has_errors(), "{:?}", owner.errors);
+    let owner = owner.data.unwrap();
+    assert_ne!(
+        owner["AgentRequest"][0]["execution_generation"],
+        "child-deadline-owner"
     );
+    assert_eq!(owner["AgentResponse"].as_array().unwrap().len(), 1);
     assert!(
         response
             .error_message

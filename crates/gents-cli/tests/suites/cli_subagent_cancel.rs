@@ -49,7 +49,8 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
     enable_default_subagents_before_server(&home_dir, tool_selection_id, &default_behavior_id)
         .await?;
 
-    let mut serve = spawn_server(&home_dir, port)?;
+    let mut serve =
+        spawn_server_with_env(&home_dir, port, &[], &[("RUST_LOG", "warn,gents=debug")])?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
@@ -82,21 +83,25 @@ async fn subagent_cancel_cascades_to_linked_child_request() -> Result<()> {
         wait_for_spawned_child_request(&graphql, &parent_session_id, Duration::from_secs(20))
             .await?;
 
-    let cancel = run_cli_json(
-        &home_dir,
-        &[
-            "subagent",
-            "cancel",
-            &parent_request_id,
-            "--graphql",
-            &graphql,
-            "--wait",
-            "--timeout",
-            "25s",
-            "--output",
-            "json",
-        ],
-    )?;
+    let cancel = serve
+        .capturing(async {
+            run_cli_json(
+                &home_dir,
+                &[
+                    "subagent",
+                    "cancel",
+                    &parent_request_id,
+                    "--graphql",
+                    &graphql,
+                    "--wait",
+                    "--timeout",
+                    "25s",
+                    "--output",
+                    "json",
+                ],
+            )
+        })
+        .await?;
     let interrupted_ids = cancel
         .get("interrupted_request_ids")
         .and_then(Value::as_array)
