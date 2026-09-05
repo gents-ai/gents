@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub struct EnqueuedAgentRequest {
@@ -138,6 +139,13 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         trigger_doc_id,
     )
     .await?;
+    if create
+        .caused_by_trigger_id
+        .as_deref()
+        .is_some_and(crate::graph_pipeline::graph_artifact_is_reserved)
+    {
+        return publish_graph_root_request(node, &create).await;
+    }
     let escaped_request_id = escape_graphql_string(&request_id);
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
 
@@ -165,6 +173,61 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         request_id,
         session_id,
     })
+}
+
+/// Retry the complete graph publication transaction on native conflicts. A
+/// first-seen trigger event cannot be replayed, so retrying only its row create
+/// would either lose the stage or bypass a newly committed graph closure.
+async fn publish_graph_root_request(
+    node: &EmbeddedNode,
+    create: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<EnqueuedAgentRequest> {
+    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    for attempt in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
+        let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+        let staged = async {
+            crate::graph_pipeline::fence_graph_root_request_in_txn(&txn, create).await?;
+            let response = txn.execute(&mutation).await?;
+            let child = response
+                .pointer("/data/create_AgentRequest")
+                .or_else(|| response.pointer("/data/add_AgentRequest"))
+                .context("graph root create omitted result")?;
+            let doc_id = child
+                .get("_docID")
+                .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
+                .and_then(serde_json::Value::as_str)
+                .context("graph root create omitted document ID")?
+                .to_owned();
+            Ok::<_, anyhow::Error>(doc_id)
+        }
+        .await;
+        let result = match staged {
+            Ok(doc_id) => txn.commit().await.map(|()| doc_id),
+            Err(error) => {
+                let _ = txn.discard().await;
+                Err(error)
+            }
+        };
+        match result {
+            Ok(doc_id) => {
+                return Ok(EnqueuedAgentRequest {
+                    doc_id,
+                    request_id: create.request_id.clone(),
+                    session_id: create.session_id.clone(),
+                })
+            }
+            Err(error)
+                if attempt < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
+                    && crate::graphql::is_defradb_transaction_conflict_text(&format!(
+                        "{error:#}"
+                    )) =>
+            {
+                tokio::time::sleep(crate::graphql::defradb_conflict_retry_backoff(attempt)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("bounded publication retry returns on its final attempt")
 }
 
 /// Build and sign the canonical pending request used by trigger materialization.

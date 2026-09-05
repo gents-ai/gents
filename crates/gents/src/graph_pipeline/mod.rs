@@ -14,7 +14,7 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
-pub(crate) use run::run_graph_run_reconciler;
+pub(crate) use run::{graph_binding_for_request_in_txn, run_graph_run_reconciler};
 pub use run::{
     load_graph_run_result_view_with_access, load_graph_run_view, load_graph_run_view_with_access,
     reconcile_graph_run, reconcile_graph_run_with_access, reconcile_owned_graph_runs,
@@ -30,8 +30,8 @@ pub use runtime::{
     MaterializedRevision, PublishedGraph, RevisionGateDecision,
 };
 pub(crate) use runtime::{
-    graph_artifact_is_reserved, graph_artifact_is_visible, graph_materialization_denial,
-    load_visible_package_artifact_ids,
+    fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,
+    graph_artifact_is_visible, graph_materialization_denial, load_visible_package_artifact_ids,
 };
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,
@@ -48,3 +48,6 @@ pub use types::{
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod logical_invocation_contract_tests;

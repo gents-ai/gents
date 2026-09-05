@@ -842,6 +842,16 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "graph_logical_invocation_cases"
+      "GraphLogicalInvocationCases"
+      "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "graph_invocation_publication_cases"
+      "GraphInvocationPublicationCases"
+      "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "goal_claimed_publication_cases"
       "GoalClaimedPublicationCases"
       "goal::claimed_publication::contract_tests::generated_goal_claimed_publication_cases_drive_real_transactions")
