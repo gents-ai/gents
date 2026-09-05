@@ -536,6 +536,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ProcessTransitions".to_string(),
         ));
     }
+    if !snapshot.graph_failure_attribution_traces.is_empty() {
+        emitted.insert((
+            "graph_failure_attribution_traces".to_string(),
+            "GraphFailureAttributionTraces".to_string(),
+        ));
+    }
     if !snapshot.graph_pipeline_validation_cases.is_empty() {
         emitted.insert((
             "graph_pipeline_validation_cases".to_string(),
@@ -1273,6 +1279,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "task_goal_recovery_cases",
         "goal_submission_cases",
         "goal_continuation_materialization_cases",
+        "graph_failure_attribution_traces",
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",
         "graph_pipeline_run_terminal_cases",

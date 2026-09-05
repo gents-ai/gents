@@ -1371,6 +1371,9 @@ async fn start_run_in_txn(
 }
 
 #[cfg(test)]
+pub(super) use tests::attribution_test_fixture;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
     use std::sync::Arc;
@@ -2362,5 +2365,281 @@ mod tests {
         assert_eq!(grouped["group_min_count"], 1);
 
         node.shutdown().await;
+    }
+    async fn reconcile_failure_fixture(
+        node: &Arc<EmbeddedNode>,
+        run_id: &str,
+        via_access: bool,
+    ) -> crate::graph_pipeline::GraphRunView {
+        if via_access {
+            let access = ConfigAccess::Local(Arc::clone(node));
+            super::super::reconcile_graph_run_with_access(&access, "did:key:owner", run_id)
+                .await
+                .unwrap()
+        } else {
+            super::super::reconcile_graph_run(node, None, "did:key:owner", run_id)
+                .await
+                .unwrap()
+        }
+    }
+
+    // Drives the real GraphRun transaction/interrupt owners. Request fixture
+    // state changes emulate executor terminal observations, not a second graph
+    // coordinator. No provider or wall-clock sleep is needed.
+    pub(in crate::graph_pipeline) async fn attribution_test_fixture(
+        max_invocations: u32,
+    ) -> (Arc<EmbeddedNode>, GraphRunReceipt, String) {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        for schema in [
+            gents_protocol::schemas::GRAPH_DEFINITION,
+            gents_protocol::schemas::GRAPH_REVISION,
+            gents_protocol::schemas::GRAPH_RUN,
+            gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
+            gents_protocol::schemas::TASK,
+            gents_protocol::schemas::EVENT_TRIGGER,
+            "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
+            "type PipelineResult { graph_run_id: String @index report: String }",
+        ] {
+            node.add_schema(schema).await.unwrap();
+        }
+        let mut plan = result_test_plan();
+        // The physical requests must fit the run limit, or the fixture would
+        // prove invocation-limit failure instead of request-cause attribution.
+        plan.limits.max_total_invocations = max_invocations;
+        plan.digest = crate::graph_pipeline::graph_plan_digest(&plan);
+        install_plan_tasks(&node, &plan).await;
+        materialize_graph_revision(&node, None, "did:key:owner", &plan)
+            .await
+            .unwrap();
+        activate_graph_revision(
+            &node,
+            None,
+            "did:key:owner",
+            "result-pipeline",
+            &plan.digest,
+            None,
+        )
+        .await
+        .unwrap();
+        let run = start_graph_run(
+            &node,
+            None,
+            "did:key:owner",
+            "result-pipeline",
+            None,
+            "input",
+            json!({ "payload": "fail-fast cause regression" }),
+        )
+        .await
+        .unwrap();
+        let trigger = graph_trigger_id(&plan.digest, "entry:input:worker:input").unwrap();
+        (node, run, trigger)
+    }
+
+    async fn assert_fail_fast_keeps_committed_primary_cause(
+        cause_id: &str,
+        sibling_id: &str,
+        sibling_outcome: &str,
+        via_access: bool,
+        cancel_after_latch: bool,
+    ) {
+        let (node, run, trigger) = attribution_test_fixture(2).await;
+        let original_reason = "MaxTurnError: maximum 250 turns exceeded";
+        let seeded = node
+            .execute(&format!(
+                r#"mutation {{
+            cause: create_AgentRequest(input: {{
+                request_id: "{}", agent_did: "did:key:worker", requester_did: "did:key:owner",
+                behavior_id: "worker-v1", lifecycle_state: "failed", failure_reason: "{}",
+                caused_by_trigger_id: "{}", caused_by_correlation: "{}",
+                created_at: "2026-08-25T00:00:00Z"
+            }}) {{ _docID }}
+            sibling: create_AgentRequest(input: {{
+                request_id: "{}", agent_did: "did:key:worker", requester_did: "did:key:owner",
+                behavior_id: "worker-v1", lifecycle_state: "processing",
+                caused_by_trigger_id: "{}", caused_by_correlation: "{}",
+                created_at: "2026-08-25T00:00:01Z"
+            }}) {{ _docID }}
+        }}"#,
+                escape_graphql_string(cause_id),
+                escape_graphql_string(original_reason),
+                escape_graphql_string(&trigger),
+                escape_graphql_string(&run.correlation),
+                escape_graphql_string(sibling_id),
+                escape_graphql_string(&trigger),
+                escape_graphql_string(&run.correlation),
+            ))
+            .await;
+        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+
+        let first = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
+        assert_eq!(first.status, "running");
+        assert_eq!(first.active_request_count, 1);
+        // Reload from DB: asserting only failure_evidence would pass before
+        // the fix because that is recomputed and is not a durable latch.
+        let latched = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+            .await
+            .unwrap();
+        let primary = latched
+            .error
+            .clone()
+            .expect("primary cause must be durable before fail-fast drains siblings");
+        assert_eq!(primary["code"], "required_request_failed");
+        assert_eq!(primary["request_id"], cause_id);
+        assert_eq!(primary["message"], original_reason);
+        assert_eq!(primary["lifecycle_state"], "failed");
+        assert!(latched.update_generation > 0);
+        let interrupt = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }} ) {{ interrupt_requested_at }} }}"#,
+            escape_graphql_string(sibling_id))).await;
+        assert!(!interrupt.has_errors(), "{:?}", interrupt.errors);
+        assert!(
+            interrupt.data.unwrap()["AgentRequest"][0]["interrupt_requested_at"]
+                .as_str()
+                .is_some()
+        );
+
+        // A fresh reconciliation object has only DB state, like restart after
+        // the committed cause and initial interrupt. It cannot replace cause.
+        let repeated = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
+        assert_eq!(repeated.status, "running");
+        assert_eq!(repeated.error.as_ref(), Some(&primary));
+        assert_eq!(repeated.update_generation, latched.update_generation);
+        if cancel_after_latch {
+            let reason = Some("operator cancelled after primary cause was committed");
+            let cancelled = if via_access {
+                let access = ConfigAccess::Local(Arc::clone(&node));
+                super::super::request_graph_run_cancellation_with_access(
+                    &access,
+                    "did:key:owner",
+                    &run.run_id,
+                    reason,
+                )
+                .await
+                .unwrap()
+            } else {
+                super::super::request_graph_run_cancellation(
+                    &node,
+                    None,
+                    "did:key:owner",
+                    &run.run_id,
+                    reason,
+                )
+                .await
+                .unwrap()
+            };
+            assert_eq!(cancelled.status, "running");
+            assert!(cancelled.cancellation_requested_at.is_some());
+            assert_eq!(cancelled.cancellation_reason.as_deref(), reason);
+            assert!(cancelled.update_generation > latched.update_generation);
+            // Error may remain diagnostic during drain. Cancellation must win
+            // final status and clear error once the sibling is terminal.
+        }
+        let drained = node
+            .execute(&format!(
+                r#"mutation {{ update_AgentRequest(
+            filter: {{ request_id: {{ _eq: "{}" }} }},
+            input: {{ lifecycle_state: "{}", failure_reason: "later sibling outcome" }}
+        ) {{ _docID }} }}"#,
+                escape_graphql_string(sibling_id),
+                escape_graphql_string(sibling_outcome)
+            ))
+            .await;
+        assert!(!drained.has_errors(), "{:?}", drained.errors);
+        let terminal = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
+        assert_eq!(
+            terminal.status,
+            if cancel_after_latch {
+                "cancelled"
+            } else {
+                "failed"
+            }
+        );
+        assert_eq!(terminal.active_request_count, 0);
+        if cancel_after_latch {
+            assert!(terminal.error.is_none());
+            assert_eq!(
+                terminal.cancellation_reason.as_deref(),
+                Some("operator cancelled after primary cause was committed")
+            );
+        } else {
+            assert_eq!(terminal.error.as_ref(), Some(&primary));
+        }
+        let again = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
+        assert_eq!(again.error, terminal.error);
+        assert_eq!(again.update_generation, terminal.update_generation);
+        node.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_latches_cause_before_interrupted_earlier_sibling() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "z-cause",
+            "a-sibling",
+            "interrupted",
+            false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_keeps_cause_when_earlier_sibling_later_fails() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "z-cause",
+            "a-sibling",
+            "failed",
+            false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_latch_does_not_depend_on_request_lexical_order() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "a-cause",
+            "z-sibling",
+            "interrupted",
+            false,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_config_access_preserves_durable_primary_cause() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "z-cause",
+            "a-sibling",
+            "interrupted",
+            true,
+            false,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_cancel_after_latch_wins_over_primary_failure() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "z-cause",
+            "a-sibling",
+            "interrupted",
+            false,
+            true,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn graph_fail_fast_config_access_cancel_after_latch_clears_error() {
+        assert_fail_fast_keeps_committed_primary_cause(
+            "z-cause",
+            "a-sibling",
+            "interrupted",
+            true,
+            true,
+        )
+        .await;
     }
 }
