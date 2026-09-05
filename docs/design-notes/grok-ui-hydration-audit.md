@@ -12,9 +12,30 @@ and unchanged Grok 1.0.13 checks cover child task output, native bash kill,
 native subagent stop/cascade, later-turn steering, and automatic wakeups.
 See grok-background-projection.md and PR verification comments for evidence.
 
-## Remaining requirements and evidence needed
+## Verification chronology
+
+The final review follow-ups passed all 330 shim tests, the full workspace
+all-target check, and the binary build. Both independent final reviewers
+(Claude and Grok) reported no blockers. The dated checkpoints below preserve
+the investigation history; intermediate “pending” statements are superseded
+by their subsequent verification results. PR #1363 records final-tip CI.
 
 ### Latest review checkpoint
+
+The final native Grok 4.6 read-only review also completed with no blockers
+(`/tmp/grok-final-native-review.log`). It checked viewer identity/cancellation,
+scoping, replay matching, unknown-identity retention, goal observation, and
+lock ordering. Two nonblocking correctness observations received small local
+follow-ups: install the cancellation target before sending a visible viewer
+echo, and compare the rendered goal observation so elapsed time advances even
+when persisted goal fields and usage are unchanged. Tests/check/build passed in
+`/tmp/grok-review-polish-{tests,check,build}.log`.
+
+Other Grok observations do not require a new runtime owner: native synthetic
+prompt-ID families remain reserved; explicitly addressed, authorized observed
+requests can be cancelled even when not the current visible wake; live/replay
+echo metadata follows their different client paths. Empty prompt content has
+no meaningful rendered text. Long-session query scaling is tracked in #1386.
 
 Commit `38848104` passed all 11 CI checks (run `33952659240`), including the
 goal accounting and replay chronology fixes documented below. A focused

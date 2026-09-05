@@ -973,6 +973,14 @@ impl TurnManager {
                 continue;
             }
             let continuing_autonomous = active.is_some();
+            // Install the cancellation target before any visible echo can
+            // let a viewer adopt (and immediately cancel) this request.
+            if progress.prompt_id.is_some() && !continuing_autonomous {
+                self.autonomous_delivery
+                    .lock()
+                    .await
+                    .insert(session_id.to_owned(), request_id.clone());
+            }
             if !progress.echo_sent {
                 if let Some((prompt_id, content)) =
                     self.observed_human_prompt(session_id, &request_id).await?
@@ -989,12 +997,6 @@ impl TurnManager {
                     progress.prompt_id = Some(prompt_id);
                 }
                 progress.echo_sent = true;
-            }
-            if progress.prompt_id.is_some() && !continuing_autonomous {
-                self.autonomous_delivery
-                    .lock()
-                    .await
-                    .insert(session_id.to_owned(), request_id.clone());
             }
             // Read terminal state first, then flush. Completion must never
             // overtake the final content persisted before terminalization.

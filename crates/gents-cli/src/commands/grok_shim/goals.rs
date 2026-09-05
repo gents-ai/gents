@@ -116,19 +116,24 @@ impl GoalCursor {
             goal.tokens_used =
                 Some(gents::goal::session_token_usage(node, principal, session).await?);
         }
-        let observed = goal.as_ref().map(serde_json::to_value).transpose()?;
+        // Compare the rendered observation, including runtime-derived active
+        // time, rather than only fields stored in the scheduler checkpoint.
+        let observed = goal
+            .as_ref()
+            .map(|goal| project(goal, Utc::now()))
+            .transpose()?;
         if observed == self.delivered {
             return Ok(());
         }
-        let update = match goal.as_ref() {
-            Some(goal) => project(goal, Utc::now())?,
+        let update = match observed.as_ref() {
+            Some(update) => update.clone(),
             None => {
                 let id = self
                     .delivered
                     .as_ref()
-                    .and_then(|row| row["_docID"].as_str())
+                    .and_then(|row| row["goal_id"].as_str())
                     .context("missing previously delivered goal identity")?;
-                base_update(&wire_goal_id(id), "", "cleared", 0)
+                base_update(id, "", "cleared", 0)
             }
         };
         projections
@@ -420,6 +425,13 @@ mod tests {
         assert_eq!(update["tokens_used"], 123);
         assert_eq!(update["token_budget"], 1000);
         assert_eq!(update["total_worker_rounds"], 0);
+        let later = project(&goal, now + chrono::Duration::seconds(1)).unwrap();
+        assert_ne!(
+            update, later,
+            "active timer must advance without a Goal write"
+        );
+        assert_eq!(later["elapsed_ms"], 16000);
+        assert_eq!(later["tokens_used"], update["tokens_used"]);
         for (runtime, native) in [
             ("paused", "user_paused"),
             ("blocked", "blocked"),
@@ -429,6 +441,11 @@ mod tests {
         ] {
             goal.status = runtime.into();
             let update = project(&goal, now).unwrap();
+            assert_eq!(
+                update,
+                project(&goal, now + chrono::Duration::seconds(1)).unwrap(),
+                "non-active goals must not accrue elapsed time"
+            );
             assert_eq!(update["goal_id"], "gents:physical-goal");
             assert_eq!(update["status"], native);
             assert_eq!(update["_meta"]["gents/goalStatus"], runtime);
