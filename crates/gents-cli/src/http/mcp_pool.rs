@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
+use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -197,16 +198,18 @@ fn status_eq(value: Option<&str>, expected: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(expected))
 }
 
+/// Buckets a persisted `ToolServiceHealthState.status` value by the owned
+/// projection (`ToolServiceHealthState::parse_opt` + `project()`) — the same
+/// classification the desktop bridge's `MCPServiceHealthView.display_state`
+/// uses. A missing or unrecognized status (including a row that somehow
+/// persisted a projection word like `"stale"`/`"unreachable"` instead of a
+/// real state) falls into `unknown`, the one fail-safe bucket.
 fn count_health_status(totals: &mut McpPoolTotals, status: Option<&str>) {
-    match status.map(|value| value.trim().to_ascii_lowercase()) {
-        Some(status) if status == "healthy" => totals.healthy += 1,
-        Some(status) if status == "degraded" || status == "stale" => totals.degraded += 1,
-        Some(status)
-            if status == "evicted" || status == "reconnecting" || status == "unreachable" =>
-        {
-            totals.unreachable += 1;
-        }
-        Some(_) | None => totals.unknown += 1,
+    match ToolServiceHealthState::parse_opt(status).map(ToolServiceHealthState::project) {
+        Some(ToolServiceHealthProjection::Healthy) => totals.healthy += 1,
+        Some(ToolServiceHealthProjection::Stale) => totals.degraded += 1,
+        Some(ToolServiceHealthProjection::Unreachable) => totals.unreachable += 1,
+        None => totals.unknown += 1,
     }
 }
 
@@ -296,5 +299,47 @@ mod tests {
         assert_eq!(obs.tool_count, Some(12));
         assert_eq!(obs.health_status.as_deref(), Some("healthy"));
         assert_eq!(obs.endpoint.as_deref(), Some("http://100.64.0.10:9201/mcp"));
+    }
+
+    #[test]
+    fn count_health_status_buckets_by_the_owned_projection() {
+        let mut totals = McpPoolTotals::default();
+        for status in ["healthy", "degraded", "evicted", "reconnecting"] {
+            count_health_status(&mut totals, Some(status));
+        }
+        assert_eq!(
+            totals,
+            McpPoolTotals {
+                registered: 0,
+                online: 0,
+                healthy: 1,
+                degraded: 1,
+                unreachable: 2,
+                unknown: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn count_health_status_falls_back_to_unknown_for_missing_or_unrecognized_status() {
+        let mut totals = McpPoolTotals::default();
+        // Projection words are not valid raw states: a row persisted with
+        // "stale" or "unreachable" (never written by health_checker, but
+        // defensively possible from a corrupt/legacy row) must not silently
+        // count as the real ToolServiceHealthState of the same name.
+        for status in [None, Some("stale"), Some("unreachable"), Some("bogus")] {
+            count_health_status(&mut totals, status);
+        }
+        assert_eq!(
+            totals,
+            McpPoolTotals {
+                registered: 0,
+                online: 0,
+                healthy: 0,
+                degraded: 0,
+                unreachable: 0,
+                unknown: 4,
+            }
+        );
     }
 }

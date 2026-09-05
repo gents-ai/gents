@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
 use crate::toolset::{
     default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy, ToolSet,
@@ -468,9 +469,11 @@ pub(super) async fn online_mcp_service_ids(node: &EmbeddedNode) -> Result<Vec<St
 }
 
 /// MCP services whose operator registry row is online and whose agent-scoped
-/// measured health permits calls. `degraded` remains callable (the normal
-/// health gate warns but proceeds); `evicted`, `reconnecting`, and missing
-/// measurements do not satisfy a required-service dependency.
+/// measured health permits calls, per `ToolServiceHealthState::project`
+/// (the single owner of the classification): `Healthy` and `Stale` remain
+/// callable (the normal health gate warns but proceeds on `Stale`);
+/// `Unreachable` and missing/unrecognized measurements do not satisfy a
+/// required-service dependency.
 pub(crate) async fn measured_available_mcp_service_ids(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -582,7 +585,12 @@ pub(crate) async fn measured_available_mcp_service_ids(
             let service_id = row.get("service_id")?.as_str()?.trim();
             let endpoint = row.get("endpoint")?.as_str()?.trim();
             let status = row.get("status")?.as_str()?.trim();
-            (matches!(status, "healthy" | "degraded")
+            let callable = matches!(
+                ToolServiceHealthState::parse_opt(Some(status))
+                    .map(ToolServiceHealthState::project),
+                Some(ToolServiceHealthProjection::Healthy | ToolServiceHealthProjection::Stale)
+            );
+            (callable
                 && expected_endpoints
                     .get(service_id)
                     .is_some_and(|endpoints| endpoints.contains(endpoint)))

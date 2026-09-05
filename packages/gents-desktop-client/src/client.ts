@@ -15,9 +15,9 @@ export type DesktopBridgeContract = GeneratedBridgeContract;
 export const PACKAGE_VERSION = "0.15.0";
 // The client and bridge share one exact breaking contract. Sync status comes
 // from database-owned gauges; goal permissions are explicit fields.
-export const BRIDGE_CONTRACT_VERSION = "6.1";
+export const BRIDGE_CONTRACT_VERSION = "6.2";
 export const EXPECTED_BRIDGE_WIRE_SCHEMA_HASH =
-  "67594ec0a37b28e01076fc29b20bf04a87a76f51373c698a156bc0a7b9d90a02";
+  "df5cd8234a352627975cc23f8b8f258d7d0675a4c544d4a8f8b02b930f35010e";
 
 export function assertExactBridgeContract(
   contract: DesktopBridgeContract,

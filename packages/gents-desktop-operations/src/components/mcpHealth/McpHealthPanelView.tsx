@@ -42,7 +42,6 @@ export function McpHealthPanelView({
       degraded: 0,
       reconnecting: 0,
       evicted: 0,
-      stuck: 0,
       unknown: 0,
     };
     for (const service of services) {
@@ -55,7 +54,7 @@ export function McpHealthPanelView({
   const filterCounts = useMemo(() => {
     const all = services.length;
     const unhealthy = services.filter(
-      (s) => projectStatus(visualState(s)) !== "healthy",
+      (s) => projectStatus(s) !== "healthy",
     ).length;
     const reconnecting = services.filter(
       (s) => visualState(s) === "reconnecting",

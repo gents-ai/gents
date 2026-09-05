@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
+use gents_protocol::tool_service_health::ToolServiceHealthProjection;
+
 use crate::graphql::escape_graphql_string;
 use crate::mcp_pool::{resolve_mcp_url, McpPool};
 
@@ -61,6 +63,16 @@ impl std::fmt::Display for HealthStatus {
     }
 }
 
+impl From<ToolServiceHealthProjection> for HealthStatus {
+    fn from(projection: ToolServiceHealthProjection) -> Self {
+        match projection {
+            ToolServiceHealthProjection::Healthy => Self::Healthy,
+            ToolServiceHealthProjection::Stale => Self::Stale,
+            ToolServiceHealthProjection::Unreachable => Self::Unreachable,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ServiceHealthEntry {
     health: ServiceHealth,
@@ -94,7 +106,7 @@ impl ServiceHealthEntry {
     ) -> Self {
         Self {
             health: ServiceHealth {
-                status: model.state.project(),
+                status: model.state.project().into(),
                 last_seen,
                 last_error,
             },
@@ -106,46 +118,13 @@ impl ServiceHealthEntry {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HealthStateInternal {
-    Healthy,
-    Degraded,
-    Evicted,
-    Reconnecting,
-}
-
-impl HealthStateInternal {
-    fn project(self) -> HealthStatus {
-        match self {
-            Self::Healthy => HealthStatus::Healthy,
-            Self::Degraded => HealthStatus::Stale,
-            Self::Evicted | Self::Reconnecting => HealthStatus::Unreachable,
-        }
-    }
-
-    /// String form persisted to the `ToolServiceHealthState` DefraDB
-    /// collection. Mirrors `HealthState.toDefraDB` in
-    /// `Proofs/MCPHealth/State.lean` exactly — including `degraded` rather
-    /// than the public `HealthStatus::Stale` projection name. Operators read
-    /// the precise internal-state vocabulary so the panel can distinguish
-    /// the staleness flavor of degraded (heartbeat lag, `failure_count = 0`)
-    /// from the failure-count flavor (`1 <= failure_count < K`).
-    ///
-    /// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in
-    /// the Lean model; the production cycle does not emit that event today
-    /// (the loop skips while backoff is active, then probes directly), so
-    /// rows with `status: "reconnecting"` will only appear once the cycle
-    /// is extended to bridge the gap. The persisted vocabulary covers it
-    /// so future production emission needs no schema change.
-    fn to_defradb(self) -> &'static str {
-        match self {
-            Self::Healthy => "healthy",
-            Self::Degraded => "degraded",
-            Self::Evicted => "evicted",
-            Self::Reconnecting => "reconnecting",
-        }
-    }
-}
+/// `Reconnecting` is reachable only via `ProbeEvent::BackoffExpiry` in the
+/// Lean model; the production cycle does not emit that event today (the
+/// loop skips while backoff is active, then probes directly), so rows with
+/// `status: "reconnecting"` will only appear once the cycle is extended to
+/// bridge the gap. The persisted vocabulary covers it so future production
+/// emission needs no schema change.
+type HealthStateInternal = gents_protocol::tool_service_health::ToolServiceHealthState;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServiceModelInternal {
@@ -249,7 +228,7 @@ impl ServiceHealthMap {
             .map(|(service_id, entry)| MCPServiceHealthSnapshot {
                 service_id: service_id.clone(),
                 endpoint: entry.endpoint.clone(),
-                status: entry.model.state.to_defradb().to_string(),
+                status: entry.model.state.as_str().to_string(),
                 tool_count: entry.tool_count,
                 failure_count: entry.model.failure_count,
                 k_max,
@@ -1011,25 +990,16 @@ mod tests {
     use crate::mcp_pool::McpPool;
 
     fn health_state_from_lean(case: &LeanMcpHealthCase, state: &str) -> HealthStateInternal {
-        match state {
-            "healthy" => HealthStateInternal::Healthy,
-            "degraded" => HealthStateInternal::Degraded,
-            "evicted" => HealthStateInternal::Evicted,
-            "reconnecting" => HealthStateInternal::Reconnecting,
-            other => panic!(
+        HealthStateInternal::parse(state).unwrap_or_else(|_| {
+            panic!(
                 "Lean MCP health case {} produced unknown state {:?}",
-                case.name, other
-            ),
-        }
+                case.name, state
+            )
+        })
     }
 
     fn health_state_name(state: HealthStateInternal) -> &'static str {
-        match state {
-            HealthStateInternal::Healthy => "healthy",
-            HealthStateInternal::Degraded => "degraded",
-            HealthStateInternal::Evicted => "evicted",
-            HealthStateInternal::Reconnecting => "reconnecting",
-        }
+        state.as_str()
     }
 
     fn probe_event_from_lean(case: &LeanMcpHealthCase) -> ProbeEvent {

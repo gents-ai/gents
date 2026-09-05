@@ -8,6 +8,7 @@ use gents::{
 };
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::{ToolServiceHealthStateRow, ToolServiceRegistryRow};
+use gents_protocol::tool_service_health::ToolServiceHealthState;
 
 use super::super::types::{MCPServiceHealthView, McpServiceProbeResult};
 
@@ -74,15 +75,34 @@ pub async fn load_mcp_services_with_health(core: &ClientCore) -> Result<Vec<MCPS
         .collect::<std::result::Result<_, _>>()
         .map_err(|error| anyhow!("parsing ToolServiceHealthState rows: {error}"))?;
 
-    Ok(rows.into_iter().map(view_from_row).collect())
+    rows.into_iter().map(view_from_row).collect()
 }
 
-fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
-    MCPServiceHealthView {
+/// `display_state` is the collapsed three-state projection
+/// (`ToolServiceHealthState::project`) of the persisted `status` column.
+/// A row with a missing or unrecognized `status` is a data error — this
+/// command surfaces it as `Err` rather than inventing a synthetic
+/// classification, so a corrupt/legacy row fails loudly instead of
+/// silently rendering as healthy.
+pub(crate) fn view_from_row(row: ToolServiceHealthStateRow) -> Result<MCPServiceHealthView> {
+    let display_state = ToolServiceHealthState::parse_opt(row.status.as_deref())
+        .ok_or_else(|| {
+            anyhow!(
+                "ToolServiceHealthState row for service_id={:?} has missing/unrecognized status {:?}",
+                row.service_id,
+                row.status
+            )
+        })?
+        .project()
+        .as_str()
+        .to_string();
+
+    Ok(MCPServiceHealthView {
         service_id: row.service_id,
         agent_did: row.agent_did,
         endpoint: row.endpoint,
         status: row.status,
+        display_state,
         tool_count: row.tool_count,
         failure_count: row.failure_count,
         k_max: row.k_max,
@@ -92,7 +112,7 @@ fn view_from_row(row: ToolServiceHealthStateRow) -> MCPServiceHealthView {
         last_error_class: row.last_error_class,
         last_error_message: row.last_error_message,
         updated_at: row.updated_at,
-    }
+    })
 }
 
 pub async fn probe_mcp_service(

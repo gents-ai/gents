@@ -23,7 +23,6 @@ export function McpHealthSummary({
         label="reconnecting"
       />
       <SummaryPill color="red" count={summary.evicted} label="evicted" />
-      <SummaryPill color="red" count={summary.stuck} label="stuck" />
       {summary.unknown > 0 ? (
         <SummaryPill color="gray" count={summary.unknown} label="unknown" />
       ) : null}
