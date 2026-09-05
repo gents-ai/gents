@@ -16,7 +16,10 @@ mod operator_resume;
 mod request_head;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
-pub(crate) use request_head::{goal_session_is_idle, latest_goal_request};
+pub(crate) use request_head::{
+    goal_session_is_idle, latest_authenticated_session_request, latest_goal_request,
+    verify_goal_continuation_edge,
+};
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
@@ -278,6 +281,15 @@ pub struct GoalState {
 }
 
 impl GoalState {
+    /// Committed continuation ownership observed by graph projection/publication.
+    /// Active includes the gap before GoalSource decides or publishes a child.
+    pub(crate) fn has_continuation_obligation(self) -> bool {
+        self.status == GoalStatus::Active
+            || (self.status == GoalStatus::BudgetLimited
+                && self.wrapup_requested
+                && !self.wrapup_completed)
+    }
+
     /// Executable mirror of `Goals.step?` in `proofs/Proofs/Goals.lean`.
     pub fn step(self, action: GoalAction) -> Option<Self> {
         match action {
@@ -833,6 +845,67 @@ struct StagedGoal {
 /// immutable creation claim. Ownership, objective/budget conflict semantics,
 /// deterministic identity, and physical-create arbitration stay single-owned
 /// for every create-only path.
+/// Opening an obligation on an already rooted session participates in the
+/// GraphRun owner's existing transaction fence. Initial graph root + Goal
+/// publication fences its root separately in the same factory transaction.
+/// Arbitrary independent pre-root Goal creation across HTTP transactions is
+/// not a supported posthoc association guarantee: absent scans do not conflict.
+async fn fence_opened_graph_goal_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    previous: Option<GoalState>,
+    goal: &GoalDocument,
+) -> Result<()> {
+    let current = goal
+        .state()
+        .context("graph Goal opening has unknown status")?;
+    if !current.has_continuation_obligation()
+        || previous.is_some_and(GoalState::has_continuation_obligation)
+    {
+        return Ok(());
+    }
+    let did = escape_graphql_string(&goal.agent_did);
+    let session = escape_graphql_string(&goal.session_id);
+    let fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{
+        agent_did: {{ _eq: "{did}" }}, session_id: {{ _eq: "{session}" }}
+    }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
+        ))
+        .await?;
+    let requests: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+        response
+            .pointer("/data/AgentRequest")
+            .cloned()
+            .context("Goal opening request query omitted rows")?,
+    )?;
+    let Some(head) =
+        latest_authenticated_session_request(&goal.agent_did, &goal.session_id, &requests)
+    else {
+        return Ok(());
+    };
+    if head.caused_by_trigger_kind.as_deref() == Some(GOAL_TRIGGER_KIND)
+        && head.caused_by_trigger_id.as_deref() != Some(goal.goal_id.as_str())
+    {
+        return Ok(());
+    }
+    let head_doc = head
+        .doc_id
+        .as_deref()
+        .context("Goal opening head has no physical document ID")?;
+    if let Some(binding) =
+        crate::graph_pipeline::graph_binding_for_request_in_txn(txn, head_doc).await?
+    {
+        crate::graph_pipeline::fence_graph_publication_in_txn(
+            txn,
+            &binding.run_id,
+            &binding.revision_digest,
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn stage_goal_and_claim(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
@@ -977,7 +1050,7 @@ async fn stage_goal_and_claim(
         escape_graphql_string(now),
     ))
     .await?;
-    Ok(StagedGoal {
+    let staged = StagedGoal {
         disposition: StagedGoalDisposition::Created,
         goal: GoalDocument {
             doc_id: String::new(),
@@ -1003,7 +1076,9 @@ async fn stage_goal_and_claim(
             created_at: Some(now.to_string()),
             updated_at: Some(now.to_string()),
         },
-    })
+    };
+    fence_opened_graph_goal_in_txn(txn, None, &staged.goal).await?;
+    Ok(staged)
 }
 
 /// Create the current principal/session goal without granting update semantics.
@@ -1427,6 +1502,7 @@ async fn stage_goal_backed_request(
         staged_goal.goal.parsed_status() == Some(GoalStatus::Active),
         "the session already has a non-active goal"
     );
+    crate::graph_pipeline::fence_graph_root_request_in_txn(txn, request).await?;
     let request_fields = request.graphql_input_fields().map_err(anyhow::Error::msg)?;
     txn.execute(&format!(
         "mutation {{ create_AgentRequest(input: {{ {request_fields} }}) {{ _docID }} }}"
@@ -1887,7 +1963,7 @@ pub async fn load_goal_by_id(
     Ok(goals.into_iter().next())
 }
 
-fn sort_goals_canonical(goals: &mut [GoalDocument]) {
+pub(crate) fn sort_goals_canonical(goals: &mut [GoalDocument]) {
     goals.sort_by(|left, right| {
         left.created_at
             .cmp(&right.created_at)
@@ -2046,9 +2122,11 @@ async fn set_goal_in_txn(
             wrapup_completed = post.wrapup_completed,
         );
         txn.execute(&mutation).await?;
-        return load_canonical_goal_in_txn(txn, agent_did, session_id)
+        let updated = load_canonical_goal_in_txn(txn, agent_did, session_id)
             .await?
-            .context("updated Goal row disappeared");
+            .context("updated Goal row disappeared")?;
+        fence_opened_graph_goal_in_txn(txn, Some(pre), &updated).await?;
+        return Ok(updated);
     }
 
     let initial_state = GoalState {
@@ -2104,9 +2182,11 @@ async fn set_goal_in_txn(
         wrapup_completed = initial_state.wrapup_completed,
     );
     txn.execute(&mutation).await?;
-    load_canonical_goal_in_txn(txn, agent_did, session_id)
+    let created = load_canonical_goal_in_txn(txn, agent_did, session_id)
         .await?
-        .context("created Goal row not found")
+        .context("created Goal row not found")?;
+    fence_opened_graph_goal_in_txn(txn, None, &created).await?;
+    Ok(created)
 }
 
 pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<bool> {
