@@ -123,6 +123,16 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
                 .trim(),
         );
         let canonical_sysroot = sysroot.canonicalize().unwrap_or_else(|_| sysroot.clone());
+        // rustc resolves std metadata source paths differently when rust-src
+        // is absent; virtual /rustc paths ignore ordinary prefix remapping.
+        // Require the pinned component so production transform bytes are stable.
+        let source_root = sysroot.join("lib/rustlib/src/rust");
+        let core_source = source_root.join("library/core/src/lib.rs");
+        println!("cargo:rerun-if-changed={}", core_source.display());
+        assert!(
+            core_source.is_file(),
+            "production lenses require rust-src for the selected compiler; run `rustup component add rust-src` with the repository's pinned toolchain"
+        );
         let mut flags = vec![
             "-Cdebuginfo=0".to_owned(),
             "-Cstrip=symbols".to_owned(),
@@ -157,6 +167,22 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
                     source.display()
                 ));
             }
+        }
+        // Name the required source component explicitly. Besides normalizing
+        // its paths, this recipe invalidates cached source-absent objects built
+        // before rust-src became a production prerequisite.
+        flags.push(format!(
+            "--remap-path-prefix={}=/rust/lib/rustlib/src/rust",
+            source_root.display()
+        ));
+        let canonical_source_root = source_root
+            .canonicalize()
+            .expect("canonicalize required rust-src component");
+        if canonical_source_root != source_root {
+            flags.push(format!(
+                "--remap-path-prefix={}=/rust/lib/rustlib/src/rust",
+                canonical_source_root.display()
+            ));
         }
         command.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"));
     }
