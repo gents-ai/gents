@@ -32,10 +32,11 @@ def traceCases : List TraceCase :=
       expected := [⟨.running, false, 1, some 90, true⟩,
                    ⟨.running, false, 1, some 90, true⟩, ⟨.failed, false, 2, some 90, false⟩] }
   , { name := "reversed_lexical_order_keeps_cause"
-      -- A later higher-ID failure does not displace the already observed
-      -- lower-ID candidate in the runtime's lexical evidence projection.
-      events := [.capture 0 (some 10), .capture 1 (some 10), .finish 1 true (some 10)]
+      -- Explicitly introduce the second physical failure before recapture.
+      events := [.capture 0 (some 10), .observedFailure 90,
+                 .capture 1 (some 10), .finish 1 true (some 10)]
       expected := [⟨.running, false, 1, some 10, true⟩,
+                   ⟨.running, false, 1, some 10, true⟩,
                    ⟨.running, false, 1, some 10, true⟩, ⟨.failed, false, 2, some 10, false⟩] }
   , { name := "concurrent_stale_capture_loses"
       events := [.capture 0 (some 90), .capture 0 (some 10), .finish 1 true (some 10)]
@@ -88,6 +89,8 @@ private def statusJson : RunStatus → String
   | .cancelled => jsonString "cancelled"
 
 def eventJson : Event → String
+  | .observedFailure cause =>
+      "{\"kind\":\"observed_failure\",\"witness\":" ++ causeJson (some cause) ++ "}"
   | .capture expected witness =>
       "{\"kind\":\"capture\",\"expected_generation\":" ++ toString expected ++
       ",\"witness\":" ++ causeJson witness ++ "}"

@@ -372,7 +372,8 @@ pub(crate) async fn graph_materialization_denial(
     correlation: Option<&str>,
 ) -> Result<Option<String>> {
     let Some(trigger_digest) = graph_artifact_revision_digest(trigger_id) else {
-        return Ok(None);
+        return Ok(graph_artifact_is_reserved(trigger_id)
+            .then(|| "malformed reserved graph trigger ID".to_owned()));
     };
     let Some(correlation) = correlation.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(Some(
@@ -429,11 +430,14 @@ pub(crate) async fn fence_graph_root_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
-    let Some(digest) = request
-        .caused_by_trigger_id
-        .as_deref()
-        .and_then(graph_artifact_revision_digest)
-    else {
+    let Some(trigger_id) = request.caused_by_trigger_id.as_deref() else {
+        return Ok(());
+    };
+    let Some(digest) = graph_artifact_revision_digest(trigger_id) else {
+        anyhow::ensure!(
+            !graph_artifact_is_reserved(trigger_id),
+            "malformed reserved graph trigger ID"
+        );
         return Ok(());
     };
     let run_id = request
@@ -441,6 +445,7 @@ pub(crate) async fn fence_graph_root_request_in_txn(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .context("graph root publication requires a durable run correlation")?;
+    super::run::validate_graph_root_owner_in_txn(txn, request, run_id, &digest).await?;
     fence_graph_publication_in_txn(txn, run_id, &digest).await
 }
 
@@ -1435,7 +1440,9 @@ async fn start_run_in_txn(
 }
 
 #[cfg(test)]
-pub(super) use tests::{attribution_test_fixture, seed_signed_graph_request};
+pub(super) use tests::{
+    attribution_test_fixture, graph_test_identity, graph_test_owner, seed_signed_graph_request,
+};
 
 #[cfg(test)]
 mod tests {
@@ -1464,10 +1471,11 @@ mod tests {
                 .execute(&format!(
                     r#"mutation {{ create_GraphRevision(input: {{
                         revision_id: "{revision_id}", graph_id: "graph", digest: "{digest}",
-                        owner_did: "did:key:owner", status: "validated",
+                        owner_did: "{owner}", status: "validated",
                         compiler_version: "test", plan_json: "{{}}",
                         artifacts_complete: {complete}, created_at: "{created_at}"
                     }}) {{ _docID }} }}"#,
+                    owner = graph_test_owner(),
                     revision_id = escape_graphql_string(revision_id),
                     digest = escape_graphql_string(digest),
                     created_at = escape_graphql_string(&created_at),
@@ -1481,10 +1489,14 @@ mod tests {
             "sha256:incomplete".to_owned(),
             "sha256:malformed".to_owned(),
         ]);
-        let visible =
-            load_visible_package_artifact_ids(&node, "did:key:owner", &digests, &BTreeSet::new())
-                .await
-                .unwrap();
+        let visible = load_visible_package_artifact_ids(
+            &node,
+            graph_test_owner(),
+            &digests,
+            &BTreeSet::new(),
+        )
+        .await
+        .unwrap();
         assert!(visible.0.is_empty());
         assert!(visible.1.is_empty());
 
@@ -1610,9 +1622,9 @@ mod tests {
                 task_id: format!("worker-{configuration}"),
                 input_ports: vec![input],
                 output_ports: vec![output],
-                allowed_callers: vec!["did:key:owner".to_owned()],
+                allowed_callers: vec![graph_test_owner().to_owned()],
             }],
-            "did:key:owner",
+            graph_test_owner(),
             &CompilerPolicy::default(),
         )
         .unwrap()
@@ -1708,7 +1720,7 @@ mod tests {
                     task_id: "producer-task".to_owned(),
                     input_ports: vec![input],
                     output_ports: vec![output],
-                    allowed_callers: vec!["did:key:owner".to_owned()],
+                    allowed_callers: vec![graph_test_owner().to_owned()],
                 },
                 StageCapability {
                     capability_id: "consumer".to_owned(),
@@ -1716,10 +1728,10 @@ mod tests {
                     task_id: "consumer-task".to_owned(),
                     input_ports: vec![grouped_input],
                     output_ports: vec![],
-                    allowed_callers: vec!["did:key:owner".to_owned()],
+                    allowed_callers: vec![graph_test_owner().to_owned()],
                 },
             ],
-            "did:key:owner",
+            graph_test_owner(),
             &CompilerPolicy::default(),
         )
         .unwrap()
@@ -1785,9 +1797,9 @@ mod tests {
                 task_id: "worker-result".to_owned(),
                 input_ports: vec![input],
                 output_ports: vec![output],
-                allowed_callers: vec!["did:key:owner".to_owned()],
+                allowed_callers: vec![graph_test_owner().to_owned()],
             }],
-            "did:key:owner",
+            graph_test_owner(),
             &CompilerPolicy::default(),
         )
         .unwrap()
@@ -1827,6 +1839,18 @@ mod tests {
     }
 
     async fn install_plan_tasks(node: &EmbeddedNode, plan: &GraphPlan) {
+        use crate::identity::AgentIdentity;
+        let identity = graph_test_identity();
+        let behavior = node.execute(r#"{ AgentBehavior(filter: { behavior_id: { _eq: "test-behavior" } }) { _docID } }"#).await;
+        assert!(!behavior.has_errors(), "{:?}", behavior.errors);
+        if behavior.data.unwrap()["AgentBehavior"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+        {
+            let result = node.execute(&format!(r#"mutation {{ create_AgentBehavior(input: {{ behavior_id: "test-behavior", agent_did: "{}", enabled: true }}) {{ _docID }} }}"#, escape_graphql_string(identity.did()))).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
         let now = chrono::Utc::now().to_rfc3339();
         for task_id in plan
             .nodes
@@ -1863,6 +1887,7 @@ mod tests {
             gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
+            gents_protocol::schemas::AGENT_BEHAVIOR,
             gents_protocol::schemas::EVENT_TRIGGER,
             r#"type PipelineInput {
                 graph_run_id: String @index(unique: true)
@@ -1878,13 +1903,13 @@ mod tests {
 
         let first = test_plan("first");
         install_plan_tasks(&node, &first).await;
-        let materialized = materialize_graph_revision(&node, None, "did:key:owner", &first)
+        let materialized = materialize_graph_revision(&node, None, graph_test_owner(), &first)
             .await
             .unwrap();
         assert_eq!(materialized.task_ids.len(), 1);
         assert_eq!(materialized.trigger_ids.len(), 1);
         assert_eq!(
-            materialize_graph_revision(&node, None, "did:key:owner", &first)
+            materialize_graph_revision(&node, None, graph_test_owner(), &first)
                 .await
                 .unwrap(),
             materialized
@@ -1901,7 +1926,7 @@ mod tests {
         let activation = activate_graph_revision(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             &first.digest,
             None,
@@ -1911,7 +1936,7 @@ mod tests {
         assert_eq!(activation.generation, 1);
         assert_eq!(activation.previous_digest, None);
         assert_eq!(
-            materialize_graph_revision(&node, None, "did:key:owner", &first)
+            materialize_graph_revision(&node, None, graph_test_owner(), &first)
                 .await
                 .unwrap(),
             materialized
@@ -1931,7 +1956,7 @@ mod tests {
         assert_eq!(active_row["artifacts_complete"], true);
 
         let read_txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-        let loaded = load_active_graph_plan_in_txn(&read_txn, "did:key:owner", "pipeline")
+        let loaded = load_active_graph_plan_in_txn(&read_txn, graph_test_owner(), "pipeline")
             .await
             .unwrap()
             .expect("active plan");
@@ -1941,7 +1966,7 @@ mod tests {
         let disable_txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
         set_graph_enabled_in_txn(
             &disable_txn,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             false,
             "2026-08-25T00:00:00Z",
@@ -1952,7 +1977,7 @@ mod tests {
         assert!(start_graph_run(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             Some(&first.digest),
             "input",
@@ -1965,7 +1990,7 @@ mod tests {
         let enable_txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
         set_graph_enabled_in_txn(
             &enable_txn,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             true,
             "2026-08-25T00:00:01Z",
@@ -1978,7 +2003,7 @@ mod tests {
         let stale_start = start_graph_run(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             Some(&stale_digest),
             "input",
@@ -1999,7 +2024,7 @@ mod tests {
         let run = start_graph_run(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             None,
             "input",
@@ -2044,13 +2069,13 @@ mod tests {
 
         let second = test_plan("second");
         install_plan_tasks(&node, &second).await;
-        materialize_graph_revision(&node, None, "did:key:owner", &second)
+        materialize_graph_revision(&node, None, graph_test_owner(), &second)
             .await
             .unwrap();
         let conflict = activate_graph_revision(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             &second.digest,
             None,
@@ -2061,7 +2086,7 @@ mod tests {
         let switched = activate_graph_revision(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "pipeline",
             &second.digest,
             Some(&first.digest),
@@ -2113,7 +2138,7 @@ mod tests {
         assert!(!cancel_intent.has_errors(), "{:?}", cancel_intent.errors);
 
         let recovering =
-            super::super::reconcile_graph_run(&node, None, "did:key:owner", &run.run_id)
+            super::super::reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
                 .await
                 .unwrap();
         assert_eq!(recovering.status, "running");
@@ -2145,7 +2170,7 @@ mod tests {
             terminal_request.errors
         );
         let cancelled =
-            super::super::reconcile_graph_run(&node, None, "did:key:owner", &run.run_id)
+            super::super::reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id)
                 .await
                 .unwrap();
         assert_eq!(cancelled.status, "cancelled");
@@ -2178,6 +2203,7 @@ mod tests {
             gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
+            gents_protocol::schemas::AGENT_BEHAVIOR,
             gents_protocol::schemas::EVENT_TRIGGER,
             r#"type PipelineInput {
                 graph_run_id: String @index(unique: true)
@@ -2192,13 +2218,13 @@ mod tests {
         }
         let plan = result_test_plan();
         install_plan_tasks(&node, &plan).await;
-        materialize_graph_revision(&node, None, "did:key:owner", &plan)
+        materialize_graph_revision(&node, None, graph_test_owner(), &plan)
             .await
             .unwrap();
         activate_graph_revision(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "result-pipeline",
             &plan.digest,
             None,
@@ -2208,7 +2234,7 @@ mod tests {
         let run = start_graph_run(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "result-pipeline",
             None,
             "input",
@@ -2220,7 +2246,7 @@ mod tests {
         let entry_trigger_id = graph_trigger_id(&plan.digest, "entry:input:worker:input").unwrap();
         seed_signed_graph_request(&node, &run, &entry_trigger_id, "request-1", "completed", "")
             .await;
-        let unsatisfied = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let unsatisfied = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         assert_eq!(
@@ -2269,7 +2295,7 @@ mod tests {
             ))
             .await;
         assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
-        let scoped = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let scoped = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         assert_eq!(scoped.requests.len(), 1);
@@ -2285,12 +2311,12 @@ mod tests {
                 .contains("not authorized")
         );
         assert_eq!(
-            super::super::reconcile_owned_graph_runs(&node, "did:key:owner")
+            super::super::reconcile_owned_graph_runs(&node, graph_test_owner())
                 .await
                 .unwrap(),
             1
         );
-        let terminal = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let terminal = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         assert_eq!(terminal.status, "succeeded");
@@ -2298,7 +2324,7 @@ mod tests {
         assert_eq!(terminal.persisted_result_refs[0].name, "report");
         assert!(!terminal.persisted_result_refs[0].commit_cid.is_empty());
 
-        let reloaded = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let reloaded = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         assert_eq!(
@@ -2306,14 +2332,14 @@ mod tests {
             terminal.persisted_result_refs
         );
         assert_eq!(
-            super::super::reconcile_graph_run(&node, None, "did:key:owner", &run.run_id,)
+            super::super::reconcile_graph_run(&node, None, graph_test_owner(), &run.run_id,)
                 .await
                 .unwrap()
                 .status,
             "succeeded"
         );
         assert_eq!(
-            super::super::reconcile_owned_graph_runs(&node, "did:key:owner")
+            super::super::reconcile_owned_graph_runs(&node, graph_test_owner())
                 .await
                 .unwrap(),
             0
@@ -2340,7 +2366,7 @@ mod tests {
         let access = ConfigAccess::Local(Arc::clone(&node));
         let hydrated = super::super::load_graph_run_result_view_with_access(
             &access,
-            "did:key:owner",
+            graph_test_owner(),
             &run.run_id,
         )
         .await
@@ -2362,6 +2388,7 @@ mod tests {
             gents_protocol::schemas::GRAPH_DEFINITION,
             gents_protocol::schemas::GRAPH_REVISION,
             gents_protocol::schemas::TASK,
+            gents_protocol::schemas::AGENT_BEHAVIOR,
             gents_protocol::schemas::EVENT_TRIGGER,
         ] {
             node.add_schema(schema).await.unwrap();
@@ -2369,7 +2396,7 @@ mod tests {
 
         let plan = grouped_test_plan();
         install_plan_tasks(&node, &plan).await;
-        materialize_graph_revision(&node, None, "did:key:owner", &plan)
+        materialize_graph_revision(&node, None, graph_test_owner(), &plan)
             .await
             .unwrap();
         let response = node
@@ -2399,11 +2426,11 @@ mod tests {
     ) -> crate::graph_pipeline::GraphRunView {
         if via_access {
             let access = ConfigAccess::Local(Arc::clone(node));
-            super::super::reconcile_graph_run_with_access(&access, "did:key:owner", run_id)
+            super::super::reconcile_graph_run_with_access(&access, graph_test_owner(), run_id)
                 .await
                 .unwrap()
         } else {
-            super::super::reconcile_graph_run(node, None, "did:key:owner", run_id)
+            super::super::reconcile_graph_run(node, None, graph_test_owner(), run_id)
                 .await
                 .unwrap()
         }
@@ -2413,6 +2440,27 @@ mod tests {
     // state changes emulate executor terminal observations, not a second graph
     // coordinator. No provider or wall-clock sleep is needed.
     /// Seed a real authenticated route receipt, then set its mutable lifecycle.
+    pub(in crate::graph_pipeline) fn graph_test_owner() -> &'static str {
+        use crate::identity::AgentIdentity;
+        static OWNER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        OWNER.get_or_init(|| graph_test_identity().did().to_owned())
+    }
+
+    pub(in crate::graph_pipeline) fn graph_test_identity() -> crate::identity::KeyIdentity {
+        use crate::identity::KeyIdentity;
+        static KEY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+        let key = KEY.get_or_init(|| {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("worker.key");
+            KeyIdentity::load_or_create(&path, None).unwrap();
+            std::fs::read(path).unwrap()
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("worker.key");
+        std::fs::write(&path, key).unwrap();
+        KeyIdentity::load_or_create(path, None).unwrap()
+    }
+
     pub(in crate::graph_pipeline) async fn seed_signed_graph_request(
         node: &EmbeddedNode,
         run: &GraphRunReceipt,
@@ -2421,16 +2469,14 @@ mod tests {
         lifecycle: &str,
         reason: &str,
     ) {
-        use crate::identity::{AgentIdentity, KeyIdentity};
+        use crate::identity::AgentIdentity;
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
-        let temp = tempfile::tempdir().unwrap();
-        let identity =
-            KeyIdentity::load_or_create(temp.path().join("graph-worker.key"), None).unwrap();
+        let identity = graph_test_identity();
         let mut create = AgentRequestCreate::base(
             request_id,
             identity.did(),
             identity.did(),
-            "worker-v1",
+            "test-behavior",
             &format!("session-{request_id}"),
             "Execute the pinned graph stage",
             "scheduled",
@@ -2479,6 +2525,7 @@ mod tests {
             gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
+            gents_protocol::schemas::AGENT_BEHAVIOR,
             gents_protocol::schemas::EVENT_TRIGGER,
             "type PipelineInput { graph_run_id: String @index(unique: true) payload: String }",
             "type PipelineResult { graph_run_id: String @index report: String }",
@@ -2491,13 +2538,13 @@ mod tests {
         plan.limits.max_total_invocations = max_invocations;
         plan.digest = crate::graph_pipeline::graph_plan_digest(&plan);
         install_plan_tasks(&node, &plan).await;
-        materialize_graph_revision(&node, None, "did:key:owner", &plan)
+        materialize_graph_revision(&node, None, graph_test_owner(), &plan)
             .await
             .unwrap();
         activate_graph_revision(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "result-pipeline",
             &plan.digest,
             None,
@@ -2507,7 +2554,7 @@ mod tests {
         let run = start_graph_run(
             &node,
             None,
-            "did:key:owner",
+            graph_test_owner(),
             "result-pipeline",
             None,
             "input",
@@ -2536,7 +2583,7 @@ mod tests {
         assert_eq!(first.active_request_count, 1);
         // Reload from DB: asserting only failure_evidence would pass before
         // the fix because that is recomputed and is not a durable latch.
-        let latched = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let latched = super::super::load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         let primary = latched
@@ -2569,7 +2616,7 @@ mod tests {
                 let access = ConfigAccess::Local(Arc::clone(&node));
                 super::super::request_graph_run_cancellation_with_access(
                     &access,
-                    "did:key:owner",
+                    graph_test_owner(),
                     &run.run_id,
                     reason,
                 )
@@ -2579,7 +2626,7 @@ mod tests {
                 super::super::request_graph_run_cancellation(
                     &node,
                     None,
-                    "did:key:owner",
+                    graph_test_owner(),
                     &run.run_id,
                     reason,
                 )

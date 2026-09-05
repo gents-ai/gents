@@ -4,6 +4,7 @@ use super::*;
 use crate::graph_pipeline::logical_invocation_contract_tests::{
     execute, prepare_signed_child, signed_invocation_fixture,
 };
+use crate::graph_pipeline::runtime::graph_test_owner;
 use serde::Deserialize;
 
 fn assert_created_request(response: &Value) {
@@ -51,7 +52,7 @@ struct Observation {
     children: usize,
 }
 async fn observe(node: &EmbeddedNode, run_id: &str, initial_generation: i64) -> Observation {
-    let view = load_graph_run_view(node, "did:key:owner", run_id)
+    let view = load_graph_run_view(node, graph_test_owner(), run_id)
         .await
         .unwrap();
     let primary = view.error.as_ref().map(|error| {
@@ -84,7 +85,7 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
     for trace in contracts.graph_invocation_publication_cases {
         let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
         execute(&node, &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "paused" }}) {{ _docID }} }}"#, goal.doc_id)).await;
-        let cause = load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let cause = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         assert_eq!(
@@ -101,7 +102,7 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
         );
         assert_eq!(trace.events.len(), trace.expected.len());
         for (event, expected) in trace.events.iter().zip(trace.expected.iter()) {
-            let before = load_graph_run_view(&node, "did:key:owner", &run.run_id)
+            let before = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
                 .await
                 .unwrap();
             let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
@@ -158,7 +159,7 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
                 "cancel" => {
                     persist_cancellation_intent(
                         txn,
-                        "did:key:owner",
+                        graph_test_owner(),
                         &run.run_id,
                         Some("generated publication cancellation"),
                     )
@@ -182,7 +183,7 @@ async fn generated_graph_invocation_publication_traces_drive_real_transactions()
 #[tokio::test]
 async fn discarding_graph_publication_rolls_back_generation_and_signed_child() {
     let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
-    let before = load_graph_run_view(&node, "did:key:owner", &run.run_id)
+    let before = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
         .await
         .unwrap();
     let child = prepare_signed_child(&node, &identity, &goal, "valid").await;
@@ -229,7 +230,7 @@ async fn overlapping_native_graph_publication_and_closure_conflict_atomically() 
     for publication_first in [false, true] {
         let (node, run, goal, identity, _temp) = signed_invocation_fixture(3).await;
         execute(&node, &format!(r#"mutation {{ update_Goal(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ status: "paused" }}) {{ _docID }} }}"#, goal.doc_id)).await;
-        let before = load_graph_run_view(&node, "did:key:owner", &run.run_id)
+        let before = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
             .await
             .unwrap();
         let child = prepare_signed_child(&node, &identity, &goal, "valid").await;

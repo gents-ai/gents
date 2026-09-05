@@ -217,9 +217,13 @@ async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Re
         .with_context(|| format!("GraphRun {run_id:?} does not exist"))
 }
 
-async fn load_plan(executor: &(impl GraphRunQuery + ?Sized), digest: &str) -> Result<GraphPlan> {
+async fn load_plan(
+    executor: &(impl GraphRunQuery + ?Sized),
+    digest: &str,
+    owner_did: &str,
+) -> Result<GraphPlan> {
     let response = executor.execute_graph_query(&format!(
-        r#"{{ GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json }} }}"#,
+        r#"{{ GraphRevision(filter: {{ digest: {{ _eq: "{}" }} }}, limit: 2) {{ plan_json owner_did graph_id }} }}"#,
         escape_graphql_string(digest),
     ))
     .await?;
@@ -233,7 +237,11 @@ async fn load_plan(executor: &(impl GraphRunQuery + ?Sized), digest: &str) -> Re
             .and_then(Value::as_str)
             .context("pinned GraphRevision is missing plan_json")?,
     )?;
-    if plan.digest != digest || !verify_graph_plan_digest(&plan) {
+    if plan.digest != digest
+        || !verify_graph_plan_digest(&plan)
+        || found[0].get("owner_did").and_then(Value::as_str) != Some(owner_did)
+        || found[0].get("graph_id").and_then(Value::as_str) != Some(plan.graph_id.as_str())
+    {
         anyhow::bail!("pinned GraphRevision plan failed immutable identity verification");
     }
     Ok(plan)
@@ -265,6 +273,27 @@ fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
         anyhow::bail!("pinned graph plan has no materialized trigger routes");
     }
     Ok(nodes_by_trigger)
+}
+
+pub(super) async fn validate_graph_root_owner_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+    run_id: &str,
+    digest: &str,
+) -> Result<()> {
+    let run = query_run(txn, run_id).await?;
+    let owner = required_string(&run, "owner_did")?;
+    anyhow::ensure!(
+        request.agent_did == owner,
+        "graph request principal is not its pinned owner"
+    );
+    let plan = load_plan(txn, digest, owner).await?;
+    let routes = planned_trigger_nodes(&plan)?;
+    anyhow::ensure!(
+        routes.contains_key(request.caused_by_trigger_id.as_deref().unwrap_or_default()),
+        "graph request trigger is not a pinned route"
+    );
+    Ok(())
 }
 
 async fn load_groups(
@@ -443,9 +472,9 @@ async fn load_graph_run_view_with(
         anyhow::bail!("actor is not authorized to observe this graph run");
     }
     let revision_digest = required_string(&run, "revision_digest")?;
-    let plan = load_plan(executor, revision_digest).await?;
+    let plan = load_plan(executor, revision_digest, owner_did).await?;
     let correlation = required_string(&run, "correlation")?;
-    let logical = logical_invocation::load(executor, correlation, &plan).await?;
+    let logical = logical_invocation::load(executor, correlation, &plan, owner_did).await?;
     let requests = logical.requests;
     let outstanding_invocation_count = logical
         .invocations
@@ -612,17 +641,10 @@ async fn load_graph_run_view_with(
         anyhow::ensure!(
             primary.get("version").and_then(Value::as_u64) == Some(1)
                 && primary.get("message").and_then(Value::as_str).is_some()
-                && matches!(
-                    primary.get("code").and_then(Value::as_str),
-                    Some(
-                        "group_quiesced"
-                            | "contract_drift"
-                            | "invocation_limit_exceeded"
-                            | "run_deadline_exceeded"
-                            | "required_request_failed"
-                            | "result_contract_unsatisfied"
-                    )
-                ),
+                && primary
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .is_some_and(|code| !code.trim().is_empty()),
             "invalid persisted graph failure evidence"
         );
     }
@@ -731,15 +753,20 @@ pub(crate) async fn graph_binding_for_request_in_txn(
         return Ok(None);
     }
     let response = txn.execute(&format!(
-        r#"{{ GraphRun(filter: {{ correlation: {{ _in: {} }} }}) {{ run_id revision_digest correlation }} }}"#,
+        r#"{{ GraphRun(filter: {{ correlation: {{ _in: {} }} }}) {{ run_id revision_digest correlation owner_did }} }}"#,
         graphql_string_list_literal(&correlations.into_iter().collect::<Vec<_>>()),
     )).await?;
     let mut bindings = Vec::new();
     for run in rows(&response, "GraphRun") {
         let digest = required_string(run, "revision_digest")?;
-        let plan = load_plan(txn, digest).await?;
-        let projection =
-            logical_invocation::load(txn, required_string(run, "correlation")?, &plan).await?;
+        let plan = load_plan(txn, digest, required_string(run, "owner_did")?).await?;
+        let projection = logical_invocation::load(
+            txn,
+            required_string(run, "correlation")?,
+            &plan,
+            required_string(run, "owner_did")?,
+        )
+        .await?;
         for invocation in projection.invocations {
             if invocation.member_doc_ids.contains(parent_doc_id) {
                 anyhow::ensure!(
@@ -1017,13 +1044,13 @@ async fn capture_failure_txn(txn: ConfigApplyTxn<'_>, view: &GraphRunView) -> Re
     let result = async {
         let fresh = load_graph_run_view_with(&txn, &view.owner_did, &view.run_id).await?;
         if fresh.status != "running" || fresh.update_generation != view.update_generation {
-            anyhow::bail!("graph failure capture CAS lost; reload the durable run");
+            return Ok(false);
         }
         if fresh.cancellation_requested_at.is_some() || fresh.error.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let Some(primary) = fresh.failure_evidence else {
-            return Ok(());
+            return Ok(false);
         };
         let current = query_run(&txn, &view.run_id).await?;
         let input = json!({
@@ -1036,14 +1063,30 @@ async fn capture_failure_txn(txn: ConfigApplyTxn<'_>, view: &GraphRunView) -> Re
             graphql_input_literal(&input)?,
         ))
         .await?;
-        Result::<()>::Ok(())
+        Result::<bool>::Ok(true)
     }
     .await;
     match result {
-        Ok(()) => txn.commit().await.context("commit graph failure cause"),
+        Ok(false) => txn.discard().await,
+        Ok(true) => match txn.commit().await {
+            Ok(()) => Ok(()),
+            // Reconciliation always reloads after this shared operation. A
+            // native competing winner is an observation change, not a failure
+            // that may bypass reloading or emit stale sibling interruptions.
+            Err(error)
+                if crate::graphql::is_defradb_transaction_conflict_text(&format!("{error:#}")) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error).context("commit graph failure cause"),
+        },
         Err(error) => {
             let _ = txn.discard().await;
-            Err(error)
+            if crate::graphql::is_defradb_transaction_conflict_text(&format!("{error:#}")) {
+                Ok(())
+            } else {
+                Err(error)
+            }
         }
     }
 }

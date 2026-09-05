@@ -34,11 +34,12 @@ fn request_view(row: &AgentRequestRow, node_id: Option<String>) -> GraphRunReque
     }
 }
 
-fn authentic_root(row: &AgentRequestRow) -> bool {
+fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
     let Some(target) = row.agent_did.as_deref().filter(|s| !s.is_empty()) else {
         return false;
     };
-    verify_request_receipt_signature(row).is_ok()
+    target == owner_did
+        && verify_request_receipt_signature(row).is_ok()
         && row.doc_id.as_deref().is_some_and(|id| !id.is_empty())
         && row.session_id.as_deref().is_some_and(|id| !id.is_empty())
         && row.admission_kind.as_deref() == Some("runtime-internal")
@@ -57,6 +58,7 @@ pub(super) async fn load(
     executor: &(impl GraphRunQuery + ?Sized),
     correlation: &str,
     plan: &GraphPlan,
+    owner_did: &str,
 ) -> Result<Projection> {
     let routes = planned_trigger_nodes(plan)?;
     let response = executor
@@ -77,13 +79,9 @@ pub(super) async fn load(
             .get(root.caused_by_trigger_id.as_deref().unwrap_or_default())
             .context("selected graph route is absent from pinned plan")?
             .clone();
-        if !authentic_root(root) {
-            physical.insert(
-                root.doc_id
-                    .clone()
-                    .unwrap_or_else(|| root.request_id.clone()),
-                request_view(root, None),
-            );
+        if !authentic_root(root, owner_did) {
+            // Owner DID comes from the verified GraphRun/revision, never the
+            // candidate row or mutable Task/AgentBehavior configuration.
             continue;
         }
         let owner = root.agent_did.as_deref().unwrap();
@@ -177,12 +175,43 @@ pub(super) async fn load(
             let open = goal
                 .state()
                 .is_some_and(crate::goal::GoalState::has_continuation_obligation);
-            open && crate::goal::latest_authenticated_session_request(owner, session, requests)
-                .is_some_and(|head| {
-                    head.doc_id.as_ref().is_some_and(|id| members.contains(id))
-                        && (head.caused_by_trigger_kind.as_deref() != Some("goal")
-                            || head.caused_by_trigger_id.as_deref() == Some(goal.goal_id.as_str()))
+            // Keep invocation ancestry and other authenticated Goal chains as
+            // association evidence. Ordinary interactive rows cannot erase an
+            // obligation; a replacement Goal on another chain cannot acquire it.
+            let invocation_rows = requests
+                .iter()
+                .filter(|row| {
+                    if row.doc_id.as_ref().is_some_and(|id| members.contains(id)) {
+                        return true;
+                    }
+                    let Some(goal_id) = row
+                        .caused_by_trigger_id
+                        .as_deref()
+                        .filter(|_| row.caused_by_trigger_kind.as_deref() == Some("goal"))
+                    else {
+                        return false;
+                    };
+                    let Some(parent) = requests.iter().find(|parent| {
+                        parent.doc_id.is_some()
+                            && parent.doc_id == row.caused_by_parent_request_doc_id
+                    }) else {
+                        return false;
+                    };
+                    crate::goal::verify_goal_continuation_edge(owner, session, goal_id, parent, row)
+                        .is_ok()
                 })
+                .cloned()
+                .collect::<Vec<_>>();
+            open && crate::goal::latest_authenticated_session_request(
+                owner,
+                session,
+                &invocation_rows,
+            )
+            .is_some_and(|head| {
+                head.doc_id.as_ref().is_some_and(|id| members.contains(id))
+                    && (head.caused_by_trigger_kind.as_deref() != Some("goal")
+                        || head.caused_by_trigger_id.as_deref() == Some(goal.goal_id.as_str()))
+            })
         });
         let outstanding = obligation || physically_active;
         for row in &member_rows {

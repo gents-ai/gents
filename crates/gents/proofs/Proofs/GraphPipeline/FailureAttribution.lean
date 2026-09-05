@@ -74,6 +74,24 @@ theorem losing_capture_is_noop (s : Snapshot) (expected : Nat) (witness : Option
     (h : s.generation ≠ expected) : capture s expected witness = s := by
   simp [capture, h]
 
+/-- Compose the actual generation-fenced capture with its ensuing interruption
+projection. The snapshot supplied here is the durable transaction/reload view. -/
+def captureAndObserve (s : Snapshot) (expected : Nat) (witness : Option Cause) :
+    Snapshot × Bool :=
+  let next := capture s expected witness
+  (next, mayInterruptForFailure next)
+
+theorem capture_loser_observes_winner (durable : Snapshot) (expected : Nat)
+    (witness : Option Cause) (h : durable.generation ≠ expected) :
+    captureAndObserve durable expected witness = (durable, mayInterruptForFailure durable) := by
+  simp [captureAndObserve, losing_capture_is_noop durable expected witness h]
+
+theorem cancelled_capture_never_requests_failure_interrupt (durable : Snapshot)
+    (expected : Nat) (witness : Option Cause)
+    (h : durable.run.cancellationRequested = true) :
+    captureAndObserve durable expected witness = (durable, false) := by
+  simp [captureAndObserve, capture, mayInterruptForFailure, h]
+
 theorem first_capture_records_witness (s : Snapshot) (cause : Cause)
     (h_running : s.run.status = .running)
     (h_cancel : s.run.cancellationRequested = false) (h_empty : s.primary = none) :
@@ -122,12 +140,15 @@ theorem terminal_snapshot_cannot_change (s : Snapshot)
   simp [capture, requestCancel, finish, h]
 
 inductive Event where
+  /-- Another durable request failed; observing it does not write the GraphRun latch. -/
+  | observedFailure (cause : Cause)
   | capture (expected : Nat) (witness : Option Cause)
   | cancel
   | finish (expected : Nat) (allTerminal : Bool) (witness : Option Cause)
   deriving DecidableEq, Repr
 
 def step (s : Snapshot) : Event → Snapshot
+  | .observedFailure _ => s
   | .capture expected witness => capture s expected witness
   | .cancel => requestCancel s
   | .finish expected allTerminal witness => finish s expected allTerminal witness
