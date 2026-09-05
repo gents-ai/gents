@@ -2414,12 +2414,12 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) api_key_env_var: Option<String>,
     #[arg(
         long,
-        help = "Agent DID owning the ChatGptCodex OAuth credential (defaults to the local agent). Only used for ChatGptCodex backends, whose bearer is a DefraDB document rather than an api_key"
+        help = "Agent DID owning the OAuth credential (defaults to the local agent). Only used for OAuth-credential backends (ChatGptCodex, XaiGrokOAuth, ClaudeCliSubscription), whose bearer is a DefraDB document rather than an api_key"
     )]
     pub(crate) agent_did: Option<String>,
     #[arg(
         long,
-        help = "Agent home directory used to resolve the local agent DID for ChatGptCodex discovery (defaults to ~/.gents). Pass --agent-did instead to target a specific agent"
+        help = "Agent home directory used to resolve the local agent DID for OAuth-credential backend discovery (defaults to ~/.gents). Pass --agent-did instead to target a specific agent"
     )]
     pub(crate) home: Option<PathBuf>,
 }
