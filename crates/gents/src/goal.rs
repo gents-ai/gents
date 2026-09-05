@@ -17,8 +17,8 @@ mod request_head;
 pub(crate) use claimed_publication::publish_claimed_continuation;
 pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
 pub(crate) use request_head::{
-    goal_session_is_idle, latest_authenticated_session_request, latest_goal_request,
-    verify_goal_continuation_edge,
+    authenticated_goal_request_members, goal_session_is_idle, latest_authenticated_session_request,
+    latest_goal_request, verify_goal_continuation_edge,
 };
 
 pub const GOAL_TRIGGER_KIND: &str = "goal";

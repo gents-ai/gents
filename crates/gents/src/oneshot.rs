@@ -46,7 +46,7 @@ pub async fn run_openai_oneshot_with_tools(
     let tool_surface = behavior.tools.resolve(node.as_ref()).await?;
     let allowed_targets = tool_surface::resolve_subagent_target_descriptions(&tool_surface);
     let prompt_builder = LayeredPromptBuilder::new(behavior, &tool_surface, &allowed_targets);
-    let preamble = prompt_builder.preamble().to_string();
+    let output_obligations = tool_surface.output_obligations();
 
     let lsp_pool = tool_runtime.lsp_pool.clone();
     let mut tools = tool_surface.build_tools(&tool_runtime)?;
@@ -73,7 +73,7 @@ pub async fn run_openai_oneshot_with_tools(
             behavior,
             prompt,
             prompt_builder,
-            preamble,
+            &output_obligations,
             tools,
             background_tool_registry,
             lsp_pool.clone(),
@@ -88,7 +88,7 @@ async fn run_oneshot_with_completion_client<C>(
     behavior: &AgentBehavior,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
-    preamble: String,
+    output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
@@ -115,7 +115,7 @@ where
     let model = client.completion_model(&behavior.model_name);
     let config = loop_config(
         behavior,
-        preamble,
+        prompt_builder.preamble().to_owned(),
         tools.len(),
         crate::rendered_request::CaptureScopeKind::OneShot,
     );
@@ -127,6 +127,7 @@ where
         prompt,
         tools,
         config,
+        output_obligations,
         background_tool_registry,
         lsp_pool,
     )
@@ -165,6 +166,7 @@ async fn run_oneshot_owned<M: CompletionModel + 'static>(
     prompt: &str,
     tools: Arc<Vec<Box<dyn ToolDyn>>>,
     mut config: crate::agent::loop_stream::LoopConfig,
+    output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
     background_tool_registry: BackgroundToolRegistry,
     lsp_pool: crate::toolset::lsp::LspPool,
 ) -> Result<OneshotRunResult>
@@ -214,6 +216,21 @@ where
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
+    config.output_obligation_gate =
+        match crate::agent::output_obligation::OutputObligationGate::for_request(
+            node.clone(),
+            &request,
+            output_obligations,
+        )
+        .await
+        {
+            Ok(gate) => gate,
+            Err(error) => {
+                return Err(
+                    terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await,
+                );
+            }
+        };
     let capture_scope = crate::rendered_request::scope::scope_from_factory(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: request.doc_id.clone(),
@@ -245,6 +262,7 @@ where
     .await
     {
         Ok(hook) => hook
+            .with_output_obligation_gate(config.output_obligation_gate.clone())
             .with_background_tool_registry(background_tool_registry)
             .with_goal_tool_authority(
                 behavior.tools.goal_tools_requested(),

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
@@ -25,7 +25,7 @@ pub(crate) struct UnmetOutputObligation {
     expected_count_field: Option<String>,
 }
 
-pub(crate) fn active_for_request(
+fn active_for_request(
     configured: &[(String, crate::document_config::WriteToolOutputObligation)],
     has_automated_trigger_lineage: bool,
 ) -> Vec<ActiveOutputObligation> {
@@ -42,7 +42,7 @@ pub(crate) fn active_for_request(
 #[derive(Clone)]
 pub(crate) struct OutputObligationGate {
     node: Arc<EmbeddedNode>,
-    request_doc_id: String,
+    request_doc_ids: Vec<String>,
     obligations: Vec<ActiveOutputObligation>,
 }
 
@@ -53,6 +53,7 @@ struct CompletedWriteRow {
 }
 
 impl OutputObligationGate {
+    #[cfg(test)]
     pub(crate) fn new(
         node: Arc<EmbeddedNode>,
         request_doc_id: impl Into<String>,
@@ -60,16 +61,70 @@ impl OutputObligationGate {
     ) -> Self {
         Self {
             node,
-            request_doc_id: request_doc_id.into(),
+            request_doc_ids: vec![request_doc_id.into()],
             obligations,
         }
+    }
+
+    /// Use the existing configured tool contracts, with trigger activation and
+    /// completed writes inherited through authenticated Goal ancestry.
+    pub(crate) async fn for_request(
+        node: Arc<EmbeddedNode>,
+        request: &crate::watcher::AgentRequest,
+        configured: &[(String, crate::document_config::WriteToolOutputObligation)],
+    ) -> Result<Option<Self>> {
+        if configured.is_empty() {
+            return Ok(None);
+        }
+        let mut request_doc_ids = vec![request.doc_id.clone()];
+        let mut triggered = request.has_automated_trigger_lineage();
+        if request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND) {
+            let query = format!(
+                r#"{{ AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }},
+                    session_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                escape_graphql_string(&request.agent_did),
+                escape_graphql_string(&request.session_id),
+                crate::request_admission::SIGNED_REQUEST_FIELDS,
+            );
+            let response = graphql_with_transaction_retry(
+                &node,
+                &query,
+                "loading output obligation request ancestry",
+            )
+            .await?;
+            let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+                response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("AgentRequest"))
+                    .cloned()
+                    .context("output obligation ancestry query omitted requests")?,
+            )?;
+            let members = crate::goal::authenticated_goal_request_members(
+                &request.agent_did,
+                &request.session_id,
+                &request.doc_id,
+                &rows,
+            )?;
+            triggered = crate::watcher::AgentRequest::try_from(members.entry.clone())?
+                .has_automated_trigger_lineage();
+            request_doc_ids = members.member_doc_ids;
+        }
+        let obligations = active_for_request(configured, triggered);
+        Ok((!obligations.is_empty()).then_some(Self {
+            node,
+            request_doc_ids,
+            obligations,
+        }))
     }
 
     pub(crate) async fn unmet(&self) -> Result<Vec<UnmetOutputObligation>> {
         if self.obligations.is_empty() {
             return Ok(Vec::new());
         }
-        if self.request_doc_id.trim().is_empty() {
+        if self.request_doc_ids.is_empty()
+            || self.request_doc_ids.iter().any(|id| id.trim().is_empty())
+        {
             bail!("output obligations require a physical request document id");
         }
 
@@ -77,7 +132,7 @@ impl OutputObligationGate {
             r#"{{
                 AgentToolCall(
                     filter: {{
-                        request_doc_id: {{ _eq: "{}" }},
+                        request_doc_id: {{ _in: {} }},
                         lifecycle_state: {{ _eq: "completed" }}
                     }}
                 ) {{
@@ -85,7 +140,7 @@ impl OutputObligationGate {
                     args
                 }}
             }}"#,
-            escape_graphql_string(&self.request_doc_id),
+            gents_protocol::graphql::graphql_string_list_literal(&self.request_doc_ids),
         );
         let response =
             graphql_with_transaction_retry(&self.node, &query, "loading completed output writes")
@@ -387,3 +442,7 @@ mod tests {
         node.shutdown().await;
     }
 }
+
+#[cfg(test)]
+#[path = "output_obligation/logical_tests.rs"]
+mod logical_tests;

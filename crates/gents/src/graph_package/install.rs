@@ -1017,7 +1017,7 @@ mod tests {
             .execute(
                 r#"{
                     GraphRevision { digest artifacts_complete plan_json }
-                    Task { task_id }
+                    Task { task_id goal_objective_template goal_token_budget }
                     EventTrigger { trigger_id }
                 }"#,
             )
@@ -1031,6 +1031,21 @@ mod tests {
             .unwrap()
             .iter()
             .any(|task| task["task_id"] == "unrelated-task"));
+        let review_tasks = data["Task"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|task| task["task_id"] != "unrelated-task")
+            .collect::<Vec<_>>();
+        assert_eq!(review_tasks.len(), 4);
+        for task in review_tasks {
+            assert!(task["goal_objective_template"]
+                .as_str()
+                .is_some_and(|s| !s.trim().is_empty()));
+            assert!(task["goal_token_budget"]
+                .as_i64()
+                .is_some_and(|budget| budget > 0));
+        }
         assert_eq!(
             data["EventTrigger"]
                 .as_array()

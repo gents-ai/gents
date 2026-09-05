@@ -5,3 +5,5 @@ import Proofs.CompletionRetry.Properties
 import Proofs.CompletionRetry.Contracts
 import Proofs.CompletionRetry.OutputObligation
 import Proofs.CompletionRetry.InvalidToolProgress
+
+import Proofs.CompletionRetry.LogicalOutputObligation

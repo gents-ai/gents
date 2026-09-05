@@ -1,3 +1,4 @@
+import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
@@ -273,6 +274,8 @@ def snapshotJson : String :=
     ++ "\"cancel_propagation_cases\":"
       ++ jsonArray
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
+    ++ "\"logical_output_obligation_cases\":"
+      ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"

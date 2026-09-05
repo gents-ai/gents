@@ -165,6 +165,108 @@ fn latest_scoped_request<'a>(
     })
 }
 
+/// Read-only membership of one admitted request and its authenticated Goal
+/// continuations. The entry supplies activation context; this grants no new
+/// execution or document permission and does not require a GraphRun.
+pub(crate) struct AuthenticatedGoalRequestMembers<'a> {
+    pub(crate) entry: &'a AgentRequestRow,
+    pub(crate) member_doc_ids: Vec<String>,
+    /// Verified physical Goal edges within this membership, child -> parent.
+    pub(crate) parents: std::collections::BTreeMap<String, String>,
+}
+
+/// `rows` must include complete signed request projections for the session.
+/// Invalid ancestry of the current request is an error. Unrelated or malformed
+/// candidate rows cannot contribute writes to its logical invocation. Each
+/// historical edge retains its own signed Goal ID across Goal replacement.
+pub(crate) fn authenticated_goal_request_members<'a>(
+    agent_did: &str,
+    session_id: &str,
+    current_doc_id: &str,
+    rows: &'a [AgentRequestRow],
+) -> Result<AuthenticatedGoalRequestMembers<'a>> {
+    let mut by_doc = std::collections::HashMap::new();
+    for row in rows.iter().filter(|row| {
+        row.agent_did.as_deref() == Some(agent_did) && row.session_id.as_deref() == Some(session_id)
+    }) {
+        let Some(doc) = row.doc_id.as_deref().filter(|doc| !doc.is_empty()) else {
+            continue;
+        };
+        anyhow::ensure!(
+            by_doc.insert(doc, row).is_none(),
+            "duplicate physical request document in ancestry observation"
+        );
+    }
+    let current = *by_doc
+        .get(current_doc_id)
+        .context("current request is absent from its owner/session observation")?;
+    let entry = authenticated_entry(agent_did, session_id, current, &by_doc)?;
+    let entry_doc = entry
+        .doc_id
+        .as_deref()
+        .context("entry has no document ID")?;
+    let mut member_doc_ids = by_doc
+        .iter()
+        .filter_map(|(doc, row)| {
+            authenticated_entry(agent_did, session_id, row, &by_doc)
+                .ok()
+                .filter(|root| root.doc_id.as_deref() == Some(entry_doc))
+                .map(|_| (*doc).to_owned())
+        })
+        .collect::<Vec<_>>();
+    member_doc_ids.sort_unstable();
+    let mut parents = std::collections::BTreeMap::new();
+    for doc in &member_doc_ids {
+        if doc == entry_doc {
+            continue;
+        }
+        // Successful resolution to entry already verified this exact edge.
+        let parent = by_doc[doc.as_str()]
+            .caused_by_parent_request_doc_id
+            .as_deref()
+            .context("authenticated Goal member has no physical parent")?;
+        parents.insert(doc.clone(), parent.to_owned());
+    }
+    Ok(AuthenticatedGoalRequestMembers {
+        entry,
+        member_doc_ids,
+        parents,
+    })
+}
+
+fn authenticated_entry<'a>(
+    agent_did: &str,
+    session_id: &str,
+    mut row: &'a AgentRequestRow,
+    by_doc: &std::collections::HashMap<&'a str, &'a AgentRequestRow>,
+) -> Result<&'a AgentRequestRow> {
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        let doc = row
+            .doc_id
+            .as_deref()
+            .context("request has no document ID")?;
+        anyhow::ensure!(visited.insert(doc), "cyclic Goal request ancestry");
+        if row.caused_by_trigger_kind.as_deref() != Some(GOAL_TRIGGER_KIND) {
+            verify_request_receipt_signature(row)?;
+            return Ok(row);
+        }
+        let goal_id = row
+            .caused_by_trigger_id
+            .as_deref()
+            .context("Goal continuation has no original Goal ID")?;
+        let parent_doc = row
+            .caused_by_parent_request_doc_id
+            .as_deref()
+            .context("Goal continuation has no physical parent")?;
+        let parent = *by_doc
+            .get(parent_doc)
+            .context("Goal continuation parent is absent from its owner/session observation")?;
+        verify_goal_continuation_edge(agent_did, session_id, goal_id, parent, row)?;
+        row = parent;
+    }
+}
+
 /// A continuation cannot bypass an unfinished or unrecognized request row.
 pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
     rows.iter().all(|row| {

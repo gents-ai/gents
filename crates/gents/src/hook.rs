@@ -478,6 +478,7 @@ pub struct DefraSessionHook {
     operator_tool_root: Option<PathBuf>,
     goal_tools_enabled: bool,
     goal_creation_enabled: bool,
+    output_obligation_gate: Option<crate::agent::output_obligation::OutputObligationGate>,
 }
 
 enum PolicyDecision {
@@ -524,6 +525,7 @@ impl DefraSessionHook {
             operator_tool_root: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            output_obligation_gate: None,
         }
     }
 
@@ -568,6 +570,7 @@ impl DefraSessionHook {
             operator_tool_root: None,
             goal_tools_enabled: false,
             goal_creation_enabled: false,
+            output_obligation_gate: None,
         })
     }
 
@@ -600,6 +603,15 @@ impl DefraSessionHook {
     ) -> Self {
         self.goal_tools_enabled = goal_tools_enabled;
         self.goal_creation_enabled = goal_tools_enabled && goal_creation_enabled;
+        self
+    }
+
+    /// Share this request's configured output gate with the owned completion loop.
+    pub(crate) fn with_output_obligation_gate(
+        mut self,
+        gate: Option<crate::agent::output_obligation::OutputObligationGate>,
+    ) -> Self {
+        self.output_obligation_gate = gate;
         self
     }
 

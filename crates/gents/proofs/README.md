@@ -1284,5 +1284,25 @@ a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
 remain runtime consumer obligations. Eleven generated traces in
-`invalid_tool_progress_cases` are follow-up coverage until actual owned-loop
-consumers verify them; the model is not a second lifecycle or permission owner.
+`invalid_tool_progress_cases` drive the real owned loop and persistence hook;
+the model is not a second lifecycle or permission owner.
+
+### Logical invocation output obligations
+
+`CompletionRetry.LogicalOutputObligation` reuses the existing authenticated
+physical ancestry projection for both graph and non-graph invocation entries.
+Trigger activation follows the root; the contract remains the current configured
+tool surface shared by the loop and model hook, with no new configuration pin.
+Completed calls from validated members are unioned by physical tool-call ID and
+fed into existing `OutputObligation.decideTerminal`. Model-requested Goal
+completion is gated by that same observed decision before the existing Goal
+status/sequence CAS; explicit operator controls are unchanged.
+
+The model proves outsider exclusion and duplicate observation stability, with
+11 generated `logical_output_obligation_cases` covering inherited eligibility,
+combined writes, invalid edges, failed/duplicate observations, scopes and dynamic
+counts. The generated consumer uses signed requests and durable tool-call rows;
+a hook regression also checks actual model Goal completion. Existing expected
+count parsing supplies count-validity evidence. Distinct calls writing the same
+output document still count separately: document uniqueness is not established.
+No atomic scan/phantom or immutable configuration claim is made.

@@ -22,7 +22,9 @@
   "defra_query_collections": [],
   "subagent_targets": [],
   "write_tools": [],
-  "datastore_tool_surface_ids": ["review-triage-writes"],
+  "datastore_tool_surface_ids": [
+    "review-triage-writes"
+  ],
   "subagent_spawn_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,

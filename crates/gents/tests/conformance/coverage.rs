@@ -564,6 +564,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.workspace_path_capability_cases,
         ),
         (
+            "logical_output_obligation_cases",
+            "LogicalOutputObligationCases",
+            &snapshot.logical_output_obligation_cases,
+        ),
+        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,
@@ -1371,6 +1376,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "graph_pipeline_run_terminal_cases",
         "workspace_path_capability_cases",
         "workspace_path_alias_cases",
+        "logical_output_obligation_cases",
         "invalid_tool_progress_cases",
         "workspace_capability_migration_cases",
         "workspace_cases",
