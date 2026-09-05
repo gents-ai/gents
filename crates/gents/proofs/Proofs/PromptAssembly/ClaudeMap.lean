@@ -173,8 +173,9 @@ inductive Msg where
   | other (tag : String)
   deriving DecidableEq, Repr
 
-/-- The Claude Code identity block. `system[0]` on every request; the agent's subscription credential's
-oat routes on it. Checked against Rust `CLAUDE_CODE_IDENTITY` by the vocab test. -/
+/-- The Claude Code identity block. `system[0]` on every request; the agent's
+subscription credential routes on it. Checked against Rust `CLAUDE_CODE_IDENTITY`
+by the vocab test. -/
 def identity : String := "You are Claude Code, Anthropic's official CLI for Claude."
 
 /-- Pull `System` rows out in order; everything else is untouched. Rust also
