@@ -633,7 +633,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
-      "cli_goal::goal_set_get_pause_resume_and_clear_are_durable")
+      "cli_goal::goal_configuration_rejects_implicit_resume_and_clear_is_durable")
       "durable-goals" [Surface.operatorCli]
   , tagged (consumerCoverage
       "goal_decision_cases"
@@ -841,6 +841,31 @@ def caseCoverage : List CoverageEntry :=
       "GraphFailureAttributionTraces"
       "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
       "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_claimed_publication_cases"
+      "GoalClaimedPublicationCases"
+      "goal::claimed_publication::contract_tests::generated_goal_claimed_publication_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_request_head_cases"
+      "GoalRequestHeadCases"
+      "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector")
+      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_operator_resume_cases"
+      "GoalOperatorResumeCases"
+      "goal::operator_resume::contract_tests::generated_goal_operator_resume_cases_drive_real_transactions")
+      "durable-goals" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "goal_operator_resume_cases"
+      "GoalOperatorResumeCases"
+      "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child")
+      "durable-goals" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "goal_config_reactivation_cases"
+      "GoalConfigReactivationCases"
+      "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter")
+      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "graph_pipeline_validation_cases"
       "GraphPipelineValidationCases"

@@ -11,6 +11,13 @@ use crate::graphql::{
     rows,
 };
 
+mod claimed_publication;
+mod operator_resume;
+mod request_head;
+pub(crate) use claimed_publication::publish_claimed_continuation;
+pub use operator_resume::{resume_goal_request, GoalResumeReceipt};
+pub(crate) use request_head::{goal_session_is_idle, latest_goal_request};
+
 pub const GOAL_TRIGGER_KIND: &str = "goal";
 pub const GET_GOAL_TOOL_NAME: &str = "get_goal";
 pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
@@ -1902,7 +1909,77 @@ pub async fn set_goal(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    let existing = load_canonical_goal(node, agent_did, session_id).await?;
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    finish_set_goal(txn, agent_did, session_id, objective, status, token_budget).await
+}
+
+/// Configure a goal through the same transactional policy for local and HTTP access.
+pub async fn set_goal_from_access(
+    access: &crate::ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    objective: Option<&str>,
+    status: Option<GoalStatus>,
+    token_budget: Option<Option<i64>>,
+) -> Result<GoalDocument> {
+    let txn = access.begin_apply_txn().await?;
+    finish_set_goal(txn, agent_did, session_id, objective, status, token_budget).await
+}
+
+async fn finish_set_goal(
+    txn: crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+    objective: Option<&str>,
+    status: Option<GoalStatus>,
+    token_budget: Option<Option<i64>>,
+) -> Result<GoalDocument> {
+    match set_goal_in_txn(&txn, agent_did, session_id, objective, status, token_budget).await {
+        Ok(goal) => {
+            txn.commit().await?;
+            Ok(goal)
+        }
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+async fn load_canonical_goal_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+) -> Result<Option<GoalDocument>> {
+    let agent_did = escape_graphql_string(agent_did);
+    let session_id = escape_graphql_string(session_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ Goal(filter: {{
+        agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}
+    }}) {{ {GOAL_FIELDS} }} }}"#
+        ))
+        .await?;
+    let mut goals: Vec<GoalDocument> = serde_json::from_value(
+        response
+            .pointer("/data/Goal")
+            .cloned()
+            .context("transactional Goal query omitted rows")?,
+    )
+    .context("decoding transactional Goal rows")?;
+    sort_goals_canonical(&mut goals);
+    Ok(goals.into_iter().next())
+}
+
+async fn set_goal_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    session_id: &str,
+    objective: Option<&str>,
+    status: Option<GoalStatus>,
+    token_budget: Option<Option<i64>>,
+) -> Result<GoalDocument> {
+    let existing = load_canonical_goal_in_txn(txn, agent_did, session_id).await?;
     let objective = objective
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -1924,7 +2001,10 @@ pub async fn set_goal(
         let pre = existing
             .state()
             .context("existing Goal has an unknown status")?;
-        let action = operator_action_for_status(pre.status, status);
+        anyhow::ensure!(
+            pre.status == GoalStatus::Active || status != GoalStatus::Active,
+            "reactivating an existing goal requires goal resume-request --from REQUEST_ID"
+        );
         let post = apply_operator_status_transition(pre, status)?;
         let active_time = existing.current_active_time_seconds(now);
         let active_started_at = if post.status.accrues_active_time() {
@@ -1938,24 +2018,14 @@ pub async fn set_goal(
             (!active_started_at.is_empty()).then_some(active_started_at.as_str()),
         );
         let doc_id = escape_graphql_string(&existing.doc_id);
-        let agent_did = escape_graphql_string(agent_did);
+        let escaped_agent_did = escape_graphql_string(agent_did);
         let objective = escape_graphql_string(&objective);
         let status = post.status.as_str();
-        let reset_audit_fields = if action == Some(GoalAction::Resume) {
-            "last_blocked_request_id: null, last_blocked_reason: null, last_failure: null, infrastructure_retry_count: 0,"
-        } else {
-            ""
-        };
-        let reset_completion_field = if action == Some(GoalAction::Resume) {
-            "completion_evidence: null,"
-        } else {
-            ""
-        };
         let now = escape_graphql_string(&now_string);
         let mutation = format!(
             r#"mutation {{
                 update_Goal(
-                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }},
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }},
                     input: {{
                         objective: "{objective}",
                         status: "{status}",
@@ -1966,8 +2036,6 @@ pub async fn set_goal(
                         consecutive_blocked_audits: {blocked_audits},
                         wrapup_requested: {wrapup_requested},
                         wrapup_completed: {wrapup_completed},
-                        {reset_audit_fields}
-                        {reset_completion_field}
                         updated_at: "{now}"
                     }}
                 ) {{ _docID }}
@@ -1977,8 +2045,8 @@ pub async fn set_goal(
             wrapup_requested = post.wrapup_requested,
             wrapup_completed = post.wrapup_completed,
         );
-        execute_goal_mutation(node, &mutation, "update goal").await?;
-        return load_goal_by_doc_id(node, &existing.doc_id)
+        txn.execute(&mutation).await?;
+        return load_canonical_goal_in_txn(txn, agent_did, session_id)
             .await?
             .context("updated Goal row disappeared");
     }
@@ -2035,8 +2103,8 @@ pub async fn set_goal(
         wrapup_requested = initial_state.wrapup_requested,
         wrapup_completed = initial_state.wrapup_completed,
     );
-    execute_goal_mutation(node, &mutation, "create goal").await?;
-    load_canonical_goal(node, agent_did, session_id)
+    txn.execute(&mutation).await?;
+    load_canonical_goal_in_txn(txn, agent_did, session_id)
         .await?
         .context("created Goal row not found")
 }
@@ -2109,27 +2177,9 @@ pub async fn delete_goals_for_session(
     }
 }
 
-pub async fn update_goal_fields(
-    node: &EmbeddedNode,
-    goal: &GoalDocument,
-    fields: &str,
-) -> Result<()> {
-    let doc_id = escape_graphql_string(&goal.doc_id);
-    let agent_did = escape_graphql_string(&goal.agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_Goal(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }},
-                input: {{ {fields} }}
-            ) {{ _docID }}
-        }}"#
-    );
-    execute_goal_mutation(node, &mutation, "update goal fields").await
-}
-
-/// Apply controller-owned fields only while the goal still has the status on
-/// which the controller based its decision. Operator/model status changes win
-/// races with continuation bookkeeping.
+/// Apply controller-owned fields only while both the observed status and
+/// continuation sequence remain current. A resumed goal may have the same
+/// status as an older snapshot, but belongs to a newer continuation.
 pub async fn update_goal_fields_if_status(
     node: &EmbeddedNode,
     goal: &GoalDocument,
@@ -2139,13 +2189,15 @@ pub async fn update_goal_fields_if_status(
     let doc_id = escape_graphql_string(&goal.doc_id);
     let agent_did = escape_graphql_string(&goal.agent_did);
     let expected_status = escape_graphql_string(expected_status.as_str());
+    let expected_sequence = goal.continuation_sequence();
     let mutation = format!(
         r#"mutation {{
             update_Goal(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
                     agent_did: {{ _eq: "{agent_did}" }},
-                    status: {{ _eq: "{expected_status}" }}
+                    status: {{ _eq: "{expected_status}" }},
+                    continuation_sequence: {{ _eq: {expected_sequence} }}
                 }},
                 input: {{ {fields} }}
             ) {{ _docID }}
@@ -2173,7 +2225,9 @@ pub async fn claim_continuation(
     let agent_did = escape_graphql_string(&goal.agent_did);
     let parent_request_id = escape_graphql_string(parent_request_id);
     let expected_sequence = goal.continuation_sequence();
-    let next_sequence = expected_sequence.saturating_add(1);
+    let next_sequence = expected_sequence
+        .checked_add(1)
+        .context("goal continuation sequence exhausted")?;
     let expected_status = escape_graphql_string(&goal.status);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
@@ -2217,7 +2271,9 @@ pub async fn claim_retry_continuation(
     let parent_request_id = escape_graphql_string(parent_request_id);
     let failure = escape_graphql_string(failure);
     let expected_sequence = goal.continuation_sequence();
-    let next_sequence = expected_sequence.saturating_add(1);
+    let next_sequence = expected_sequence
+        .checked_add(1)
+        .context("goal continuation sequence exhausted")?;
     let expected_status = escape_graphql_string(&goal.status);
     let now = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
@@ -2325,29 +2381,19 @@ pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Res
             .is_some_and(GoalStatus::accrues_active_time)
             .then_some(now_string.as_str()),
     );
-    update_goal_fields(
+    let status = goal
+        .parsed_status()
+        .context("Goal usage snapshot has an unknown status")?;
+    update_goal_fields_if_status(
         node,
         goal,
+        status,
         &format!(
             "tokens_used: {tokens}, active_time_seconds: {active_time}, {active_started_field} updated_at: \"{updated_at}\""
         ),
     )
     .await?;
     Ok(tokens)
-}
-
-async fn load_goal_by_doc_id(node: &EmbeddedNode, doc_id: &str) -> Result<Option<GoalDocument>> {
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{ Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {GOAL_FIELDS} }} }}"#
-    );
-    Ok(decode_goal_rows(node, &query).await?.into_iter().next())
-}
-
-async fn execute_goal_mutation(node: &EmbeddedNode, mutation: &str, label: &str) -> Result<()> {
-    execute_goal_mutation_response(node, mutation, label)
-        .await
-        .map(|_| ())
 }
 
 async fn execute_goal_mutation_response(

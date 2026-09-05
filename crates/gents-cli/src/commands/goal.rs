@@ -1,14 +1,15 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use gents::config_client::ConfigAccess;
 use gents::goal::{
-    apply_operator_status_transition, delete_goals_for_session, deterministic_goal_id,
-    load_canonical_goal, set_goal, GoalDocument, GoalSnapshot, GoalState, GoalStatus,
-    BLOCKED_AUDIT_THRESHOLD, GOAL_FIELDS,
+    delete_goals_for_session, load_canonical_goal, set_goal_from_access, GoalDocument,
+    GoalSnapshot, GoalStatus, GOAL_FIELDS,
 };
 use gents::graphql::escape_graphql_string;
 
-use crate::cli::args::{GoalCommand, GoalScopeArgs, GoalSetArgs, GoalShowArgs, GoalStatusArg};
+use crate::cli::args::{
+    GoalCommand, GoalResumeArgs, GoalScopeArgs, GoalSetArgs, GoalShowArgs, GoalStatusArg,
+};
 use crate::cli::output_format::OutputFormat;
 use crate::{print_json, resolve_agent_did, resolve_config_access};
 
@@ -16,6 +17,7 @@ pub(crate) async fn dispatch(command: GoalCommand) -> Result<()> {
     match command {
         GoalCommand::Show(args) => goal_show(args).await,
         GoalCommand::Set(args) => goal_set(args).await,
+        GoalCommand::ResumeRequest(args) => goal_resume(args).await,
         GoalCommand::Clear(args) => goal_clear(args).await,
     }
 }
@@ -43,34 +45,36 @@ async fn goal_set(args: GoalSetArgs) -> Result<()> {
     } else {
         args.token_budget.map(Some)
     };
-    let goal = match &access {
-        ConfigAccess::Local(node) => {
-            set_goal(
-                node,
-                &agent_did,
-                &args.scope.session,
-                args.objective.as_deref(),
-                status,
-                budget,
-            )
-            .await?
-        }
-        ConfigAccess::Graphql(_) => {
-            set_goal_over_graphql(
-                &access,
-                &agent_did,
-                &args.scope.session,
-                args.objective.as_deref(),
-                status,
-                budget,
-            )
-            .await?
-        }
-    };
+    let goal = set_goal_from_access(
+        &access,
+        &agent_did,
+        &args.scope.session,
+        args.objective.as_deref(),
+        status,
+        budget,
+    )
+    .await?;
     print_json(&serde_json::to_value(GoalSnapshot::from_document(
         &goal,
         Utc::now(),
     ))?)
+}
+
+async fn goal_resume(args: GoalResumeArgs) -> Result<()> {
+    args.output
+        .ensure_supported("goal resume-request", &[OutputFormat::Json])?;
+    let (access, agent_did) = access_and_did(&args.scope).await?;
+    crate::request_helpers::ensure_local_request_signer(args.scope.home.as_deref(), &agent_did)?;
+    let identity = gents::identity::RegisteredIdentity::from_registered_did(&agent_did, None)?;
+    let receipt = gents::goal::resume_goal_request(
+        &access,
+        &identity,
+        &agent_did,
+        &args.scope.session,
+        &args.from,
+    )
+    .await?;
+    print_json(&serde_json::to_value(receipt)?)
 }
 
 async fn goal_clear(args: GoalShowArgs) -> Result<()> {
@@ -180,132 +184,6 @@ async fn load_goal(
             .then_with(|| left.doc_id.cmp(&right.doc_id))
     });
     Ok(goals.into_iter().next())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn set_goal_over_graphql(
-    access: &ConfigAccess,
-    agent_did: &str,
-    session_id: &str,
-    objective: Option<&str>,
-    status: Option<GoalStatus>,
-    token_budget: Option<Option<i64>>,
-) -> Result<GoalDocument> {
-    let existing = load_goal(access, agent_did, session_id).await?;
-    let objective = objective
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| existing.as_ref().map(|goal| goal.objective.clone()))
-        .context("a goal objective is required")?;
-    let status = status
-        .or_else(|| existing.as_ref().and_then(GoalDocument::parsed_status))
-        .unwrap_or(GoalStatus::Active);
-    let budget =
-        token_budget.unwrap_or_else(|| existing.as_ref().and_then(|goal| goal.token_budget));
-    if budget.is_some_and(|value| value <= 0) {
-        bail!("goal token budget must be positive");
-    }
-
-    let now = Utc::now();
-    let now_string = now.to_rfc3339();
-    let objective = escape_graphql_string(&objective);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_now = escape_graphql_string(&now_string);
-    let budget_field = budget
-        .map(|value| format!("token_budget: {value},"))
-        .unwrap_or_else(|| "token_budget: null,".to_string());
-    let started_field = if status.accrues_active_time() {
-        format!(r#"active_started_at: "{escaped_now}","#)
-    } else {
-        "active_started_at: null,".to_string()
-    };
-
-    let mutation = if let Some(existing) = existing {
-        let pre = existing
-            .state()
-            .context("existing Goal has an unknown status")?;
-        let post = apply_operator_status_transition(pre, status)?;
-        let resumed = pre.status != GoalStatus::Active && post.status == GoalStatus::Active;
-        let doc_id = escape_graphql_string(&existing.doc_id);
-        let active_time = existing.current_active_time_seconds(now);
-        let reset_fields = if resumed {
-            "last_blocked_request_id: null, last_blocked_reason: null, last_failure: null, infrastructure_retry_count: 0, completion_evidence: null,"
-        } else {
-            ""
-        };
-        format!(
-            r#"mutation {{
-                update_Goal(
-                    filter: {{
-                        _docID: {{ _eq: "{doc_id}" }},
-                        agent_did: {{ _eq: "{escaped_agent_did}" }}
-                    }},
-                    input: {{
-                        objective: "{objective}",
-                        status: "{status}",
-                        {budget_field}
-                        tokens_used: {tokens_used},
-                        active_time_seconds: {active_time},
-                        {started_field}
-                        consecutive_blocked_audits: {blocked_audits},
-                        wrapup_requested: {wrapup_requested},
-                        wrapup_completed: {wrapup_completed},
-                        {reset_fields}
-                        updated_at: "{escaped_now}"
-                    }}
-                ) {{ _docID }}
-            }}"#,
-            status = post.status.as_str(),
-            tokens_used = existing.tokens_used.unwrap_or_default().max(0),
-            blocked_audits = post.blocked_audits,
-            wrapup_requested = post.wrapup_requested,
-            wrapup_completed = post.wrapup_completed,
-        )
-    } else {
-        let goal_id = escape_graphql_string(&deterministic_goal_id(agent_did, session_id));
-        let initial_state = GoalState {
-            status,
-            blocked_audits: if status == GoalStatus::Blocked {
-                BLOCKED_AUDIT_THRESHOLD
-            } else {
-                0
-            },
-            wrapup_requested: status == GoalStatus::BudgetLimited,
-            wrapup_completed: status == GoalStatus::Complete,
-        };
-        format!(
-            r#"mutation {{
-                create_Goal(input: {{
-                    goal_id: "{goal_id}",
-                    session_id: "{escaped_session_id}",
-                    agent_did: "{escaped_agent_did}",
-                    objective: "{objective}",
-                    status: "{status}",
-                    {budget_field}
-                    tokens_used: 0,
-                    active_time_seconds: 0,
-                    {started_field}
-                    consecutive_blocked_audits: {blocked_audits},
-                    continuation_sequence: 0,
-                    wrapup_requested: {wrapup_requested},
-                    wrapup_completed: {wrapup_completed},
-                    infrastructure_retry_count: 0,
-                    created_at: "{escaped_now}",
-                    updated_at: "{escaped_now}"
-                }}) {{ _docID }}
-            }}"#,
-            status = status.as_str(),
-            blocked_audits = initial_state.blocked_audits,
-            wrapup_requested = initial_state.wrapup_requested,
-            wrapup_completed = initial_state.wrapup_completed,
-        )
-    };
-    access.execute(&mutation).await?;
-    load_goal(access, agent_did, session_id)
-        .await?
-        .context("durable Goal disappeared after write")
 }
 
 impl From<GoalStatusArg> for GoalStatus {
