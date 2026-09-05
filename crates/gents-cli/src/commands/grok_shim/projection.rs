@@ -559,6 +559,7 @@ impl<T: AsyncSendLine + ?Sized> AsyncSendLine for Arc<T> {
 /// in-process node every projection query executes against, the bound
 /// model/context configuration, and the connection's projection sequencer.
 pub(crate) struct ProjectionEngine {
+    pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     bound: BoundModelContext,
     sequencer: Arc<ProjectionSequencer>,
@@ -574,6 +575,7 @@ impl ProjectionEngine {
         Self {
             node,
             bound,
+            background_executions: Default::default(),
             channel: SessionUpdateChannel::new(sequencer.clone()),
             sequencer,
         }
@@ -585,6 +587,14 @@ impl ProjectionEngine {
     /// allocation order equals enqueue order.
     pub(crate) fn session_updates(&self) -> &SessionUpdateChannel {
         &self.channel
+    }
+
+    pub(crate) fn with_background_executions(
+        mut self,
+        executions: gents::hook::BackgroundExecutionRegistry,
+    ) -> Self {
+        self.background_executions = executions;
+        self
     }
 
     /// The connection's projection sequencer as a shared handle, for tests
@@ -902,7 +912,13 @@ impl ProjectionEngine {
             }
         }
         // 4. Tools (lifecycle of the request's tool calls).
-        let tools = tools::project_tools(&self.node, request_id, session_id).await?;
+        let tools = tools::project_tools(
+            &self.node,
+            request_id,
+            session_id,
+            &self.background_executions,
+        )
+        .await?;
         for (index, update) in tools.updates.iter().enumerate() {
             let chronology = tools.chronology.get(index).copied().flatten();
             match update {
@@ -957,7 +973,18 @@ impl ProjectionEngine {
                     });
                 }
                 tools::ToolUpdate::BackgroundTask(update) => {
-                    let Some(advance) = cursor.background_task_novel(&update.key) else {
+                    let advance = if update.kind == "tool_call_update" {
+                        let fingerprint = payload_fingerprint(&update.payload);
+                        (cursor.background_outputs.get(&update.key) != Some(&fingerprint)).then(
+                            || CursorAdvance::BackgroundOutput {
+                                key: update.key.clone(),
+                                fingerprint,
+                            },
+                        )
+                    } else {
+                        cursor.background_task_novel(&update.key)
+                    };
+                    let Some(advance) = advance else {
                         continue;
                     };
                     merged.push(MergedEvent {
@@ -1394,7 +1421,9 @@ pub(crate) enum CursorAdvance {
     Many(Vec<CursorAdvance>),
     /// Adopt a replacement response document generation before applying
     /// live-tail advances from it.
-    ResponseDocument { doc_id: String },
+    ResponseDocument {
+        doc_id: String,
+    },
     /// The full base payload of a tool call was observed (first time or
     /// changed tracked fields).
     ToolBase {
@@ -1409,11 +1438,22 @@ pub(crate) enum CursorAdvance {
         status: String,
     },
     /// A distinct visible tool list was observed.
-    Commands { fingerprint: u64 },
+    Commands {
+        fingerprint: u64,
+    },
     /// A distinct subagent payload was observed for its key.
-    Subagent { key: String, fingerprint: u64 },
+    Subagent {
+        key: String,
+        fingerprint: u64,
+    },
     /// One native background task lifecycle notification was delivered.
-    BackgroundTask { key: String },
+    BackgroundTask {
+        key: String,
+    },
+    BackgroundOutput {
+        key: String,
+        fingerprint: u64,
+    },
     /// A live response tail delta was planned and sent. The `plan` is the
     /// post-send cursor state (including the history anchor it absorbed);
     /// `progress_seq` is the durable progress counter observed with this
@@ -1436,7 +1476,9 @@ pub(crate) enum CursorAdvance {
     /// Inclusive durable transcript query cursor. This advances only after
     /// the complete projection batch succeeds, so a leaf/send failure re-reads
     /// every still-undelivered row.
-    MessageHighWater { sequence: i64 },
+    MessageHighWater {
+        sequence: i64,
+    },
 }
 
 /// The post-send state of one live tail cursor, carried inside a
@@ -2390,6 +2432,7 @@ pub(crate) struct RequestCursor {
     subagent_states: BTreeMap<String, u64>,
     /// Delivery receipts only; process lifecycle remains in AgentToolCall.
     background_task_events: std::collections::BTreeSet<String>,
+    background_outputs: BTreeMap<String, u64>,
     /// The committed (send-success) state of the live tail cursors.
     live_cursors: LiveCursorPair,
     /// The committed (send-success) delivered length per durable chunk key.
@@ -2596,6 +2639,9 @@ impl RequestCursor {
             }
             CursorAdvance::BackgroundTask { key } => {
                 self.background_task_events.insert(key);
+            }
+            CursorAdvance::BackgroundOutput { key, fingerprint } => {
+                self.background_outputs.insert(key, fingerprint);
             }
             CursorAdvance::LiveContent { plan, progress_seq } => {
                 self.live_cursors.content.commit(plan, progress_seq);

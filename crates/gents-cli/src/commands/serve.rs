@@ -1080,6 +1080,7 @@ pub(crate) async fn serve_with_control(
     let mut grok_shim_handle = None;
     if let Some(socket_path) = grok_shim_socket_path.as_ref() {
         match bind_grok_shim(GrokShimBindArgs {
+            background_executions: background_execution_registry.clone(),
             node: node.clone(),
             graphql: graphql_url.clone(),
             behavior_id: args.grok_shim_behavior_id.clone(),

@@ -766,14 +766,11 @@ impl TurnManager {
         }
         for (request_id, progress) in requests {
             let _delivery = self.delivery_gate.lock().await;
-            if self
+            let foreground_busy = self
                 .foreground_deliveries
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .contains_key(session_id)
-            {
-                continue;
-            }
+                .contains_key(session_id);
             // The foreground owns this lock through its final flush. Never
             // wait behind it: other completed requests may have late events.
             let Ok(mut progress) = progress.try_lock() else {
@@ -782,24 +779,47 @@ impl TurnManager {
             // The pager treats a user notification as a turn boundary and
             // accepts autonomous prompts only while idle. Leave all cursors
             // untouched while a foreground request owns the session.
-            {
+            let request_busy = {
                 let state = self.state.lock().await;
-                if state.closed
-                    || state
-                        .entries
-                        .keys()
-                        .any(|(session, _)| session == session_id)
-                {
+                if state.closed {
                     continue;
                 }
-            }
+                state
+                    .entries
+                    .keys()
+                    .any(|(session, _)| session == session_id)
+            };
             let active = self
                 .autonomous_delivery
                 .lock()
                 .await
                 .get(session_id)
                 .cloned();
-            if active.as_deref().is_some_and(|id| id != request_id) {
+            if foreground_busy
+                || request_busy
+                || active.as_deref().is_some_and(|id| id != request_id)
+            {
+                let ObservedRequest {
+                    prompt_id,
+                    cursor,
+                    token_high_water,
+                    timing,
+                    ..
+                } = &mut *progress;
+                self.stream_projection_updates_mode(
+                    session_id,
+                    &request_id,
+                    prompt_id.as_deref(),
+                    sender,
+                    projections,
+                    token_high_water,
+                    cursor,
+                    timing,
+                    false,
+                    0,
+                    true,
+                )
+                .await?;
                 continue;
             }
             let continuing_autonomous = active.is_some();
@@ -1625,6 +1645,42 @@ impl TurnManager {
         include_notifications: bool,
         descendant_depth: usize,
     ) -> Result<()> {
+        self.stream_projection_updates_mode(
+            session_id,
+            request_id,
+            prompt_id,
+            sender,
+            projections,
+            token_high_water,
+            cursor,
+            update_timing,
+            include_notifications,
+            descendant_depth,
+            false,
+        )
+        .await
+    }
+
+    /// Background activity is independent of parent conversation delivery.
+    /// Suppressed text and its cursor advances stay pending until that lane
+    /// is free; children retain their own session-scoped delivery cursors.
+    async fn stream_projection_updates_mode(
+        &self,
+        session_id: &str,
+        request_id: &str,
+        prompt_id: Option<&str>,
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+        token_high_water: &mut u64,
+        cursor: &tokio::sync::Mutex<RequestCursor>,
+        update_timing: &mut RequestUpdateTiming,
+        include_notifications: bool,
+        descendant_depth: usize,
+        activity_only: bool,
+    ) -> Result<()> {
+        // An old prompt ID on parent activity makes the stock pager adopt
+        // that old turn as a viewer. Activity has no conversation ownership.
+        let prompt_id = if activity_only { None } else { prompt_id };
         let batch = {
             let mut cursor = cursor.lock().await;
             projections
@@ -1634,6 +1690,9 @@ impl TurnManager {
         let mut deferred_notifications = false;
         let mut child_finishes = Vec::new();
         for event in batch.events {
+            if activity_only && !is_background_activity(&event.payload) {
+                continue;
+            }
             if event.payload.get("sessionUpdate").and_then(Value::as_str)
                 == Some("subagent_finished")
             {
@@ -1657,6 +1716,7 @@ impl TurnManager {
                 projections,
                 cursor,
                 update_timing,
+                activity_only,
             )
             .await?;
         }
@@ -1689,13 +1749,14 @@ impl TurnManager {
                 projections,
                 cursor,
                 update_timing,
+                activity_only,
             )
             .await?;
         }
         // No-wire observations (tail resets/no-op commits) form the suffix
         // of the same delivery prefix. They become durable cursor state only
         // after every byte-carrying event above was enqueued successfully.
-        if !batch.trailing_advances.is_empty() {
+        if !activity_only && !batch.trailing_advances.is_empty() {
             let mut cursor = cursor.lock().await;
             for advance in batch.trailing_advances {
                 if deferred_notifications
@@ -1720,9 +1781,13 @@ impl TurnManager {
         projections: &ProjectionEngine,
         cursor: &Mutex<RequestCursor>,
         timing: &mut RequestUpdateTiming,
+        activity_only: bool,
     ) -> Result<()> {
-        let timestamps =
-            timing.resolve(event.timing.as_ref(), chrono::Utc::now().timestamp_millis());
+        let timestamps = if activity_only {
+            UpdateTimestamps::default()
+        } else {
+            timing.resolve(event.timing.as_ref(), chrono::Utc::now().timestamp_millis())
+        };
         let commit = ProjectionCursorCommit {
             cursor,
             advance: event.advance,
@@ -2031,20 +2096,31 @@ fn stop_reason_from_wire(name: &str) -> StopReason {
 }
 
 /// Whether a durable request lifecycle state is terminal.
-pub(super) fn is_terminal_lifecycle_state(state: &str) -> bool {
+fn is_background_activity(payload: &Value) -> bool {
     matches!(
-        state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
+        payload["sessionUpdate"].as_str(),
+        Some(
+            "tool_call"
+                | "tool_call_update"
+                | "task_backgrounded"
+                | "task_completed"
+                | "subagent_spawned"
+                | "subagent_progress"
+                | "subagent_finished"
+        )
     )
+}
+
+/// Whether a durable request lifecycle state is terminal.
+pub(super) fn is_terminal_lifecycle_state(state: &str) -> bool {
+    gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 /// Project the durable terminal state into a wire `stopReason`.
 ///
 /// The durable source is `AgentRequest.lifecycle_state`; an `interrupted`
-/// request projects `cancelled`. `AgentResponse.interrupted_at` is the durable
-/// cancellation marker, so a non-terminal request carrying a non-empty
-/// `interrupted_at` is already on its way to `interrupted` and projects
-/// `cancelled` promptly.
+/// request projects `cancelled`. Response markers may explain a terminal
+/// outcome, but cannot finish a still-active request ahead of its owner.
 pub(super) fn stop_reason_from_rows(
     lifecycle_state: &str,
     response_status: Option<&str>,
@@ -2068,13 +2144,7 @@ pub(super) fn stop_reason_from_rows(
                 Some(StopReason::Error)
             }
         }
-        _ => {
-            if interrupted_at_nonempty {
-                Some(StopReason::Cancelled)
-            } else {
-                None
-            }
-        }
+        _ => None,
     }
 }
 
@@ -2399,7 +2469,7 @@ mod tests {
     fn stop_reason_projection_maps_interrupted_at_marker() {
         assert_eq!(
             stop_reason_from_rows("processing", None, Some("2026-01-01T00:00:00Z")),
-            Some(StopReason::Cancelled)
+            None
         );
         assert_eq!(stop_reason_from_rows("processing", None, Some("  ")), None);
         assert_eq!(
@@ -3431,11 +3501,12 @@ mod tests {
             )
             .await;
         ensure_no_errors(&response, "scope child tool").unwrap();
+        seed_assistant_message(&node, "pane-root", 7, "PARENT MUST WAIT").await;
         let cursor = Mutex::new(RequestCursor::new());
         let mut tokens = 0;
         let mut timing = RequestUpdateTiming::new(0);
         manager
-            .stream_projection_updates(
+            .stream_projection_updates_mode(
                 "session-1",
                 "pane-root",
                 Some("parent-prompt"),
@@ -3446,9 +3517,26 @@ mod tests {
                 &mut timing,
                 false,
                 0,
+                true,
             )
             .await
             .unwrap();
+        let activity = parse_buffered_updates(&buffer).await;
+        assert!(activity
+            .iter()
+            .any(|row| row["params"]["sessionId"] == "session-1-child"
+                && row["params"]["update"]["toolCallId"] == "child-bash"));
+        assert!(!activity.iter().any(|row| row
+            .pointer("/params/update/content/text")
+            .and_then(Value::as_str)
+            == Some("PARENT MUST WAIT")));
+        for row in activity
+            .iter()
+            .filter(|row| row["params"]["sessionId"] == "session-1")
+        {
+            assert!(row.pointer("/params/_meta/promptId").is_none());
+            assert!(row.pointer("/params/_meta/turnStartMs").is_none());
+        }
         complete_child_request(&node, "pane-child").await;
         complete_tool_call(&node, "child-bash", "child tool done").await;
         complete_tool_call(&node, "call-1", "done").await;
@@ -3626,6 +3714,19 @@ mod tests {
                     .and_then(Value::as_str)
                     == Some("Background work finished.")),
             "wake output must remain undelivered while the pager has a foreground prompt"
+        );
+        assert!(
+            parse_buffered_updates(&buffer).await.iter().any(|event| {
+                event
+                    .pointer("/params/update/toolCallId")
+                    .and_then(Value::as_str)
+                    == Some("late-bash")
+                    && event
+                        .pointer("/params/update/status")
+                        .and_then(Value::as_str)
+                        == Some("failed")
+            }),
+            "background terminal updates must flow while a new foreground is pending"
         );
         manager.state.lock().await.entries.remove(&foreground_key);
         // Pending removal precedes response enqueue in the live delegate.

@@ -470,11 +470,62 @@ pub(super) async fn project_tools(
     node: &Arc<EmbeddedNode>,
     request_id: &str,
     session_id: &str,
+    executions: &gents::hook::BackgroundExecutionRegistry,
 ) -> Result<ToolProjection> {
     let tool_response = node.execute(&tool_calls_query(request_id)).await;
     ensure_no_errors(&tool_response, "grok shim tool call query")?;
-    let rows = decode_tool_call_rows(&tool_response);
-
+    let mut rows = decode_tool_call_rows(&tool_response);
+    // Runtime authorization and retained buffers remain the single output
+    // owner. These are ephemeral projection inputs, never persisted copies.
+    if rows.iter().any(|row| {
+        row.await_mode.as_deref() == Some("background") && !observed_status(row).is_completed()
+    }) {
+        let scope = node.execute(&format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{request_id session_id agent_did requester_did}} }}"#, gents::graphql::escape_graphql_string(request_id))).await;
+        ensure_no_errors(&scope, "Grok output scope")?;
+        let owners: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+            scope
+                .data
+                .as_ref()
+                .and_then(|v| v.get("AgentRequest"))
+                .cloned()
+                .unwrap_or(json!([])),
+        )?;
+        if let [owner] = owners.as_slice() {
+            if owner.session_id.as_deref() == Some(session_id) {
+                if let Some(principal) = owner.agent_did.as_deref() {
+                    for row in &mut rows {
+                        if row.await_mode.as_deref() != Some("background")
+                            || observed_status(row).is_completed()
+                        {
+                            continue;
+                        }
+                        let Some(id) = row.tool_call_key_tool_call_id() else {
+                            continue;
+                        };
+                        if let Some(snapshot) = executions
+                            .read_process_output_snapshot(
+                                node,
+                                session_id,
+                                principal,
+                                owner.requester_did.as_deref(),
+                                &id,
+                            )
+                            .await?
+                        {
+                            if let Some(output) =
+                                snapshot["output"].as_str().filter(|s| !s.is_empty())
+                            {
+                                row.partial_output_tail = Some(json!({
+                                "stdout": output,
+                                "stdout_truncation": {"truncated": snapshot["first_available_offset"].as_u64().unwrap_or(0) > 0}
+                            }).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let result_response = node.execute(&tool_results_query(session_id)).await;
     ensure_no_errors(&result_response, "grok shim tool result query")?;
     let results = decode_tool_result_rows(&result_response);
@@ -590,7 +641,7 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
             status,
             content,
             raw_input,
-            raw_output,
+            raw_output: raw_output.clone(),
             meta: meta.clone(),
         }));
         chronology.push(row.message_sequence);
@@ -598,6 +649,15 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
         if let Some((started, _)) = &background {
             updates.push(ToolUpdate::BackgroundTask(started.clone()));
             chronology.push(row.message_sequence);
+            // The stock pager maps task IDs only on task_backgrounded and
+            // consumes cumulative output via tool_call_update, not the base.
+            if let Some(raw) = raw_output {
+                updates.push(ToolUpdate::BackgroundTask(background::BackgroundTaskUpdate {
+                    method: "session/update", kind: "tool_call_update", key: tool_call_id.clone(),
+                    payload: json!({"sessionUpdate":"tool_call_update","toolCallId":tool_call_id,"rawOutput":raw}),
+                }));
+                chronology.push(row.message_sequence);
+            }
         }
 
         // A terminal first observation still emits the base `tool_call`
@@ -1095,6 +1155,39 @@ mod tests {
         assert_eq!(ToolCallKind::Think.wire_name(), "think");
         assert_eq!(ToolCallKind::Fetch.wire_name(), "fetch");
         assert_eq!(ToolCallKind::Other.wire_name(), "other");
+    }
+
+    #[test]
+    fn native_task_output_follows_registration_and_keeps_large_snapshot() {
+        let mut row = tool_row("bash", Some("running"));
+        row.result = None;
+        row.await_mode = Some("background".into());
+        row.args = Some(r#"{"command":"produce output"}"#.into());
+        row.started_at = Some("2026-01-01T00:00:00Z".into());
+        let text = format!("PREFIX{}SUFFIX", "0123456789".repeat(10_000));
+        row.partial_output_tail =
+            Some(json!({"stdout":text,"stdout_truncation":{"truncated":true}}).to_string());
+        let projected = project_tool_rows(&[row], &[]);
+        let start = projected
+            .updates
+            .iter()
+            .position(
+                |u| matches!(u, ToolUpdate::BackgroundTask(v) if v.kind == "task_backgrounded"),
+            )
+            .unwrap();
+        let output = projected
+            .updates
+            .iter()
+            .position(
+                |u| matches!(u, ToolUpdate::BackgroundTask(v) if v.kind == "tool_call_update"),
+            )
+            .unwrap();
+        assert!(start < output);
+        let ToolUpdate::BackgroundTask(update) = &projected.updates[output] else {
+            unreachable!()
+        };
+        assert_eq!(update.payload["rawOutput"]["output_for_prompt"], text);
+        assert_eq!(update.payload["rawOutput"]["truncated"], true);
     }
 
     #[test]
@@ -2095,7 +2188,7 @@ mod tests {
         );
 
         // The actual production path: query + deserialize + projection.
-        let projection = project_tools(&node, request_id, session_id)
+        let projection = project_tools(&node, request_id, session_id, &Default::default())
             .await
             .expect("tool projection");
         let output_for = |tool_call_id: &str| -> Option<String> {
@@ -2245,7 +2338,7 @@ mod tests {
         );
 
         // The full production path: query + deserialize + projection.
-        let projection = project_tools(&node, request_id, session_id)
+        let projection = project_tools(&node, request_id, session_id, &Default::default())
             .await
             .expect("tool projection");
 
@@ -2329,7 +2422,7 @@ mod tests {
             response.errors
         );
 
-        let reprojection = project_tools(&node, request_id, session_id)
+        let reprojection = project_tools(&node, request_id, session_id, &Default::default())
             .await
             .expect("tool reprojection");
         // Same toolCallId, still rendered, now terminal.
@@ -2418,7 +2511,7 @@ mod tests {
         );
 
         // The production path streams the window while the call runs.
-        let projection = project_tools(&node, request_id, session_id)
+        let projection = project_tools(&node, request_id, session_id, &Default::default())
             .await
             .expect("live projection");
         let live = call_for(&projection, "call-live");
@@ -2453,7 +2546,7 @@ mod tests {
             response.errors
         );
 
-        let reprojection = project_tools(&node, request_id, session_id)
+        let reprojection = project_tools(&node, request_id, session_id, &Default::default())
             .await
             .expect("terminal projection");
         let terminal = call_for(&reprojection, "call-live");

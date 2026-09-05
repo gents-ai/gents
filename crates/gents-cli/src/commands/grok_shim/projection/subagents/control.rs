@@ -101,7 +101,7 @@ pub(crate) async fn handle(
     }
 }
 
-async fn authorized_children(
+pub(crate) async fn authorized_children(
     node: &EmbeddedNode,
     principal: &str,
     sessions: &[String],

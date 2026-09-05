@@ -809,7 +809,7 @@ mod tests {
             assert!(selection["command_execution_policy"].is_null(), "{asset}");
             assert!(selection["command_network_mode"].is_null(), "{asset}");
             assert_eq!(selection["enable_lsp"], false, "{asset}");
-            assert_eq!(selection["enable_context_budget"], true, "{asset}");
+            assert_eq!(selection["enable_context_budget"], false, "{asset}");
             assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
 

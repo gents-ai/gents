@@ -149,7 +149,7 @@ struct ChildRequestRow {
 }
 
 /// Latest `AgentResponse` row for a child request; the durable source of
-/// token usage and the interrupted marker.
+/// token usage and error details (request lifecycle owns terminality).
 #[derive(Clone, Debug, Deserialize)]
 struct ChildResponseRow {
     request_id: String,
@@ -157,8 +157,6 @@ struct ChildResponseRow {
     token_count: Option<i64>,
     #[serde(default)]
     error_message: Option<String>,
-    #[serde(default)]
-    interrupted_at: Option<String>,
 }
 
 /// An `AgentToolCall` row of the spawn tool, when the parent recorded one
@@ -214,7 +212,6 @@ const CHILD_RESPONSE_FIELDS: &str = r#"
     request_id
     token_count
     error_message
-    interrupted_at
 "#;
 
 const SPAWN_TOOL_FIELDS: &str = r#"
@@ -626,57 +623,27 @@ fn project_child_rows(
 }
 
 impl ChildRequestRow {
-    /// A child is terminal when its own canonical `AgentRequest`
-    /// lifecycle is terminal — `completed`, `failed`, `dead`,
-    /// `superseded`, or `interrupted` (unconditionally: the canonical
-    /// lifecycle is authoritative, even when the `interrupt_requested_at`
-    /// marker is absent) — or when its response carries an
-    /// `interrupted_at` marker (the fallback that terminalizes an
-    /// otherwise still-active child). A blank or still-active row is
-    /// never treated as finished.
-    fn is_terminal(&self, response: Option<&ChildResponseRow>) -> bool {
-        if response.is_some_and(|response| {
-            response
-                .interrupted_at
-                .as_deref()
-                .and_then(nonempty)
-                .is_some()
-        }) {
-            return true;
-        }
-        matches!(
-            self.lifecycle_state.as_deref().and_then(nonempty),
-            Some("completed" | "failed" | "dead" | "superseded" | "interrupted")
+    /// Only the canonical request lifecycle owns terminality. An interrupt
+    /// marker is a request to stop, not evidence that execution has stopped.
+    fn is_terminal(&self, _response: Option<&ChildResponseRow>) -> bool {
+        gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
+            self.lifecycle_state.as_deref(),
         )
     }
-
-    /// The terminal `subagent_finished` status for this child, from the
-    /// canonical runtime lifecycle vocabulary: `completed` completes,
+    /// Project terminal status from the canonical runtime lifecycle:
+    /// `completed` completes,
     /// `interrupted` cancels (directly: the canonical lifecycle state is
     /// the authority, no interrupt marker required), the failure terminal
     /// states (`failed`, `dead`, `superseded`) fail. Anything else — the
-    /// still-active states — only ever projects progress, never a finish,
-    /// except when the response's `interrupted_at` marker alone
-    /// terminalizes the child as cancelled.
+    /// still-active states — only ever projects progress, never a finish.
     fn finish_status(&self, response: Option<&ChildResponseRow>) -> Option<SubagentFinishStatus> {
         if !self.is_terminal(response) {
             return None;
         }
-        let response_interrupted = response.is_some_and(|response| {
-            response
-                .interrupted_at
-                .as_deref()
-                .and_then(nonempty)
-                .is_some()
-        });
         match self.lifecycle_state.as_deref().and_then(nonempty) {
             Some("completed") => Some(SubagentFinishStatus::Completed),
             Some("interrupted") => Some(SubagentFinishStatus::Cancelled),
             Some("failed" | "dead" | "superseded") => Some(SubagentFinishStatus::Failed),
-            // A response `interrupted_at` marker alone terminates the child:
-            // the interrupt is the terminal edge, so the finish is cancelled
-            // even though the row's own lifecycle is still an active state.
-            _ if response_interrupted => Some(SubagentFinishStatus::Cancelled),
             _ => None,
         }
     }
@@ -1063,7 +1030,6 @@ mod tests {
             request_id: request_id.to_string(),
             token_count,
             error_message: None,
-            interrupted_at: None,
         }
     }
 
@@ -1292,10 +1258,12 @@ mod tests {
     }
 
     #[test]
-    fn response_interrupted_marker_alone_marks_terminal_and_cancelled() {
+    fn response_interrupted_marker_waits_for_request_terminalization() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let mut response = response_row("child-1", None);
-        response.interrupted_at = Some("2026-08-31T22:46:46Z".to_string());
+        let response: ChildResponseRow = serde_json::from_value(json!({
+            "request_id": "child-1", "interrupted_at": "2026-08-31T22:46:46Z"
+        }))
+        .unwrap();
         let (updates, _chronology) = project_child_rows(
             &children,
             &[],
@@ -1306,10 +1274,7 @@ mod tests {
             262_144,
         );
         assert_eq!(updates.len(), 2);
-        let SubagentUpdate::Finished(finished) = &updates[1] else {
-            panic!("interrupted response should finish the child");
-        };
-        assert_eq!(finished.status, SubagentFinishStatus::Cancelled);
+        assert!(matches!(&updates[1], SubagentUpdate::Progress(_)));
     }
 
     #[test]

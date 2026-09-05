@@ -35,6 +35,7 @@ pub(crate) mod acp;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;
+mod task_control;
 pub(crate) mod turn;
 
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
@@ -51,6 +52,7 @@ use crate::commands::grok_shim::server::{
 /// synthetic catalog entry.
 #[derive(Clone)]
 pub(crate) struct GrokShimBindArgs {
+    pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
     /// In-process node every request, interrupt, and projection query uses.
     pub(crate) node: Arc<EmbeddedNode>,
     /// GraphQL endpoint string accepted by `create_agent_request`; the
@@ -107,6 +109,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     // per-session event counters — is constructed fresh inside the factory,
     // once per registered connection.
     let factory_inputs = AcpDelegateFactoryInputs {
+        background_executions: args.background_executions.clone(),
         node: args.node.clone(),
         graphql: args.graphql.clone(),
         agent_did: args.agent_did.clone(),
@@ -139,6 +142,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 /// fresh `AcpService`, `TurnManager`, and `ProjectionEngine`.
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
+    background_executions: gents::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
     graphql: String,
     agent_did: String,
@@ -173,7 +177,8 @@ fn production_acp_delegate_factory(
             crate::commands::grok_shim::projection::ProjectionEngine::new(
                 inputs.node.clone(),
                 inputs.bound.clone(),
-            ),
+            )
+            .with_background_executions(inputs.background_executions.clone()),
         );
         let mut service = crate::commands::grok_shim::acp::AcpService::new(
             crate::commands::grok_shim::acp::AcpServiceConfig {
@@ -332,6 +337,7 @@ mod tests {
             .expect("seed admitted factory behavior");
         let graphql = spawn_mock_graphql(node.clone()).await;
         let inputs = AcpDelegateFactoryInputs {
+            background_executions: Default::default(),
             node: node.clone(),
             graphql,
             agent_did,
@@ -841,6 +847,7 @@ mod tests {
                 .expect("embedded node"),
         );
         let args = GrokShimBindArgs {
+            background_executions: Default::default(),
             node,
             graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
             behavior_id: Some("behavior-a".to_string()),

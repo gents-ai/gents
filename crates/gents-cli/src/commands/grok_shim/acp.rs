@@ -629,6 +629,35 @@ impl AcpService {
                 self.handle_subagent_ext_request(request.method.as_str(), request)
                     .await
             }
+            "x.ai/task/kill" => {
+                let params: super::task_control::KillTaskRequest =
+                    serde_json::from_value(request.params.clone())
+                        .map_err(|error| invalid_params(&format!("invalid task kill: {error}")))?;
+                if params.session_id.trim().is_empty() || params.task_id.trim().is_empty() {
+                    return Err(invalid_params(
+                        "task kill requires non-empty sessionId and taskId",
+                    ));
+                }
+                let sessions = self
+                    .sessions
+                    .lock()
+                    .await
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let result = super::task_control::kill(
+                    self.config.node.clone(),
+                    &self.projections.background_executions,
+                    &self.config.agent_did,
+                    &sessions,
+                    params,
+                )
+                .await?;
+                Ok(RequestOutcome {
+                    notifications: Vec::new(),
+                    result: json!({"result":result}),
+                })
+            }
             other if other.starts_with("terminal/") => {
                 // The client-side terminal/* methods are owned by
                 // `projection::tools`: its shaped errors must be preserved
@@ -1518,6 +1547,143 @@ mod tests {
             ),
         ));
         (staging, AcpService::new(config, turns, projections))
+    }
+
+    #[tokio::test]
+    async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
+        let (_dir, service) = test_service().await;
+        service
+            .sessions
+            .lock()
+            .await
+            .insert("task-session".into(), AcpSessionState::new());
+        let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+            service.config.node.clone(),
+            "task-owner".into(),
+            "task-session".into(),
+            service.config.agent_did.to_string(),
+            "task-button".into(),
+            1,
+            "bash".into(),
+            "{}".into(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+        )
+        .with_requester_did(Some(service.config.agent_did.to_string()));
+        lifecycle.start_running().await.unwrap();
+        for params in [
+            json!({"sessionId":"task-session"}),
+            json!({"sessionId":"task-session","taskId":""}),
+            json!({"sessionId":"task-session","taskId":"task-button","source":"invalid"}),
+        ] {
+            let response = service
+                .handle_acp_payload(&request_payload("x.ai/task/kill", params))
+                .await;
+            assert_eq!(
+                parse_response(response.response.as_deref().unwrap())["error"]["code"],
+                -32602
+            );
+        }
+        for (session, expected) in [
+            ("foreign", "not_found"),
+            ("task-session", "killed"),
+            ("task-session", "already_exited"),
+        ] {
+            let response = service
+                .handle_acp_payload(&request_payload(
+                    "x.ai/task/kill",
+                    json!({"sessionId":session, "taskId":"task-button", "source":"clientUi"}),
+                ))
+                .await;
+            let value = parse_response(response.response.as_deref().unwrap());
+            assert_eq!(
+                value["result"]["result"],
+                json!({"taskId":"task-button","outcome":expected}),
+                "{value}"
+            );
+        }
+        let response = service.config.node.execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "task-button"}}) {lifecycle_state} }"#).await;
+        assert_eq!(
+            response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+            "cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn native_task_kill_reaches_only_physically_linked_child_sessions() {
+        let (_dir, service) = test_service().await;
+        service
+            .sessions
+            .lock()
+            .await
+            .insert("parent-session".into(), AcpSessionState::new());
+        let node = &service.config.node;
+        let did = gents::graphql::escape_graphql_string(&service.config.agent_did);
+        let root = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "parent", session_id: "parent-session", agent_did: "{did}", requester_did: "{did}", lifecycle_state: "completed"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&root, "root fixture").unwrap();
+        let root = node
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "parent"}}) {_docID} }"#)
+            .await;
+        ensure_no_errors(&root, "root fixture lookup").unwrap();
+        let root_doc = root.data.unwrap()["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let root_doc = gents::graphql::escape_graphql_string(&root_doc);
+        let bridge = node.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
+            tool_call_key: "parent-session:spawn", tool_call_id: "spawn", request_id: "parent", request_doc_id: "{root_doc}",
+            session_id: "parent-session", agent_did: "{did}", requester_did: "{did}", tool_name: "spawn_subagent",
+            child_request_id: "child", await_mode: "background", lifecycle_state: "running"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&bridge, "bridge fixture").unwrap();
+        let bridge = node
+            .execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "spawn"}}) {_docID} }"#)
+            .await;
+        ensure_no_errors(&bridge, "bridge fixture lookup").unwrap();
+        let bridge_doc = bridge.data.unwrap()["AgentToolCall"][0]["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let bridge_doc = gents::graphql::escape_graphql_string(&bridge_doc);
+        let child = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "child", session_id: "child-session", agent_did: "{did}", lifecycle_state: "processing",
+            caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{root_doc}",
+            caused_by_parent_tool_call_id: "spawn", caused_by_parent_tool_call_doc_id: "{bridge_doc}"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&child, "child fixture").unwrap();
+        for session in ["child-session", "unlinked-session"] {
+            let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+                node.clone(),
+                "child".into(),
+                session.into(),
+                service.config.agent_did.to_string(),
+                "child-process".into(),
+                1,
+                "bash".into(),
+                "{}".into(),
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            );
+            lifecycle.start_running().await.unwrap();
+        }
+        for (session, outcome) in [
+            ("unlinked-session", "not_found"),
+            ("child-session", "killed"),
+        ] {
+            let response = service
+                .handle_acp_payload(&request_payload(
+                    "x.ai/task/kill",
+                    json!({
+                        "sessionId": session, "taskId": "child-process", "source": "teardown"
+                    }),
+                ))
+                .await;
+            let response = parse_response(response.response.as_deref().unwrap());
+            assert_eq!(
+                response["result"]["result"]["outcome"], outcome,
+                "{response}"
+            );
+        }
     }
 
     fn request_payload(method: &str, params: Value) -> String {

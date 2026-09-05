@@ -936,7 +936,28 @@ pub(crate) async fn handle_read_tool_output(
     live_outputs: &LiveToolOutputRegistry,
     args: ReadToolOutputArgs,
 ) -> Result<ReadToolOutputOutcome> {
-    let tool_call_id = args.tool_call_id.trim();
+    read_tool_output_slice(
+        node,
+        caller,
+        live_outputs,
+        &args.tool_call_id,
+        args.offset,
+        args.validated_max_bytes(),
+    )
+    .await
+}
+
+/// Shared authorized output observation. Client snapshots read the retained
+/// buffer in one observation; model tools keep their configured page budget.
+pub(crate) async fn read_tool_output_slice(
+    node: &EmbeddedNode,
+    caller: &ProcessControlScope,
+    live_outputs: &LiveToolOutputRegistry,
+    tool_call_id: &str,
+    offset: u64,
+    max_bytes: usize,
+) -> Result<ReadToolOutputOutcome> {
+    let tool_call_id = tool_call_id.trim();
     if tool_call_id.is_empty() {
         return Ok(ReadToolOutputOutcome::NotAuthorized);
     }
@@ -992,7 +1013,6 @@ pub(crate) async fn handle_read_tool_output(
         .unwrap_or("running")
         .to_string();
     let exited = status != "running";
-    let max_bytes = args.validated_max_bytes();
     let (slice, exit_code) = if exited {
         let result = row.result.as_deref().unwrap_or_default();
         let persisted = persisted_tool_output_streams(&row.tool_name, result);
@@ -1003,15 +1023,15 @@ pub(crate) async fn handle_read_tool_output(
         // model: an orchestrator pages through ALL output gap-free from `offset`.
         let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
         (
-            read_combined_output_slice(&combined, args.offset, max_bytes),
+            read_combined_output_slice(&combined, offset, max_bytes),
             persisted.exit_code,
         )
     } else {
         let slice = live_outputs
             .snapshot(&row.tool_call_id)
             .await
-            .map(|snapshot| read_live_output_slice(snapshot, args.offset, max_bytes))
-            .unwrap_or_else(|| read_combined_output_slice("", args.offset, max_bytes));
+            .map(|snapshot| read_live_output_slice(snapshot, offset, max_bytes))
+            .unwrap_or_else(|| read_combined_output_slice("", offset, max_bytes));
         (slice, None)
     };
 
