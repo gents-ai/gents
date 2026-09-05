@@ -117,9 +117,9 @@ impl GoalCursor {
                 let id = self
                     .delivered
                     .as_ref()
-                    .and_then(|row| row["goal_id"].as_str())
+                    .and_then(|row| row["_docID"].as_str())
                     .context("missing previously delivered goal identity")?;
-                base_update(id, "", "cleared", 0)
+                base_update(&wire_goal_id(id), "", "cleared", 0)
             }
         };
         projections
@@ -148,6 +148,13 @@ impl GoalCursor {
     }
 }
 
+/// Stock permanently suppresses a cleared wire ID. Gents logical goal IDs
+/// are reused across clear/create, so project the stable physical incarnation
+/// instead. No synthesized generation counter or second identity owner.
+fn wire_goal_id(doc_id: &str) -> String {
+    format!("gents:{doc_id}")
+}
+
 fn base_update(id: &str, objective: &str, status: &str, elapsed_ms: u64) -> Value {
     // Grok's optional worker/verifier orchestration is not used by Gents'
     // durable goal owner. Do not reinterpret continuation attempts as rounds.
@@ -173,7 +180,12 @@ fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
         GoalStatus::Complete => "complete",
     };
     let elapsed_ms = (goal.current_active_time_seconds(now) as u64).saturating_mul(1000);
-    let mut update = base_update(&goal.goal_id, &goal.objective, status, elapsed_ms);
+    let mut update = base_update(
+        &wire_goal_id(&goal.doc_id),
+        &goal.objective,
+        status,
+        elapsed_ms,
+    );
     update["tokens_used"] = json!(goal.tokens_used.unwrap_or_default().max(0));
     if let Some(budget) = goal.token_budget {
         update["token_budget"] = json!(budget);
@@ -188,7 +200,7 @@ fn project(goal: &GoalDocument, now: DateTime<Utc>) -> Result<Value> {
     if let Some(reason) = reason {
         update["pause_message"] = json!(reason);
     }
-    update["_meta"] = json!({"gents/goalStatus":goal.status,
+    update["_meta"] = json!({"gents/goalId":goal.goal_id, "gents/goalStatus":goal.status,
         "gents/continuationSequence":goal.continuation_sequence(),
         "gents/goalOrchestration":"runtime-owned; no stock worker/verifier phases"});
     Ok(update)
@@ -275,7 +287,11 @@ mod tests {
             .unwrap();
         assert_eq!(buffer.lock().await.len(), 1);
         let delivered: Value = serde_json::from_str(&buffer.lock().await[0]).unwrap();
-        assert_eq!(delivered["params"]["update"]["goal_id"], "owned");
+        assert_eq!(
+            delivered["params"]["update"]["_meta"]["gents/goalId"],
+            "owned"
+        );
+        let first_wire_id = delivered["params"]["update"]["goal_id"].clone();
         assert_eq!(
             before,
             node.execute("{Goal {goal_id status tokens_used}}")
@@ -313,7 +329,24 @@ mod tests {
         assert_eq!(lines.len(), 2);
         let cleared: Value = serde_json::from_str(&lines[1]).unwrap();
         assert_eq!(cleared["params"]["update"]["status"], "cleared");
-        assert_eq!(cleared["params"]["update"]["goal_id"], "owned");
+        assert_eq!(cleared["params"]["update"]["goal_id"], first_wire_id);
+        drop(lines);
+        // Reusing a logical goal ID must not hit the stock pager's permanent
+        // last_cleared_goal_id suppression for the preceding incarnation.
+        let recreated = node.execute(r#"mutation {create_Goal(input:{
+            goal_id:"owned", agent_did:"principal", session_id:"session", objective:"New incarnation",
+            status:"active", created_at:"2026-09-02T00:00:00Z"
+        }) {_docID}}"#).await;
+        ensure_no_errors(&recreated, "recreate same logical goal").unwrap();
+        cursor
+            .refresh(&node, "principal", "session", &sender, &projections)
+            .await
+            .unwrap();
+        let lines = buffer.lock().await;
+        assert_eq!(lines.len(), 3);
+        let next: Value = serde_json::from_str(&lines[2]).unwrap();
+        assert_ne!(next["params"]["update"]["goal_id"], first_wire_id);
+        assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
     }
 
     #[test]
@@ -341,6 +374,7 @@ mod tests {
         ] {
             goal.status = runtime.into();
             let update = project(&goal, now).unwrap();
+            assert_eq!(update["goal_id"], "gents:physical-goal");
             assert_eq!(update["status"], native);
             assert_eq!(update["_meta"]["gents/goalStatus"], runtime);
             assert_eq!(update["elapsed_ms"], 10000);

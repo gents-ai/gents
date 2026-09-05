@@ -109,8 +109,47 @@ Live fixture checks now passed on `grok-edge-7f5059b3e1804437`:
   an explanatory host-command response when it is not; it does not change
   the transition rules or write an illegal state. A DB-backed regression
   asserts the goal remains budget-limited. All 324 shim tests and the workspace
-  all-target check passed for this last adjustment. The focused Claude review
-  and publication remain pending.
+  all-target check passed for this last adjustment. Publication remains pending.
+
+The focused Claude review completed and identified a clear/recreate blocker:
+stock permanently suppresses a cleared `goal_id`, while Gents reuses its
+logical goal ID for a session. The follow-up now derives the wire display ID
+from the durable physical Goal document identity (`gents:<_docID>`), leaving
+the canonical logical ID in `update._meta.gents/goalId`. No connection-local
+generation counter or runtime identity change is introduced. Clear emits the
+last delivered physical incarnation's ID. The DB regression recreates the
+same logical ID and asserts that its next wire ID differs; status/usage changes
+within one document retain the same wire ID. All 324 shim tests, the binary
+build, and workspace all-target check passed (`/tmp/grok-goal-incarnation-*.log`).
+The live probe verified distinct physical IDs after clearing and recreating
+the same logical goal. The same attached stock Grok 1.0.13 client then showed
+the recreated goal and its detail panel; clearing it removed the panel again.
+
+A separate inference check created a paused goal through the runtime CLI
+(not a raw fixture mutation) in `grok-edge-7f5059b3e1804437`. Stock `/goal resume`
+caused runtime request
+`goal-cont-00000000000000000001-a9d52eddbae78403903c3b1098c305ad` to run.
+Its only tools were `get_goal` and `update_goal`, both completed. The canonical
+goal became complete, and stock rendered `GOAL_RESUME_OK`, the completed goal,
+and the ended turn. A raw rendering fixture without `continuation_sequence`
+is not a valid runtime-created goal and must not be used to test admission.
+
+This check exposed an unresolved accounting gap: after completion, the stored
+Goal still reports 14,315 tokens. The continuation's three completed physical
+InferenceCalls additionally report 7,281+105, 7,616+55, and 7,690+66 tokens
+(22,813 total). The current projector faithfully displays the stored counter,
+so final goal accounting is not yet verified. The runtime goal source refreshes
+usage for active/budget-limited candidates, not completed goals. Resolve the
+accounting owner/read projection before declaring the overall audit complete;
+do not introduce observer-side database writes to mask stale materialization.
+
+The review otherwise verified the native DTO, scoping, runtime transition
+ownership, retry cursor, and transactional clear. Nonblocking observations:
+host-command exchanges are ephemeral (not inserted into model history), the
+200 ms goal observation cadence adds one read per attached session, and a
+concurrent runtime transition can still turn a successful preflight into a
+typed runtime error. These are not reasons to write a second transcript,
+transition owner, or synthetic goal generation registry in the shim.
 
 The legacy-accounting recommendation needs more than omitting numeric fields:
 stock `acp_types.rs::ContextInfo` defaults missing fields to zero, and

@@ -8,8 +8,20 @@ import argparse
 import json
 import time
 import uuid
+from datetime import datetime, timezone
 from grok_edge_probe import LeaderClient, initialize
 from grok_probe_common import graphql_query, graphql_escape
+
+
+def wait_goal(client, events, predicate):
+    deadline = time.monotonic() + 10
+    while True:
+        for event in events:
+            update = event.get("params", {}).get("update", {})
+            if update.get("sessionUpdate") == "goal_updated" and predicate(update):
+                return update
+        assert time.monotonic() < deadline, "No matching native goal update"
+        events.append(client.recv_acp())
 
 
 def main():
@@ -42,7 +54,8 @@ def main():
         assert not goals(), "Refusing to replace an existing goal"
         goal_id = "grok-goal-probe-" + uuid.uuid4().hex[:12]
         def seed():
-            graphql_query(args.graphql, 'mutation{create_Goal(input:{goal_id:"' + goal_id + '",agent_did:"' + principal + '",session_id:"' + escaped + '",objective:"Goal panel fixture: verify native status and controls",status:"paused",token_budget:1000,tokens_used:123,active_time_seconds:7}){_docID}}')
+            created = graphql_escape(datetime.now(timezone.utc).isoformat())
+            graphql_query(args.graphql, 'mutation{create_Goal(input:{goal_id:"' + goal_id + '",agent_did:"' + principal + '",session_id:"' + escaped + '",objective:"Goal panel fixture: verify native status and controls",status:"paused",token_budget:1000,tokens_used:123,active_time_seconds:7,created_at:"' + created + '"}){_docID}}')
         seed()
         observed = []
         for command, status in [("status", "paused"), ("pause", "paused"), ("clear", None)]:
@@ -55,19 +68,24 @@ def main():
             assert (rows[0]["status"] if rows else None) == status, rows
             observed.append(command)
             if command == "status":
-                deadline = time.monotonic() + 10
-                while not any(event.get("params", {}).get("update", {}).get("goal_id") == goal_id for event in events):
-                    assert time.monotonic() < deadline, "No native goal update"
-                    events.append(client.recv_acp())
-                update = next(event["params"]["update"] for event in events if event.get("params", {}).get("update", {}).get("goal_id") == goal_id)
+                update = wait_goal(client, events, lambda update: update.get("_meta", {}).get("gents/goalId") == goal_id)
                 assert update["status"] == "user_paused" and update["tokens_used"] == 123 and update["elapsed_ms"] == 7000, update
-        if args.keep_paused:
-            # Deleted Defra documents cannot be recreated with identical
-            # content-addressed identity. Keep a distinct rendering fixture.
-            goal_id += "-retained"
-            seed()
+                first_wire_id = update["goal_id"]
+            if command == "clear":
+                wait_goal(client, events, lambda update: update.get("goal_id") == first_wire_id and update.get("status") == "cleared")
+        # Keep the same logical ID, as the runtime does. Only the durable
+        # incarnation changes; a cleared stock pager must accept this new ID.
+        seed()
+        recreated = wait_goal(client, [], lambda update: update.get("_meta", {}).get("gents/goalId") == goal_id)
+        assert recreated["goal_id"] != first_wire_id, "Recreated goal would remain suppressed by stock Grok"
+        if not args.keep_paused:
+            response, events = client.request("session/prompt", {"sessionId":session,
+                "prompt":[{"type":"text", "text":"/goal clear"}]})
+            assert response.get("result", {}).get("stopReason") == "end_turn", response
+            wait_goal(client, events, lambda update: update.get("goal_id") == recreated["goal_id"] and update.get("status") == "cleared")
         print(json.dumps({"result":"PASS", "session":session, "goal":goal_id,
             "commands":observed, "kept_paused":args.keep_paused,
+            "incarnations":[first_wire_id, recreated["goal_id"]],
             "resume":"unit-tested; deliberately not starting live inference in this wire probe"}))
     finally:
         client.close()
