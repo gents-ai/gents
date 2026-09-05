@@ -170,6 +170,7 @@ async fn diagnose_backend(backend: &Value, required_models: Vec<String>) -> Valu
                     "required_models": required_models,
                     "discovered_models": discovered_models,
                     "error": error,
+                    "note": null,
                 });
             }
         };
