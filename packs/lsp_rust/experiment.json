@@ -1,0 +1,42 @@
+{
+  "name": "lsp_rust",
+  "description": "Least-privilege lsp tool against rust-analyzer on the Gents workspace. Not a CI gate.",
+  "init": {
+    "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "model_name": "${GENTS_EXP_MODEL:-d4f}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions",
+    "tool_package": "readonly",
+    "tool_root": "${GENTS_LSP_WORKSPACE:-.}",
+    "tool_root_env_var": "GENTS_LSP_WORKSPACE",
+    "tool_root_markers": ["Cargo.toml", "crates/gents"]
+  },
+  "seed": {
+    "collection": "LspDemoJob",
+    "job_id_field": "job_id",
+    "prompt_field": "prompt"
+  },
+  "default_prompt": "This workspace is the Gents repository. Use the lsp tool and do not guess types or comments.\n\n1. Call lsp action=hover on crates/gents/src/toolset/shared/command.rs with symbol=meet. Quote the documented rank order.\n2. Call lsp action=hover on crates/gents/src/toolset/lsp/auth.rs with symbol=lsp_advertised. Quote the signature.\n\nQuote the hover text. Reply DONE.",
+  "expect": {
+    "trigger_ids": ["lsp-hover"],
+    "tool_calls": [
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "hover",
+        "file": "crates/gents/src/toolset/shared/command.rs",
+        "symbol": "meet",
+        "result_contains": ["Disabled", "Inherit"]
+      },
+      {
+        "trigger_id": "lsp-hover",
+        "tool_name": "lsp",
+        "action": "hover",
+        "file": "crates/gents/src/toolset/lsp/auth.rs",
+        "symbol": "lsp_advertised",
+        "result_contains": ["FileToolMode"]
+      }
+    ]
+  },
+  "await_timeout_secs": 300
+}

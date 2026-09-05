@@ -423,7 +423,7 @@ fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
     let source = json!({
         "owned_files": [],
         "assignment_id": "cluster:patch",
-        "repository_id": "defending-code",
+        "repository_id": "defending_code",
         "base_revision": "abc123"
     });
     let plan = emit_plan_from_source(&binding(), &source).expect("plan");

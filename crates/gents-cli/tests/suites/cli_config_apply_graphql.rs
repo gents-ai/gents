@@ -46,9 +46,9 @@ async fn config_apply_updates_backend_from_fresh_init_home_over_graphql() -> Res
         ],
     )?;
 
-    let backends_dir = root.join("inference-backends");
+    let backends_dir = root.join("inference_backends");
     let backend_entry = fs::read_dir(&backends_dir)
-        .context("reading inference-backends dir after export")?
+        .context("reading inference_backends dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
     let backend_id = backend_entry
@@ -57,8 +57,8 @@ async fn config_apply_updates_backend_from_fresh_init_home_over_graphql() -> Res
         .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
         .to_string();
     let backends_path = root
-        .join("inference-backends")
-        .join(&backend_id)
+        .join("inference_backends")
+        .join(backend_id.replace('-', "_"))
         .join("object.json");
     let mut backend = read_json_file(&backends_path)?;
     let updated_endpoint = "http://127.0.0.1:9200/v1";

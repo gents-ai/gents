@@ -46,7 +46,7 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -56,13 +56,16 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     let task_id = format!("nightly-audit-{}", Uuid::new_v4().simple());
     let schedule_id = format!("nightly-audit-schedule-{}", Uuid::new_v4().simple());
     let service_path = root
-        .join("tool-services")
-        .join(&service_id)
+        .join("tool_services")
+        .join(service_id.replace('-', "_"))
         .join("object.json");
-    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let task_path = root
+        .join("tasks")
+        .join(task_id.replace('-', "_"))
+        .join("object.json");
     let schedule_path = root
         .join("schedules")
-        .join(&schedule_id)
+        .join(schedule_id.replace('-', "_"))
         .join("object.json");
 
     write_json_file(
@@ -611,7 +614,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -619,8 +622,8 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         .to_string();
     let behavior = read_json_file(
         &root
-            .join("agent-behaviors")
-            .join(&behavior_id)
+            .join("agent_behaviors")
+            .join(behavior_id.replace('-', "_"))
             .join("object.json"),
     )?;
     let selection_id = behavior
@@ -629,8 +632,8 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         .ok_or_else(|| anyhow!("missing tool_selection_id after export"))?
         .to_string();
     let selection_path = root
-        .join("tool-selections")
-        .join(&selection_id)
+        .join("tool_selections")
+        .join(selection_id.replace('-', "_"))
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("Empty list regression".to_string());
@@ -802,7 +805,7 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -810,10 +813,13 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
         .to_string();
     let task_id = format!("greet-signup-{}", Uuid::new_v4().simple());
     let trigger_id = format!("on-signup-created-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let task_path = root
+        .join("tasks")
+        .join(task_id.replace('-', "_"))
+        .join("object.json");
     let trigger_path = root
         .join("event_triggers")
-        .join(&trigger_id)
+        .join(trigger_id.replace('-', "_"))
         .join("object.json");
 
     write_json_file(
@@ -1180,7 +1186,7 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -1188,10 +1194,13 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
         .to_string();
     let task_id = format!("greet-{suffix}");
     let trigger_id = format!("on-created-{suffix}");
-    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let task_path = root
+        .join("tasks")
+        .join(task_id.replace('-', "_"))
+        .join("object.json");
     let trigger_path = root
         .join("event_triggers")
-        .join(&trigger_id)
+        .join(trigger_id.replace('-', "_"))
         .join("object.json");
 
     write_json_file(
@@ -1341,7 +1350,7 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -1349,8 +1358,8 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         .to_string();
     let behavior = read_json_file(
         &root
-            .join("agent-behaviors")
-            .join(&behavior_id)
+            .join("agent_behaviors")
+            .join(behavior_id.replace('-', "_"))
             .join("object.json"),
     )?;
     let selection_id = behavior
@@ -1359,8 +1368,8 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         .ok_or_else(|| anyhow!("missing tool_selection_id after export"))?
         .to_string();
     let selection_path = root
-        .join("tool-selections")
-        .join(&selection_id)
+        .join("tool_selections")
+        .join(selection_id.replace('-', "_"))
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("write_tools round-trip".to_string());

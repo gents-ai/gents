@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-17
 **Status:** Approved design, pre-implementation
-**Pack:** `demo/security-scan`
+**Pack:** `packs/security_scan`
 
 ## Purpose
 
@@ -123,7 +123,7 @@ deepsec's scan stage (`packages/scanner`):
 }
 ```
 
-When present, `gents demo run` executes the scan engine over the resolved
+When present, `gents pack run` executes the scan engine over the resolved
 root **before seeding** and merges computed fields into the seed mutation:
 `candidates` (formatted payload), `candidate_total`, `slug_counts`,
 `overflow_count`. The pack model's "kickoff = one GraphQL create of the
@@ -247,7 +247,7 @@ Mirrors `code-review`'s contract vocabulary:
 - **Unit (runner)**: manifest parsing for the `scan` section; scan-before-
   seed ordering.
 - **Live e2e**: an `#[ignore]`d entry mirroring `lsp_live.rs` that drives
-  `gents demo run security-scan` end to end — the "kick it off from a test"
+  `gents pack run security_scan` end to end — the "kick it off from a test"
   entry point.
 - Gate with `cargo test -p gents` (full package suite) and
   `cargo check --workspace --all-targets` before pushing, per CLAUDE.md.

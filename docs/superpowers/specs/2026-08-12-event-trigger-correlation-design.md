@@ -570,10 +570,10 @@ Conformance tests driven from the spec change, plus e2e beside
 Gate with the full `cargo test -p gents` suite and
 `cargo check --workspace --all-targets`, per `CLAUDE.md`.
 
-## Acceptance: `demo/code-review`
+## Acceptance: `packs/code_review`
 
 A self-contained pack with real (non-toy) stages that reviews **this
-repository** by default, following the `demo/pipeline` layout precedent.
+repository** by default, following the `packs/pipeline` layout precedent.
 
 ```text
 ReviewJob (seed)       ──► recon    ──► 4 × ReviewArea
@@ -669,7 +669,7 @@ the foundation order as reviewable commits:
 | **Runtime PR, commit 2** | Update all canonical `AgentRequest` / `EventTrigger` SDL fields, add the internal `EventTriggerGroupState` clock collection, and refresh frozen baseline pins. Add no migration step, lens, or backfill. |
 | **Runtime PR, commit 3** | Implement correlation through materialization, fire-mode-scoped gate/marker queries, bounded locks, timeline/protocol/CLI projections, immutable trigger context, parent-derived inheritance, runtime scopes, and write-tool fills. |
 | **Runtime PR, commit 4** | Implement `per_group`: combined-filter membership, startup/rotating recovery cursors, dirty-group fast path, batched marker pruning, bounded active/dormant tracking, count and timeout-only modes, deterministic scope, validation, metrics, restart/retry behavior, and e2e tests. Keep the existing EventDelivery contract per-document. |
-| **Demo PR** | `demo/code-review` pack + deterministic graph acceptance checks + operator README. |
+| **Demo PR** | `packs/code_review` pack + deterministic graph acceptance checks + operator README. |
 
 The runtime PR is mergeable only as a complete unit: no released intermediate
 contains a stored-but-unused field or a schema/runtime mismatch.
@@ -690,6 +690,6 @@ contains a stored-but-unused field or a schema/runtime mismatch.
 - On a fresh post-cut store, triggers without the new fields behave exactly as
   today.
 - `config validate` rejects every invalid field combination listed above.
-- `demo/code-review` proves N correlated area/result rows and one correlated
+- `packs/code_review` proves N correlated area/result rows and one correlated
   triage request/report, with a barrier stage that is a plain agent containing
   no counting logic. Real finding quality is evaluated separately.

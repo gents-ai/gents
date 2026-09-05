@@ -23,7 +23,7 @@ impl NoiseTier {
 
 pub(crate) struct Matcher {
     pub slug: &'static str,
-    /// Operator documentation, mirrored in demo/security-scan/README.md; not read at runtime.
+    /// Operator documentation, mirrored in packs/security_scan/README.md; not read at runtime.
     #[cfg_attr(not(test), allow(dead_code))]
     pub description: &'static str,
     pub tier: NoiseTier,

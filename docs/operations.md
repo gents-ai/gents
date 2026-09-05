@@ -103,7 +103,7 @@ For an isolated desktop data directory — useful for demos and QA runs — set
 `GENTS_DESKTOP_HOME` before launching the Tauri app:
 
 ```bash
-GENTS_DESKTOP_HOME=/tmp/gents-desktop-demo/desktop \
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop \
   npm --prefix apps/gents-desktop run tauri -- dev
 ```
 

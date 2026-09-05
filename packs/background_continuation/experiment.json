@@ -1,0 +1,33 @@
+{
+  "name": "background_continuation",
+  "description": "Parent -> two background subagents -> durable acknowledged continuation wake",
+  "init": {
+    "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "model_name": "${GENTS_EXP_MODEL:-d4f}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "BackgroundContinuationJob",
+    "job_id_field": "job_id",
+    "prompt_field": "prompt",
+    "fields": {
+      "suite": "subagent-reliability"
+    }
+  },
+  "default_prompt": "Delegate one worker to identify a reliability risk and another to identify an observability signal.",
+  "expect": {
+    "trigger_ids": ["background-parent"],
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["background-parent"],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "background_completion": {
+      "min_completed_subagent_requests": 2,
+      "min_completed_wakes": 1,
+      "min_acknowledged_notifications": 2,
+      "max_pending_notifications": 0,
+      "max_stranded_notifications": 0
+    }
+  },
+  "await_timeout_secs": 300
+}

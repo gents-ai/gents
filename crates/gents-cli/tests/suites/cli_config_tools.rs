@@ -277,8 +277,8 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
     )?;
     let selection_doc = read_json_file(
         &export_root
-            .join("tool-selections")
-            .join(&selection_id)
+            .join("tool_selections")
+            .join(selection_id.replace('-', "_"))
             .join("object.json"),
     )?;
     assert_eq!(

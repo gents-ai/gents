@@ -230,6 +230,7 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
@@ -246,12 +247,12 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
     // runtime's recurring prober takes its immediate startup tick. Its
     // exported runtime-owned health fields are deliberately absent, so the
     // post-apply path must probe and promote it before readiness can publish.
-    let backends_dir = root.join("inference-backends");
+    let backends_dir = root.join("inference_backends");
     let existing_backend = fs::read_dir(&backends_dir)
         .context("reading exported backend directory")?
         .next()
         .ok_or_else(|| anyhow!("exported pack has no backend"))??;
-    let applied_backend_dir = backends_dir.join(APPLIED_BACKEND);
+    let applied_backend_dir = backends_dir.join(APPLIED_BACKEND.replace('-', "_"));
     fs::create_dir_all(&applied_backend_dir)?;
     for entry in fs::read_dir(existing_backend.path()).context("reading exported backend")? {
         let entry = entry?;
@@ -268,12 +269,12 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
     }
     write_json_file(&backend_path, &backend)?;
 
-    let behaviors_dir = root.join("agent-behaviors");
+    let behaviors_dir = root.join("agent_behaviors");
     let existing = fs::read_dir(&behaviors_dir)
         .context("reading exported behavior directory")?
         .next()
         .ok_or_else(|| anyhow!("exported pack has no behavior"))??;
-    let grok_behavior_dir = behaviors_dir.join(GROK_BEHAVIOR);
+    let grok_behavior_dir = behaviors_dir.join(GROK_BEHAVIOR.replace('-', "_"));
     fs::create_dir_all(&grok_behavior_dir)?;
     for entry in fs::read_dir(existing.path()).context("reading exported behavior")? {
         let entry = entry?;

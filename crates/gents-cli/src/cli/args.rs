@@ -131,7 +131,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    #[command(about = "Discover, install, run, and observe bundled graphs")]
+    #[command(about = "List, inspect, install and exercise document packs")]
+    Pack {
+        #[command(subcommand)]
+        command: PackCommand,
+    },
+    #[command(about = "Run and observe installed graphs")]
     Graph {
         #[command(subcommand)]
         command: GraphCommand,
@@ -192,10 +197,6 @@ pub(crate) enum Command {
 
 #[derive(clap::Subcommand)]
 pub(crate) enum GraphCommand {
-    #[command(about = "Inspect immutable graph packages bundled in this binary")]
-    Catalog(GraphCatalogArgs),
-    #[command(about = "Materialize a bundled package into an initialized home")]
-    Install(GraphInstallArgs),
     #[command(about = "Start a run of an installed active graph")]
     Run(GraphRunArgs),
     #[command(about = "Watch durable graph progress until terminal")]
@@ -221,12 +222,28 @@ pub(crate) struct GraphScopeArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct GraphCatalogArgs {
-    pub(crate) package: Option<String>,
+pub(crate) struct PackShowArgs {
+    pub(crate) package: String,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PackCommand {
+    /// List all packs bundled in this binary.
+    List,
+    /// Inspect a pack manifest and declared assets.
+    Show(PackShowArgs),
+    /// Install a pack into an initialized node; never seed or prune.
+    Install(PackInstallArgs),
+    /// Exercise a scenario in a dedicated home: apply, seed, await, report.
+    Run(PackRunArgs),
+    /// Initialize a dedicated scenario home.
+    Init(PackInitArgs),
+    /// Seed an installed scenario against an already-serving node.
+    Seed(PackSeedArgs),
 }
 
 #[derive(clap::Args)]
-pub(crate) struct GraphInstallArgs {
+pub(crate) struct PackInstallArgs {
     pub(crate) package: String,
     #[arg(
         long,
@@ -237,6 +254,12 @@ pub(crate) struct GraphInstallArgs {
     pub(crate) scope: GraphScopeArgs,
     #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
     pub(crate) output: OutputFormat,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Explicitly rebind concrete identities in document packs to the target node"
+    )]
+    pub(crate) force_rebind_concrete_did: bool,
 }
 
 #[derive(clap::Args)]
@@ -317,8 +340,6 @@ pub(crate) struct GraphToggleArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct DemoArgs {
-    #[command(subcommand)]
-    pub(crate) command: Option<DemoCommand>,
     #[arg(
         long,
         help = "Demo state directory. Defaults to ~/.gents-demo (persists)"
@@ -360,21 +381,9 @@ pub(crate) struct DemoArgs {
     pub(crate) http_port: u16,
 }
 
-#[derive(clap::Subcommand)]
-pub(crate) enum DemoCommand {
-    #[command(about = "Run a pack end to end without a human: apply, seed, await, report")]
-    Run(DemoRunArgs),
-    #[command(about = "Initialize a home from a pack's experiment.json")]
-    Init(DemoInitArgs),
-    #[command(about = "Seed a pack document against an already-serving node")]
-    Seed(DemoSeedArgs),
-    #[command(about = "List runnable packs")]
-    List(DemoListArgs),
-}
-
 #[derive(clap::Args)]
-pub(crate) struct DemoRunArgs {
-    #[arg(help = "Pack directory, or a name resolved under demo/")]
+pub(crate) struct PackRunArgs {
+    #[arg(help = "Pack directory, or a name resolved under packs/")]
     pub(crate) pack: String,
     #[arg(long, help = "Reuse this home instead of a fresh one per run")]
     pub(crate) home: Option<PathBuf>,
@@ -393,8 +402,8 @@ pub(crate) struct DemoRunArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct DemoInitArgs {
-    #[arg(help = "Pack directory, or a name resolved under demo/")]
+pub(crate) struct PackInitArgs {
+    #[arg(help = "Pack directory, or a name resolved under packs/")]
     pub(crate) pack: String,
     #[arg(long, help = "Home directory to initialize")]
     pub(crate) home: PathBuf,
@@ -407,8 +416,8 @@ pub(crate) struct DemoInitArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct DemoSeedArgs {
-    #[arg(help = "Pack directory, or a name resolved under demo/")]
+pub(crate) struct PackSeedArgs {
+    #[arg(help = "Pack directory, or a name resolved under packs/")]
     pub(crate) pack: String,
     #[arg(long, help = "Pack node home used to resolve the initialized identity")]
     pub(crate) home: Option<PathBuf>,
@@ -420,12 +429,6 @@ pub(crate) struct DemoSeedArgs {
     pub(crate) http_port: u16,
     #[arg(long, help = "If set, print the talk-page URL with ?run=")]
     pub(crate) page_port: Option<u16>,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct DemoListArgs {
-    #[arg(long, default_value = "demo", help = "Directory holding packs")]
-    pub(crate) root: PathBuf,
 }
 
 #[derive(clap::Args)]

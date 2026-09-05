@@ -122,9 +122,9 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         ],
     )?;
 
-    let backends_dir = root.join("inference-backends");
+    let backends_dir = root.join("inference_backends");
     let backend_entry = fs::read_dir(&backends_dir)
-        .context("reading inference-backends dir after export")?
+        .context("reading inference_backends dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
     let backend_id = backend_entry
@@ -133,8 +133,8 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
         .to_string();
     let backends_path = root
-        .join("inference-backends")
-        .join(&backend_id)
+        .join("inference_backends")
+        .join(backend_id.replace('-', "_"))
         .join("object.json");
     let mut backend = read_json_file(&backends_path)?;
     backend["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());

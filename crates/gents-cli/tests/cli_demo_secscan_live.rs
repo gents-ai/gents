@@ -1,4 +1,4 @@
-//! Live qualification: `gents demo run security-scan` end to end against
+//! Live qualification: `gents pack run security_scan` end to end against
 //! this repository, on the pack's default GLM-5.2 backend (or whatever
 //! GENTS_SCAN_ENDPOINT / GENTS_SCAN_MODEL point at).
 //!
@@ -28,14 +28,14 @@ fn demo_run_security_scan_live() {
     let status = Command::new(env!("CARGO_BIN_EXE_gents"))
         .current_dir(&root)
         .env("GENTS_SCAN_ROOT", &root)
-        .args(["demo", "run", "security-scan"])
+        .args(["pack", "run", "security_scan"])
         .status()
-        .expect("spawn gents demo run");
+        .expect("spawn gents pack run");
     assert!(status.success(), "demo run security-scan exited {status}");
 
     // The runner writes runs/<job_id>/meta.json; the newest run must exist
     // and record a results artifact.
-    let runs = root.join("demo/security-scan/runs");
+    let runs = root.join("packs/security_scan/runs");
     let newest = std::fs::read_dir(&runs)
         .expect("runs dir")
         .filter_map(Result::ok)

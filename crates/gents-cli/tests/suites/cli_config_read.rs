@@ -41,7 +41,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -54,7 +54,10 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     let service_id = format!("{agent_name}-mcp");
 
     write_json_file(
-        &root.join("tasks").join(&task_id).join("object.json"),
+        &root
+            .join("tasks")
+            .join(task_id.replace('-', "_"))
+            .join("object.json"),
         &serde_json::json!({
             "task_id": task_id.clone(),
             "name": "Read Commands Task",
@@ -67,7 +70,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     write_json_file(
         &root
             .join("schedules")
-            .join(&schedule_id)
+            .join(schedule_id.replace('-', "_"))
             .join("object.json"),
         &serde_json::json!({
             "schedule_id": schedule_id.clone(),
@@ -80,7 +83,7 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     write_json_file(
         &root
             .join("event_triggers")
-            .join(&trigger_id)
+            .join(trigger_id.replace('-', "_"))
             .join("object.json"),
         &serde_json::json!({
             "trigger_id": trigger_id.clone(),
@@ -93,8 +96,8 @@ async fn config_read_commands_list_and_show_trigger_schedule_and_mcp() -> Result
     )?;
     write_json_file(
         &root
-            .join("tool-services")
-            .join(&service_id)
+            .join("tool_services")
+            .join(service_id.replace('-', "_"))
             .join("object.json"),
         &serde_json::json!({
             "service_id": service_id.clone(),

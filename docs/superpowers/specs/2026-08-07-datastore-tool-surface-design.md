@@ -155,7 +155,7 @@ overwrite; do not add a second collision policy.
 ### Desired-state layout
 
 ```text
-datastore-tool-surfaces/<surface_id>/object.json
+datastore_tool_surfaces/<surface_id>/object.json
 ```
 
 `ToolSelection` object gains `datastore_tool_surface_ids: ["…"]`.
@@ -221,7 +221,7 @@ documents and making the discrete transitions we allow** — everything else
 off. One surface + one selection. Prefer a bound query entry over
 `defra_query` when the stage only needs one collection:
 
-`datastore-tool-surfaces/experiment-io/object.json`:
+`datastore_tool_surfaces/experiment-io/object.json`:
 
 ```json
 {
@@ -335,7 +335,7 @@ product `gents-schemas`.
 | --- | --- |
 | **This PR** | Design doc only (iterate). |
 | A | The full vertical slice: Lean apply-order + `Collection` + schema/baseline registration + desired-state parity + `DocumentRuntimeView` loading + snapshot expand + fail-closed/unavailable semantics + collision checks, with unit/conformance tests (including: dangling ref ⇒ behavior unavailable; surface-equivalent-to-inline ⇒ identical tool surface). |
-| B | Consumers: switch `pipeline-two-stage` stage-1 to `experiment-writes` (drop the inline decl, assert no behavior change), read-only `list|show` CLI, operator docs in `demo/README.md`. |
+| B | Consumers: switch `pipeline-two-stage` stage-1 to `experiment-writes` (drop the inline decl, assert no behavior change), read-only `list|show` CLI, operator docs in `packs/README.md`. |
 
 No "link stored, expand later" intermediate: shipping a reference field that
 does nothing invites drift and silent no-op configs — the expand is the small
@@ -370,5 +370,5 @@ part.
 - Apply-order proofs: `crates/gents/proofs/Proofs/ApplyReconcile/`
 - Migration baseline: `crates/gents-migration/src/registry.rs`
 - Self-config protected fields: `crates/gents/src/self_config/mod.rs`
-- Motivating usage: `demo/pipeline/` (canonical pack; stage-1 links
+- Motivating usage: `packs/pipeline/` (canonical pack; stage-1 links
   `experiment-writes`), `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`

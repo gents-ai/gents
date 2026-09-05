@@ -1,0 +1,18 @@
+{
+  "manifest_version": 1,
+  "name": "graph_pipeline",
+  "version": "1.0.0",
+  "description": "Worked graph_pipeline assets for Gents",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "example"
+  ],
+  "kind": "assets",
+  "assets": [
+    "README.md",
+    "eval_cases.json"
+  ],
+  "dependencies": []
+}

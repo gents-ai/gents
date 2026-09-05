@@ -1,0 +1,69 @@
+[
+  {
+    "capability_id": "research-plan",
+    "revision": "v1",
+    "role": "coordinator",
+    "behavior_asset": "agent_behaviors/research_plan/object.json",
+    "system_prompt_asset": "agent_behaviors/research_plan/system_prompt.md",
+    "task_asset": "tasks/research_plan_task/object.json",
+    "task_prompt_asset": "tasks/research_plan_task/prompt.md",
+    "tool_selection_asset": "tool_selections/research_plan_tools/object.json",
+    "tool_surface_assets": ["datastore_tool_surfaces/research_plan_writes/object.json"],
+    "input_ports": [{"name": "job", "collection": "WebResearchJob", "schema": "WebResearchJob/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+    "output_ports": [
+      {"name": "plan", "collection": "WebResearchPlan", "schema": "WebResearchPlan/v1", "correlation_field": "run_id", "cardinality": "one", "required": false},
+      {"name": "assignments", "collection": "WebResearchAssignment", "schema": "WebResearchAssignment/v1", "correlation_field": "run_id", "cardinality": "one", "required": false}
+    ],
+    "workspace_authority": "none"
+  },
+  {
+    "capability_id": "research-investigate",
+    "revision": "v1",
+    "role": "researcher",
+    "behavior_asset": "agent_behaviors/research_investigate/object.json",
+    "system_prompt_asset": "agent_behaviors/research_investigate/system_prompt.md",
+    "task_asset": "tasks/research_investigate_task/object.json",
+    "task_prompt_asset": "tasks/research_investigate_task/prompt.md",
+    "tool_selection_asset": "tool_selections/research_investigate_tools/object.json",
+    "tool_surface_assets": ["datastore_tool_surfaces/research_investigate_writes/object.json"],
+    "input_ports": [{"name": "assignment", "collection": "WebResearchAssignment", "schema": "WebResearchAssignment/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+    "output_ports": [
+      {"name": "investigations", "collection": "WebResearchInvestigation", "schema": "WebResearchInvestigation/v1", "correlation_field": "run_id", "cardinality": "one", "required": false},
+      {"name": "sources", "collection": "WebResearchSource", "schema": "WebResearchSource/v1", "correlation_field": "run_id", "cardinality": "many", "required": false},
+      {"name": "claims", "collection": "WebResearchClaim", "schema": "WebResearchClaim/v1", "correlation_field": "run_id", "cardinality": "many", "required": false},
+      {"name": "evidence", "collection": "WebResearchEvidence", "schema": "WebResearchEvidence/v1", "correlation_field": "run_id", "cardinality": "many", "required": false}
+    ],
+    "workspace_authority": "none"
+  },
+  {
+    "capability_id": "research-adjudicate",
+    "revision": "v1",
+    "role": "coordinator",
+    "behavior_asset": "agent_behaviors/research_adjudicate/object.json",
+    "system_prompt_asset": "agent_behaviors/research_adjudicate/system_prompt.md",
+    "task_asset": "tasks/research_adjudicate_task/object.json",
+    "task_prompt_asset": "tasks/research_adjudicate_task/prompt.md",
+    "tool_selection_asset": "tool_selections/research_adjudicate_tools/object.json",
+    "tool_surface_assets": ["datastore_tool_surfaces/research_adjudicate_io/object.json"],
+    "input_ports": [{"name": "investigations", "collection": "WebResearchInvestigation", "schema": "WebResearchInvestigation/v1", "correlation_field": "run_id", "cardinality": "many", "required": true}],
+    "output_ports": [
+      {"name": "draft", "collection": "WebResearchDraft", "schema": "WebResearchDraft/v1", "correlation_field": "run_id", "cardinality": "one", "required": false},
+      {"name": "verdicts", "collection": "WebResearchClaimVerdict", "schema": "WebResearchClaimVerdict/v1", "correlation_field": "run_id", "cardinality": "many", "required": false}
+    ],
+    "workspace_authority": "none"
+  },
+  {
+    "capability_id": "research-report",
+    "revision": "v1",
+    "role": "coordinator",
+    "behavior_asset": "agent_behaviors/research_report/object.json",
+    "system_prompt_asset": "agent_behaviors/research_report/system_prompt.md",
+    "task_asset": "tasks/research_report_task/object.json",
+    "task_prompt_asset": "tasks/research_report_task/prompt.md",
+    "tool_selection_asset": "tool_selections/research_report_tools/object.json",
+    "tool_surface_assets": ["datastore_tool_surfaces/research_report_io/object.json"],
+    "input_ports": [{"name": "draft", "collection": "WebResearchDraft", "schema": "WebResearchDraft/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
+    "output_ports": [{"name": "result", "collection": "WebResearchResult", "schema": "WebResearchResult/v1", "correlation_field": "run_id", "cardinality": "one", "required": false}],
+    "workspace_authority": "none"
+  }
+]

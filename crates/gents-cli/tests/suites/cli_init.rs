@@ -23,7 +23,10 @@ fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
     for suffix in ["alpha", "zeta"] {
         let skill_id = format!("{agent_did}:skill-{suffix}");
         write_json_file(
-            &root.join("skills").join(&skill_id).join("object.json"),
+            &root
+                .join("skills")
+                .join(skill_id.replace('-', "_"))
+                .join("object.json"),
             &serde_json::json!({
                 "skill_id": skill_id,
                 "agent_did": agent_did,
@@ -224,7 +227,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent-principal.json");
+    let principal_path = pack_root.join("agent_principal.json");
     let mut principal = read_json_file(&principal_path)?;
     let original_behavior_id = principal
         .get("default_behavior_id")
@@ -233,9 +236,11 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         .to_string();
     let applied_behavior_id = format!("{agent_did}:applied-default");
     let original_behavior_dir = pack_root
-        .join("agent-behaviors")
-        .join(&original_behavior_id);
-    let applied_behavior_dir = pack_root.join("agent-behaviors").join(&applied_behavior_id);
+        .join("agent_behaviors")
+        .join(original_behavior_id.replace('-', "_"));
+    let applied_behavior_dir = pack_root
+        .join("agent_behaviors")
+        .join(applied_behavior_id.replace('-', "_"));
     fs::create_dir_all(&applied_behavior_dir)?;
     for entry in fs::read_dir(&original_behavior_dir)? {
         let entry = entry?;
@@ -322,7 +327,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent-principal.json");
+    let principal_path = pack_root.join("agent_principal.json");
     let mut principal = read_json_file(&principal_path)?;
     principal["display_name"] = Value::String("Metadata-only rename".to_string());
     write_json_file(&principal_path, &principal)?;
@@ -388,14 +393,17 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal = read_json_file(&pack_root.join("agent-principal.json"))?;
+    let principal = read_json_file(&pack_root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .context("exported principal missing default behavior")?;
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
     write_json_file(
-        &pack_root.join("tasks").join(&task_id).join("object.json"),
+        &pack_root
+            .join("tasks")
+            .join(task_id.replace('-', "_"))
+            .join("object.json"),
         &serde_json::json!({
             "task_id": task_id,
             "name": "Post-apply task",

@@ -48,9 +48,9 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     wait_for_runtime_state_graphql(&home_dir, &graphql, Duration::from_secs(30)).await?;
 
-    let behaviors_dir = root.join("agent-behaviors");
+    let behaviors_dir = root.join("agent_behaviors");
     let behavior_entry = fs::read_dir(&behaviors_dir)
-        .context("reading agent-behaviors dir after export")?
+        .context("reading agent_behaviors dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
     let behavior_id = behavior_entry
@@ -59,8 +59,8 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
         .ok_or_else(|| anyhow!("non-utf8 behavior dir name"))?
         .to_string();
     let behaviors_path = root
-        .join("agent-behaviors")
-        .join(&behavior_id)
+        .join("agent_behaviors")
+        .join(behavior_id.replace('-', "_"))
         .join("object.json");
     let mut behavior = read_json_file(&behaviors_path)?;
     let updated_prompt = "Keep responses terse. Mention that desired state was applied.";
@@ -143,7 +143,7 @@ async fn config_diff_bind_live_force_rebinds_concrete_manifest_to_running_runtim
         .path()
         .join("infra")
         .join("agents")
-        .join("mini-1-steward");
+        .join("mini_1_steward");
     fs::create_dir_all(&home_dir)?;
 
     let concrete_manifest_did = "did:test:mini-1-steward";

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A whole-codebase security-scan experiment pack (`demo/security-scan`) with a free Rust regex pre-scan at kickoff, a planner-driven investigator fan-out over trigger edges, an adversarial revalidation barrier, and bound single-collection query tools instead of `defra_query`.
+**Goal:** A whole-codebase security-scan experiment pack (`packs/security_scan`) with a free Rust regex pre-scan at kickoff, a planner-driven investigator fan-out over trigger edges, an adversarial revalidation barrier, and bound single-collection query tools instead of `defra_query`.
 
-**Architecture:** The `gents demo run` runner gains an optional `scan` manifest section: before seeding, a ported deepsec-style matcher engine (`secscan` module) scans the tree and embeds a formatted candidate payload into the single `ScanJob` seed document. Four trigger-edge stages (plan → investigate ×N → revalidate barrier → report) coordinate purely through documents: `{{ doc.* }}` / `{{ group.docs }}` template injection plus bound `query_*` surface tools.
+**Architecture:** The `gents pack run` runner gains an optional `scan` manifest section: before seeding, a ported deepsec-style matcher engine (`secscan` module) scans the tree and embeds a formatted candidate payload into the single `ScanJob` seed document. Four trigger-edge stages (plan → investigate ×N → revalidate barrier → report) coordinate purely through documents: `{{ doc.* }}` / `{{ group.docs }}` template injection plus bound `query_*` surface tools.
 
 **Tech Stack:** Rust (gents-cli `secscan` module: `regex` + `ignore` crates), DefraDB pack config documents (GraphQL SDL + JSON), GLM-5.2 over one vLLM backend.
 
@@ -606,36 +606,36 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 5: Pack wiring — schemas, surfaces, selections, triggers, backend, experiment.json
 
 **Files (all Create):**
-- `demo/security-scan/schemas/scan_job.graphql`
-- `demo/security-scan/schemas/investigation_batch.graphql`
-- `demo/security-scan/schemas/candidate_finding.graphql`
-- `demo/security-scan/schemas/investigation_result.graphql`
-- `demo/security-scan/schemas/finding_verdict.graphql`
-- `demo/security-scan/schemas/revalidation_summary.graphql`
-- `demo/security-scan/schemas/finding.graphql`
-- `demo/security-scan/schemas/scan_report.graphql`
-- `demo/security-scan/agent-principal.json`
-- `demo/security-scan/inference-backends/scan-backend/object.json`
-- `demo/security-scan/inference-profiles/scan-profile/object.json`
-- `demo/security-scan/datastore-tool-surfaces/scan-plan-writes/object.json`
-- `demo/security-scan/datastore-tool-surfaces/scan-investigate-writes/object.json`
-- `demo/security-scan/datastore-tool-surfaces/scan-revalidate-io/object.json`
-- `demo/security-scan/datastore-tool-surfaces/scan-report-io/object.json`
-- `demo/security-scan/tool-selections/scan-plan-tools/object.json`
-- `demo/security-scan/tool-selections/scan-investigate-tools/object.json`
-- `demo/security-scan/tool-selections/scan-revalidate-tools/object.json`
-- `demo/security-scan/tool-selections/scan-report-tools/object.json`
-- `demo/security-scan/event_triggers/scan-plan/object.json`
-- `demo/security-scan/event_triggers/scan-investigate/object.json`
-- `demo/security-scan/event_triggers/scan-revalidate/object.json`
-- `demo/security-scan/event_triggers/scan-report/object.json`
-- `demo/security-scan/experiment.json`
-- `demo/security-scan/runs/.gitignore` (contents: `*\n!.gitignore\n`, matching the other packs)
+- `packs/security_scan/schemas/scan_job.graphql`
+- `packs/security_scan/schemas/investigation_batch.graphql`
+- `packs/security_scan/schemas/candidate_finding.graphql`
+- `packs/security_scan/schemas/investigation_result.graphql`
+- `packs/security_scan/schemas/finding_verdict.graphql`
+- `packs/security_scan/schemas/revalidation_summary.graphql`
+- `packs/security_scan/schemas/finding.graphql`
+- `packs/security_scan/schemas/scan_report.graphql`
+- `packs/security_scan/agent_principal.json`
+- `packs/security_scan/inference_backends/scan_backend/object.json`
+- `packs/security_scan/inference_profiles/scan_profile/object.json`
+- `packs/security_scan/datastore_tool_surfaces/scan_plan_writes/object.json`
+- `packs/security_scan/datastore_tool_surfaces/scan_investigate_writes/object.json`
+- `packs/security_scan/datastore_tool_surfaces/scan_revalidate_io/object.json`
+- `packs/security_scan/datastore_tool_surfaces/scan_report_io/object.json`
+- `packs/security_scan/tool_selections/scan_plan_tools/object.json`
+- `packs/security_scan/tool_selections/scan_investigate_tools/object.json`
+- `packs/security_scan/tool_selections/scan_revalidate_tools/object.json`
+- `packs/security_scan/tool_selections/scan_report_tools/object.json`
+- `packs/security_scan/event_triggers/scan_plan/object.json`
+- `packs/security_scan/event_triggers/scan_investigate/object.json`
+- `packs/security_scan/event_triggers/scan_revalidate/object.json`
+- `packs/security_scan/event_triggers/scan_report/object.json`
+- `packs/security_scan/experiment.json`
+- `packs/security_scan/runs/.gitignore` (contents: `*\n!.gitignore\n`, matching the other packs)
 
 Behaviors and tasks are Task 6 (they carry the prompts); this task creates the wiring and validates it with stub-free references, so behaviors/tasks JSONs are ALSO created here (they reference prompt files by path — create the four `system_prompt.md` / four `prompt.md` files as one-line placeholders in this task, then Task 6 replaces their content; `config validate` needs the files to exist):
 
-- `demo/security-scan/agent-behaviors/{scan-plan,scan-investigate,scan-revalidate,scan-report}/object.json` + `system_prompt.md` (placeholder line: `Replaced in the prompts task.`)
-- `demo/security-scan/tasks/{scan-plan-task,scan-investigate-task,scan-revalidate-task,scan-report-task}/object.json` + `prompt.md` (same placeholder)
+- `packs/security_scan/agent_behaviors/{scan-plan,scan-investigate,scan-revalidate,scan-report}/object.json` + `system_prompt.md` (placeholder line: `Replaced in the prompts task.`)
+- `packs/security_scan/tasks/{scan-plan-task,scan-investigate-task,scan-revalidate-task,scan-report-task}/object.json` + `prompt.md` (same placeholder)
 
 **Interfaces:**
 - Consumes: bound-query entry vocabulary from Task 0's committed work; runner `scan` section from Task 4.
@@ -760,7 +760,7 @@ type ScanReport {
 }
 ```
 
-**`agent-principal.json`:**
+**`agent_principal.json`:**
 ```json
 {
   "agent_did": "did:key:zSecurityScanAgentPlaceholder00000000000000000000000",
@@ -770,7 +770,7 @@ type ScanReport {
 }
 ```
 
-**`inference-backends/scan-backend/object.json`** (ONE backend, concurrency 8):
+**`inference_backends/scan-backend/object.json`** (ONE backend, concurrency 8):
 ```json
 {
   "backend_id": "scan-backend",
@@ -787,7 +787,7 @@ type ScanReport {
 }
 ```
 
-**`inference-profiles/scan-profile/object.json`** (single shared profile; values copied from code-review's reviewer profile with `GENTS_SCAN_*` names):
+**`inference_profiles/scan-profile/object.json`** (single shared profile; values copied from code-review's reviewer profile with `GENTS_SCAN_*` names):
 ```json
 {
   "profile_id": "scan-profile",
@@ -990,7 +990,7 @@ type ScanReport {
 }
 ```
 
-**Tool selections.** Copy `demo/code-review/tool-selections/review-scan-tools/object.json` as the base for each and change only what's listed (all other keys keep code-review's values, e.g. the `enable_lsp`/`lsp_config` pair copied verbatim where LSP is on):
+**Tool selections.** Copy `packs/code_review/tool_selections/review-scan-tools/object.json` as the base for each and change only what's listed (all other keys keep code-review's values, e.g. the `enable_lsp`/`lsp_config` pair copied verbatim where LSP is on):
 
 - `scan-plan-tools`: `selection_id: "scan-plan-tools"`, display_name `"Plan: batch candidates and write assignments"`, `enable_file_tools: true`, `file_tools_mode: "ReadOnly"`, `file_tool_root: "${GENTS_SCAN_ROOT:-.}"`, `enable_bash: false`, `command_network_mode: "disabled"`, `enable_lsp: false` (omit `lsp_config`), `backgroundable_tool_names: []`, `datastore_tool_surface_ids: ["scan-plan-writes"]`, `enable_defra_query: false`.
 - `scan-investigate-tools`: like review-scan-tools (file ReadOnly at `${GENTS_SCAN_ROOT:-.}`, bash Unrestricted, network `enabled` for cargo/dependency fetches, `enable_lsp: true` + code-review's `lsp_config`, `backgroundable_tool_names: ["bash_unrestricted"]`), `datastore_tool_surface_ids: ["scan-investigate-writes"]`.
@@ -1065,7 +1065,7 @@ type ScanReport {
 **`experiment.json`:**
 ```json
 {
-  "name": "security-scan",
+  "name": "security_scan",
   "description": "Whole-codebase security scan: free regex pre-scan -> batch planner -> investigator fan-out -> adversarial revalidation -> report",
   "init": {
     "inference_url": "${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}",
@@ -1156,7 +1156,7 @@ type ScanReport {
 
 - [ ] **Step 2: Validate the pack config graph**
 
-Run: `cargo run -p gents-cli --bin gents -- config validate --root demo/security-scan`
+Run: `cargo run -p gents-cli --bin gents -- config validate --root packs/security_scan`
 Expected: JSON output with `"status": "validated"`, `"ok": true`. Fix any reference errors (typo'd ids) until clean. This exercises the new desired-state validation of query entries against a real pack.
 
 - [ ] **Step 3: Confirm pack discovery**
@@ -1167,7 +1167,7 @@ Expected: `security-scan` appears alongside `pipeline`, `code-review`, `repo-mai
 - [ ] **Step 4: Commit**
 
 ```bash
-git add demo/security-scan
+git add packs/security_scan
 git commit -m "feat(demo): security-scan pack wiring (schemas, surfaces, selections, triggers)
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -1178,14 +1178,14 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 6: Prompts — the four system prompts and four task templates
 
 **Files (all Modify, replacing Task 5 placeholders):**
-- `demo/security-scan/agent-behaviors/scan-plan/system_prompt.md`
-- `demo/security-scan/agent-behaviors/scan-investigate/system_prompt.md`
-- `demo/security-scan/agent-behaviors/scan-revalidate/system_prompt.md`
-- `demo/security-scan/agent-behaviors/scan-report/system_prompt.md`
-- `demo/security-scan/tasks/scan-plan-task/prompt.md`
-- `demo/security-scan/tasks/scan-investigate-task/prompt.md`
-- `demo/security-scan/tasks/scan-revalidate-task/prompt.md`
-- `demo/security-scan/tasks/scan-report-task/prompt.md`
+- `packs/security_scan/agent_behaviors/scan_plan/system_prompt.md`
+- `packs/security_scan/agent_behaviors/scan_investigate/system_prompt.md`
+- `packs/security_scan/agent_behaviors/scan_revalidate/system_prompt.md`
+- `packs/security_scan/agent_behaviors/scan_report/system_prompt.md`
+- `packs/security_scan/tasks/scan_plan_task/prompt.md`
+- `packs/security_scan/tasks/scan_investigate_task/prompt.md`
+- `packs/security_scan/tasks/scan_revalidate_task/prompt.md`
+- `packs/security_scan/tasks/scan_report_task/prompt.md`
 
 **Interfaces:**
 - Consumes: tool names, field names, slugs, and env vars from Tasks 2 and 5 — use them verbatim (`write_investigation_batch`, `query_candidate_finding`, `finding_id` = `<run_id>:<batch_id>:<finding-slug>`, etc.).
@@ -1420,11 +1420,11 @@ successful write.
 
 - [ ] **Step 9: Re-validate and commit**
 
-Run: `cargo run -p gents-cli --bin gents -- config validate --root demo/security-scan`
+Run: `cargo run -p gents-cli --bin gents -- config validate --root packs/security_scan`
 Expected: `"ok": true`.
 
 ```bash
-git add demo/security-scan
+git add packs/security_scan
 git commit -m "feat(demo): security-scan behavior and task prompts
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -1435,12 +1435,12 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 7: Pack README, attribution, and demo index row
 
 **Files:**
-- Create: `demo/security-scan/README.md`
-- Modify: `demo/README.md` (packs table)
+- Create: `packs/security_scan/README.md`
+- Modify: `packs/README.md` (packs table)
 
-- [ ] **Step 1: Write `demo/security-scan/README.md`**
+- [ ] **Step 1: Write `packs/security_scan/README.md`**
 
-Cover, in this order (follow `demo/code-review/README.md`'s voice): the five-stage shape (free pre-scan → plan → investigate ×N → revalidate barrier → report) with the ASCII graph from the spec; the self-sufficient-carrier-documents principle (template injection + bound `query_*` tools, no `defra_query`); the matcher table from Task 2 (slug, tier, what it flags) including the two gents-native matchers and why they exist; env retargeting (`GENTS_SCAN_ROOT`, `GENTS_SCAN_ENDPOINT`, `GENTS_SCAN_MODEL`, `GENTS_SCAN_MIN_BATCHES`, `GENTS_SCAN_MAX_BATCHES`, `GENTS_SCAN_MAX_PAYLOAD_CHARS`); the run command `gents demo run security-scan`; and this attribution notice verbatim:
+Cover, in this order (follow `packs/code_review/README.md`'s voice): the five-stage shape (free pre-scan → plan → investigate ×N → revalidate barrier → report) with the ASCII graph from the spec; the self-sufficient-carrier-documents principle (template injection + bound `query_*` tools, no `defra_query`); the matcher table from Task 2 (slug, tier, what it flags) including the two gents-native matchers and why they exist; env retargeting (`GENTS_SCAN_ROOT`, `GENTS_SCAN_ENDPOINT`, `GENTS_SCAN_MODEL`, `GENTS_SCAN_MIN_BATCHES`, `GENTS_SCAN_MAX_BATCHES`, `GENTS_SCAN_MAX_PAYLOAD_CHARS`); the run command `gents pack run security_scan`; and this attribution notice verbatim:
 
 ```markdown
 ## Attribution
@@ -1453,7 +1453,7 @@ upstream NOTICE file). The scan engine here is an independent Rust
 implementation of the same scan → process → revalidate → report shape.
 ```
 
-- [ ] **Step 2: Add the pack to `demo/README.md`'s packs table**
+- [ ] **Step 2: Add the pack to `packs/README.md`'s packs table**
 
 After the `background-continuation` row:
 
@@ -1464,7 +1464,7 @@ After the `background-continuation` row:
 - [ ] **Step 3: Commit**
 
 ```bash
-git add demo/security-scan/README.md demo/README.md
+git add packs/security_scan/README.md packs/README.md
 git commit -m "docs(demo): security-scan pack README and index row
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -1483,7 +1483,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - [ ] **Step 1: Write the live test** (gated twice: `#[ignore]` and an env var, matching the `lsp_live.rs` convention; it drives the real `gents` binary because `[[bin]] name = "gents"` lives in this crate)
 
 ```rust
-//! Live qualification: `gents demo run security-scan` end to end against
+//! Live qualification: `gents pack run security_scan` end to end against
 //! this repository, on the pack's default GLM-5.2 backend (or whatever
 //! GENTS_SCAN_ENDPOINT / GENTS_SCAN_MODEL point at).
 //!
@@ -1513,14 +1513,14 @@ fn demo_run_security_scan_live() {
     let status = Command::new(env!("CARGO_BIN_EXE_gents"))
         .current_dir(&root)
         .env("GENTS_SCAN_ROOT", &root)
-        .args(["demo", "run", "security-scan"])
+        .args(["pack", "run", "security_scan"])
         .status()
-        .expect("spawn gents demo run");
+        .expect("spawn gents pack run");
     assert!(status.success(), "demo run security-scan exited {status}");
 
     // The runner writes runs/<job_id>/meta.json; the newest run must exist
     // and record a results artifact.
-    let runs = root.join("demo/security-scan/runs");
+    let runs = root.join("packs/security_scan/runs");
     let newest = std::fs::read_dir(&runs)
         .expect("runs dir")
         .filter_map(Result::ok)
@@ -1554,4 +1554,4 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - [ ] **Step 5: Live run (operator step — requires the GLM-5.2 box or a retarget)**
 
 Run: `GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_demo_secscan_live -- --ignored --test-threads=1 --nocapture`
-Expected: run completes; inspect `demo/security-scan/runs/<job_id>/` — `meta.json` stage states, `results.json` with `ScanReport` + `Finding` rows, projections. If the run fails on a prompt-contract or fan-in expectation, fix the prompt or config (not the expectation) and re-run. Use `--keep-home` via a direct `gents demo run security-scan --keep-home` invocation when a failure needs the node re-opened for querying.
+Expected: run completes; inspect `packs/security_scan/runs/<job_id>/` — `meta.json` stage states, `results.json` with `ScanReport` + `Finding` rows, projections. If the run fails on a prompt-contract or fan-in expectation, fix the prompt or config (not the expectation) and re-run. Use `--keep-home` via a direct `gents pack run security_scan --keep-home` invocation when a failure needs the node re-opened for querying.

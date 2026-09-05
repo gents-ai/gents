@@ -115,7 +115,7 @@ the Tauri app. The bootstrap summary, peer directory, embedded desktop node,
 and logs all resolve under that directory:
 
 ```bash
-GENTS_DESKTOP_HOME=/tmp/gents-desktop-demo/desktop npm run tauri -- dev
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop npm run tauri -- dev
 ```
 
 From a release binary, `gents demo` drives the same fleet: `pair` brings up

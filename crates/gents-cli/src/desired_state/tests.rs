@@ -933,6 +933,39 @@ fn round_trip_load_write_load_is_identity() {
     assert_eq!(loaded.schedules, original.schedules);
 }
 
+#[test]
+fn filesystem_handles_preserve_ids_and_reject_collisions_before_overwrite() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut manifest = write_manifest_root::minimal_manifest();
+    let task = manifest.tasks[0].clone();
+    assert_eq!(task.task_id, "seed-health");
+    super::write_manifest_root(temp.path(), &manifest, false).unwrap();
+    assert!(temp.path().join("tasks/seed_health/prompt.md").exists());
+    let (loaded, _) = super::load_manifest_root(temp.path());
+    assert_eq!(loaded.unwrap().tasks[0].task_id, task.task_id);
+    let mut collision = task;
+    collision.task_id = "seed_health".to_owned();
+    manifest.tasks.push(collision);
+    let marker = temp.path().join("operator_note");
+    std::fs::write(&marker, "preserve me").unwrap();
+    let error = super::write_manifest_root(temp.path(), &manifest, true).unwrap_err();
+    assert!(error.contains("collide"), "{error}");
+    assert_eq!(std::fs::read_to_string(marker).unwrap(), "preserve me");
+}
+
+#[test]
+fn old_collection_layout_is_rejected_not_silently_ignored() {
+    let temp = tempfile::tempdir().unwrap();
+    super::write_manifest_root(temp.path(), &write_manifest_root::minimal_manifest(), false)
+        .unwrap();
+    std::fs::create_dir(temp.path().join("event-triggers")).unwrap();
+    let (_, report) = super::load_manifest_root(temp.path());
+    assert!(report
+        .errors
+        .iter()
+        .any(|error| error.contains("unsupported directory event-triggers")));
+}
+
 mod load_manifest_root {
     use crate::desired_state::load::load_manifest_root;
     use crate::desired_state::write_manifest_root;
@@ -941,7 +974,7 @@ mod load_manifest_root {
 
     fn write_minimal_root(root: &std::path::Path) {
         fs::write(
-            root.join("agent-principal.json"),
+            root.join("agent_principal.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
                 "agent_did": "did:key:example",
                 "default_behavior_id": "default",
@@ -951,7 +984,7 @@ mod load_manifest_root {
         )
         .unwrap();
 
-        let behavior_dir = root.join("agent-behaviors").join("default");
+        let behavior_dir = root.join("agent_behaviors").join("default");
         fs::create_dir_all(&behavior_dir).unwrap();
         fs::write(
             behavior_dir.join("object.json"),
@@ -987,7 +1020,7 @@ mod load_manifest_root {
             report
                 .errors
                 .iter()
-                .any(|e| e.contains("agent-principal.json")),
+                .any(|e| e.contains("agent_principal.json")),
             "got: {:?}",
             report.errors
         );
@@ -998,7 +1031,7 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        let behavior_dir = tmp.path().join("agent-behaviors").join("default");
+        let behavior_dir = tmp.path().join("agent_behaviors").join("default");
         fs::write(
             behavior_dir.join("object.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -1033,7 +1066,7 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        let behavior_dir = tmp.path().join("agent-behaviors").join("default");
+        let behavior_dir = tmp.path().join("agent_behaviors").join("default");
         fs::write(
             behavior_dir.join("object.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
@@ -1063,7 +1096,7 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        let task_dir = tmp.path().join("tasks").join("summarize-inbox");
+        let task_dir = tmp.path().join("tasks").join("summarize_inbox");
         fs::create_dir_all(&task_dir).unwrap();
         fs::write(
             task_dir.join("object.json"),
@@ -1078,7 +1111,7 @@ mod load_manifest_root {
         )
         .unwrap();
 
-        let trigger_dir = tmp.path().join("event_triggers").join("new-customer-greet");
+        let trigger_dir = tmp.path().join("event_triggers").join("new_customer_greet");
         fs::create_dir_all(&trigger_dir).unwrap();
         fs::write(
             trigger_dir.join("object.json"),
@@ -1120,8 +1153,8 @@ mod load_manifest_root {
 
         let binding_dir = tmp
             .path()
-            .join("callback-bindings")
-            .join("defense-patch-workspace");
+            .join("callback_bindings")
+            .join("defense_patch_workspace");
         fs::create_dir_all(&binding_dir).unwrap();
         fs::write(
             binding_dir.join("object.json"),
@@ -1142,13 +1175,13 @@ mod load_manifest_root {
 
         let placement_dir = tmp
             .path()
-            .join("repository-placements")
-            .join("defending-code");
+            .join("repository_placements")
+            .join("defending_code");
         fs::create_dir_all(&placement_dir).unwrap();
         fs::write(
             placement_dir.join("object.json"),
             serde_json::to_vec_pretty(&serde_json::json!({
-                "repository_id": "defending-code",
+                "repository_id": "defending_code",
                 "host_path": "/tmp/repo",
                 "enabled": true
             }))
@@ -1175,7 +1208,7 @@ mod load_manifest_root {
         );
         assert_eq!(
             manifest.repository_placements[0].repository_id,
-            "defending-code"
+            "defending_code"
         );
     }
 
@@ -1184,7 +1217,7 @@ mod load_manifest_root {
         let tmp = tempdir().unwrap();
         write_minimal_root(tmp.path());
 
-        let binding_dir = tmp.path().join("callback-bindings").join("secret-bind");
+        let binding_dir = tmp.path().join("callback_bindings").join("secret_bind");
         fs::create_dir_all(&binding_dir).unwrap();
         fs::write(
             binding_dir.join("object.json"),
@@ -1223,8 +1256,8 @@ mod load_manifest_root {
 
         let binding_dir = tmp
             .path()
-            .join("projection-acp-bindings")
-            .join("codex-read");
+            .join("projection_acp_bindings")
+            .join("codex_read");
         fs::create_dir_all(&binding_dir).unwrap();
         fs::write(
             binding_dir.join("object.json"),
@@ -1349,8 +1382,8 @@ mod load_manifest_root {
         write_manifest_root(out.path(), &manifest, false).unwrap();
         let written_path = out
             .path()
-            .join("projection-acp-bindings")
-            .join("codex-read")
+            .join("projection_acp_bindings")
+            .join("codex_read")
             .join("object.json");
         let written: serde_json::Value =
             serde_json::from_slice(&fs::read(written_path).unwrap()).unwrap();
@@ -1813,7 +1846,7 @@ fn hydrate_sidecar_rejects_parent_component_in_rel_path() {
     use tempfile::tempdir;
 
     let tmp = tempdir().unwrap();
-    let json_dir = tmp.path().join("doc-dir");
+    let json_dir = tmp.path().join("doc_dir");
     fs::create_dir_all(&json_dir).unwrap();
     fs::write(tmp.path().join("sibling.md"), "secret contents").unwrap();
 
@@ -1880,7 +1913,7 @@ mod load_per_doc_collection {
     use tempfile::tempdir;
 
     fn write_behavior_dir(root: &std::path::Path, handle: &str, behavior_id: &str) {
-        let dir = root.join("agent-behaviors").join(handle);
+        let dir = root.join("agent_behaviors").join(handle);
         fs::create_dir_all(&dir).unwrap();
         let body = serde_json::json!({
             "behavior_id": behavior_id,
@@ -1922,7 +1955,7 @@ mod load_per_doc_collection {
     #[test]
     fn missing_object_json_is_error() {
         let tmp = tempdir().unwrap();
-        fs::create_dir_all(tmp.path().join("agent-behaviors").join("default")).unwrap();
+        fs::create_dir_all(tmp.path().join("agent_behaviors").join("default")).unwrap();
         let mut errors = Vec::new();
         let _: Vec<DesiredAgentBehavior> =
             load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
@@ -1976,7 +2009,7 @@ mod load_per_doc_collection {
         write_behavior_dir(tmp.path(), "default", "default");
         fs::write(
             tmp.path()
-                .join("agent-behaviors")
+                .join("agent_behaviors")
                 .join("default")
                 .join("README.md"),
             "notes",
@@ -1984,7 +2017,7 @@ mod load_per_doc_collection {
         .unwrap();
         fs::write(
             tmp.path()
-                .join("agent-behaviors")
+                .join("agent_behaviors")
                 .join("default")
                 .join(".DS_Store"),
             "",
@@ -2000,7 +2033,7 @@ mod load_per_doc_collection {
     #[test]
     fn non_directory_collection_path_is_error() {
         let tmp = tempdir().unwrap();
-        fs::write(tmp.path().join("agent-behaviors"), "not a dir").unwrap();
+        fs::write(tmp.path().join("agent_behaviors"), "not a dir").unwrap();
         let mut errors = Vec::new();
         let _: Vec<DesiredAgentBehavior> =
             load_per_doc_collection(tmp.path(), Collection::AgentBehavior, &mut errors);
@@ -2082,11 +2115,11 @@ pub(super) mod write_manifest_root {
             Some("Context {{ ctx.now }}".to_string());
         write_manifest_root(tmp.path(), &manifest, false).unwrap();
 
-        assert!(tmp.path().join("agent-principal.json").is_file());
+        assert!(tmp.path().join("agent_principal.json").is_file());
 
-        let behavior_object = tmp.path().join("agent-behaviors/default/object.json");
+        let behavior_object = tmp.path().join("agent_behaviors/default/object.json");
         assert!(behavior_object.is_file());
-        let behavior_sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
+        let behavior_sidecar = tmp.path().join("agent_behaviors/default/system_prompt.md");
         assert!(behavior_sidecar.is_file());
         assert_eq!(
             fs::read_to_string(&behavior_sidecar).unwrap(),
@@ -2100,7 +2133,7 @@ pub(super) mod write_manifest_root {
         );
         let context_sidecar = tmp
             .path()
-            .join("agent-behaviors/default/request_context_template.md");
+            .join("agent_behaviors/default/request_context_template.md");
         assert!(context_sidecar.is_file());
         assert_eq!(
             fs::read_to_string(&context_sidecar).unwrap(),
@@ -2113,9 +2146,9 @@ pub(super) mod write_manifest_root {
             Some("./request_context_template.md")
         );
 
-        let task_object = tmp.path().join("tasks/seed-health/object.json");
+        let task_object = tmp.path().join("tasks/seed_health/object.json");
         assert!(task_object.is_file());
-        let task_sidecar = tmp.path().join("tasks/seed-health/prompt.md");
+        let task_sidecar = tmp.path().join("tasks/seed_health/prompt.md");
         assert!(task_sidecar.is_file());
         assert_eq!(
             fs::read_to_string(&task_sidecar).unwrap(),
@@ -2136,10 +2169,10 @@ pub(super) mod write_manifest_root {
         manifest.agent_behaviors[0].system_prompt = None;
         write_manifest_root(tmp.path(), &manifest, false).unwrap();
 
-        let sidecar = tmp.path().join("agent-behaviors/default/system_prompt.md");
+        let sidecar = tmp.path().join("agent_behaviors/default/system_prompt.md");
         assert!(!sidecar.exists());
         let body: serde_json::Value = serde_json::from_slice(
-            &fs::read(tmp.path().join("agent-behaviors/default/object.json")).unwrap(),
+            &fs::read(tmp.path().join("agent_behaviors/default/object.json")).unwrap(),
         )
         .unwrap();
         assert!(body.get("system_prompt").is_none());
@@ -2160,7 +2193,7 @@ pub(super) mod write_manifest_root {
         fs::write(tmp.path().join("random.txt"), "this is not a manifest root").unwrap();
         let err = write_manifest_root(tmp.path(), &minimal_manifest(), true).unwrap_err();
         assert!(
-            err.contains("does not contain agent-principal.json"),
+            err.contains("does not contain agent_principal.json"),
             "got: {err}"
         );
         assert!(tmp.path().join("random.txt").exists());
@@ -2179,11 +2212,11 @@ pub(super) mod write_manifest_root {
         let tmp = tempdir().unwrap();
 
         fs::write(
-            tmp.path().join("agent-principal.json"),
+            tmp.path().join("agent_principal.json"),
             b"{\"agent_did\":\"did:key:old\",\"enabled\":true}",
         )
         .unwrap();
-        let old_behavior_dir = tmp.path().join("agent-behaviors").join("old-safe-id");
+        let old_behavior_dir = tmp.path().join("agent_behaviors").join("old_safe_id");
         fs::create_dir_all(&old_behavior_dir).unwrap();
         fs::write(old_behavior_dir.join("object.json"), b"{}").unwrap();
 
@@ -2211,8 +2244,8 @@ pub(super) mod write_manifest_root {
         assert!(err.contains("filesystem-unsafe"), "got: {err}");
 
         assert!(
-            tmp.path().join("agent-principal.json").exists(),
-            "old agent-principal.json was deleted before pre-flight finished"
+            tmp.path().join("agent_principal.json").exists(),
+            "old agent_principal.json was deleted before pre-flight finished"
         );
         assert!(
             old_behavior_dir.join("object.json").exists(),
@@ -2224,13 +2257,13 @@ pub(super) mod write_manifest_root {
     fn force_removes_stray_files_from_previous_export() {
         let tmp = tempdir().unwrap();
         fs::write(
-            tmp.path().join("agent-principal.json"),
+            tmp.path().join("agent_principal.json"),
             b"{\"agent_did\":\"did:key:stale\",\"enabled\":false}",
         )
         .unwrap();
-        fs::create_dir_all(tmp.path().join("agent-behaviors").join("old-name")).unwrap();
+        fs::create_dir_all(tmp.path().join("agent_behaviors").join("old_name")).unwrap();
         fs::write(
-            tmp.path().join("agent-behaviors/old-name/object.json"),
+            tmp.path().join("agent_behaviors/old_name/object.json"),
             b"{}",
         )
         .unwrap();
@@ -2239,10 +2272,10 @@ pub(super) mod write_manifest_root {
         write_manifest_root(tmp.path(), &minimal_manifest(), true).unwrap();
 
         assert!(!tmp.path().join("leftover.txt").exists());
-        assert!(!tmp.path().join("agent-behaviors/old-name").exists());
+        assert!(!tmp.path().join("agent_behaviors/old_name").exists());
         assert!(tmp
             .path()
-            .join("agent-behaviors/default/object.json")
+            .join("agent_behaviors/default/object.json")
             .is_file());
     }
 }
@@ -2305,7 +2338,7 @@ mod write_manifest_root_safe_id {
 /// lets one pack be compared across models and endpoints.
 #[test]
 fn pipeline_pack_interpolates_endpoint_and_model() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
 
     let (manifest, report) = load_manifest_root(&root);
     assert!(
@@ -2339,9 +2372,9 @@ fn pipeline_pack_interpolates_endpoint_and_model() {
 
 #[test]
 fn load_pipeline_two_stage_fixture_with_surface() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
     assert!(
-        root.join("datastore-tool-surfaces/experiment-writes/object.json")
+        root.join("datastore_tool_surfaces/experiment_writes/object.json")
             .is_file(),
         "pipeline fixture must include experiment-writes surface"
     );
@@ -2393,7 +2426,8 @@ fn load_pipeline_two_stage_fixture_with_surface() {
 
 #[test]
 fn load_background_continuation_demo_with_local_background_target() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/background-continuation");
+    let root =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/background_continuation");
     let (manifest, report) = load_manifest_root(&root);
     assert!(
         report.errors.is_empty(),

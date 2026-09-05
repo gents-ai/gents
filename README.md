@@ -58,11 +58,11 @@ that default backend when it is installed:
 gents init                 # choose ChatGPT / Codex and complete OAuth
 gents server               # keep this running in another terminal
 
-gents graph catalog code-review
-gents graph install code-review
+gents pack show code_review
+gents pack install code_review
 
 cd /path/to/repo
-gents graph run code-review
+gents graph run code_review
 gents graph watch <run-id>
 gents graph result <run-id>
 ```
@@ -90,13 +90,13 @@ cd web-research-mcp
 checks, registers `http://127.0.0.1:9213/mcp` against the running local Gents
 node, and probes readiness. The graph package installs Gents documents and
 declares this external dependency; it deliberately does not silently allocate
-the roughly 12 GB Docker stack during `graph install`.
+the roughly 12 GB Docker stack during `pack install`.
 
 Then install the graph and run it with live fan-out progress:
 
 ```bash
-gents graph install web-deep-research
-gents graph run web-deep-research \
+gents pack install web_deep_research
+gents graph run web_deep_research \
   --question "What changed in the MCP security guidance, and what should operators do?" \
   --investigator-count 4 \
   --watch

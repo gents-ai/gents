@@ -68,7 +68,7 @@ state machine or provider-input assembly rule changes are required; the
 existing `GoalAutomation.submissionSafe` contract remains the fence.
 All 331 shim tests, the workspace all-target check and binary build passed
 (`/tmp/grok-goal-create-{suite,check,build}.log`). The dedicated live probe
-`demo/grok-tui-port/scripts/grok_goal_create_probe.py` passed on an isolated
+`packs/grok_tui_port/scripts/grok_goal_create_probe.py` passed on an isolated
 GLM server: session `grok-edge-fcd34529fa274274`, initial signed request
 `6e617ff5-9034-4735-80cf-b24bc2734b0d`, budget 100,000, goal complete. It verified
 the native goal update, prompt identity, stripped objective, real inference and

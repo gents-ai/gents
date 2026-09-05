@@ -1,5 +1,5 @@
-//! Non-interactive pack runs: `gents demo run <pack>`, `gents demo init`,
-//! and `gents demo seed` against an already-serving node.
+//! Non-interactive pack runs: `gents pack run <pack>`, `gents pack init`,
+//! and `gents pack seed` against an already-serving node.
 //!
 //! A pack is a self-contained desired-state root (its own `schemas/` plus the
 //! config documents) with an `experiment.json` describing how to drive it.
@@ -8,7 +8,7 @@
 //! pack applies *after* the runtime is ready, so its backend is unprobed for up
 //! to one probe interval while the server already reports `serving`; and a seed
 //! written before the event source observes its collection is dropped in
-//! silence, because triggers are created/first-seen only. `demo seed` waits
+//! silence, because triggers are created/first-seen only. `pack seed` waits
 //! for `/healthz` and an enabled EventTrigger, then confirms a correlated
 //! AgentRequest actually fired.
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,7 +22,7 @@ use serde_json::{json, Value};
 use super::fleet::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use super::secscan;
 use super::util::{path_arg, run_cli_json};
-use crate::cli::args::{DemoInitArgs, DemoRunArgs, DemoSeedArgs};
+use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
@@ -342,21 +342,22 @@ struct SourceEdgeExpectation {
     source_collection: String,
 }
 
-/// Resolve a pack by path, or by name under `demo/`.
+/// Resolve a pack by path, or by name under `packs/`.
 fn resolve_pack(target: &str) -> Result<PathBuf> {
     let direct = PathBuf::from(target);
     if direct.join("experiment.json").is_file() {
         return Ok(direct);
     }
-    let under_demo = PathBuf::from("demo").join(target);
-    if under_demo.join("experiment.json").is_file() {
-        return Ok(under_demo);
+    let under_packs = PathBuf::from("packs").join(target);
+    if under_packs.join("experiment.json").is_file() {
+        return Ok(under_packs);
     }
-    bail!(
-        "no pack at {} or {} (a pack is a directory containing experiment.json)",
-        direct.display(),
-        under_demo.display()
-    )
+    let bundled = crate::commands::pack::materialize_named_pack(target)?;
+    anyhow::ensure!(
+        bundled.join("experiment.json").is_file(),
+        "pack {target} has no scenario; use graph run for installed graphs"
+    );
+    Ok(bundled)
 }
 
 fn load_manifest(pack: &Path) -> Result<PackManifest> {
@@ -477,14 +478,14 @@ fn validate_task_goal_declarations_with(
 
         let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
         let behavior_path = pack
-            .join("agent-behaviors")
-            .join(behavior_id)
+            .join("agent_behaviors")
+            .join(crate::desired_state::document_handle(behavior_id))
             .join("object.json");
         let behavior = read_pack_json_with(&behavior_path, lookup)?;
         let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
         let selection_path = pack
-            .join("tool-selections")
-            .join(selection_id)
+            .join("tool_selections")
+            .join(crate::desired_state::document_handle(selection_id))
             .join("object.json");
         let selection = read_pack_json_with(&selection_path, lookup)?;
         let goal_tools_enabled = selection
@@ -541,7 +542,9 @@ fn validate_prompt_tool_contracts_with(
         .join("\n");
 
     for contract in &manifest.expect.prompt_tool_contracts {
-        let task_dir = pack.join("tasks").join(&contract.task_id);
+        let task_dir = pack
+            .join("tasks")
+            .join(crate::desired_state::document_handle(&contract.task_id));
         let task_path = task_dir.join("object.json");
         let task = read_pack_json_with(&task_path, lookup)?;
         let behavior_id = required_json_string(&task, "behavior_id", &task_path)?;
@@ -551,7 +554,9 @@ fn validate_prompt_tool_contracts_with(
         let task_prompt = std::fs::read_to_string(&task_prompt_path)
             .with_context(|| format!("reading {}", task_prompt_path.display()))?;
 
-        let behavior_dir = pack.join("agent-behaviors").join(behavior_id);
+        let behavior_dir = pack
+            .join("agent_behaviors")
+            .join(crate::desired_state::document_handle(behavior_id));
         let behavior_path = behavior_dir.join("object.json");
         let behavior = read_pack_json_with(&behavior_path, lookup)?;
         let system_prompt_path = behavior_dir.join(
@@ -562,8 +567,8 @@ fn validate_prompt_tool_contracts_with(
             .with_context(|| format!("reading {}", system_prompt_path.display()))?;
         let selection_id = required_json_string(&behavior, "tool_selection_id", &behavior_path)?;
         let selection_path = pack
-            .join("tool-selections")
-            .join(selection_id)
+            .join("tool_selections")
+            .join(crate::desired_state::document_handle(selection_id))
             .join("object.json");
         let selection = read_pack_json_with(&selection_path, lookup)?;
 
@@ -590,8 +595,8 @@ fn validate_prompt_tool_contracts_with(
             .filter_map(Value::as_str)
         {
             let surface_path = pack
-                .join("datastore-tool-surfaces")
-                .join(surface_id)
+                .join("datastore_tool_surfaces")
+                .join(crate::desired_state::document_handle(surface_id))
                 .join("object.json");
             let surface = read_pack_json_with(&surface_path, lookup)?;
             for entry in surface
@@ -700,7 +705,7 @@ fn trigger_source_collections(pack: &Path, trigger_ids: &[String]) -> Result<Vec
     for trigger_id in trigger_ids {
         let path = pack
             .join("event_triggers")
-            .join(trigger_id)
+            .join(crate::desired_state::document_handle(trigger_id))
             .join("object.json");
         let trigger = read_pack_json(&path)?;
         let source_collection = required_json_string(&trigger, "source_collection", &path)?;
@@ -1081,37 +1086,6 @@ fn resolve_pack_tool_root(
         );
     }
     Ok(root)
-}
-
-pub(crate) async fn list(root: &Path) -> Result<()> {
-    let mut rows: Vec<(String, String)> = Vec::new();
-    let entries =
-        std::fs::read_dir(root).with_context(|| format!("reading pack root {}", root.display()))?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.join("experiment.json").is_file() {
-            continue;
-        }
-        match load_manifest(&path) {
-            Ok(manifest) => rows.push((manifest.name, manifest.description)),
-            Err(error) => rows.push((
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into(),
-                format!("(unreadable: {error})"),
-            )),
-        }
-    }
-    rows.sort();
-    if rows.is_empty() {
-        println!("no packs under {}", root.display());
-        return Ok(());
-    }
-    for (name, description) in rows {
-        println!("{name:<20} {description}");
-    }
-    Ok(())
 }
 
 /// Wait for the trigger engine to announce it is watching `collection` and
@@ -3138,10 +3112,11 @@ fn resolve_manifest_tool_root(pack: &Path, manifest: &PackManifest) -> Result<Op
     }
 }
 
-pub(crate) async fn init_pack(args: DemoInitArgs) -> Result<()> {
+pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
     let manifest = load_manifest(&pack)?;
+    tracing::info!(pack = %manifest.name, description = %manifest.description, "initializing pack scenario");
     let home = args.home;
     if home.join("init.json").is_file() && !args.overwrite {
         bail!(
@@ -3169,7 +3144,7 @@ pub(crate) async fn init_pack(args: DemoInitArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn seed(args: DemoSeedArgs) -> Result<()> {
+pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     let pack = resolve_pack(&args.pack)?;
     let manifest = load_manifest(&pack)?;
 
@@ -3243,7 +3218,7 @@ pub(crate) async fn seed(args: DemoSeedArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
+pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
     let pack = resolve_pack(&args.pack)?;
     let mut manifest = load_manifest(&pack)?;
@@ -3860,7 +3835,7 @@ mod tests {
 
     #[test]
     fn defending_code_pack_is_typed_static_and_closes_both_fan_outs() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/defending-code");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/defending_code");
         let manifest = load_manifest_defaults(&pack).expect("defending-code pack should load");
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 14);
         assert_eq!(manifest.expect.result_documents.len(), 17);
@@ -3949,7 +3924,7 @@ mod tests {
             let document = read_pack_json_defaults(
                 &pack
                     .join("event_triggers")
-                    .join(trigger)
+                    .join(crate::desired_state::document_handle(trigger))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{trigger} should load: {error:#}"));
@@ -3981,8 +3956,8 @@ mod tests {
         ] {
             let document = read_pack_json_defaults(
                 &pack
-                    .join("tool-selections")
-                    .join(selection)
+                    .join("tool_selections")
+                    .join(selection.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4022,8 +3997,8 @@ mod tests {
         ] {
             let document = read_pack_json_defaults(
                 &pack
-                    .join("tool-selections")
-                    .join(selection)
+                    .join("tool_selections")
+                    .join(selection.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4061,8 +4036,8 @@ mod tests {
 
         let triage_tools = read_pack_json_defaults(
             &pack
-                .join("tool-selections")
-                .join("defend-triage-tools")
+                .join("tool_selections")
+                .join("defend_triage_tools")
                 .join("object.json"),
         )
         .expect("triage reducer tools should load");
@@ -4094,7 +4069,7 @@ mod tests {
             .is_some_and(Vec::is_empty));
         let triage_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("defend-triage-task")
+                .join("defend_triage_task")
                 .join("prompt.md"),
         )
         .expect("triage reducer prompt should load");
@@ -4102,8 +4077,8 @@ mod tests {
 
         let verifier_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("defend-verifier-io")
+                .join("datastore_tool_surfaces")
+                .join("defend_verifier_io")
                 .join("object.json"),
         )
         .expect("verifier datastore surface should load");
@@ -4197,8 +4172,8 @@ mod tests {
 
         let scan_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("defend-scan-writes")
+                .join("datastore_tool_surfaces")
+                .join("defend_scan_writes")
                 .join("object.json"),
         )
         .expect("scan datastore surface should load");
@@ -4219,7 +4194,7 @@ mod tests {
 
         let verification_plan_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("defend-verification-plan-task")
+                .join("defend_verification_plan_task")
                 .join("prompt.md"),
         )
         .expect("verification-plan prompt should load");
@@ -4227,8 +4202,8 @@ mod tests {
 
         let verification_plan_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("defend-verification-plan-io")
+                .join("datastore_tool_surfaces")
+                .join("defend_verification_plan_io")
                 .join("object.json"),
         )
         .expect("verification-plan datastore surface should load");
@@ -4251,8 +4226,8 @@ mod tests {
 
         let triage_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("defend-triage-io")
+                .join("datastore_tool_surfaces")
+                .join("defend_triage_io")
                 .join("object.json"),
         )
         .expect("triage datastore surface should load");
@@ -4279,7 +4254,7 @@ mod tests {
         }
         let triage_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("defend-triage-task")
+                .join("defend_triage_task")
                 .join("prompt.md"),
         )
         .expect("triage prompt should load");
@@ -4371,8 +4346,8 @@ mod tests {
         );
         let report_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("defend-report-io")
+                .join("datastore_tool_surfaces")
+                .join("defend_report_io")
                 .join("object.json"),
         )
         .expect("report datastore surface should load");
@@ -4554,8 +4529,12 @@ mod tests {
                 "read_defense_patch_security_review",
             ),
         ] {
-            let prompt = std::fs::read_to_string(pack.join("tasks").join(task).join("prompt.md"))
-                .unwrap_or_else(|error| panic!("{task} prompt should load: {error}"));
+            let prompt = std::fs::read_to_string(
+                pack.join("tasks")
+                    .join(task.replace('-', "_"))
+                    .join("prompt.md"),
+            )
+            .unwrap_or_else(|error| panic!("{task} prompt should load: {error}"));
             assert!(
                 prompt.contains(source_template),
                 "{task} must interpolate its trigger document directly"
@@ -4566,8 +4545,8 @@ mod tests {
             );
             let datastore = read_pack_json_defaults(
                 &pack
-                    .join("datastore-tool-surfaces")
-                    .join(surface)
+                    .join("datastore_tool_surfaces")
+                    .join(surface.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
@@ -4592,8 +4571,8 @@ mod tests {
         ] {
             let document = read_pack_json_defaults(
                 &pack
-                    .join("tool-selections")
-                    .join(selection)
+                    .join("tool_selections")
+                    .join(selection.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4609,8 +4588,8 @@ mod tests {
 
         let report_tools = read_pack_json_defaults(
             &pack
-                .join("tool-selections")
-                .join("defend-report-tools")
+                .join("tool_selections")
+                .join("defend_report_tools")
                 .join("object.json"),
         )
         .expect("report tools should load");
@@ -4625,8 +4604,8 @@ mod tests {
 
         let backend = read_pack_json_defaults(
             &pack
-                .join("inference-backends")
-                .join("defending-backend")
+                .join("inference_backends")
+                .join("defending_backend")
                 .join("object.json"),
         )
         .expect("defending backend should load");
@@ -4653,8 +4632,8 @@ mod tests {
         ] {
             let document = read_pack_json_defaults(
                 &pack
-                    .join("agent-behaviors")
-                    .join(behavior)
+                    .join("agent_behaviors")
+                    .join(behavior.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{behavior} should load: {error:#}"));
@@ -4667,7 +4646,7 @@ mod tests {
 
         let review_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("defend-patch-review-task")
+                .join("defend_patch_review_task")
                 .join("prompt.md"),
         )
         .expect("patch review prompt should load");
@@ -4676,8 +4655,8 @@ mod tests {
         assert!(!review_prompt.contains("{{ doc.description }}"));
 
         let read_surface = std::fs::read_to_string(
-            pack.join("datastore-tool-surfaces")
-                .join("defend-report-io")
+            pack.join("datastore_tool_surfaces")
+                .join("defend_report_io")
                 .join("object.json"),
         )
         .expect("report surface should load");
@@ -4687,7 +4666,7 @@ mod tests {
 
     #[test]
     fn repo_maintenance_pack_preserves_categories_and_worktree_sized_packages() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/repo-maintenance");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/repo_maintenance");
         let manifest = load_manifest_defaults(&pack).expect("repo-maintenance pack should load");
         assert_eq!(manifest.expect.prompt_tool_contracts.len(), 6);
         assert_eq!(manifest.expect.result_documents.len(), 6);
@@ -4743,7 +4722,7 @@ mod tests {
 
         let recon_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("maintenance-recon-task")
+                .join("maintenance_recon_task")
                 .join("prompt.md"),
         )
         .expect("maintenance recon prompt should load");
@@ -4759,8 +4738,8 @@ mod tests {
 
         let triage_surface = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("maintenance-triage-writes")
+                .join("datastore_tool_surfaces")
+                .join("maintenance_triage_writes")
                 .join("object.json"),
         )
         .expect("maintenance triage surface should load");
@@ -4776,7 +4755,7 @@ mod tests {
 
         let triage_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("maintenance-triage-task")
+                .join("maintenance_triage_task")
                 .join("prompt.md"),
         )
         .expect("maintenance triage prompt should load");
@@ -4787,7 +4766,7 @@ mod tests {
         let execute_trigger = read_pack_json_defaults(
             &pack
                 .join("event_triggers")
-                .join("maintenance-execute")
+                .join("maintenance_execute")
                 .join("object.json"),
         )
         .expect("maintenance execute trigger should load");
@@ -4797,8 +4776,8 @@ mod tests {
 
         let execute_writes = read_pack_json_defaults(
             &pack
-                .join("datastore-tool-surfaces")
-                .join("maintenance-execute-writes")
+                .join("datastore_tool_surfaces")
+                .join("maintenance_execute_writes")
                 .join("object.json"),
         )
         .expect("maintenance execute writes should load");
@@ -4810,7 +4789,7 @@ mod tests {
 
         let execute_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("maintenance-execute-task")
+                .join("maintenance_execute_task")
                 .join("prompt.md"),
         )
         .expect("maintenance execute prompt should load");
@@ -4828,7 +4807,7 @@ mod tests {
         let publish_trigger = read_pack_json_defaults(
             &pack
                 .join("event_triggers")
-                .join("maintenance-publish")
+                .join("maintenance_publish")
                 .join("object.json"),
         )
         .expect("maintenance publish trigger should load");
@@ -4841,7 +4820,7 @@ mod tests {
 
         let publish_prompt = std::fs::read_to_string(
             pack.join("tasks")
-                .join("maintenance-publish-task")
+                .join("maintenance_publish_task")
                 .join("prompt.md"),
         )
         .expect("maintenance publish prompt should load");
@@ -4856,25 +4835,25 @@ mod tests {
 
     #[test]
     fn workspace_packs_bind_callback_bindings_and_forbid_prompt_worktrees() {
-        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
         for (pack_name, binding_id, source) in [
             (
-                "defending-code",
+                "defending_code",
                 "defense-patch-workspace",
                 "DefensePatchAssignment",
             ),
             (
-                "repo-maintenance",
+                "repo_maintenance",
                 "maintenance-execute-workspace",
                 "MaintenanceReport",
             ),
-            ("grok-tui-port", "port-implement-workspace", "PortWorkUnit"),
+            ("grok_tui_port", "port-implement-workspace", "PortWorkUnit"),
         ] {
             let pack = demo.join(pack_name);
             let binding = read_pack_json_defaults(
                 &pack
-                    .join("callback-bindings")
-                    .join(binding_id)
+                    .join("callback_bindings")
+                    .join(binding_id.replace('-', "_"))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{pack_name} callback binding should load: {error:#}"));
@@ -4886,7 +4865,7 @@ mod tests {
             let trigger_ids = experiment["expect"]["trigger_ids"]
                 .as_array()
                 .expect("trigger_ids");
-            if pack_name == "grok-tui-port" {
+            if pack_name == "grok_tui_port" {
                 assert!(trigger_ids.iter().any(|id| id == "port-retry"));
                 assert!(trigger_ids.iter().any(|id| id == "port-integrate-record"));
                 assert!(trigger_ids.iter().any(|id| id == "port-recon-audit"));
@@ -4897,7 +4876,7 @@ mod tests {
                 let integrate_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("port-integrate")
+                        .join("port_integrate")
                         .join("object.json"),
                 )
                 .expect("port-integrate trigger should load");
@@ -4924,7 +4903,7 @@ mod tests {
                     let task = read_pack_json_defaults(
                         &pack
                             .join("tasks")
-                            .join(format!("port-{stage}-task"))
+                            .join(format!("port_{stage}_task").replace('-', "_"))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("port-{stage} task should load: {error:#}"));
@@ -4935,8 +4914,8 @@ mod tests {
 
                     let tools = read_pack_json_defaults(
                         &pack
-                            .join("tool-selections")
-                            .join(format!("port-{stage}-tools"))
+                            .join("tool_selections")
+                            .join(format!("port_{stage}_tools").replace('-', "_"))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| {
@@ -4949,16 +4928,16 @@ mod tests {
 
                     let prompt = std::fs::read_to_string(
                         pack.join("tasks")
-                            .join(format!("port-{stage}-task"))
+                            .join(format!("port_{stage}_task").replace('-', "_"))
                             .join("prompt.md"),
                     )
                     .unwrap_or_else(|error| panic!("port-{stage} prompt should load: {error:#}"));
                     assert!(prompt.contains("`update_goal`"));
                     assert!(prompt.contains("`status=\"complete\"`"));
                 }
-                assert!(!pack.join("event_triggers/port-revise").exists());
-                assert!(!pack.join("tasks/port-revise-task").exists());
-                assert_eq!(experiment["bundled_graph_packages"], json!(["code-review"]));
+                assert!(!pack.join("event_triggers/port_revise").exists());
+                assert!(!pack.join("tasks/port_revise_task").exists());
+                assert_eq!(experiment["bundled_graph_packages"], json!(["code_review"]));
                 assert_eq!(experiment["init"]["max_concurrent"], 16);
                 assert!(experiment["expect"]["stage_tool_sequences"][0]
                     ["allowed_at_or_after_boundary"]
@@ -4967,35 +4946,35 @@ mod tests {
                         .iter()
                         .all(|expected| tools.iter().any(|tool| tool == expected))));
                 assert_eq!(
-                    experiment["bundled_graph_bindings"]["code-review"]["backend_id"],
+                    experiment["bundled_graph_bindings"]["code_review"]["backend_id"],
                     "grok-port-backend-ws1"
                 );
                 assert_eq!(
-                    experiment["bundled_graph_bindings"]["code-review"]["profile_id"],
+                    experiment["bundled_graph_bindings"]["code_review"]["profile_id"],
                     "grok-port-code-review-profile"
                 );
                 assert_eq!(
-                    experiment["bundled_graph_bindings"]["code-review"]["role_overrides"]
+                    experiment["bundled_graph_bindings"]["code_review"]["role_overrides"]
                         ["reviewer"]["profile_id"],
                     "grok-port-code-review-scan-profile"
                 );
                 let scan_profile = read_pack_json_defaults(
-                    &pack.join("inference-profiles/grok-port-code-review-scan-profile/object.json"),
+                    &pack.join("inference_profiles/grok_port_code_review_scan_profile/object.json"),
                 )
                 .expect("code-review scan profile should load");
                 assert_eq!(scan_profile["max_turns"], 1_000_000);
                 assert_eq!(scan_profile["reasoning_effort"], "high");
                 let coordinator_profile = read_pack_json_defaults(
-                    &pack.join("inference-profiles/grok-port-code-review-profile/object.json"),
+                    &pack.join("inference_profiles/grok_port_code_review_profile/object.json"),
                 )
                 .expect("code-review coordinator profile should load");
                 assert_eq!(coordinator_profile["reasoning_effort"], "high");
-                let backend_dirs = std::fs::read_dir(pack.join("inference-backends"))
+                let backend_dirs = std::fs::read_dir(pack.join("inference_backends"))
                     .expect("grok backend directory should load")
                     .collect::<Result<Vec<_>, _>>()
                     .expect("grok backend entries should load");
                 assert_eq!(backend_dirs.len(), 1);
-                for behavior in std::fs::read_dir(pack.join("agent-behaviors"))
+                for behavior in std::fs::read_dir(pack.join("agent_behaviors"))
                     .expect("grok behavior directory should load")
                 {
                     let behavior = behavior.expect("grok behavior entry should load");
@@ -5026,7 +5005,7 @@ mod tests {
                 let retry_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("port-retry")
+                        .join("port_retry")
                         .join("object.json"),
                 )
                 .expect("port-retry trigger should load");
@@ -5036,7 +5015,7 @@ mod tests {
                 let integrate_record_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("port-integrate-record")
+                        .join("port_integrate_record")
                         .join("object.json"),
                 )
                 .expect("port-integrate-record trigger should load");
@@ -5050,13 +5029,13 @@ mod tests {
                 );
                 assert_eq!(integrate_record_trigger["workspace_authority"], "readOnly");
                 let route_review =
-                    std::fs::read_to_string(pack.join("tasks/port-review-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_review_task/prompt.md"))
                         .expect("route review prompt should load");
-                assert!(!route_review.contains("gents graph run code-review"));
+                assert!(!route_review.contains("gents graph run code_review"));
                 assert!(route_review.contains("structured `owned_paths` JSON"));
                 assert!(route_review.contains("There are no exceptions for `.tmp-build`"));
                 let review_io = read_pack_json_defaults(
-                    &pack.join("datastore-tool-surfaces/port-review-io/object.json"),
+                    &pack.join("datastore_tool_surfaces/port_review_io/object.json"),
                 )
                 .expect("port review IO should load");
                 assert!(review_io["entries"]
@@ -5067,33 +5046,33 @@ mod tests {
                             .iter()
                             .any(|field| field == "owned_paths")))));
                 let review_behavior =
-                    read_pack_json_defaults(&pack.join("agent-behaviors/port-review/object.json"))
+                    read_pack_json_defaults(&pack.join("agent_behaviors/port_review/object.json"))
                         .expect("review behavior should load");
                 assert_eq!(
                     review_behavior["inference_profile_id"],
                     "grok-port-review-profile"
                 );
                 let review_profile = read_pack_json_defaults(
-                    &pack.join("inference-profiles/grok-port-review-profile/object.json"),
+                    &pack.join("inference_profiles/grok_port_review_profile/object.json"),
                 )
                 .expect("review profile should load");
                 assert_eq!(review_profile["max_turns"], 1_000_000);
-                let recon = std::fs::read_to_string(pack.join("tasks/port-recon-task/prompt.md"))
+                let recon = std::fs::read_to_string(pack.join("tasks/port_recon_task/prompt.md"))
                     .expect("recon prompt should load");
                 assert!(recon.contains("`grok_wire_continuation`"));
                 assert!(recon.contains("preserve both wire fields verbatim"));
                 let recon_tools = read_pack_json_defaults(
-                    &pack.join("tool-selections/port-recon-tools/object.json"),
+                    &pack.join("tool_selections/port_recon_tools/object.json"),
                 )
                 .expect("recon tool selection should load");
                 assert_eq!(recon_tools["enable_bash"], false);
                 assert_eq!(recon_tools["command_network_mode"], "disabled");
                 assert_eq!(
                     recon_tools["file_tool_root"],
-                    "./demo/grok-tui-port/recon-input"
+                    "./packs/grok_tui_port/recon_input"
                 );
                 let recon_write = read_pack_json_defaults(
-                    &pack.join("datastore-tool-surfaces/port-recon-writes/object.json"),
+                    &pack.join("datastore_tool_surfaces/port_recon_writes/object.json"),
                 )
                 .expect("recon write surface should load");
                 let recon_fields = recon_write["entries"][0]["fields"]
@@ -5107,7 +5086,7 @@ mod tests {
                         .expect("PortSurface schema should load");
                 assert!(surface_schema.contains("grok_wire_continuation: String @immutable"));
                 let audited_ledger: Value = serde_json::from_slice(
-                    &std::fs::read(pack.join("recon-input/audited-ledger.json"))
+                    &std::fs::read(pack.join("recon_input/audited_ledger.json"))
                         .expect("audited recon ledger should exist"),
                 )
                 .expect("audited recon ledger should be valid JSON");
@@ -5228,14 +5207,14 @@ mod tests {
                     );
                 }
                 let recon_behavior =
-                    read_pack_json_defaults(&pack.join("agent-behaviors/port-recon/object.json"))
+                    read_pack_json_defaults(&pack.join("agent_behaviors/port_recon/object.json"))
                         .expect("recon behavior should load");
                 assert_eq!(
                     recon_behavior["inference_profile_id"],
                     "grok-port-recon-profile"
                 );
                 let recon_profile = read_pack_json_defaults(
-                    &pack.join("inference-profiles/grok-port-recon-profile/object.json"),
+                    &pack.join("inference_profiles/grok_port_recon_profile/object.json"),
                 )
                 .expect("recon profile should load");
                 assert_eq!(recon_profile["max_turns"], 1_000_000);
@@ -5245,7 +5224,7 @@ mod tests {
                     "write_port_surface"
                 );
                 let implement_prompt =
-                    std::fs::read_to_string(pack.join("tasks/port-implement-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_implement_task/prompt.md"))
                         .expect("implement prompt should load");
                 assert!(implement_prompt.contains("Navigate by symbol, not line number"));
                 assert!(implement_prompt.contains("`grok_wire_continuation`"));
@@ -5261,7 +5240,7 @@ mod tests {
                 assert_eq!(receipt_paths["work_unit_collection"], "PortWorkUnit");
                 assert_eq!(receipt_paths["owned_paths_field"], "owned_paths");
                 let implement_behavior = read_pack_json_defaults(
-                    &pack.join("agent-behaviors/port-implement/object.json"),
+                    &pack.join("agent_behaviors/port_implement/object.json"),
                 )
                 .expect("implement behavior should load");
                 assert_eq!(
@@ -5269,7 +5248,7 @@ mod tests {
                     "grok-port-implement-profile"
                 );
                 let implement_profile = read_pack_json_defaults(
-                    &pack.join("inference-profiles/grok-port-implement-profile/object.json"),
+                    &pack.join("inference_profiles/grok_port_implement_profile/object.json"),
                 )
                 .expect("implement profile should load");
                 assert_eq!(implement_profile["max_turns"], 1_000_000);
@@ -5279,8 +5258,8 @@ mod tests {
                 for selection in ["port-implement-tools", "port-converge-tools"] {
                     let tools = read_pack_json_defaults(
                         &pack
-                            .join("tool-selections")
-                            .join(selection)
+                            .join("tool_selections")
+                            .join(selection.replace('-', "_"))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -5333,7 +5312,7 @@ mod tests {
                     );
                 }
                 let final_review_tools = read_pack_json_defaults(
-                    &pack.join("tool-selections/port-final-review-tools/object.json"),
+                    &pack.join("tool_selections/port_final_review_tools/object.json"),
                 )
                 .expect("port-final-review-tools should load");
                 assert_eq!(final_review_tools["enable_bash"], true);
@@ -5355,8 +5334,8 @@ mod tests {
                 for selection in ["port-live-tools", "port-publish-tools"] {
                     let tools = read_pack_json_defaults(
                         &pack
-                            .join("tool-selections")
-                            .join(selection)
+                            .join("tool_selections")
+                            .join(selection.replace('-', "_"))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -5373,7 +5352,7 @@ mod tests {
                     );
                 }
                 let live_io = read_pack_json_defaults(
-                    &pack.join("datastore-tool-surfaces/port-live-io/object.json"),
+                    &pack.join("datastore_tool_surfaces/port_live_io/object.json"),
                 )
                 .expect("port-live-io should load");
                 let live_io_text = live_io.to_string();
@@ -5382,17 +5361,17 @@ mod tests {
                 assert!(live_io_text.contains("pty_session_id"));
                 assert!(live_io_text.contains("proof_json_continuation"));
                 let live_review_io = read_pack_json_defaults(
-                    &pack.join("datastore-tool-surfaces/port-live-review-io/object.json"),
+                    &pack.join("datastore_tool_surfaces/port_live_review_io/object.json"),
                 )
                 .expect("port-live-review-io should load");
                 let live_review_io_text = live_review_io.to_string();
                 assert!(live_review_io_text.contains("read_grok_port_job"));
                 assert!(live_review_io_text.contains("read_port_live_environment_proof"));
                 let live_prompt =
-                    std::fs::read_to_string(pack.join("tasks/port-live-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_live_task/prompt.md"))
                         .expect("live prompt should load");
                 let live_behavior = std::fs::read_to_string(
-                    pack.join("agent-behaviors/port-live/system_prompt.md"),
+                    pack.join("agent_behaviors/port_live/system_prompt.md"),
                 )
                 .expect("live behavior prompt should load");
                 for prompt in [&live_prompt, &live_behavior] {
@@ -5431,7 +5410,7 @@ mod tests {
                     live_behavior_words.contains("never pipe or otherwise mask its exit status")
                 );
                 let live_review =
-                    std::fs::read_to_string(pack.join("tasks/port-live-review-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_live_review_task/prompt.md"))
                         .expect("live review prompt should load");
                 let live_review_words =
                     live_review.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -5455,8 +5434,8 @@ mod tests {
                     .is_none());
                 let live_io = read_pack_json_defaults(
                     &pack
-                        .join("datastore-tool-surfaces")
-                        .join("port-live-io")
+                        .join("datastore_tool_surfaces")
+                        .join("port_live_io")
                         .join("object.json"),
                 )
                 .expect("live I/O surface should load");
@@ -5469,7 +5448,7 @@ mod tests {
                     })
                     .expect("live environment proof write");
                 assert!(proof_write.get("output_obligation").is_none());
-                let plan = std::fs::read_to_string(pack.join("tasks/port-plan-task/prompt.md"))
+                let plan = std::fs::read_to_string(pack.join("tasks/port_plan_task/prompt.md"))
                     .expect("plan prompt should load");
                 assert!(plan.contains("only a compact, sorted `[surface_id=<id>]` index"));
                 assert!(experiment["expect"]["collection_counts"]
@@ -5492,8 +5471,8 @@ mod tests {
                 assert!(makefile.contains("GROK_PORT_MAX_SURFACES ?= 13"));
                 let audit_io = read_pack_json_defaults(
                     &pack
-                        .join("datastore-tool-surfaces")
-                        .join("port-recon-audit-io")
+                        .join("datastore_tool_surfaces")
+                        .join("port_recon_audit_io")
                         .join("object.json"),
                 )
                 .expect("recon audit surface should load");
@@ -5502,28 +5481,28 @@ mod tests {
                 assert!(audit_io.contains("base_sha"));
                 assert!(audit_io.contains("source_field"));
                 let final_review =
-                    std::fs::read_to_string(pack.join("tasks/port-final-review-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_final_review_task/prompt.md"))
                         .expect("final review prompt should load");
-                assert!(final_review.contains("gents graph run code-review"));
+                assert!(final_review.contains("gents graph run code_review"));
                 assert!(final_review.contains("not the sentinel document count"));
                 assert!(final_review.contains("independently rerun all three convergence gates"));
                 assert!(final_review.contains("failures cannot be\nwaived as environmental"));
                 let convergence =
-                    std::fs::read_to_string(pack.join("tasks/port-converge-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/port_converge_task/prompt.md"))
                         .expect("convergence prompt should load");
                 assert!(convergence.contains("cargo test -p gents-cli --lib grok_shim"));
                 assert!(convergence.contains("cargo check -p gents-cli --all-targets"));
                 assert!(convergence.contains("Any nonzero exit is a failed\ngate"));
                 assert!(convergence.contains("Do not waive, reinterpret"));
                 let final_review_trigger = read_pack_json_defaults(
-                    &pack.join("event_triggers/port-final-review/object.json"),
+                    &pack.join("event_triggers/port_final_review/object.json"),
                 )
                 .expect("final-review trigger should load");
                 assert_eq!(
                     final_review_trigger["source_collection"],
                     "PortConvergenceReport"
                 );
-            } else if pack_name == "repo-maintenance" {
+            } else if pack_name == "repo_maintenance" {
                 assert!(trigger_ids
                     .iter()
                     .any(|id| id == "maintenance-execute-skip"));
@@ -5551,8 +5530,8 @@ mod tests {
                 );
                 let skip_writes = read_pack_json_defaults(
                     &pack
-                        .join("datastore-tool-surfaces")
-                        .join("defend-patch-skip-writes")
+                        .join("datastore_tool_surfaces")
+                        .join("defend_patch_skip_writes")
                         .join("object.json"),
                 )
                 .expect("defending skip writes should load");
@@ -5576,7 +5555,7 @@ mod tests {
                 let review_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("defend-patch-review")
+                        .join("defend_patch_review")
                         .join("object.json"),
                 )
                 .expect("defend-patch-review trigger should load");
@@ -5587,7 +5566,7 @@ mod tests {
                 let security_trigger = read_pack_json_defaults(
                     &pack
                         .join("event_triggers")
-                        .join("defend-patch-security-review")
+                        .join("defend_patch_security_review")
                         .join("object.json"),
                 )
                 .expect("defend-patch-security-review trigger should load");
@@ -5596,7 +5575,7 @@ mod tests {
                     "{ _and: [ { workspace_id: { _neq: null } }, { workspace_id: { _ne: \"\" } } ] }"
                 );
                 let skip_prompt =
-                    std::fs::read_to_string(pack.join("tasks/defend-patch-skip-task/prompt.md"))
+                    std::fs::read_to_string(pack.join("tasks/defend_patch_skip_task/prompt.md"))
                         .expect("skip prompt should load");
                 assert!(
                     !skip_prompt.contains("workspace_id=none"),
@@ -5604,12 +5583,12 @@ mod tests {
                 );
             }
 
-            let patch_or_execute = if pack_name == "defending-code" {
-                pack.join("tasks/defend-patch-task/prompt.md")
-            } else if pack_name == "grok-tui-port" {
-                pack.join("tasks/port-implement-task/prompt.md")
+            let patch_or_execute = if pack_name == "defending_code" {
+                pack.join("tasks/defend_patch_task/prompt.md")
+            } else if pack_name == "grok_tui_port" {
+                pack.join("tasks/port_implement_task/prompt.md")
             } else {
-                pack.join("tasks/maintenance-execute-task/prompt.md")
+                pack.join("tasks/maintenance_execute_task/prompt.md")
             };
             let prompt = std::fs::read_to_string(patch_or_execute)
                 .unwrap_or_else(|error| panic!("{pack_name} worker prompt: {error}"));
@@ -5627,7 +5606,7 @@ mod tests {
 
     #[test]
     fn every_checked_in_demo_pack_loads() {
-        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo");
+        let demo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
         let mut packs = std::fs::read_dir(&demo)
             .expect("read demo directory")
             .map(|entry| entry.expect("read demo entry").path())
@@ -5643,7 +5622,7 @@ mod tests {
 
     #[test]
     fn omitted_tool_package_keeps_the_minimal_ceiling() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
         let manifest = load_manifest_defaults(&pack).expect("pipeline pack should load");
         assert_eq!(manifest.init.tool_package, "minimal");
         assert!(manifest.init.tool_root.is_none());
@@ -5651,10 +5630,10 @@ mod tests {
 
     #[test]
     fn pipeline_stage_declares_controller_owned_goal_with_least_privilege_tools() {
-        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo/pipeline");
+        let pack = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/pipeline");
         load_manifest_defaults(&pack).expect("pipeline pack should load");
 
-        let task = read_pack_json_defaults(&pack.join("tasks/exp-stage1-task/object.json"))
+        let task = read_pack_json_defaults(&pack.join("tasks/exp_stage1_task/object.json"))
             .expect("stage-1 task");
         assert!(task["goal_objective_template"]
             .as_str()
@@ -5662,7 +5641,7 @@ mod tests {
         assert_eq!(task["goal_token_budget"], 50_000);
 
         let selection =
-            read_pack_json_defaults(&pack.join("tool-selections/exp-tools-stage1/object.json"))
+            read_pack_json_defaults(&pack.join("tool_selections/exp_tools_stage1/object.json"))
                 .expect("stage-1 tool selection");
         assert_eq!(selection["enable_meta_tools"], false);
         assert_eq!(selection["enable_goal_tools"], true);
@@ -5894,8 +5873,9 @@ mod tests {
 
     #[test]
     fn lsp_rust_pack_declares_readonly_ceiling_and_tool_calls() {
-        let pack = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust");
-        let manifest = load_manifest_defaults(&pack).expect("demo/lsp-rust experiment.json");
+        let pack =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/lsp_rust");
+        let manifest = load_manifest_defaults(&pack).expect("packs/lsp_rust experiment.json");
         assert_eq!(manifest.init.tool_package, "readonly");
         assert!(manifest
             .init

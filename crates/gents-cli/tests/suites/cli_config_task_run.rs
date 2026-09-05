@@ -59,7 +59,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -72,7 +72,10 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         .to_string();
 
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let task_path = root
+        .join("tasks")
+        .join(task_id.replace('-', "_"))
+        .join("object.json");
     write_json_file(
         &task_path,
         &serde_json::json!({
@@ -267,7 +270,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -280,7 +283,10 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         .to_string();
 
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
-    let task_path = root.join("tasks").join(&task_id).join("object.json");
+    let task_path = root
+        .join("tasks")
+        .join(task_id.replace('-', "_"))
+        .join("object.json");
     write_json_file(
         &task_path,
         &serde_json::json!({

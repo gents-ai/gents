@@ -21,6 +21,12 @@ pub(crate) use load::load_manifest_root;
 pub(crate) use provision::apply_workspace_provisioning;
 pub(crate) use write::write_manifest_root;
 
+/// Filesystem spelling is not document identity. Kebab-case IDs remain
+/// unchanged in the database; their authored/exported handles use underscores.
+pub(crate) fn document_handle(id: &str) -> String {
+    id.replace('-', "_")
+}
+
 use serde::de::{DeserializeOwned, Error as _};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -141,8 +147,8 @@ pub(crate) struct DesiredEventTrigger {
     pub(crate) concurrency: String,
 }
 
-pub(crate) const CALLBACK_BINDINGS_DIR: &str = "callback-bindings";
-pub(crate) const REPOSITORY_PLACEMENTS_DIR: &str = "repository-placements";
+pub(crate) const CALLBACK_BINDINGS_DIR: &str = "callback_bindings";
+pub(crate) const REPOSITORY_PLACEMENTS_DIR: &str = "repository_placements";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]

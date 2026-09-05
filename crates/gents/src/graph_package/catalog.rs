@@ -10,7 +10,7 @@ use crate::graph_pipeline::{
     COMPILER_VERSION,
 };
 
-include!(concat!(env!("OUT_DIR"), "/bundled_graph_packages.rs"));
+use crate::pack::{bundled_graph_package_asset, BUNDLED_GRAPH_PACKAGE_NAMES};
 
 #[derive(Deserialize)]
 struct BundledToolSurface {
@@ -36,6 +36,8 @@ pub struct PackageExternalDependency {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphPackageManifest {
+    #[serde(flatten)]
+    pub metadata: crate::pack::PackMetadata,
     pub manifest_version: u32,
     pub name: String,
     pub version: String,
@@ -183,6 +185,14 @@ fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
 }
 
 fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
+    let distribution = crate::pack::resolve_pack(package_name)?;
+    anyhow::ensure!(
+        matches!(
+            distribution.manifest.metadata.kind,
+            crate::pack::PackKind::Graph
+        ),
+        "pack is not a graph"
+    );
     let manifest_bytes = bundled_graph_package_asset(package_name, "manifest.json")
         .with_context(|| format!("bundled package {package_name:?} has no manifest"))?;
     let manifest: GraphPackageManifest = serde_json::from_slice(manifest_bytes)?;
@@ -281,8 +291,8 @@ mod tests {
 
     #[test]
     fn bundled_catalog_is_read_only_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("code-review").unwrap();
-        assert_eq!(graph_package_catalog().unwrap().len(), 2);
+        let package = load_bundled_graph_package("code_review").unwrap();
+        assert!(graph_package_catalog().unwrap().len() >= 2);
         assert!(package.package_digest.starts_with("sha256:"));
         for path in &package.asset_paths {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
@@ -359,7 +369,7 @@ mod tests {
 
     #[test]
     fn web_deep_research_package_is_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        let package = load_bundled_graph_package("web_deep_research").unwrap();
         assert!(package.package_digest.starts_with("sha256:"));
         assert_eq!(package.manifest.external_dependencies.len(), 1);
         let dependency = &package.manifest.external_dependencies[0];
@@ -487,10 +497,10 @@ mod tests {
 
     #[test]
     fn web_deep_research_handoffs_are_typed_and_correlation_scoped() {
-        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        let package = load_bundled_graph_package("web_deep_research").unwrap();
         for (asset, fields) in [
             (
-                "tasks/research-plan-task/prompt.md",
+                "tasks/research_plan_task/prompt.md",
                 &[
                     "question",
                     "scope",
@@ -501,7 +511,7 @@ mod tests {
                 ][..],
             ),
             (
-                "tasks/research-investigate-task/prompt.md",
+                "tasks/research_investigate_task/prompt.md",
                 &[
                     "assignment_id",
                     "question",
@@ -513,7 +523,7 @@ mod tests {
                 ][..],
             ),
             (
-                "tasks/research-report-task/prompt.md",
+                "tasks/research_report_task/prompt.md",
                 &[
                     "title",
                     "thesis",
@@ -532,7 +542,7 @@ mod tests {
             }
         }
         let adjudicate_prompt = package
-            .asset_text("tasks/research-adjudicate-task/prompt.md")
+            .asset_text("tasks/research_adjudicate_task/prompt.md")
             .unwrap();
         assert!(adjudicate_prompt.contains("{{ group.correlation_value }}"));
         assert!(adjudicate_prompt.contains("{{ group.count }}"));
@@ -540,11 +550,11 @@ mod tests {
 
         let expected_surface_tools = [
             (
-                "datastore-tool-surfaces/research-plan-writes/object.json",
+                "datastore_tool_surfaces/research_plan_writes/object.json",
                 vec!["write_research_assignment", "write_research_plan"],
             ),
             (
-                "datastore-tool-surfaces/research-investigate-writes/object.json",
+                "datastore_tool_surfaces/research_investigate_writes/object.json",
                 vec![
                     "write_research_source",
                     "write_research_claim",
@@ -553,7 +563,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore-tool-surfaces/research-adjudicate-io/object.json",
+                "datastore_tool_surfaces/research_adjudicate_io/object.json",
                 vec![
                     "read_research_investigation",
                     "read_research_source",
@@ -564,7 +574,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore-tool-surfaces/research-report-io/object.json",
+                "datastore_tool_surfaces/research_report_io/object.json",
                 vec![
                     "read_report_research_source",
                     "read_report_research_evidence",
@@ -608,7 +618,7 @@ mod tests {
 
         let investigator: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/research-investigate-writes/object.json")
+                .asset_text("datastore_tool_surfaces/research_investigate_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -683,10 +693,10 @@ mod tests {
 
     #[test]
     fn code_review_scan_writes_use_the_trigger_area_id() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         let surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -715,10 +725,10 @@ mod tests {
 
     #[test]
     fn code_review_evidence_handoff_is_compact_and_correlation_scoped() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         let surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-recon-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_recon_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -756,18 +766,18 @@ mod tests {
         assert!(expected_total.required);
         assert_eq!(expected_total.fill, None);
         let recon_prompt = package
-            .asset_text("tasks/review-recon-task/prompt.md")
+            .asset_text("tasks/review_recon_task/prompt.md")
             .unwrap();
         assert!(recon_prompt.contains("{{ doc.evidence_summary }}"));
         assert!(!recon_prompt.contains("{{ doc.evidence }}"));
         let scan_prompt = package
-            .asset_text("tasks/review-scan-task/prompt.md")
+            .asset_text("tasks/review_scan_task/prompt.md")
             .unwrap();
         assert!(!scan_prompt.contains("{{ doc.evidence }}"));
 
         let scan_surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -830,10 +840,10 @@ mod tests {
 
     #[test]
     fn code_review_stages_use_role_specific_least_privilege_tools() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         for asset in [
-            "tool-selections/review-recon-tools/object.json",
-            "tool-selections/review-scan-tools/object.json",
+            "tool_selections/review_recon_tools/object.json",
+            "tool_selections/review_scan_tools/object.json",
         ] {
             let selection: Value =
                 serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
@@ -848,7 +858,7 @@ mod tests {
             assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
 
-        let asset = "tool-selections/review-verify-tools/object.json";
+        let asset = "tool_selections/review_verify_tools/object.json";
         let selection: Value = serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
         assert_eq!(selection["enable_file_tools"], true, "{asset}");
         assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
@@ -870,7 +880,7 @@ mod tests {
 
     #[test]
     fn code_review_stages_are_durable_goal_controlled() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         for capability in &package.capabilities {
             let task: Value =
                 serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();

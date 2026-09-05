@@ -190,7 +190,7 @@ impl BoundModel {
     /// Build the `models` object of a `session/new` result.
     ///
     /// The audited wire shape nests `availableModels` and `currentModelId`
-    /// under a `models` key — see `recon-input/audited-ledger.json`
+    /// under a `models` key — see `recon_input/audited_ledger.json`
     /// (`session:new-load`) and the live probe's
     /// `session["models"]["currentModelId"]` read. Splicing the catalog keys
     /// into the top-level result object breaks the pager, so the nesting is
