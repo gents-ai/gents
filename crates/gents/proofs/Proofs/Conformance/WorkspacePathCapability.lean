@@ -143,4 +143,57 @@ private def migrationCaseJson (c : MigrationCase) :=
   "{\"name\":" ++ jsonString c.name ++ ",\"legacy_source\":" ++ boolString c.legacySource ++
   ",\"stored\":" ++ optionalCapJson c.stored ++ ",\"expected\":" ++ optionalCapJson c.expected ++ "}"
 def migrationCasesJson := jsonArray (migrationCases.map migrationCaseJson)
+
+structure AliasCase where
+  name : String
+  changedPaths : List String
+  basePaths : List String
+  treePaths : List String
+  changedPrefixes : List (String × String)
+  basePrefixes : List (String × String)
+  treePrefixes : List (String × String)
+  expected : Bool
+  deriving DecidableEq, Repr
+
+def aliasCases : List AliasCase :=
+  [ ⟨"unrelated_exotic_and_colliding_entries_unchanged",
+      ["allowed.rs"], ["allowed.rs","odd:name","[draft]","Old/a","old/b"],
+      ["allowed.rs","odd:name","[draft]","Old/a","old/b"],
+      [("allowed.rs","allowed.rs")],
+      [("allowed.rs","allowed.rs"),("odd:name","odd:name"),("[draft]","[draft]"),
+       ("Old","old"),("Old/a","old/a"),("old","old"),("old/b","old/b")],
+      [("allowed.rs","allowed.rs"),("odd:name","odd:name"),("[draft]","[draft]"),
+       ("Old","old"),("Old/a","old/a"),("old","old"),("old/b","old/b")], true⟩
+  , ⟨"changed_file_alias_denied", ["allowed.rs"], ["Allowed.rs"],
+      ["Allowed.rs","allowed.rs"], [("allowed.rs","allowed.rs")],
+      [("Allowed.rs","allowed.rs")],[("Allowed.rs","allowed.rs"),("allowed.rs","allowed.rs")], false⟩
+  , ⟨"changed_directory_alias_denied", ["src/new.rs"], ["Src/other.rs"],
+      ["Src/other.rs","src/new.rs"], [("src","src"),("src/new.rs","src/new.rs")],
+      [("Src","src"),("Src/other.rs","src/other.rs")],
+      [("Src","src"),("Src/other.rs","src/other.rs"),("src","src"),("src/new.rs","src/new.rs")], false⟩
+  , ⟨"exact_shared_directory_allowed", ["src/new.rs"], ["src/other.rs"],
+      ["src/other.rs","src/new.rs"], [("src","src"),("src/new.rs","src/new.rs")],
+      [("src","src"),("src/other.rs","src/other.rs")],
+      [("src","src"),("src/other.rs","src/other.rs"),("src","src"),("src/new.rs","src/new.rs")], true⟩
+  , ⟨"empty_delta_ignores_existing_aliases", [], ["Old","old"], ["Old","old"], [],
+      [("Old","old"),("old","old")], [("Old","old"),("old","old")], true⟩ ]
+
+theorem alias_cases_replay : ∀ c ∈ aliasCases,
+    (changedAliasesCanonical c.changedPrefixes c.basePrefixes &&
+     changedAliasesCanonical c.changedPrefixes c.treePrefixes) = c.expected := by decide
+
+private def pathsJson (paths : List String) := jsonArray (paths.map jsonString)
+private def prefixesJson (prefixes : List (String × String)) :=
+  jsonArray (prefixes.map fun p => jsonArray [jsonString p.1, jsonString p.2])
+private def aliasCaseJson (c : AliasCase) :=
+  "{\"name\":" ++ jsonString c.name ++
+  ",\"changed_paths\":" ++ pathsJson c.changedPaths ++
+  ",\"base_paths\":" ++ pathsJson c.basePaths ++
+  ",\"tree_paths\":" ++ pathsJson c.treePaths ++
+  ",\"changed_prefixes\":" ++ prefixesJson c.changedPrefixes ++
+  ",\"base_prefixes\":" ++ prefixesJson c.basePrefixes ++
+  ",\"tree_prefixes\":" ++ prefixesJson c.treePrefixes ++
+  ",\"expected\":" ++ boolString c.expected ++ "}"
+def aliasCasesJson := jsonArray (aliasCases.map aliasCaseJson)
+
 end Conformance.WorkspacePathCapabilityContracts

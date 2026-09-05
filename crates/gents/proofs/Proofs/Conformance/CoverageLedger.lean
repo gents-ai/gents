@@ -875,6 +875,11 @@ def caseCoverage : List CoverageEntry :=
       "gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "workspace_path_alias_cases"
+      "WorkspacePathAliasCases"
+      "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "graph_logical_invocation_cases"
       "GraphLogicalInvocationCases"
       "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection")

@@ -17,6 +17,21 @@ structure Change where
   canonical : Bool := true
   deriving DecidableEq, Repr
 
+/-- Host supplies literal component prefixes and their compatibility alias keys.
+Only prefixes of changed paths must be unambiguous against both full trees;
+unchanged entries are observations, never newly admitted capability paths. -/
+def changedAliasesCanonical (changed tree : List (String × String)) : Bool :=
+  changed.all fun wanted => tree.all fun existing =>
+    wanted.2 != existing.2 || wanted.1 == existing.1
+
+theorem empty_delta_ignores_tree_aliases (tree : List (String × String)) :
+    changedAliasesCanonical [] tree = true := rfl
+
+theorem changed_alias_collision_rejected (left right key : String)
+    (different : left ≠ right) :
+    changedAliasesCanonical [(left,key)] [(right,key)] = false := by
+  simp [changedAliasesCanonical, different]
+
 def deltaAuthorized (cap : WorkspacePathCapability) (delta : List Change) : Bool :=
   match cap with
   | .unrestrictedCompatibility => true

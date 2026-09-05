@@ -84,6 +84,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_workspace_path_capability_cases_drive_real_git_executor",
         },
         ConformanceConsumer::RustTest {
+            id: "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta",
+            package: "gents",
+            source_path: "crates/gents/src/workspace/tests/path_alias_contract.rs",
+            module_path: "workspace::tests::path_alias_contract",
+            function: "generated_workspace_path_alias_cases_drive_real_git_delta",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows",
             package: "gents-migration",
             source_path: "crates/gents-migration/tests/workspace_path_capability.rs",
