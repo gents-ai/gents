@@ -537,7 +537,7 @@ async fn assert_resumed_wait_cascades_callers_interrupt(later_turn: bool) {
     wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
     let waiting_request_id = if later_turn {
-        update_request_state(db.node.as_ref(), &request_id, "completed", "completed").await;
+        update_request_state(db.node.as_ref(), &request_id, "completed").await;
         let caller = "later-waiting-request".to_owned();
         create_parent_request(
             db.node.as_ref(),

@@ -18,14 +18,8 @@ async fn shared_cancel_subagent_controls_prior_turn_only_for_the_same_session_pr
     let receipt = skip_reason_json(spawn);
     let child = receipt["child_request_id"].as_str().unwrap();
     wait_for_child_session_id(fixture.db.node.as_ref(), child).await;
-    update_request_state(fixture.db.node.as_ref(), child, "processing", "processing").await;
-    update_request_state(
-        fixture.db.node.as_ref(),
-        &fixture.request_id,
-        "completed",
-        "completed",
-    )
-    .await;
+    update_request_state(fixture.db.node.as_ref(), child, "processing").await;
+    update_request_state(fixture.db.node.as_ref(), &fixture.request_id, "completed").await;
 
     create_parent_request_with_extra_fields(
         fixture.db.node.as_ref(),
@@ -108,13 +102,7 @@ async fn shared_cancel_subagent_controls_prior_turn_only_for_the_same_session_pr
         Some("cancelled")
     );
 
-    update_request_state(
-        fixture.db.node.as_ref(),
-        child,
-        "interrupted",
-        "interrupted",
-    )
-    .await;
+    update_request_state(fixture.db.node.as_ref(), child, "interrupted").await;
     assert!(matches!(
         gents::cancel_session_subagent(fixture.db.node.clone(), "later-session-turn", child, None)
             .await

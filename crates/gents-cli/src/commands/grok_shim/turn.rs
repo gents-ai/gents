@@ -3070,7 +3070,6 @@ mod tests {
                     caused_by_parent_tool_call_id: "call-1"
                     caused_by_parent_tool_call_doc_id: "{escaped_tool_doc}"
                     content: "child work"
-                    status: "pending"
                     lifecycle_state: "{escaped_state}"
                     backend_id: ""
                     execution_origin: "interactive"

@@ -8,10 +8,10 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::{graphql::escape_graphql_string, skills::prompt_slash_skill_selection};
 use gents_protocol::client_protocol::RequestLifecycleState;
-use gents_protocol::row::AgentRequestRow;
 use gents_protocol::graphql::{
     execute_graphql_async, graphql_error_is_retryable, GraphqlRequestOptions,
 };
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::Value;
 
@@ -1329,6 +1329,7 @@ mod tests {
             "/vuln-scan review this",
             Some("session"),
             None,
+            Some("stable-request".into()),
             RequestSubmitOptions {
                 temperature: Some(0.35),
                 top_p: Some(0.92),
@@ -1343,7 +1344,6 @@ mod tests {
                 retry_root_request: Some("root".into()),
                 retry_key: Some("goal-submit:key".into()),
             },
-            Some("stable-request".into()),
         )
         .await;
         server.abort();

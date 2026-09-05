@@ -5707,7 +5707,7 @@ mod tests {
         let stage = StageResult {
             trigger_id: "recon".into(),
             request_id: "request-1".into(),
-            lifecycle_state: "completed".into(),
+            lifecycle_state: RequestLifecycleState::Completed,
             caused_by_source_doc_id: None,
         };
         let expected = StageToolSequenceExpectation {

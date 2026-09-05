@@ -443,7 +443,10 @@ fn page_descendant_edges(
 /// lookup. Match requester absence exactly and never grant cross-turn access
 /// to missing agent/session identities. Physical bridges are checked separately.
 fn same_session_owner(caller: &AgentRequestRow, owner: &AgentRequestRow) -> bool {
-    caller.session_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+    caller
+        .session_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
         && caller
             .agent_did
             .as_deref()
