@@ -1,7 +1,11 @@
 import Proofs.InferenceCall.ControllerBookkeeping
 
 /-! One backend's serial-drain registry refinement. `key` is the canonical
-resource configuration, excluding display/catalog metadata. Counts represent
+resource configuration, including queue capacity and credential identity but
+excluding display/catalog metadata. Rust's queue-depth equality is therefore
+part of key equality, not an omitted admission parameter. The keyed digest is
+a runtime representation of this identity, not a cryptographic theorem here.
+Counts represent
 real in-flight controller ownership, not persisted InferenceCall rows. -/
 namespace InferenceCall.Registry
 

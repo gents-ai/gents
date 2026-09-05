@@ -3764,6 +3764,7 @@ dependencies = [
  "gents-lean-contract",
  "gents-migration",
  "gents-protocol",
+ "hmac",
  "hostname",
  "identity",
  "jsonschema",
