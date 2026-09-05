@@ -17,8 +17,10 @@ gents pack run pipeline --http-port 19191 --keep-home
 
 `pack install` resolves bundled assets by name, without a source checkout.
 Graph packs use the runtime graph installer; document packs use schema-first
-desired-state application. Neither seeds inference nor prunes unrelated
-configuration. Asset-only packs are materialized beneath `<home>/packs/`.
+desired-state application. Neither submits scenario seed documents nor prunes
+unrelated configuration. Enabled schedules and triggers can execute when their
+configuration is applied to a serving node; installation is not a dry run.
+Asset-only packs are materialized beneath `<home>/packs/`.
 Declared graph dependencies are installed before the document pack; this is
 not an atomic multi-package transaction. Failures remain visible and installs
 can be retried through the existing owners.
