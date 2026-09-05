@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits",
+            package: "gents",
+            source_path: "crates/gents/src/admission/registry_contract_tests.rs",
+            module_path: "admission::registry::contract_tests",
+            function: "generated_inference_registry_cases_drive_real_permits",
+        },
+        ConformanceConsumer::RustTest {
             id: "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy",
             package: "gents",
             source_path: "crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs",

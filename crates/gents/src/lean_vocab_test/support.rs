@@ -39,6 +39,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) provider_eof_cases: Vec<LeanProviderEofCase>,
     pub(crate) request_execution_lease_cases: Vec<LeanRequestExecutionLeaseCase>,
     pub(crate) request_execution_lease_trace_cases: Vec<LeanRequestExecutionLeaseTraceCase>,
+    pub(crate) inference_registry_cases: Vec<serde_json::Value>,
     pub(crate) trigger_dispatch_case_count: usize,
     pub(crate) trigger_dispatch_cases: Vec<LeanTriggerDispatchCase>,
     pub(crate) trigger_group_case_count: usize,

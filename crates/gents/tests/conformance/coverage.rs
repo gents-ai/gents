@@ -512,6 +512,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RequestExecutionLeaseCases".to_string(),
         ));
     }
+    if !snapshot.inference_registry_cases.is_empty() {
+        emitted.insert((
+            "inference_registry_cases".to_string(),
+            "InferenceRegistryCases".to_string(),
+        ));
+    }
     if !snapshot.request_execution_lease_trace_cases.is_empty() {
         emitted.insert((
             "request_execution_lease_trace_cases".to_string(),
@@ -1184,6 +1190,7 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
 
     let valid_categories = [
+        "inference_registry_cases",
         "request_execution_lease_cases",
         "request_execution_lease_trace_cases",
         "provider_eof_cases",

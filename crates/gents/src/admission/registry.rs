@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
@@ -11,6 +11,10 @@ use super::config::BackendAdmissionConfig;
 use super::controller::{BackendAdmissionController, InferenceCallRecord};
 use super::permit::AdmissionPermit;
 use super::persistence::persist_terminal_call;
+
+#[cfg(test)]
+#[path = "registry_contract_tests.rs"]
+mod contract_tests;
 
 #[derive(Clone)]
 pub(crate) struct AdmissionRegistry {
@@ -59,7 +63,11 @@ impl AdmissionRegistry {
             .expect("AdmissionRegistry state lock poisoned");
         state.prune_drained();
 
-        let desired_ids = configs.keys().cloned().collect::<HashSet<_>>();
+        // Rebuild pending work from this complete desired snapshot while the
+        // registry mutex excludes drain callbacks. Only the install helper
+        // below consumes it and constructs replacement controllers.
+        state.pending.clear();
+
         let active_ids = state.active.keys().cloned().collect::<Vec<_>>();
         for backend_id in active_ids {
             let desired = configs
@@ -69,33 +77,7 @@ impl AdmissionRegistry {
                 (Some(active), Some(config)) if active.matches(config) => {
                     state.active.insert(backend_id, active);
                 }
-                (Some(active), Some(config)) => {
-                    active.close();
-                    if active.is_drained() {
-                        state.active.insert(
-                            backend_id.clone(),
-                            BackendAdmissionController::new(
-                                generation,
-                                config.clone(),
-                                Arc::downgrade(&self.inner),
-                            ),
-                        );
-                    } else {
-                        state
-                            .draining
-                            .entry(backend_id.clone())
-                            .or_default()
-                            .push(active);
-                        state.pending.insert(
-                            backend_id,
-                            PendingControllerConfig {
-                                generation,
-                                config: config.clone(),
-                            },
-                        );
-                    }
-                }
-                (Some(active), None) => {
+                (Some(active), _) => {
                     active.close();
                     if !active.is_drained() {
                         state
@@ -104,21 +86,13 @@ impl AdmissionRegistry {
                             .or_default()
                             .push(active);
                     }
-                    state.pending.remove(&backend_id);
                 }
                 (None, _) => {}
             }
         }
 
         for (backend_id, config) in configs {
-            if !config.is_available() || !desired_ids.contains(backend_id) {
-                state.pending.remove(backend_id);
-                continue;
-            }
-            if state.active.contains_key(backend_id) {
-                continue;
-            }
-            if state.has_draining(backend_id) {
+            if config.is_available() && !state.active.contains_key(backend_id) {
                 state.pending.insert(
                     backend_id.clone(),
                     PendingControllerConfig {
@@ -126,16 +100,7 @@ impl AdmissionRegistry {
                         config: config.clone(),
                     },
                 );
-                continue;
             }
-            state.active.insert(
-                backend_id.clone(),
-                BackendAdmissionController::new(
-                    generation,
-                    config.clone(),
-                    Arc::downgrade(&self.inner),
-                ),
-            );
         }
 
         let pending_ids = state.pending.keys().cloned().collect::<Vec<_>>();
