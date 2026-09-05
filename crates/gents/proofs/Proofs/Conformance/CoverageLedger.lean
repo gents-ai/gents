@@ -837,6 +837,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "graph_failure_attribution_traces"
+      "GraphFailureAttributionTraces"
+      "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
+      "graph-pipeline" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "graph_pipeline_validation_cases"
       "GraphPipelineValidationCases"
       "conformance::graph_pipeline::generated_validation_cases_fence_whole_graph_compilation_gate")
