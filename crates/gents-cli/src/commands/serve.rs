@@ -947,6 +947,7 @@ pub(crate) async fn serve_with_control(
             &probe_client,
             &backend_health,
             &probe_options,
+            identity.did(),
         )
         .await;
         tracing::debug!(
