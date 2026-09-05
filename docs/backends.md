@@ -20,7 +20,7 @@ agent loop itself.
 | `XaiGrokOAuth` | Grok CLI subscription proxy (`cli-chat-proxy.grok.com`); Responses by default, `openai_wire: chat_completions` honored (the proxy serves both; the official client picks per model) | `OAuthCredential` document (`provider=xai-oauth`), refreshed by owner runtime | SSE | Function tools through rig | Not forced (several Grok models reject `reasoning.effort`) | Sets `store: false` when absent (Responses); injects Grok-CLI identity headers (`x-xai-token-auth`, `x-authenticateresponse`, `x-grok-client-*`, User-Agent) + bearer on every wire | Adds missing SSE `Content-Type` when omitted | Unit tests for headers/bearer/wire; live replay planned by #545 |
 | `OpenRouter` | Chat Completions | API key | SSE | Function tools through rig | Provider-dependent | Adds OpenRouter provider preference `require_parameters: true` | Standard rig OpenRouter handling | Planned by #545 |
 | local OpenAI-compatible servers | Responses or Chat Completions depending on server support | Usually none/local key | SSE varies by server | Function tools when server supports them | Reasoning parser support varies; Chat Completions sends `enable_thinking` for vLLM-style servers | Same as `OpenAiCompatible`; operators may need Chat Completions fallback for servers without `/v1/responses` | Standard rig OpenAI handling | Planned by #545 |
-| `ClaudeCliSubscription` | Anthropic Messages HTTP (`POST /v1/messages`), the single Claude wire; `/v1/models` discovery with the credential bearer (endpoint placeholder `claude-cli://subscription`) | `OAuthCredential` document (`provider=claude-subscription`), written by `gents claude-login`, refreshed by owner runtime | Messages SSE, parsed incrementally into the owned loop | Tool-capable: gents tools map onto `tool_use`; unmapped names fail closed; `tools` omitted when the surface is empty | No sampling keys sent | `system[0]` = Claude Code identity block, then preamble and System rows; two `cache_control` breakpoints; full Claude model IDs on `InferenceBackend.models[]`; a behavior with no enabled credential is not runnable; health = credential-expiry read (not fleet HTTP) | `text_delta` / `tool_use` blocks → owned completion/stream path | Unit + SSE fixtures, Lean-generated body/stream witnesses; live only with a logged-in credential |
+| `ClaudeCliSubscription` | Anthropic Messages HTTP (`POST /v1/messages`), the single Claude wire; `/v1/models` discovery with the credential bearer (endpoint placeholder `claude-cli://subscription`) | `OAuthCredential` document (`provider=claude-subscription`), written by `gents claude-login`, refreshed by owner runtime | Messages SSE, parsed incrementally into the owned loop | Tool-capable: gents tools map onto `tool_use`; unmapped names fail closed; `tools` omitted when the surface is empty | No sampling keys sent | `system[0]` = Claude Code identity block, then preamble and System rows; two `cache_control` breakpoints; Claude model IDs on `InferenceBackend.models[]`; a behavior with no enabled credential is not runnable; health = credential-expiry read (not fleet HTTP) | `text_delta` / `tool_use` blocks → owned completion/stream path | Unit + SSE fixtures, Lean-generated body/stream witnesses; live only with a logged-in credential |
 
 ## Probe lifecycle and health (#640)
 
@@ -39,8 +39,7 @@ different places:
   10s timeout) probes the models endpoint of every enabled, probeable backend
   and keeps an in-memory `BackendHealthMap`. Hysteresis is K=3 consecutive
   failures to demote to `unhealthy`, one success to promote back (formal
-  model: `crates/gents/proofs/Proofs/BackendHealth/`). Backends that
-  `skips_fleet_http_probe()` are never HTTP-probed (no `/models` round-trip).
+  model: `crates/gents/proofs/Proofs/BackendHealth/`).
   Agent-scoped OAuth backends (`ChatGptCodex`, `XaiGrokOAuth`,
   `ClaudeCliSubscription`) skip the HTTP round-trip; instead each cycle reads
   the enabled `OAuthCredential` document for the runtime principal's DID and
@@ -127,7 +126,8 @@ as an `OAuthCredential` DefraDB document scoped by `agent_did` and provider
   ```
 
   Add `--write` to replace the backend's `models[]` with the returned set; nothing
-  is written without it. The returned set is what the account can actually use — it is gated server-side by
+  is written without it, and an empty result is never written (`models[]` is left
+  unchanged). The returned set is what the account can actually use — it is gated server-side by
   plan and by the advertised Codex client version (see below). An empty list usually
   means a stale client version.
 - **Change the model:** pass `--model-name <slug>` to `init`, or update the behavior
@@ -191,7 +191,7 @@ places. Regression tests pin these details:
   refresh token to OpenAI's token endpoint, writes the rotated tokens back to
   `OAuthCredential`, then sends the request. A refresh that fails is not
   retried for 60 seconds: the bearer returns the same failure without another
-  POST, though a re-login is picked up as soon as the document changes.
+  POST, though a re-login is picked up when the cooldown lapses (≤60 s).
 - If the provider rejects a live request with 401/403, the bearer is invalidated
   so the next request forces a refresh rather than replaying a clock-fresh but
   server-revoked token. Runtime errors still tell the operator to rerun
@@ -265,7 +265,9 @@ subscription tokens. Use the CLI chat proxy for OAuth.
 ### Credential storage & fleet
 
 Same document model and owner-only refresh rules as ChatGPT Codex
-(`OAuthCredential`, agent-scoped filter, rotating refresh token). ChatGPT-only
+(`OAuthCredential`, agent-scoped filter, rotating refresh token), including the
+60 s refresh-failure cooldown: a failed refresh is served without another POST
+until it lapses, and a re-login is picked up when it does. ChatGPT-only
 fields (`chatgpt_plan_type`, `is_fedramp`) stay null/false for Grok.
 
 ### Diagnostics
@@ -288,10 +290,12 @@ lists the seat's models (`GET /v1/models` with the credential bearer). Turns are
 tool-capable: gents tools map onto `tool_use` and unmapped names fail closed.
 `system[0]` is the Claude Code identity block, followed by the gents preamble
 and System rows, with two `cache_control` breakpoints; `tools` is omitted when
-the surface is empty, and no sampling keys are sent. Full Claude model IDs are
-advertised from `InferenceBackend.models[]` (default behavior model
-`claude-sonnet-5`; catalog also lists `claude-opus-5`,
-`claude-haiku-4-5-20251001`, `claude-fable-5`).
+the surface is empty, and no sampling keys are sent. Claude model IDs are
+advertised from `InferenceBackend.models[]`: the preset default is
+`claude-sonnet-5`; run `gents config backend discover-models --write` to load
+what the subscription serves. The Messages URI is pinned to `api.anthropic.com`
+regardless of the backend document's endpoint; only discovery honours an
+`http(s)://` endpoint override (a test seam; the presets write the placeholder).
 
 Design notes:
 
@@ -311,26 +315,36 @@ Design notes:
    No `:8787`, no dummy API key:
 
    ```sh
-   gents config backend create \
-     --backend-preset claude-cli-subscription \
+   gents config backend set \
+     --graphql http://127.0.0.1:9191/api/v0/graphql \
+     --backend-id <did>:backend \
      --name "Claude Max subscription" \
-     --model-name claude-sonnet-5
+     --backend-preset claude-cli-subscription \
+     --max-concurrent 1
 
-   # models[] is seeded with the single --model-name (same for `gents init`).
-   # After step 2 (login), replace it with the seat's catalog (GET /v1/models
-   # with the credential bearer); without --write nothing is written:
+   # `backend set` seeds models[] with the literal `default`; only
+   # `gents init --backend-preset claude-cli-subscription` seeds a slug (the
+   # preset default, claude-sonnet-5). After step 2 (login), fill the catalog
+   # from the seat (GET /v1/models with the credential bearer); without
+   # --write nothing is written:
    gents config backend discover-models --write \
-     --graphql <url> --backend-id <id> --agent-did did:key:...
-   gents config behavior set --model-name claude-sonnet-5
+     --graphql http://127.0.0.1:9191/api/v0/graphql \
+     --backend-id <did>:backend --agent-did <did>
+   gents config behavior set \
+     --graphql http://127.0.0.1:9191/api/v0/graphql \
+     --agent-did <did> --behavior-id <id> \
+     --backend-id <did>:backend --model-name claude-sonnet-5
    ```
 
    Migrating an older A2a `OpenAiCompatible` + `http://127.0.0.1:8787/v1` row:
 
    ```sh
    gents config backend set \
+     --graphql http://127.0.0.1:9191/api/v0/graphql \
      --backend-id "$CLAUDE_BACKEND_ID" \
+     --name "Claude Max subscription" \
      --backend-preset claude-cli-subscription \
-     --name "Claude Max subscription"
+     --max-concurrent 1
    # Then `discover-models --write` as above; clear openai_wire_api / api_key.
    # `gents config backend set --backend-preset claude-cli-subscription`
    # clears sticky openai_wire_api on update.
@@ -391,11 +405,11 @@ Design notes:
 | Symptom | Meaning | Fix |
 | --- | --- | --- |
 | Behavior not runnable: `… has no enabled OAuthCredential for agent <did>; run gents claude-login --agent-did <did>` (agent snapshot gate; `gents diagnose` reports the same condition as `checks.claude_auth.guidance` with different wording) | No enabled `claude-subscription` credential for the behavior's principal | `gents claude-login --agent-did <did>` |
-| `gents diagnose` reports `checks.claude_auth.ok == false` with `Claude OAuth credential for agent <did> … is expired or revoked. Re-authenticate with gents claude-login --agent-did <did>`, while its overall `status` stays `ok` and health stays `healthy` | Access token past `access_token_expires_at` on a credential that still has a refresh token (the ordinary state of an agent idle past the ~8 h token lifetime); `diagnose` reports freshness itself but only a credential it cannot read degrades `status`, and the probe counts the credential healthy (it never refreshes) | Nothing: the next request refreshes. If that refresh fails, see the "Refresh fails" row |
+| `gents diagnose` reports `checks.claude_auth.ok == false` with `Claude OAuth credential for agent <did> … is expired or revoked. Re-authenticate with gents claude-login --agent-did <did>`, while its overall `status` stays `ok` and health stays `healthy` | Access token past `access_token_expires_at` on a credential that still has a refresh token (the ordinary state of an idle agent; Anthropic sets the lifetime via `expires_in`, and gents falls back to 1 h when it is absent); `diagnose` reports freshness itself but only a credential it cannot read degrades `status`, and the probe counts the credential healthy (it never refreshes) | Nothing: the next request refreshes. If that refresh fails, see the "Refresh fails" row |
 | Health fails with `reading OAuthCredential: OAuthCredential missing refresh_token`; K=3 demotes | Credential has no refresh token (the probe never refreshes); this is the decoder's read error and carries no login hint | `gents claude-login --agent-did <did>`; the next passing cycle promotes the backend |
 | Refresh fails at the token endpoint | Refresh grant expired or revoked | `gents claude-login --agent-did <did>`; until then the failure is served for 60 s at a time without another POST, and the new credential is used on the next request |
 | Inference **401** | Anthropic rejected the bearer | The bearer is invalidated once and that request fails; the next request refreshes. A 401 that survives a refresh means re-login |
-| Unexpected Claude spend | A Claude-backed behavior with an enabled credential on a running server | Set the credential `enabled: false` or disable the backend document for dry runs |
+| Unexpected Claude spend | A Claude-backed behavior with an enabled credential on a running server | Disable the backend document for dry runs. Setting the credential `enabled: false` also stops spend, but the lookup filters `enabled = true`, so the credential then reads as missing: K=3 demotes the backend to `unhealthy` and `gents diagnose` reports `status: degraded` |
 | Turn fails closed on `tool_use` (unmapped name) | Claude emitted a tool that is not on the behavior's gents surface | Add the tool to the behavior's surface or leave it off; names are never aliased |
 | `discover-models` fails with `requires an OAuthCredential document` or a 401/403 from `api.anthropic.com/v1/models` | No enabled credential for the agent DID, or Anthropic rejected the bearer | `gents claude-login --agent-did <did>`, then rerun |
 | Fleet probe demotes Claude over HTTP | Old binary still HTTP-probes the placeholder | Rebuild/restart; `ClaudeCliSubscription` skips fleet HTTP probes |
@@ -409,7 +423,9 @@ refresh token, and the agent-scoped replication filter
 `OAuthCredential:agent_did=did:key:...` — Claude rows need no new rule.
 ChatGPT-only fields (`chatgpt_plan_type`, `is_fedramp`, `id_token`,
 `account_id`) stay null/false. Nothing is read from `~/.claude` or any Claude
-CLI configuration.
+CLI configuration. The token fields are plaintext: anyone who can reach the
+node's GraphQL endpoint can read them (`gents query` refuses the token fields;
+raw GraphQL does not).
 
 ### Token refresh
 
@@ -423,7 +439,7 @@ CLI configuration.
   through replication.
 - A refresh that fails (revoked grant, endpoint error) is not retried for
   60 seconds: the bearer returns the same failure without another POST, and a
-  re-login is picked up as soon as the document changes.
+  re-login is picked up when the cooldown lapses (≤60 s).
 - A `401` invalidates the cached bearer once; that request fails and the next
   one refreshes rather than replaying a clock-fresh but server-revoked token.
 - An agent idle past `access_token_expires_at` stays routable: the health probe
@@ -459,7 +475,8 @@ staleness independently because it checks token freshness itself.
   credential bearer (plus `anthropic-version` / `anthropic-beta`) and prints
   `discovered_models`; with `--write` it replaces `models[]` with them
   (`models_written`), superseding the single `--model-name` that `gents init`
-  and `backend create` seed. Without `--write` nothing is written. 401/403
+  seeds (`backend set` seeds the literal `default`). Without `--write` nothing
+  is written. 401/403
   appends `gents claude-login` guidance.
   `gents diagnose` does not run discovery for this backend.
 - There is no `claude-auth-probe`; `gents diagnose` is the read-only check.
@@ -481,6 +498,10 @@ staleness independently because it checks token freshness itself.
 - Effort / thinking is not sent on the Claude wire: the Messages body carries
   no sampling keys, so reasoning-effort settings have no effect on Claude
   turns.
+- `/v1/models` is fetched with `?limit=100` and `has_more` is ignored, so a
+  catalog over 100 models would be truncated.
+- `discover-models --write` skips the write when discovery returns zero models
+  (`write_skipped` in the output); `models[]` is never wiped.
 
 ### Unified prod suite
 
@@ -488,8 +509,8 @@ Fold Claude into the **prod** home so Codex `/model` lists Grok **and** Claude
 together:
 
 1. Register a `ClaudeCliSubscription` backend on prod `~/.gents` with endpoint
-   `claude-cli://subscription` and the four full Claude model IDs. Keep the
-   existing Grok/`XaiGrokOAuth` backend. Do **not** point Claude at
+   `claude-cli://subscription` and the model IDs `discover-models` returns.
+   Keep the existing Grok/`XaiGrokOAuth` backend. Do **not** point Claude at
    `http://127.0.0.1:8787/v1`.
 2. Sign in for the prod agent: `gents claude-login --agent-did <prod DID>`.
 3. Start the server:

@@ -1,5 +1,7 @@
 # SPEC: Claude spike Phase 4 — Document verification
 
+**Historical (superseded 2026-09-04).** The proxy / process-seat design described here no longer exists; the shipped design is `docs/backends.md` § Claude subscription (agent-scoped `OAuthCredential`, Messages HTTP).
+
 Parent: [`claude-subscription-spike.md`](./claude-subscription-spike.md)
 
 ## Goal

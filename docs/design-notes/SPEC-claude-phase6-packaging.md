@@ -1,5 +1,7 @@
 # SPEC: Claude spike Phase 6 — Path A packaging
 
+**Historical (superseded 2026-09-04).** The proxy / process-seat design described here no longer exists; the shipped design is `docs/backends.md` § Claude subscription (agent-scoped `OAuthCredential`, Messages HTTP).
+
 Parent: [`claude-subscription-spike.md`](./claude-subscription-spike.md)  
 Unlocked by: Phase 5 verdict **Go** (`.scratch/claude-spike/logs/phase5-verdict.md`)
 

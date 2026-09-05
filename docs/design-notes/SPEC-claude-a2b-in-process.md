@@ -1,5 +1,7 @@
 # SPEC: Claude A2b — first-class in-process provider
 
+**Historical (superseded 2026-09-04).** The proxy / process-seat design described here no longer exists; the shipped design is `docs/backends.md` § Claude subscription (agent-scoped `OAuthCredential`, Messages HTTP).
+
 **Date:** 2026-09-01  
 **Status:** Locked for implementation (human decisions 2026-09-01)  
 **Parent:** [`claude-subscription-spike.md`](./claude-subscription-spike.md)  
