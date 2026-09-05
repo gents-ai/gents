@@ -128,6 +128,30 @@ pub(crate) async fn resolve_request_workspace_overlay(
     artifact_requested: bool,
     operator_tool_root: Option<&Path>,
 ) -> Result<Option<WorkspaceOverlay>> {
+    resolve_request_workspace_overlay_on_host(
+        node,
+        request,
+        execution_generation,
+        artifact_requested,
+        operator_tool_root,
+        workspace_write_sandbox_enforced(),
+    )
+    .await
+}
+
+async fn resolve_request_workspace_overlay_on_host(
+    node: &Arc<EmbeddedNode>,
+    request: &AgentRequest,
+    execution_generation: &str,
+    artifact_requested: bool,
+    operator_tool_root: Option<&Path>,
+    sandbox_enforced: bool,
+) -> Result<Option<WorkspaceOverlay>> {
+    // Enforce the model's host eligibility before database reads, binding,
+    // grant allocation or provider dispatch, not after a wasted model turn.
+    if artifact_requested && !sandbox_enforced {
+        bail!("artifact_write requires an enforceable artifact sandbox on this host");
+    }
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         if artifact_requested {
             bail!("artifact_write requires a sealed ReadOnly workspace binding");
@@ -183,7 +207,7 @@ pub(crate) async fn resolve_request_workspace_overlay(
             local_deployment_id: &local_deployment_id,
             operator_tool_root,
             enabled_workspace_roots: &enabled_workspace_roots,
-            workspace_write_sandbox_enforced: workspace_write_sandbox_enforced(),
+            workspace_write_sandbox_enforced: sandbox_enforced,
             live_tree_hash: live_tree_hash.as_deref(),
         },
     )?;

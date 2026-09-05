@@ -86,6 +86,11 @@ theorem admitted_explicit {m : ExecutionMode} {c : Option ArtifactBinding}
 theorem missing_binding_denied (m : ExecutionMode) : admitArtifact m none = false := by
   simp [admitArtifact]
 
+/-- Host eligibility is an admission premise, not merely a later spawn check. -/
+theorem unsupported_host_denied (m : ExecutionMode) (c : ArtifactBinding)
+    (h : c.sandboxEnforced = false) : admitArtifact m (some c) = false := by
+  simp [admitArtifact, ArtifactBinding.eligible, h]
+
 theorem admitted_checks {m : ExecutionMode} {c : ArtifactBinding}
     (h : admitArtifact m (some c) = true) :
     c.authority = .readOnly ∧ c.state = .sealed ∧ c.sealMatches = true ∧
