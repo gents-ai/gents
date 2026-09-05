@@ -158,7 +158,13 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
             "a production Pending writer bypassed AgentRequestCreate"
         );
         assert!(
-            source.contains("AgentRequestCreate") || source.contains("write_pending_agent_request"),
+            source.contains("AgentRequestCreate")
+                || source.contains("write_pending_agent_request")
+                // #1336: queue/mutation.rs and queue/goal_continuation.rs no
+                // longer spell "AgentRequestCreate" at all — they build a
+                // RequestSpec and construct through
+                // build_request/build_signed_request/sign_request instead.
+                || source.contains("RequestSpec"),
             "a production Pending writer lost its canonical signed authoring seam"
         );
     }
@@ -179,11 +185,46 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!signed_direct_materializer.contains("add_AgentRequest(input:"));
     assert!(!signed_direct_materializer.contains("status: \"processing\""));
     assert!(signed_direct_materializer.contains("Arc<dyn crate::identity::AgentIdentity>"));
-    assert!(signed_direct_materializer.contains("AgentRequestCreate::base"));
+    // #1336: this site now builds and signs its AgentRequestCreate through
+    // the shared constructor rather than hand-rolling
+    // AgentRequestCreate::base(...) itself.
+    assert!(signed_direct_materializer.contains("build_signed_request"));
     assert!(signed_direct_materializer.contains("verify_fresh_local_self_request"));
     assert!(signed_direct_materializer.contains("claim_with_identity"));
     assert!(!oneshot.contains("add_AgentRequest(input:"));
     assert!(oneshot.contains("behavior.principal_identity().clone()"));
+
+    // #1336: materialize.rs's build_request is the sole owner of
+    // AgentRequestCreate::base construction in this crate; every other
+    // in-crate writer builds through build_request/build_signed_request
+    // instead of calling AgentRequestCreate::base itself. (gents-cli and
+    // gents-desktop-core author their own AgentRequestCreate values
+    // independently of this crate's constructor and are out of #1336's
+    // scope, so they are not checked here.)
+    assert_eq!(
+        materialize.matches("AgentRequestCreate::base(").count(),
+        1,
+        "materialize.rs's build_request must be this crate's only direct AgentRequestCreate::base call"
+    );
+    for (name, source) in [
+        (
+            "lifecycle/queue/mutation.rs",
+            include_str!("../../src/lifecycle/queue/mutation.rs"),
+        ),
+        (
+            "lifecycle/queue/goal_continuation.rs",
+            include_str!("../../src/lifecycle/queue/goal_continuation.rs"),
+        ),
+        (
+            "tool_call_lifecycle/subagent_request.rs",
+            include_str!("../../src/tool_call_lifecycle/subagent_request.rs"),
+        ),
+    ] {
+        assert!(
+            !source.contains("AgentRequestCreate::base("),
+            "{name} bypassed the shared build_request/build_signed_request constructor"
+        );
+    }
 }
 
 #[test]

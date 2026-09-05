@@ -19,6 +19,8 @@ pub(crate) mod queue;
 mod recovery;
 mod rows;
 mod task_title;
+#[cfg(test)]
+pub(crate) mod test_support;
 mod transition;
 
 pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};

@@ -1,5 +1,10 @@
 use super::*;
 
+use crate::lifecycle::materialize::{
+    build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
+};
+use crate::lifecycle::TriggerLineage;
+
 pub(super) async fn session_request_create_mutation(
     parent: &AgentRequest,
     behavior_id: &str,
@@ -19,27 +24,31 @@ pub(super) async fn session_request_create_mutation(
             &parent.agent_did,
             &parent.request_id,
         );
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id,
-        &parent.agent_did,
-        &parent.agent_did,
-        behavior_id,
-        &parent.session_id,
-        content,
-        execution_origin.as_str(),
-        created_at,
-        admission,
-    );
-    create.metadata = Some(metadata.to_string());
-    create.retry_key = retry_key.map(ToOwned::to_owned);
-    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-    create.subagent_depth = parent.subagent_depth;
-    create.caused_by_parent_request_id = Some(parent.request_id.clone());
-    create.caused_by_parent_request_doc_id = Some(parent.doc_id.clone());
-    create.caused_by_parent_tool_call_id = None;
-    create.caused_by_parent_tool_call_doc_id = None;
-    create.caused_by_correlation = parent.caused_by_correlation.clone();
-    create.caused_by_trigger_context = parent.caused_by_trigger_context.clone();
-    crate::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let identity = RequestIdentity {
+        request_id: request_id.to_string(),
+        agent_did: parent.agent_did.clone(),
+        behavior_id: behavior_id.to_string(),
+        session_id: parent.session_id.clone(),
+        content: content.to_string(),
+        execution_origin,
+        created_at: created_at.to_string(),
+    };
+    let spec = RequestSpec {
+        trigger_lineage: TriggerLineage {
+            correlation: parent.caused_by_correlation.clone(),
+            trigger_context: parent.caused_by_trigger_context.clone(),
+            ..Default::default()
+        },
+        subagent: Some(ParentLink {
+            depth: parent.subagent_depth,
+            parent_request_id: parent.request_id.clone(),
+            parent_request_doc_id: parent.doc_id.clone(),
+            ..Default::default()
+        }),
+        metadata: Some(metadata.to_string()),
+        retry_key: retry_key.map(ToOwned::to_owned),
+        ..RequestSpec::new(identity, admission)
+    };
+    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     create.graphql_mutation().map_err(anyhow::Error::msg)
 }
