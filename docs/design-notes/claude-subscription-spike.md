@@ -1,5 +1,7 @@
 # Spike: Claude subscription as OpenAI-compatible completer
 
+**Historical (superseded 2026-09-04).** The proxy / process-seat design described here no longer exists; the shipped design is `docs/backends.md` § Claude subscription (agent-scoped `OAuthCredential`, Messages HTTP).
+
 Pinned decisions for proving whether a Claude Code / Claude subscription seat
 can back gents' **owned completion loop** without a native Anthropic provider
 crate. Companion to `xai-grok-oauth-spike.md` (different seat, same thesis:
@@ -50,9 +52,9 @@ Opportunistic “just one quick test” is forbidden.
 | 1 | Phase 3/4 tool surface | **Text-only / no-tools behavior.** Tool bridging is out of spike scope. |
 | 2 | Model slug | Advertise **`claude-plan`**. Proxy may map internally to a Claude `--model` later; client always sees `claude-plan`. |
 | 3 | Artifact root | Worktree-local **`.scratch/claude-spike/`** (gitignored). Prod `~/.gents` / prod Claude home untouched. |
-| 4 | Phase 6 packaging | **Unlocked by Phase 5 Go.** Path A only for v1: CLI-login + loopback completer; **no oat / no `OAuthCredential`**. See `SPEC-claude-phase6-packaging.md`. |
+| 4 | Phase 6 packaging | **Unlocked by Phase 5 Go.** Path A only for v1: CLI-login + loopback completer; **no oat / no `OAuthCredential`**. See `SPEC-claude-phase6-packaging.md`. [Superseded 2026-09-04 (PR 5): inverted — the Claude oat lives in an agent-scoped `OAuthCredential` written by `gents claude-login`.] |
 | 5 | Billing gate placement | **Phase 5** (after gents-shaped traffic exists). Not a Phase 0/1 blocker. |
-| 6 | Provider shape | **A2b:** `ClaudeCliSubscription` + process seat (`--claude-config-dir`); placeholder endpoint `claude-cli://subscription`. Historical Path A used stock `OpenAiCompatible` + Chat Completions + dummy API key → loopback proxy. |
+| 6 | Provider shape | **A2b:** `ClaudeCliSubscription` + process seat (`--claude-config-dir`); placeholder endpoint `claude-cli://subscription`. Historical Path A used stock `OpenAiCompatible` + Chat Completions + dummy API key → loopback proxy. [Superseded 2026-09-04 (PR 5): no process seat; auth is the agent-scoped `OAuthCredential` and the wire is Messages HTTP.] |
 | 7 | Completer-only enforcement | Claude Code **2.1.x**: `--tools ""` + reject stdout `tool_use`. Do **not** use `--bare` (forces API-key auth). |
 
 ## Capability map / phases

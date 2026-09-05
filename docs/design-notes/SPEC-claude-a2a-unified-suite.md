@@ -1,5 +1,7 @@
 # SPEC: Claude A2a — unified prod suite via managed proxy
 
+**Historical (superseded 2026-09-04).** The proxy / process-seat design described here no longer exists; the shipped design is `docs/backends.md` § Claude subscription (agent-scoped `OAuthCredential`, Messages HTTP).
+
 **Date:** 2026-08-31  
 **Status:** Complete (A2a-0..A2a-4 human-confirmed 2026-09-01)  
 **Parent:** [`claude-subscription-spike.md`](./claude-subscription-spike.md)  
