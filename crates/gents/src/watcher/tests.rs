@@ -910,3 +910,25 @@ async fn pending_requests_skip_workspace_bound_rows_owned_elsewhere() {
         vec!["req-owned"]
     );
 }
+
+fn canonical_request_row_with_depth(depth: i64) -> gents_protocol::row::AgentRequestRow {
+    gents_protocol::row::AgentRequestRow {
+        doc_id: Some("doc-depth".to_string()),
+        request_id: "req-depth".to_string(),
+        agent_did: Some("did:key:z-depth".to_string()),
+        session_id: Some("session-depth".to_string()),
+        content: Some("depth test".to_string()),
+        created_at: Some("2026-09-04T00:00:00Z".to_string()),
+        subagent_depth: Some(depth),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn canonical_request_conversion_rejects_negative_or_overflowing_depth() {
+    for depth in [-1, i64::MAX] {
+        let error = AgentRequest::try_from(canonical_request_row_with_depth(depth))
+            .expect_err("invalid schema-width conversion must fail");
+        assert!(error.to_string().contains("subagent_depth"), "{error:#}");
+    }
+}

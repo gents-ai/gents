@@ -168,7 +168,9 @@ pub(super) fn request_backed_conversation_summaries(
                 session_id,
                 title: None,
                 preview_text: normalize_optional(request.content.as_deref()),
-                status: normalize_optional(request.lifecycle_state.as_deref()),
+                status: request
+                    .lifecycle_state
+                    .map(|state| state.as_str().to_string()),
                 behavior_id: normalize_optional(request.behavior_id.as_deref()),
                 latest_request_id: Some(latest_request_id.clone()),
                 task_id: task_tag.as_ref().map(|tag| tag.task_id.clone()),
@@ -292,7 +294,9 @@ pub(super) fn task_run_history(
             request_id: request.request_id.clone(),
             session_id: normalize_optional(request.session_id.as_deref()),
             behavior_id: normalize_optional(request.behavior_id.as_deref()),
-            lifecycle_state: normalize_optional(request.lifecycle_state.as_deref()),
+            lifecycle_state: request
+                .lifecycle_state
+                .map(|state| state.as_str().to_string()),
             execution_origin: normalize_optional(request.execution_origin.as_deref()),
             caused_by_trigger_id: normalize_optional(request.caused_by_trigger_id.as_deref()),
             caused_by_trigger_kind: normalize_optional(request.caused_by_trigger_kind.as_deref()),

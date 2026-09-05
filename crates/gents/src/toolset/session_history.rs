@@ -5,6 +5,7 @@ use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -115,7 +116,7 @@ pub struct SessionCompactionEvent {
 #[derive(Debug, Deserialize)]
 struct RequestScanEnvelope {
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,7 +124,7 @@ struct SessionDetailEnvelope {
     #[serde(rename = "AgentSession", default)]
     sessions: Vec<SessionRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentMessage", default)]
     messages: Vec<MessageRow>,
     #[serde(rename = "CompactionEntry", default)]
@@ -133,7 +134,7 @@ struct SessionDetailEnvelope {
 #[derive(Debug, Deserialize)]
 struct InvestigationEnvelope {
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentToolCall", default)]
     tool_calls: Vec<ToolCallDetailRow>,
     #[serde(rename = "CompactionEntry", default)]
@@ -151,7 +152,7 @@ struct InvestigationCallsEnvelope {
     #[serde(rename = "InferenceCall", default)]
     inference_calls: Vec<InferenceDetailRow>,
     #[serde(rename = "AgentRequest", default)]
-    child_requests: Vec<RequestRow>,
+    child_requests: Vec<AgentRequestRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -168,32 +169,6 @@ struct SessionRow {
     ended: Option<String>,
     #[serde(default)]
     status: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default, rename = "_docID")]
-    doc_id: Option<String>,
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    terminalized_at: Option<String>,
-    #[serde(default)]
-    failure_reason: Option<String>,
-    #[serde(default)]
-    deadline: Option<String>,
-    #[serde(default)]
-    retry_count: Option<i64>,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -625,8 +600,10 @@ fn build_session_investigation(
         .requests
         .iter()
         .map(|request| SessionRequestEvent {
-            request_id: clean(request.request_id.as_ref()).unwrap_or_default(),
-            lifecycle_state: clean(request.lifecycle_state.as_ref()),
+            request_id: request.request_id.trim().to_string(),
+            lifecycle_state: request
+                .lifecycle_state
+                .map(|state| state.as_str().to_string()),
             created_at: clean(request.created_at.as_ref()),
             terminalized_at: clean(request.terminalized_at.as_ref()),
             failure_reason: clean(request.failure_reason.as_ref()),
@@ -807,6 +784,7 @@ fn request_scan_query(agent_did: &str) -> String {
     format!(
         r#"{{
             AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {REQUEST_SCAN_LIMIT}) {{
+                request_id
                 session_id
             }}
         }}"#
@@ -876,7 +854,7 @@ fn decode<T: serde::de::DeserializeOwned>(data: Option<&Value>, label: &str) -> 
     serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
 }
 
-fn recent_session_ids(requests: &[RequestRow], limit: usize) -> Vec<String> {
+fn recent_session_ids(requests: &[AgentRequestRow], limit: usize) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut ids = Vec::new();
     for request in requests {
@@ -928,15 +906,22 @@ fn build_session_rows(
                     .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_ref()))),
                 status: session
                     .and_then(|row| clean(row.status.as_ref()))
-                    .or_else(|| latest_request.and_then(|row| clean(row.lifecycle_state.as_ref()))),
+                    .or_else(|| {
+                        latest_request
+                            .and_then(|row| row.lifecycle_state)
+                            .map(|state| state.as_str().to_string())
+                    }),
                 created_at: started_at
                     .clone()
                     .or_else(|| latest_request_created_at.clone()),
                 started_at,
                 ended_at: session.and_then(|row| clean(row.ended.as_ref())),
-                latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_ref())),
+                latest_request_id: latest_request
+                    .map(|row| row.request_id.trim().to_string())
+                    .filter(|request_id| !request_id.is_empty()),
                 latest_request_lifecycle_state: latest_request
-                    .and_then(|row| clean(row.lifecycle_state.as_ref())),
+                    .and_then(|row| row.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 latest_request_created_at,
                 request_count: aggregate
                     .map(|aggregate| aggregate.request_count)
@@ -959,7 +944,7 @@ fn build_session_rows(
 #[derive(Debug, Clone, Default)]
 struct SessionAggregate {
     request_count: i64,
-    latest_request: Option<RequestRow>,
+    latest_request: Option<AgentRequestRow>,
     message_count: i64,
     latest_message_at: Option<String>,
     compaction_count: i64,
@@ -967,7 +952,7 @@ struct SessionAggregate {
 }
 
 fn aggregate_by_session(
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     messages: Vec<MessageRow>,
     compactions: Vec<CompactionRow>,
     session_id_set: &HashSet<String>,

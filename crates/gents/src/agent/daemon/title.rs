@@ -60,7 +60,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // scope and this provider call would be the one that stays uncaptured.
         let capture_factory = self.rendered_request_capture_factory.clone();
 
-        tokio::spawn(async move {
+        // Keep this large, deeply nested completion future off the caller's
+        // stack. Canonical request rows make the surrounding request future
+        // intentionally broad, and constructing both futures inline can
+        // exceed Tokio's default worker stack before this task is spawned.
+        tokio::spawn(Box::pin(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
                 crate::rendered_request::scope::scope_request_if_configured(
                     capture_context,
@@ -82,7 +86,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     "failed to generate conversation title"
                 );
             }
-        });
+        }));
     }
 }
 

@@ -39,7 +39,10 @@ async fn foreground_spawn_subagent_waits_for_child_completion() {
         db.node.as_ref(),
         &agent_did,
         &child.request_id,
-        &child.session_id,
+        child
+            .session_id
+            .as_deref()
+            .expect("child AgentRequest is missing session_id"),
         "foreground final answer",
     )
     .await;

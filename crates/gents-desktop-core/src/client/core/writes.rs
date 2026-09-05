@@ -504,9 +504,9 @@ impl ClientCore {
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch.request_row(request_id).is_some_and(|row| {
-            RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref())
-        });
+        let terminal = patch
+            .request_row(request_id)
+            .is_some_and(|row| row.is_terminal());
         let version = self.store.merge_chat_patch(patch);
         tracing::debug!(
             target: "gents_desktop_core::replication",
@@ -1752,11 +1752,6 @@ struct LocalHydrationStartEvidence {
     nonterminal_request_present: bool,
 }
 
-#[derive(Deserialize)]
-struct HydrationLifecycleRow {
-    lifecycle_state: Option<String>,
-}
-
 fn should_start_session_hydration_request(
     progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     session_id: &str,
@@ -1792,17 +1787,26 @@ async fn load_local_hydration_start_evidence(
         .execute(&format!(
             r#"{{
                 AgentSession(filter: {{ {scope} }}, limit: 1) {{ _docID }}
-                AgentRequest(filter: {{ {scope} }}) {{ lifecycle_state }}
+                AgentRequest(filter: {{ {scope} }}) {{ request_id lifecycle_state }}
             }}"#
         ))
         .await;
     gents::graphql::ensure_no_errors(&response, "query local hydration start evidence")?;
+    local_hydration_start_evidence_from_response(&response)
+}
+
+fn local_hydration_start_evidence_from_response(
+    response: &defra_node::QueryResponse,
+) -> Result<LocalHydrationStartEvidence> {
     let owned_session_present =
-        !gents::graphql::rows::<HydrationDocIdRow>(&response, "AgentSession")?.is_empty();
+        !gents::graphql::rows::<HydrationDocIdRow>(response, "AgentSession")?.is_empty();
     let nonterminal_request_present =
-        gents::graphql::rows::<HydrationLifecycleRow>(&response, "AgentRequest")?
+        gents::graphql::rows::<AgentRequestRow>(response, "AgentRequest")?
             .iter()
-            .any(|row| !RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()));
+            .any(|row| {
+                !row.lifecycle_state
+                    .is_some_and(RequestLifecycleState::is_terminal)
+            });
     Ok(LocalHydrationStartEvidence {
         owned_session_present,
         nonterminal_request_present,
@@ -2193,6 +2197,24 @@ mod delete_source_tests {
                 nonterminal_request_present: true,
             },
         ));
+    }
+
+    #[test]
+    fn hydration_start_evidence_rejects_unknown_request_lifecycle_state() {
+        let response = defra_node::QueryResponse::success(json!({
+            "AgentSession": [{ "_docID": "session-1" }],
+            "AgentRequest": [{
+                "request_id": "request-1",
+                "lifecycle_state": "notARequestState"
+            }]
+        }));
+
+        let error = local_hydration_start_evidence_from_response(&response)
+            .expect_err("unknown lifecycle state must fail at the row boundary");
+        assert!(
+            format!("{error:#}").contains("notARequestState"),
+            "{error:#}"
+        );
     }
 
     #[test]

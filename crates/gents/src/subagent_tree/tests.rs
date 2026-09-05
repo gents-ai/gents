@@ -69,7 +69,7 @@ fn root_response() -> Value {
                     "session_id": "sess-root",
                     "agent_did": "deployment-a",
                     "behavior_id": "amy-general",
-                    "lifecycle_state": "Processing",
+                    "lifecycle_state": "processing",
                     "subagent_depth": 0,
                     "caused_by_parent_request_id": null,
                     "caused_by_parent_tool_call_id": null,

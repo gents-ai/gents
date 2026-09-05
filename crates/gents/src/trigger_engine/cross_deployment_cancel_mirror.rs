@@ -3,9 +3,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -193,7 +194,9 @@ impl CrossDeploymentCancelMirror {
         if child.agent_did.as_deref() != Some(snapshot.local_did.as_str()) {
             return Ok(());
         }
-        if RequestLifecycleState::is_terminal_str(child.lifecycle_state.as_deref())
+        if child
+            .lifecycle_state
+            .is_some_and(RequestLifecycleState::is_terminal)
             || child.interrupt_requested_at.is_some()
         {
             self.mirrored.insert(dedupe_key);
@@ -264,7 +267,7 @@ impl CrossDeploymentCancelMirror {
                 AgentRequest(
                     filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                     limit: 1
-                ) {{ agent_did }}
+                ) {{ request_id agent_did }}
             }}"#
         );
         let response = self.node.execute(&query).await;
@@ -274,18 +277,17 @@ impl CrossDeploymentCancelMirror {
                 response.errors
             );
         }
-        Ok(response
+        let value = response
             .data
             .as_ref()
             .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("agent_did"))
-            .and_then(|v| v.as_str())
-            .map(String::from))
+            .context("AgentRequest field missing from cancel mirror parent query")?;
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+            .context("decode parent AgentRequest rows for cancel mirror")?;
+        Ok(rows.into_iter().next().and_then(|row| row.agent_did))
     }
 
-    async fn load_child_request(&self, child_request_id: &str) -> Result<Option<ChildRequestRow>> {
+    async fn load_child_request(&self, child_request_id: &str) -> Result<Option<AgentRequestRow>> {
         let escaped = escape_graphql_string(child_request_id);
         let query = format!(
             r#"{{
@@ -293,6 +295,7 @@ impl CrossDeploymentCancelMirror {
                     filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                     limit: 1
                 ) {{
+                    request_id
                     agent_did
                     lifecycle_state
                     interrupt_requested_at
@@ -303,12 +306,13 @@ impl CrossDeploymentCancelMirror {
         if response.has_errors() {
             anyhow::bail!("cancel mirror child load failed: {:?}", response.errors);
         }
-        let rows: Vec<ChildRequestRow> = response
+        let value = response
             .data
             .as_ref()
             .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+            .context("AgentRequest field missing from cancel mirror child query")?;
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(value.clone())
+            .context("decode child AgentRequest rows for cancel mirror")?;
         Ok(rows.into_iter().next())
     }
 
@@ -369,13 +373,6 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
         let trimmed = value.trim();
         (!trimmed.is_empty()).then_some(trimmed)
     })
-}
-
-#[derive(Debug, Deserialize)]
-struct ChildRequestRow {
-    agent_did: Option<String>,
-    lifecycle_state: Option<String>,
-    interrupt_requested_at: Option<String>,
 }
 
 async fn write_child_interrupt_requested_at(

@@ -35,6 +35,7 @@ use gents::{
     ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
     DocumentRuntimeOptions, Gents, ToolCeiling,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use crate::support::fixtures::test_identity;
@@ -253,10 +254,7 @@ async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Resul
 }
 
 fn is_terminal(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "dead" | "interrupted" | "superseded"
-    )
+    RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 async fn fetch_lifecycle(node: &EmbeddedNode, request_id: &str) -> Option<String> {

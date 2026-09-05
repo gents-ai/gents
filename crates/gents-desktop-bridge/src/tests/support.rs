@@ -2,11 +2,8 @@ use std::sync::Arc;
 
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::{ClientCore, ClientCoreOptions, DesktopPaths};
+use gents_protocol::row::AgentRequestRow;
 use tempfile::TempDir;
-
-pub struct AgentRequestRowLite {
-    pub interrupt_requested_at: Option<String>,
-}
 
 pub async fn boot_core() -> (Arc<ClientCore>, TempDir) {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -334,7 +331,7 @@ pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore
     (core, tmp)
 }
 
-pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRowLite {
+pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> AgentRequestRow {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -342,6 +339,7 @@ pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> Agen
                 filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
+                request_id
                 interrupt_requested_at
             }}
         }}"#
@@ -361,15 +359,6 @@ pub async fn fetch_request_row(core: &Arc<ClientCore>, request_id: &str) -> Agen
         .and_then(|arr| arr.first())
         .cloned()
         .unwrap_or_else(|| panic!("fetch_request_row: request {request_id} not found"));
-
-    let interrupt_requested_at = row
-        .get("interrupt_requested_at")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned);
-
-    AgentRequestRowLite {
-        interrupt_requested_at,
-    }
+    serde_json::from_value(row)
+        .unwrap_or_else(|error| panic!("fetch_request_row: invalid request {request_id}: {error}"))
 }

@@ -1,15 +1,5 @@
 use super::*;
 
-#[derive(Debug, Deserialize)]
-pub(super) struct PendingQueueRow {
-    #[serde(rename = "_docID")]
-    pub(super) doc_id: String,
-    pub(super) request_id: Option<String>,
-    pub(super) session_id: Option<String>,
-    pub(super) execution_origin: Option<String>,
-    pub(super) metadata: Option<String>,
-}
-
 pub(super) fn queue_source_and_key_match(
     metadata: Option<&str>,
     source: QueueSource,
@@ -52,7 +42,12 @@ pub async fn reconcile_coalesced_pending_request(
     let escaped_agent_did = escape_graphql_string(agent_did);
     for duplicate in matching.iter().skip(1) {
         let terminalized_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-        let duplicate_doc_id = escape_graphql_string(&duplicate.doc_id);
+        let duplicate_doc_id = escape_graphql_string(
+            duplicate
+                .doc_id
+                .as_deref()
+                .context("pending AgentRequest row is missing _docID")?,
+        );
         let survivor_request_id = escape_graphql_string(&survivor.request_id);
         let mutation = format!(
             r#"mutation {{
@@ -91,7 +86,7 @@ async fn matching_coalesced_pending_requests(
     agent_did: &str,
     source: QueueSource,
     key: &str,
-) -> Result<Vec<PendingQueueRow>> {
+) -> Result<Vec<AgentRequestRow>> {
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
@@ -120,12 +115,7 @@ async fn matching_coalesced_pending_requests(
         );
     }
 
-    let rows: Vec<PendingQueueRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&response, "AgentRequest")?;
 
     Ok(rows
         .into_iter()
@@ -133,10 +123,10 @@ async fn matching_coalesced_pending_requests(
         .collect())
 }
 
-pub(super) fn queue_row_to_enqueued_request(row: &PendingQueueRow) -> Option<EnqueuedAgentRequest> {
+pub(super) fn queue_row_to_enqueued_request(row: &AgentRequestRow) -> Option<EnqueuedAgentRequest> {
     Some(EnqueuedAgentRequest {
-        doc_id: row.doc_id.clone(),
-        request_id: row.request_id.clone()?,
+        doc_id: row.doc_id.clone()?,
+        request_id: row.request_id.clone(),
         session_id: row.session_id.clone()?,
     })
 }

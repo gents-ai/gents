@@ -10,7 +10,7 @@ use gents::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
     ToolCeiling, ToolSelectionDocument,
 };
-use serde::Deserialize;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
@@ -110,13 +110,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ChildRequestRow {
-    request_id: String,
-    behavior_id: String,
-}
-
-async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
+async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
     let escaped = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -132,7 +126,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<ChildRequestRow>(&response, "AgentRequest") {
+        if let Some(row) = first_optional_row::<AgentRequestRow>(&response, "AgentRequest") {
             return row;
         }
         assert!(
@@ -199,7 +193,8 @@ async fn enabled_agent_spawns_local_child_and_list_reflects_it() {
         "child request_id must match"
     );
     assert_eq!(
-        child.behavior_id, running.behavior_id,
+        child.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str()),
         "child behavior_id must match parent behavior"
     );
 

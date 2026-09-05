@@ -936,6 +936,7 @@ mod tests {
         EnrollmentDecisionRecord, EnrollmentRequestRecord, ENROLLMENT_PROTOCOL_VERSION,
     };
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     use super::*;
     use crate::agent::p2p_reconcile::enrollment_store::{ActiveEnrollment, RevokedEnrollment};
@@ -1265,7 +1266,7 @@ mod tests {
         assert!(rejected.is_none());
         #[derive(Deserialize)]
         struct RejectedRow {
-            lifecycle_state: String,
+            lifecycle_state: RequestLifecycleState,
             claimed_at: Option<String>,
             failure_reason: Option<String>,
         }
@@ -1285,7 +1286,7 @@ mod tests {
         let rejected_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("rejected request row");
-        assert_eq!(rejected_row.lifecycle_state, "failed");
+        assert_eq!(rejected_row.lifecycle_state, RequestLifecycleState::Failed);
         assert!(rejected_row.claimed_at.is_none());
         assert!(rejected_row
             .failure_reason
@@ -1369,7 +1370,7 @@ mod tests {
         let pending_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("temporarily unavailable request row");
-        assert_eq!(pending_row.lifecycle_state, "pending");
+        assert_eq!(pending_row.lifecycle_state, RequestLifecycleState::Pending);
         assert!(pending_row.claimed_at.is_none());
         assert!(pending_row
             .failure_reason

@@ -1,5 +1,7 @@
 use super::lookup::{lookup_response_status_by_request_id, lookup_terminal_response_by_request_id};
 use super::*;
+use anyhow::Context;
+use gents_protocol::row::AgentRequestRow;
 
 impl RequestLifecycle {
     pub async fn recover_all(node: &EmbeddedNode, agent_did: &str) -> Result<RecoveryReport> {
@@ -83,35 +85,24 @@ impl RequestLifecycle {
             anyhow::bail!("querying terminal requests to re-drive: {:?}", resp.errors);
         }
 
-        let rows: Vec<serde_json::Value> = resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
-        let mut candidates: Vec<(String, String, String, u32)> = Vec::new();
-        for row in &rows {
-            let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
-            let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
+        let mut candidates: Vec<(String, String, RequestLifecycleState, u32)> = Vec::new();
+        for row in rows {
+            let doc_id = row
+                .doc_id
+                .context("terminal AgentRequest is missing _docID")?;
             let lifecycle_state = row
-                .get("lifecycle_state")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+                .lifecycle_state
+                .context("terminal AgentRequest is missing lifecycle_state")?;
             let attempts = row
-                .get("terminal_redrive_attempts")
-                .and_then(|value| value.as_u64())
-                .unwrap_or(TERMINAL_REDRIVE_CAP as u64) as u32;
-            if doc_id.is_empty() || lifecycle_state.is_empty() {
-                continue;
-            }
-            candidates.push((
-                doc_id.to_string(),
-                request_id.to_string(),
-                lifecycle_state.to_string(),
-                attempts,
-            ));
+                .terminal_redrive_attempts
+                .context("terminal AgentRequest is missing terminal_redrive_attempts")
+                .and_then(|attempts| {
+                    u32::try_from(attempts)
+                        .context("terminal AgentRequest terminal_redrive_attempts must fit in u32")
+                })?;
+            candidates.push((doc_id, row.request_id, lifecycle_state, attempts));
         }
 
         let scanned = candidates.len();
@@ -120,7 +111,7 @@ impl RequestLifecycle {
         for (doc_id, request_id, lifecycle_state, attempts) in &candidates {
             let next_attempts = attempts.saturating_add(1);
             let escaped_doc_id = escape_graphql_string(doc_id);
-            let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+            let escaped_lifecycle_state = escape_graphql_string(lifecycle_state.as_str());
             // Defense-in-depth: the candidate query is already `agent_did == self`
             // scoped, but keep the mutation itself owner-scoped too, matching the
             // queue.rs seam guards — a re-drive must never touch a foreign replica.
@@ -218,23 +209,23 @@ impl RequestLifecycle {
             anyhow::bail!("querying stuck requests: {:?}", resp.errors);
         }
 
-        let rows: Vec<serde_json::Value> = resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
+        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
         let mut report = TerminalRepairReport {
             scanned: rows.len(),
             ..Default::default()
         };
         for row in &rows {
-            let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
-            let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
-            let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-            let retry_count = row.get("retry_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            let doc_id = row
+                .doc_id
+                .as_deref()
+                .context("stuck AgentRequest is missing _docID")?;
+            let request_id = row.request_id.as_str();
+            let session_id = row
+                .session_id
+                .as_deref()
+                .context("stuck AgentRequest is missing session_id")?;
+            let retry_count = row.retry_count.unwrap_or(0);
             let terminal_response =
                 lookup_terminal_response_by_request_id(node, agent_did, request_id).await?;
             let Some(terminal_response) = terminal_response else {
@@ -471,27 +462,21 @@ async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str
         );
     }
 
-    let rows: Vec<serde_json::Value> = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
     let mut recovered = 0;
     for row in rows {
-        let request_doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
-        let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
-        let requester_did = row.get("requester_did").and_then(|v| v.as_str());
-        let behavior_id = row
-            .get("behavior_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let session_id = row.get("session_id").and_then(|v| v.as_str()).unwrap_or("");
-        if request_doc_id.is_empty() || request_id.is_empty() || session_id.is_empty() {
-            continue;
-        }
+        let request_doc_id = row
+            .doc_id
+            .as_deref()
+            .context("processing AgentRequest is missing _docID")?;
+        let request_id = row.request_id.as_str();
+        let requester_did = row.requester_did.as_deref();
+        let behavior_id = row.behavior_id.as_deref().unwrap_or("");
+        let session_id = row
+            .session_id
+            .as_deref()
+            .context("processing AgentRequest is missing session_id")?;
 
         if lookup_response_status_by_request_id(node, agent_did, request_id)
             .await?

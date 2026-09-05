@@ -15,6 +15,7 @@ use gents::{
     upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
     ToolCeiling, ToolSelectionDocument,
 };
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
@@ -115,19 +116,7 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ChildRequestRow {
-    request_id: String,
-    behavior_id: String,
-    content: String,
-    subagent_depth: Option<i64>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-}
-
-async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
+async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
     let escaped = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -149,7 +138,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<ChildRequestRow>(&response, "AgentRequest") {
+        if let Some(row) = first_optional_row::<AgentRequestRow>(&response, "AgentRequest") {
             return row;
         }
         assert!(
@@ -160,11 +149,6 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct RequestDeadlineRow {
-    deadline: Option<String>,
-}
-
 async fn wait_for_request_deadline(node: &EmbeddedNode, request_id: &str) {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
@@ -172,13 +156,13 @@ async fn wait_for_request_deadline(node: &EmbeddedNode, request_id: &str) {
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped}" }} }},
                 limit: 1
-            ) {{ deadline }}
+            ) {{ request_id deadline }}
         }}"#
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         let response = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<RequestDeadlineRow>(&response, "AgentRequest") {
+        if let Some(row) = first_optional_row::<AgentRequestRow>(&response, "AgentRequest") {
             if row.deadline.is_some_and(|value| !value.trim().is_empty()) {
                 return;
             }
@@ -270,8 +254,11 @@ async fn local_background_spawn_materializes_child_with_lineage_and_lists() {
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.behavior_id, running.behavior_id);
-    assert_eq!(child.content, "background child work");
+    assert_eq!(
+        child.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str())
+    );
+    assert_eq!(child.content.as_deref(), Some("background child work"));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),
@@ -380,7 +367,7 @@ async fn unmaterialized_background_child_stays_observable_in_list() {
         r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_child}" }} }}, limit: 1) {{ request_id behavior_id content subagent_depth caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind }} }}"#
     );
     let child_row =
-        first_optional_row::<ChildRequestRow>(&db.node.execute(&child_query).await, "AgentRequest");
+        first_optional_row::<AgentRequestRow>(&db.node.execute(&child_query).await, "AgentRequest");
     assert!(
         child_row.is_none(),
         "test premise: remote-target child must not materialize locally"
@@ -581,8 +568,11 @@ async fn local_foreground_spawn_materializes_child_via_source() {
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
     assert_eq!(child.request_id, child_request_id);
-    assert_eq!(child.behavior_id, running.behavior_id);
-    assert_eq!(child.content, "foreground child work");
+    assert_eq!(
+        child.behavior_id.as_deref(),
+        Some(running.behavior_id.as_str())
+    );
+    assert_eq!(child.content.as_deref(), Some("foreground child work"));
     assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
         child.caused_by_parent_request_id.as_deref(),

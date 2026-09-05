@@ -1,5 +1,6 @@
 use gents::graphql::escape_graphql_string;
 use gents::interrupt_request;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::{
@@ -134,23 +135,26 @@ async fn interrupt_request_drains_automated_wakeups_but_preserves_user_queue() {
         .unwrap();
 
     let parent = fetch_request_snapshot(&db.node, &parent_doc_id).await;
-    assert_eq!(parent.lifecycle_state, "pending");
+    assert_eq!(parent.lifecycle_state, RequestLifecycleState::Pending);
 
     let auto = fetch_request_snapshot(&db.node, &auto_doc_id).await;
-    assert_eq!(auto.lifecycle_state, "interrupted");
+    assert_eq!(auto.lifecycle_state, RequestLifecycleState::Interrupted);
     assert_eq!(
         auto.failure_reason,
         "automated wake-up drained because active request was interrupted"
     );
 
     let user = fetch_request_snapshot(&db.node, &user_doc_id).await;
-    assert_eq!(user.lifecycle_state, "pending");
+    assert_eq!(user.lifecycle_state, RequestLifecycleState::Pending);
 
     let interactive_auto = fetch_request_snapshot(&db.node, &interactive_auto_doc_id).await;
-    assert_eq!(interactive_auto.lifecycle_state, "pending");
+    assert_eq!(
+        interactive_auto.lifecycle_state,
+        RequestLifecycleState::Pending
+    );
 
     let plain = fetch_request_snapshot(&db.node, &plain_doc_id).await;
-    assert_eq!(plain.lifecycle_state, "pending");
+    assert_eq!(plain.lifecycle_state, RequestLifecycleState::Pending);
 }
 
 #[tokio::test]
@@ -181,5 +185,5 @@ async fn already_interrupted_request_still_drains_automated_wakeups() {
         .unwrap();
 
     let auto = fetch_request_snapshot(&db.node, &auto_doc_id).await;
-    assert_eq!(auto.lifecycle_state, "interrupted");
+    assert_eq!(auto.lifecycle_state, RequestLifecycleState::Interrupted);
 }

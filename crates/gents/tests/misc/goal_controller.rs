@@ -168,6 +168,10 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         admission,
     );
     parent.subagent_depth = 2;
+    parent.caused_by_parent_request_id = Some("grandparent-request".to_string());
+    parent.caused_by_parent_request_doc_id = Some("grandparent-request-doc".to_string());
+    parent.caused_by_parent_tool_call_id = Some("grandparent-tool-call".to_string());
+    parent.caused_by_parent_tool_call_doc_id = Some("grandparent-tool-call-doc".to_string());
     parent.workspace_id = Some("workspace-goal".to_string());
     parent.workspace_authority = Some("readOnly".to_string());
     parent.workspace_owner_deployment_id = Some("deployment-owner".to_string());

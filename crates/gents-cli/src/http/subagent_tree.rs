@@ -247,7 +247,7 @@ mod tests {
                         "session_id": "sess-root",
                         "agent_did": "deployment-a",
                         "behavior_id": "amy-general",
-                        "lifecycle_state": "Processing",
+                        "lifecycle_state": "processing",
                         "subagent_depth": 0,
                         "caused_by_parent_request_id": null,
                         "caused_by_parent_tool_call_id": null
@@ -452,7 +452,7 @@ mod tests {
                     {
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
-                        "lifecycle_state": "Processing",
+                        "lifecycle_state": "processing",
                         "subagent_depth": 0
                     }
                 ]
@@ -575,7 +575,7 @@ mod tests {
                     {
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
-                        "lifecycle_state": "Processing",
+                        "lifecycle_state": "processing",
                         "subagent_depth": 0
                     }
                 ]

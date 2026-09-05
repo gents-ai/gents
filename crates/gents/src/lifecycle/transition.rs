@@ -6,11 +6,13 @@
 use anyhow::Context;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-use super::rows::{RequestStatusTransition, RequestViewRow};
+use super::rows::RequestStatusTransition;
 use super::*;
+use gents_protocol::row::AgentRequestRow;
 
-fn request_view_is_terminal(view: &RequestViewRow) -> bool {
-    RequestLifecycleState::is_terminal_str(view.lifecycle_state.as_deref())
+fn request_view_is_terminal(view: &AgentRequestRow) -> bool {
+    view.lifecycle_state
+        .is_some_and(RequestLifecycleState::is_terminal)
 }
 
 pub(super) fn projection_error_requires_atomic_retry(error: &anyhow::Error) -> bool {
@@ -311,7 +313,7 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
+                    current_lifecycle_state = %current.lifecycle_state.map(|s| s.as_str()).unwrap_or("missing"),
                     "skipping completion because request is already terminal"
                 );
             }
@@ -373,16 +375,14 @@ impl RequestLifecycle {
 
         match self.request_view().await? {
             Some(current)
-                if RequestLifecycleState::parse_opt(current.lifecycle_state.as_deref())
-                    == Some(RequestLifecycleState::Interrupted) =>
+                if current.lifecycle_state == Some(RequestLifecycleState::Interrupted) =>
             {
                 self.state = LocalLifecycleState::Interrupted;
                 Ok(())
             }
             Some(current) if request_view_is_terminal(&current) => Ok(()),
             Some(current)
-                if RequestLifecycleState::parse_opt(current.lifecycle_state.as_deref())
-                    == Some(RequestLifecycleState::InputRequired) =>
+                if current.lifecycle_state == Some(RequestLifecycleState::InputRequired) =>
             {
                 anyhow::bail!(
                     "cannot interrupt request_id={} from reserved lifecycle_state={}",
@@ -393,7 +393,10 @@ impl RequestLifecycle {
             Some(current) => anyhow::bail!(
                 "request {} could not transition to interrupted; current lifecycle_state={}",
                 self.request.request_id,
-                current.lifecycle_state.as_deref().unwrap_or("missing")
+                current
+                    .lifecycle_state
+                    .map(|s| s.as_str())
+                    .unwrap_or("missing")
             ),
             None => anyhow::bail!(
                 "request {} disappeared while transitioning to interrupted",
@@ -444,7 +447,7 @@ impl RequestLifecycle {
             RequestStatusTransition::ConflictingTerminal(current) => {
                 tracing::info!(
                     request_id = %self.request.request_id,
-                    current_lifecycle_state = %current.lifecycle_state.as_deref().unwrap_or("missing"),
+                    current_lifecycle_state = %current.lifecycle_state.map(|s| s.as_str()).unwrap_or("missing"),
                     "skipping failure because request is already terminal"
                 );
             }
@@ -537,20 +540,20 @@ impl RequestLifecycle {
         }
 
         match self.request_view().await? {
-            Some(current)
-                if current.lifecycle_state.as_deref() == Some(target_lifecycle_state.as_str()) =>
-            {
+            Some(current) if current.lifecycle_state == Some(target_lifecycle_state) => {
                 Ok(RequestStatusTransition::AlreadyTarget)
             }
             Some(current) if request_view_is_terminal(&current) => {
                 Ok(RequestStatusTransition::ConflictingTerminal(current))
             }
-            Some(current) => anyhow::bail!(
+            Some(current) => {
+                anyhow::bail!(
                 "request {} could not transition lifecycle_state -> {}; current lifecycle_state={}",
                 self.request.request_id,
                 target_lifecycle_state.as_str(),
-                current.lifecycle_state.as_deref().unwrap_or("missing")
-            ),
+                current.lifecycle_state.map(|s| s.as_str()).unwrap_or("missing")
+            )
+            }
             None => anyhow::bail!(
                 "request {} disappeared while transitioning lifecycle_state -> {}",
                 self.request.request_id,
@@ -603,13 +606,13 @@ impl RequestLifecycle {
 
         let request_view = self.request_view().await?;
         match request_view {
-            Some(current) if current.lifecycle_state.as_deref() == Some(to.as_str()) => Ok(()),
+            Some(current) if current.lifecycle_state == Some(to) => Ok(()),
             Some(current) => anyhow::bail!(
                 "request {} could not transition execution view {} -> {}; current lifecycle_state={}",
                 self.request.request_id,
                 from,
                 to,
-                current.lifecycle_state.as_deref().unwrap_or("missing")
+                current.lifecycle_state.map(|s| s.as_str()).unwrap_or("missing")
             ),
             None => anyhow::bail!(
                 "request {} disappeared while transitioning execution view {} -> {}",

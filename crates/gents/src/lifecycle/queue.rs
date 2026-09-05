@@ -2,6 +2,8 @@
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
+#[cfg(test)]
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -33,7 +35,7 @@ use coalescing::lookup_request_doc_id_optional;
 pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
     coalesce_key, lookup_request_doc_id, parent_behavior_id, queue_row_to_enqueued_request,
-    queue_source_and_key_match, PendingQueueRow,
+    queue_source_and_key_match,
 };
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;

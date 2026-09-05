@@ -4,7 +4,8 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
-use gents_protocol::client_protocol::derive_persisted_attempt;
+use gents_protocol::client_protocol::{derive_persisted_attempt, RequestLifecycleState};
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::transcript::present_persisted_message;
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
@@ -28,25 +29,6 @@ use super::subagent_projection::{
 };
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    request_id: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    content: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    lifecycle_state: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    failure_reason: String,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    terminalized_at: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    metadata: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    execution_origin: String,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 struct ResponseRow {
@@ -177,7 +159,7 @@ pub(super) async fn load_thread_turns(
     );
     let response = query_node_json(&state.node, &query).await?;
 
-    let requests = decode_rows::<RequestRow>(&response, "AgentRequest")
+    let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest history rows")?;
     let responses = decode_response_rows(state, &response).await?;
     let mut tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
@@ -243,7 +225,7 @@ pub(super) async fn load_thread_turns(
 
 async fn load_completed_compactions(
     state: &ShimState,
-    requests: &[RequestRow],
+    requests: &[AgentRequestRow],
 ) -> Result<Vec<CompactionRow>> {
     let request_ids = requests
         .iter()
@@ -342,7 +324,7 @@ fn finish_message_turn(
 
 fn project_request_turns(
     record: &CodexThreadRecord,
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
@@ -358,7 +340,7 @@ fn project_request_turns(
         .collect::<BTreeMap<_, _>>();
 
     let mut root_order = Vec::<String>::new();
-    let mut grouped = BTreeMap::<String, Vec<RequestRow>>::new();
+    let mut grouped = BTreeMap::<String, Vec<AgentRequestRow>>::new();
     for request in &requests {
         let root_id = steering_root_id(request, &requests_by_id)?;
         if !grouped.contains_key(&root_id) {
@@ -386,8 +368,8 @@ fn project_request_turns(
 }
 
 fn steering_root_id(
-    request: &RequestRow,
-    requests_by_id: &BTreeMap<&str, &RequestRow>,
+    request: &AgentRequestRow,
+    requests_by_id: &BTreeMap<&str, &AgentRequestRow>,
 ) -> Result<String> {
     let mut current = request;
     let mut seen = BTreeSet::<String>::new();
@@ -409,8 +391,8 @@ fn steering_root_id(
     }
 }
 
-fn steering_parent_id(request: &RequestRow) -> Option<String> {
-    let metadata = request.metadata.trim();
+fn steering_parent_id(request: &AgentRequestRow) -> Option<String> {
+    let metadata = request.metadata.as_deref()?.trim();
     if metadata.is_empty() {
         return None;
     }
@@ -428,11 +410,17 @@ fn steering_parent_id(request: &RequestRow) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn is_codex_visible_request(request: &RequestRow) -> bool {
-    request.metadata.contains("\"codex_shim\"")
-        || is_background_completion_metadata(Some(&request.metadata))
+fn is_codex_visible_request(request: &AgentRequestRow) -> bool {
+    let metadata = request.metadata.as_deref().unwrap_or_default();
+    request
+        .metadata
+        .as_deref()
+        .is_some_and(|value| value.contains("\"codex_shim\""))
+        || is_background_completion_metadata(Some(metadata))
         || request
             .execution_origin
+            .as_deref()
+            .unwrap_or_default()
             .trim()
             .eq_ignore_ascii_case("interactive")
 }
@@ -523,7 +511,7 @@ fn conversation_summary_git_info(git_info: &Option<Value>) -> Option<Value> {
 fn project_turn_group(
     record: &CodexThreadRecord,
     turn_id: &str,
-    requests: &[RequestRow],
+    requests: &[AgentRequestRow],
     responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
@@ -585,14 +573,17 @@ fn project_turn_group(
 fn append_request_items(
     record: &CodexThreadRecord,
     items: &mut Vec<codex::ThreadItem>,
-    request: &RequestRow,
+    request: &AgentRequestRow,
     response: Option<&ResponseRow>,
     mut tools: Vec<ToolRow>,
     compactions: &[CompactionRow],
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
 ) {
     let projection_settled = derive_persisted_attempt(
-        request.lifecycle_state.trim(),
+        request
+            .lifecycle_state
+            .map(RequestLifecycleState::as_str)
+            .unwrap_or_default(),
         false,
         response.map(|row| row.status.trim()),
     )
@@ -603,13 +594,15 @@ fn append_request_items(
             .then_with(|| left.started_at.cmp(&right.started_at))
     });
 
-    if !request.content.trim().is_empty()
-        && !is_background_completion_metadata(Some(&request.metadata))
+    let request_content = request.content.as_deref().unwrap_or_default();
+    let request_metadata = request.metadata.as_deref().unwrap_or_default();
+    if !request_content.trim().is_empty()
+        && !is_background_completion_metadata(Some(request_metadata))
     {
         items.push(codex::ThreadItem::UserMessage {
             id: format!("gents-user-{}", request.request_id),
             content: vec![codex::UserInput::Text {
-                text: request.content.clone(),
+                text: request_content.to_string(),
                 text_elements: Vec::new(),
             }],
         });
@@ -726,28 +719,34 @@ fn project_tool(
     }
 }
 
-fn turn_status(request: &RequestRow, response: Option<&ResponseRow>) -> codex::TurnStatus {
-    let Some(lifecycle_state) = normalized_nonempty(&request.lifecycle_state) else {
+fn turn_status(request: &AgentRequestRow, response: Option<&ResponseRow>) -> codex::TurnStatus {
+    let Some(lifecycle_state) = request.lifecycle_state.map(RequestLifecycleState::as_str) else {
         return codex::TurnStatus::Failed;
     };
     let response_status = response
         .and_then(|response| normalized_nonempty(&response.status))
         .unwrap_or_default();
 
-    derive_persisted_attempt(&lifecycle_state, false, Some(&response_status))
+    derive_persisted_attempt(lifecycle_state, false, Some(&response_status))
         .map(codex_turn_status)
         .unwrap_or(codex::TurnStatus::Failed)
 }
 
-fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<codex::TurnError> {
+fn turn_error(
+    request: &AgentRequestRow,
+    response: Option<&ResponseRow>,
+) -> Option<codex::TurnError> {
     let response_status = response.map(|row| row.status.as_str()).unwrap_or_default();
     let response_error = response.and_then(|row| row.error_message.as_deref());
-    let lifecycle_state = request.lifecycle_state.as_str();
+    let lifecycle_state = request
+        .lifecycle_state
+        .map(RequestLifecycleState::as_str)
+        .unwrap_or_default();
     terminal_error_message(
         response_status,
         response_error,
         lifecycle_state,
-        &request.failure_reason,
+        request.failure_reason.as_deref().unwrap_or_default(),
     )
     .map(|message| codex::TurnError {
         message,
@@ -756,7 +755,10 @@ fn turn_error(request: &RequestRow, response: Option<&ResponseRow>) -> Option<co
     })
 }
 
-fn turn_completed_timestamp(request: &RequestRow, response: Option<&ResponseRow>) -> Option<i64> {
+fn turn_completed_timestamp(
+    request: &AgentRequestRow,
+    response: Option<&ResponseRow>,
+) -> Option<i64> {
     response
         .and_then(|response| {
             response
@@ -902,6 +904,10 @@ mod tests {
 
     use super::*;
 
+    fn request_row(value: Value) -> AgentRequestRow {
+        serde_json::from_value(value).expect("canonical AgentRequest test row")
+    }
+
     #[test]
     fn replicated_nullable_history_scalars_decode_as_empty_text() {
         let response = json!({
@@ -930,9 +936,9 @@ mod tests {
             }
         });
 
-        let requests = decode_rows::<RequestRow>(&response, "AgentRequest").unwrap();
-        assert_eq!(requests[0].content, "");
-        assert_eq!(requests[0].failure_reason, "");
+        let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest").unwrap();
+        assert_eq!(requests[0].content, None);
+        assert_eq!(requests[0].failure_reason, None);
         let responses = decode_rows::<ResponseRow>(&response, "AgentResponse").unwrap();
         assert_eq!(responses[0].reasoning, "");
         let messages = decode_rows::<MessageRow>(&response, "AgentMessage").unwrap();
@@ -941,16 +947,13 @@ mod tests {
 
     #[test]
     fn completed_request_overrides_error_response_status() {
-        let request = RequestRow {
-            request_id: "request-1".to_string(),
-            content: "Inspect the repo".to_string(),
-            lifecycle_state: "completed".to_string(),
-            failure_reason: String::new(),
-            created_at: None,
-            terminalized_at: None,
-            metadata: r#"{"codex_shim":{}}"#.to_string(),
-            execution_origin: "interactive".to_string(),
-        };
+        let request = request_row(json!({
+            "request_id": "request-1",
+            "content": "Inspect the repo",
+            "lifecycle_state": "completed",
+            "metadata": r#"{"codex_shim":{}}"#,
+            "execution_origin": "interactive"
+        }));
         let response = ResponseRow {
             request_id: request.request_id.clone(),
             content: "Done".to_string(),
@@ -984,16 +987,13 @@ mod tests {
             conversation: None,
             subagent: None,
         };
-        let request = RequestRow {
-            request_id: "wake-1".to_string(),
-            content: gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
-            lifecycle_state: "completed".to_string(),
-            failure_reason: String::new(),
-            created_at: None,
-            terminalized_at: None,
-            metadata: r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"},"background_completion_wake_version":1}"#.to_string(),
-            execution_origin: "scheduled".to_string(),
-        };
+        let request = request_row(json!({
+            "request_id": "wake-1",
+            "content": gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
+            "lifecycle_state": "completed",
+            "metadata": r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"},"background_completion_wake_version":1}"#,
+            "execution_origin": "scheduled"
+        }));
 
         assert!(is_codex_visible_request(&request));
         let mut items = Vec::new();
@@ -1016,16 +1016,15 @@ mod tests {
 
     #[test]
     fn turn_completion_timing_prefers_response_then_request_terminalization() {
-        let request = RequestRow {
-            request_id: "request-1".to_string(),
-            content: String::new(),
-            lifecycle_state: "completed".to_string(),
-            failure_reason: String::new(),
-            created_at: Some("2026-07-15T10:00:00Z".to_string()),
-            terminalized_at: Some("2026-07-15T10:00:05Z".to_string()),
-            metadata: r#"{"codex_shim":{}}"#.to_string(),
-            execution_origin: "interactive".to_string(),
-        };
+        let request = request_row(json!({
+            "request_id": "request-1",
+            "content": "",
+            "lifecycle_state": "completed",
+            "created_at": "2026-07-15T10:00:00Z",
+            "terminalized_at": "2026-07-15T10:00:05Z",
+            "metadata": r#"{"codex_shim":{}}"#,
+            "execution_origin": "interactive"
+        }));
         let mut response = ResponseRow {
             request_id: request.request_id.clone(),
             content: String::new(),
@@ -1069,16 +1068,13 @@ mod tests {
             conversation: None,
             subagent: None,
         };
-        let request = RequestRow {
-            request_id: "request-1".to_string(),
-            content: "Inspect the repo".to_string(),
-            lifecycle_state: "completed".to_string(),
-            failure_reason: String::new(),
-            created_at: None,
-            terminalized_at: None,
-            metadata: r#"{"codex_shim":{}}"#.to_string(),
-            execution_origin: "interactive".to_string(),
-        };
+        let request = request_row(json!({
+            "request_id": "request-1",
+            "content": "Inspect the repo",
+            "lifecycle_state": "completed",
+            "metadata": r#"{"codex_shim":{}}"#,
+            "execution_origin": "interactive"
+        }));
         let response = ResponseRow {
             request_id: request.request_id.clone(),
             content: String::new(),
@@ -1208,16 +1204,13 @@ mod tests {
             conversation: None,
             subagent: None,
         };
-        let request = RequestRow {
-            request_id: "request-1".to_string(),
-            content: "Continue".to_string(),
-            lifecycle_state: "completed".to_string(),
-            failure_reason: String::new(),
-            created_at: None,
-            terminalized_at: None,
-            metadata: r#"{"codex_shim":{}}"#.to_string(),
-            execution_origin: "interactive".to_string(),
-        };
+        let request = request_row(json!({
+            "request_id": "request-1",
+            "content": "Continue",
+            "lifecycle_state": "completed",
+            "metadata": r#"{"codex_shim":{}}"#,
+            "execution_origin": "interactive"
+        }));
         let compactions = vec![CompactionRow {
             request_id: request.request_id.clone(),
             call_id: "compact-1".to_string(),

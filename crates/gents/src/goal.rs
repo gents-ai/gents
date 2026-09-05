@@ -216,7 +216,11 @@ pub enum GoalRequestTerminal {
 
 impl GoalRequestTerminal {
     pub fn parse(value: &str) -> Option<Self> {
-        match RequestLifecycleState::parse(value).ok()? {
+        Self::from_state(RequestLifecycleState::parse(value).ok()?)
+    }
+
+    pub fn from_state(state: RequestLifecycleState) -> Option<Self> {
+        match state {
             RequestLifecycleState::Completed => Some(Self::Completed),
             RequestLifecycleState::Failed => Some(Self::Failed),
             RequestLifecycleState::Dead => Some(Self::Dead),

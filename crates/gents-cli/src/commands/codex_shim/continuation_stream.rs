@@ -6,7 +6,7 @@ use gents::graphql::escape_graphql_string;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::RequestLifecycleState;
-use serde::Deserialize;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 use tokio::sync::watch;
 
@@ -31,21 +31,6 @@ use super::turn::{
 use super::turn_projection::TurnProjection;
 use super::{ConnectionState, ShimState};
 use crate::SubmittedRequest;
-
-#[derive(Clone, Debug, Deserialize)]
-struct BackgroundContinuationRequest {
-    request_id: String,
-    session_id: String,
-    agent_did: String,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    metadata: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ChildLifecycleSignature {
@@ -140,7 +125,7 @@ async fn watch_loaded_root_continuations(
         let requests = load_background_continuation_requests(state, thread_id).await?;
         let mut projected_request = false;
         for request in requests {
-            let lifecycle_state = request.lifecycle_state.as_deref().unwrap_or("");
+            let lifecycle_state = request.lifecycle_state;
             if observed.contains(&request.request_id) {
                 continue;
             }
@@ -148,23 +133,21 @@ async fn watch_loaded_root_continuations(
             if !continuation_request_has_started(lifecycle_state) {
                 continue;
             }
-            if RequestLifecycleState::parse_opt(Some(lifecycle_state))
-                == Some(RequestLifecycleState::Superseded)
-            {
+            if lifecycle_state == Some(RequestLifecycleState::Superseded) {
                 observed.insert(request.request_id);
                 continue;
             }
 
             let baseline_turn = baseline_turns.remove(&request.request_id);
             if baseline_turn_is_terminal(baseline_turn.as_ref())
-                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
+                && lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
             {
                 observed.insert(request.request_id);
                 continue;
             }
             if !initialized
                 && suppress_existing_terminal
-                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
+                && lifecycle_state.is_some_and(RequestLifecycleState::is_terminal)
             {
                 observed.insert(request.request_id);
                 continue;
@@ -271,9 +254,17 @@ async fn project_background_continuation(
     connection: &ConnectionState,
     state: &ShimState,
     watcher_id: &str,
-    request: BackgroundContinuationRequest,
+    request: AgentRequestRow,
     baseline_turn: Option<codex::Turn>,
 ) -> Result<()> {
+    let session_id = request
+        .session_id
+        .clone()
+        .context("background continuation AgentRequest missing session_id")?;
+    let agent_did = request
+        .agent_did
+        .clone()
+        .context("background continuation AgentRequest missing agent_did")?;
     let turn_id = request.request_id.clone();
     let started_at = request.created_at.as_deref().and_then(timestamp_seconds);
     if baseline_turn.is_none() {
@@ -281,7 +272,7 @@ async fn project_background_continuation(
             &connection.outbound,
             state,
             codex::ServerNotification::TurnStarted(codex::TurnStartedNotification {
-                thread_id: request.session_id.clone(),
+                thread_id: session_id.clone(),
                 turn: turn_value_with_timing(
                     &turn_id,
                     codex::TurnStatus::InProgress,
@@ -296,7 +287,7 @@ async fn project_background_continuation(
         send_thread_status_changed(
             &connection.outbound,
             state,
-            &request.session_id,
+            &session_id,
             codex::ThreadStatus::Active {
                 active_flags: Vec::new(),
             },
@@ -306,8 +297,8 @@ async fn project_background_continuation(
 
     let submitted = SubmittedRequest {
         request_id: request.request_id,
-        session_id: request.session_id.clone(),
-        agent_did: request.agent_did,
+        session_id: session_id.clone(),
+        agent_did,
         behavior_id: request.behavior_id,
         temperature: None,
         top_p: None,
@@ -318,16 +309,16 @@ async fn project_background_continuation(
         metadata: request.metadata,
         created_at: request.created_at,
     };
-    let cwd = state.thread_cwd(&request.session_id).await;
-    let mut projection = TurnProjection::new(state, &request.session_id, &turn_id, cwd, started_at);
+    let cwd = state.thread_cwd(&session_id).await;
+    let mut projection = TurnProjection::new(state, &session_id, &turn_id, cwd, started_at);
     let options = baseline_turn.map_or_else(
-        || TurnStreamOptions::fresh_background_completion(request.session_id.clone()),
-        |turn| TurnStreamOptions::resumed_background_completion(request.session_id.clone(), turn),
+        || TurnStreamOptions::fresh_background_completion(session_id.clone()),
+        |turn| TurnStreamOptions::resumed_background_completion(session_id.clone(), turn),
     );
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let stream_registration = install_stream_control(
         connection,
-        request.session_id.clone(),
+        session_id.clone(),
         turn_id.clone(),
         Some(watcher_id),
         cancel_tx,
@@ -366,7 +357,7 @@ async fn project_background_continuation(
             send_thread_status_changed(
                 &connection.outbound,
                 state,
-                &request.session_id,
+                &session_id,
                 codex::ThreadStatus::SystemError,
             )
             .await
@@ -377,7 +368,7 @@ async fn project_background_continuation(
 async fn load_background_continuation_requests(
     state: &ShimState,
     thread_id: &str,
-) -> Result<Vec<BackgroundContinuationRequest>> {
+) -> Result<Vec<AgentRequestRow>> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -408,9 +399,18 @@ async fn load_background_continuation_requests(
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .map(serde_json::from_value::<BackgroundContinuationRequest>)
-        .collect::<serde_json::Result<Vec<_>>>()
-        .context("decoding background completion AgentRequest rows")
+        .map(|value| {
+            let row = serde_json::from_value::<AgentRequestRow>(value)
+                .context("decoding background completion AgentRequest row")?;
+            row.session_id
+                .as_deref()
+                .context("background continuation AgentRequest missing session_id")?;
+            row.agent_did
+                .as_deref()
+                .context("background continuation AgentRequest missing agent_did")?;
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>>>()
         .map(|rows| {
             rows.into_iter()
                 .filter(|row| is_background_completion_metadata(row.metadata.as_deref()))
@@ -438,9 +438,9 @@ pub(super) fn is_background_completion_metadata(metadata: Option<&str>) -> bool 
         })
 }
 
-fn continuation_request_has_started(lifecycle_state: &str) -> bool {
+fn continuation_request_has_started(lifecycle_state: Option<RequestLifecycleState>) -> bool {
     !matches!(
-        RequestLifecycleState::parse_opt(Some(lifecycle_state.trim())),
+        lifecycle_state,
         None | Some(
             RequestLifecycleState::Pending | RequestLifecycleState::WorkspaceBindingPending
         )
@@ -479,10 +479,18 @@ mod tests {
 
     #[test]
     fn pending_wakes_are_not_announced_before_the_runtime_claims_them() {
-        assert!(!continuation_request_has_started("pending"));
-        assert!(!continuation_request_has_started("workspaceBindingPending"));
-        assert!(continuation_request_has_started("claimed"));
-        assert!(continuation_request_has_started("processing"));
+        assert!(!continuation_request_has_started(Some(
+            RequestLifecycleState::Pending
+        )));
+        assert!(!continuation_request_has_started(Some(
+            RequestLifecycleState::WorkspaceBindingPending
+        )));
+        assert!(continuation_request_has_started(Some(
+            RequestLifecycleState::Claimed
+        )));
+        assert!(continuation_request_has_started(Some(
+            RequestLifecycleState::Processing
+        )));
         assert!(RequestLifecycleState::is_terminal_str(Some("completed")));
         assert!(RequestLifecycleState::is_terminal_str(Some("interrupted")));
     }

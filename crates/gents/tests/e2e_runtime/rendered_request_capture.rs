@@ -21,6 +21,7 @@ use gents::llm::message::Message;
 use gents::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use gents::rendered_request::RenderedCompletionRequest;
 use gents::{AgentIdentity, BehaviorBuilder, CompactionStrategy, Gents, ToolCeiling};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
@@ -197,7 +198,8 @@ async fn a_failing_capture_sink_issues_no_provider_request() {
         backend.observed_completion_bodies()
     );
     assert_eq!(
-        terminal, "failed",
+        terminal,
+        RequestLifecycleState::Failed,
         "a request whose capture never succeeded must terminate as failed"
     );
     assert!(
@@ -699,7 +701,8 @@ async fn a_repaired_attempt_is_a_second_fact_with_a_different_canonical_request(
     // the coordinate claim this test is about.
     let terminal = wait_for_request_terminal_state(db.node.as_ref(), &doc_id).await;
     assert_eq!(
-        terminal, "completed",
+        terminal,
+        RequestLifecycleState::Completed,
         "the repaired attempt must be a second durable fact, not a rejected \
          rebinding of the first"
     );
@@ -1348,7 +1351,7 @@ async fn rolling_chunk_failure_does_not_advance_session_and_retry_commits_once()
     .await;
     assert_eq!(
         wait_for_request_terminal_state(db.node.as_ref(), &failed_doc).await,
-        "failed"
+        RequestLifecycleState::Failed
     );
     assert!(
         compaction_entries(db.node.as_ref(), session_id)
@@ -1753,14 +1756,14 @@ async fn commit_set(node: &EmbeddedNode, capture_key: &str) -> Vec<(String, Stri
 }
 
 /// Wait for any terminal lifecycle state and report which one it reached.
-async fn wait_for_request_terminal_state(node: &EmbeddedNode, request_doc_id: &str) -> String {
+async fn wait_for_request_terminal_state(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> RequestLifecycleState {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
-        if matches!(
-            snapshot.lifecycle_state.as_str(),
-            "completed" | "failed" | "cancelled" | "expired"
-        ) {
+        if snapshot.lifecycle_state.is_terminal() {
             return snapshot.lifecycle_state;
         }
         assert!(

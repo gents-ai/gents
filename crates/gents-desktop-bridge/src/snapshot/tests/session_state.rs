@@ -7,6 +7,7 @@ use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use lean_vocab_test::{
     lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
     lean_response_transition_cases, lean_transcript_cases, LeanClientShellCase,
@@ -94,7 +95,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -118,6 +119,7 @@ fn session_snapshot_can_be_built_without_conversation_row_when_session_is_observ
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -187,7 +189,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -211,6 +213,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -229,7 +232,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -253,6 +256,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_conversation_latest_reque
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         responses: vec![AgentResponseRow {
@@ -344,7 +348,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -368,6 +372,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "msg-1".to_string(),
@@ -507,7 +512,7 @@ fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
         if let Some(pending_turn) = snapshot.pending_turn.as_ref() {
             assert_eq!(
                 pending_turn.lifecycle_state.as_deref(),
-                Some(lifecycle_state),
+                Some(lifecycle_state.as_str()),
                 "case {name} should carry the raw lifecycle state for UI badges"
             );
         }
@@ -729,7 +734,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("pending".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Pending),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -753,6 +758,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         ..ClientStoreRows::default()
     });
@@ -807,7 +813,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("processing".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -831,6 +837,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -898,7 +905,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -922,6 +929,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -1014,7 +1022,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("interrupted".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -1038,6 +1046,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -1184,7 +1193,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("interrupted".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
             backend_id: None,
             execution_origin: Some("subagent".to_string()),
             failure_reason: None,
@@ -1208,6 +1217,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-child".to_string(),
@@ -1325,7 +1335,7 @@ fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("completed".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Completed),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -1349,6 +1359,7 @@ fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: transcript_contract_messages(case),
         tool_calls: transcript_contract_tool_calls(case),
@@ -1698,7 +1709,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some(lifecycle_state.to_string()),
+            lifecycle_state: Some(lifecycle_state),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -1722,6 +1733,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         });
 
         if let Some(response_status) = response_status_for_turn(turn_state) {
@@ -1751,16 +1763,16 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
     ClientStore::from_rows(rows)
 }
 
-fn request_state_for_turn(turn_state: Option<&str>) -> &'static str {
+fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     match turn_state {
-        Some("waitingForClaim") => "pending",
-        Some("streaming") => "processing",
-        Some("completed") => "completed",
-        Some("failed") => "failed",
-        Some("superseded") => "superseded",
-        Some("interrupted") => "interrupted",
+        Some("waitingForClaim") => RequestLifecycleState::Pending,
+        Some("streaming") => RequestLifecycleState::Processing,
+        Some("completed") => RequestLifecycleState::Completed,
+        Some("failed") => RequestLifecycleState::Failed,
+        Some("superseded") => RequestLifecycleState::Superseded,
+        Some("interrupted") => RequestLifecycleState::Interrupted,
         Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
-        None => "pending",
+        None => RequestLifecycleState::Pending,
     }
 }
 
@@ -1810,7 +1822,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some(lifecycle_state.to_string()),
+            lifecycle_state: Some(lifecycle_state),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -1834,6 +1846,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
@@ -1891,11 +1904,11 @@ fn streaming_case_tail(case: &LeanResponseTransitionCase) -> (Option<String>, Op
     )
 }
 
-fn request_lifecycle_for_streaming_post_status(status: &str) -> &'static str {
+fn request_lifecycle_for_streaming_post_status(status: &str) -> RequestLifecycleState {
     match status {
-        "streaming" => "processing",
-        "complete" => "completed",
-        "error" => "failed",
+        "streaming" => RequestLifecycleState::Processing,
+        "complete" => RequestLifecycleState::Completed,
+        "error" => RequestLifecycleState::Failed,
         other => panic!("unsupported Lean streaming response post status {other:?}"),
     }
 }

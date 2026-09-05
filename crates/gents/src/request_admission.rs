@@ -14,6 +14,7 @@ use gents_protocol::request_admission::{
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
     AgentRequestAdmissionRecord, AgentRequestSigningFields, RuntimeInternalSourceKind,
 };
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
@@ -149,13 +150,12 @@ pub(crate) async fn verify_fresh_local_self_request(
     target_behavior_id: &str,
 ) -> AdmissionResult<AgentRequest> {
     let row = load_signed_request(node, &request.doc_id).await?;
-    let admission = row
-        .admission()
-        .map_err(AgentRequestAdmissionError::denied)?;
+    let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
+    let signing_fields = row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
     let verified = identity
         .verify(
             &admission.signer_did,
-            &admission.signing_payload(&row.signing_fields()),
+            &admission.signing_payload(&signing_fields),
             &admission.signature,
         )
         .await
@@ -165,19 +165,17 @@ pub(crate) async fn verify_fresh_local_self_request(
         base_admission_observation(admission.kind, RuntimeInternalSourceKind::LocalControl);
     observation.signature_valid = verified;
     observation.signed_fields_match = row.request_id == request.request_id
-        && row.agent_did == request.agent_did
+        && row.agent_did.as_deref() == Some(request.agent_did.as_str())
         && row.behavior_id.as_deref() == Some(target_behavior_id)
-        && validate_signing_fields(&row.signing_fields()).is_ok();
+        && validate_signing_fields(&signing_fields).is_ok();
     observation.branch_fields_exact =
         admission.validate_canonical_fields().is_ok() && admission.validate_branch_fields().is_ok();
     observation.pending_deadline_absent = row.deadline.is_none();
     observation.signer_matches_requester =
         row.requester_did.as_deref() == Some(admission.signer_did.as_str());
-    observation.requester_matches_target =
-        row.requester_did.as_deref() == Some(row.agent_did.as_str());
+    observation.requester_matches_target = row.requester_did.as_deref() == row.agent_did.as_deref();
     require_admitted_observation(observation, None)?;
-    row.into_agent_request(request.doc_id.clone())
-        .map_err(AgentRequestAdmissionError::denied)
+    row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
 }
 
 pub async fn sign_agent_request_create(
@@ -300,10 +298,10 @@ impl AgentRequestAdmissionVerifier {
         test_observed_at: Option<chrono::DateTime<Utc>>,
     ) -> AdmissionResult<AgentRequest> {
         let row = load_signed_request(self.node.as_ref(), &request.doc_id).await?;
-        let admission = row
-            .admission()
-            .map_err(AgentRequestAdmissionError::denied)?;
-        let payload = admission.signing_payload(&row.signing_fields());
+        let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
+        let signing_fields =
+            row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
+        let payload = admission.signing_payload(&signing_fields);
         let signature_valid = self
             .identity
             .verify(&admission.signer_did, &payload, &admission.signature)
@@ -316,9 +314,9 @@ impl AgentRequestAdmissionVerifier {
         let mut observation = base_admission_observation(admission.kind, runtime_source_kind);
         observation.signature_valid = signature_valid;
         observation.signed_fields_match = row.request_id == request.request_id
-            && row.agent_did == request.agent_did
+            && row.agent_did.as_deref() == Some(request.agent_did.as_str())
             && row.behavior_id.as_deref() == Some(target_behavior_id)
-            && validate_signing_fields(&row.signing_fields()).is_ok();
+            && validate_signing_fields(&signing_fields).is_ok();
         observation.branch_fields_exact = admission.validate_canonical_fields().is_ok()
             && admission.validate_branch_fields().is_ok();
         observation.pending_deadline_absent = row.deadline.is_none();
@@ -336,7 +334,7 @@ impl AgentRequestAdmissionVerifier {
                 observation.signer_matches_requester =
                     row.requester_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
-                    row.requester_did.as_deref() == Some(row.agent_did.as_str());
+                    row.requester_did.as_deref() == row.agent_did.as_deref();
             }
             AgentRequestAdmissionKind::Enrollment => {
                 let requester = nonempty(row.requester_did.as_deref());
@@ -355,7 +353,8 @@ impl AgentRequestAdmissionVerifier {
                         // Production always samples after the async authority
                         // reload. Tests may inject this final observation only.
                         let observed_at = test_observed_at.unwrap_or_else(Utc::now);
-                        observation.current_approval = current.owner_agent == row.agent_did;
+                        observation.current_approval =
+                            row.agent_did.as_deref() == Some(current.owner_agent.as_str());
                         observation.exact_generation = admission.enrollment_request_id.as_deref()
                             == Some(current.request_id.as_str())
                             && admission.enrollment_request_digest.as_deref()
@@ -403,11 +402,11 @@ impl AgentRequestAdmissionVerifier {
                     issuer.is_some() && source.is_some() && admission.runtime_source_kind.is_some();
                 observation.signer_matches_issuer = issuer == Some(&admission.signer_did);
                 observation.requester_matches_issuer = row.requester_did.as_deref() == issuer;
-                observation.signer_matches_target = admission.signer_did == row.agent_did;
+                observation.signer_matches_target =
+                    row.agent_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
-                    row.requester_did.as_deref() == Some(row.agent_did.as_str());
-                observation.target_runtime_attestation_valid =
-                    issuer == Some(row.agent_did.as_str());
+                    row.requester_did.as_deref() == row.agent_did.as_deref();
+                observation.target_runtime_attestation_valid = issuer == row.agent_did.as_deref();
                 if !observation.runtime_evidence_present
                     || !observation.signer_matches_issuer
                     || !observation.requester_matches_issuer
@@ -462,15 +461,14 @@ impl AgentRequestAdmissionVerifier {
             }
         }
         require_admitted_observation(observation, denied)?;
-        row.into_agent_request(request.doc_id.clone())
-            .map_err(AgentRequestAdmissionError::denied)
+        row_into_agent_request(row, &request.doc_id).map_err(AgentRequestAdmissionError::denied)
     }
 }
 
 async fn verify_runtime_source_binding(
     node: &EmbeddedNode,
     peer_admission: &dyn PeerAdmissionAuthority,
-    row: &SignedAgentRequestRow,
+    row: &AgentRequestRow,
     source: &str,
     source_kind: RuntimeInternalSourceKind,
     bridge_author_did: Option<&str>,
@@ -518,8 +516,8 @@ async fn verify_runtime_source_binding(
                 tool_call_id,
                 parent_doc_id,
                 source,
-                &parent.agent_did,
-                &row.agent_did,
+                required_row_string(parent.agent_did.as_deref(), "agent_did")?,
+                required_row_string(row.agent_did.as_deref(), "agent_did")?,
                 target_behavior_id,
             )
             .await?;
@@ -528,7 +526,7 @@ async fn verify_runtime_source_binding(
                 parent.behavior_id.as_deref(),
                 &target_name,
                 target_behavior_id,
-                &row.agent_did,
+                required_row_string(row.agent_did.as_deref(), "agent_did")?,
             )
             .await
         }
@@ -592,17 +590,10 @@ async fn verify_runtime_source_binding(
     }
 }
 
-#[derive(Deserialize)]
-struct RuntimeParentRow {
-    request_id: String,
-    agent_did: String,
-    behavior_id: Option<String>,
-}
-
 async fn load_exact_parent_request(
     node: &EmbeddedNode,
     source_doc_id: &str,
-) -> AdmissionResult<RuntimeParentRow> {
+) -> AdmissionResult<AgentRequestRow> {
     let response = node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ request_id agent_did behavior_id }} }}"#,
         escape_graphql_string(source_doc_id),
@@ -625,7 +616,7 @@ async fn load_exact_parent_request(
 async fn verify_cross_deployment_child_source(
     node: &EmbeddedNode,
     peer_admission: &dyn PeerAdmissionAuthority,
-    row: &SignedAgentRequestRow,
+    row: &AgentRequestRow,
     source: &str,
     bridge_author_did: &str,
     target_behavior_id: &str,
@@ -695,7 +686,7 @@ async fn verify_cross_deployment_child_source(
             && bridge.request_id.as_deref() == Some(source)
             && bridge.request_doc_id.as_deref() == Some(parent_doc_id)
             && bridge.agent_did.as_deref() == Some(bridge_author_did)
-            && bridge.spawn_target_did.as_deref() == Some(row.agent_did.as_str())
+            && bridge.spawn_target_did.as_deref() == row.agent_did.as_deref()
             && bridge.child_request_id.as_deref() == Some(row.request_id.as_str()),
         "cross-deployment source bridge does not exactly own this child",
     )?;
@@ -713,7 +704,10 @@ async fn verify_cross_deployment_child_source(
         "cross-deployment source bridge targets another behavior",
     )?;
     let authorized = peer_admission
-        .fresh_member_authorized_for_agent(bridge_author_did, &row.agent_did)
+        .fresh_member_authorized_for_agent(
+            bridge_author_did,
+            required_row_string(row.agent_did.as_deref(), "agent_did")?,
+        )
         .await
         .context("reload cross-deployment bridge author admission")
         .map_err(AgentRequestAdmissionError::unavailable)?;
@@ -721,7 +715,12 @@ async fn verify_cross_deployment_child_source(
         authorized,
         "cross-deployment bridge author is no longer authorized for the target",
     )?;
-    verify_target_cross_deployment_policy(node, &row.agent_did, target_behavior_id).await
+    verify_target_cross_deployment_policy(
+        node,
+        required_row_string(row.agent_did.as_deref(), "agent_did")?,
+        target_behavior_id,
+    )
+    .await
 }
 
 async fn verify_target_cross_deployment_policy(
@@ -1040,176 +1039,107 @@ fn require_pending_deadline_absent(deadline: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Deserialize)]
-struct SignedAgentRequestRow {
-    request_id: String,
-    agent_did: String,
-    requester_did: Option<String>,
-    behavior_id: Option<String>,
-    session_id: String,
-    retry_parent_request: Option<String>,
-    retry_parent_request_doc_id: Option<String>,
-    retry_root_request: Option<String>,
-    retry_key: Option<String>,
-    content: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
-    execution_origin: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-    caused_by_correlation: Option<String>,
-    caused_by_trigger_context: Option<String>,
-    caused_by_source_doc_id: Option<String>,
-    caused_by_trigger_doc_id: Option<String>,
-    created_at: String,
-    deadline: Option<String>,
-    retry_count: Option<i64>,
-    max_retries: Option<i64>,
-    valid_until: Option<String>,
-    subagent_depth: Option<u32>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_request_doc_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_parent_tool_call_doc_id: Option<String>,
-    workspace_id: Option<String>,
-    workspace_authority: Option<String>,
-    workspace_owner_deployment_id: Option<String>,
-    workspace_seal_hash: Option<String>,
-    admission_kind: Option<String>,
-    admission_signer_did: Option<String>,
-    admission_signature: Option<String>,
-    enrollment_request_id: Option<String>,
-    enrollment_request_digest: Option<String>,
-    enrollment_admin_did: Option<String>,
-    enrollment_authorization_sequence: Option<i64>,
-    enrollment_authorization_expires_at: Option<String>,
-    runtime_issuer_did: Option<String>,
-    runtime_source_request_id: Option<String>,
-    runtime_source_kind: Option<String>,
-    runtime_bridge_author_did: Option<String>,
+fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
+    AgentRequestAdmissionRecord::from_wire_fields(
+        row.admission_kind.as_deref(),
+        row.admission_signer_did.as_deref(),
+        row.admission_signature.as_deref(),
+        row.enrollment_request_id.as_deref(),
+        row.enrollment_request_digest.as_deref(),
+        row.enrollment_admin_did.as_deref(),
+        row.enrollment_authorization_sequence,
+        row.enrollment_authorization_expires_at.as_deref(),
+        row.runtime_issuer_did.as_deref(),
+        row.runtime_source_request_id.as_deref(),
+        row.runtime_source_kind.as_deref(),
+        row.runtime_bridge_author_did.as_deref(),
+    )
+    .map_err(anyhow::Error::msg)
 }
 
-impl SignedAgentRequestRow {
-    fn admission(&self) -> Result<AgentRequestAdmissionRecord> {
-        AgentRequestAdmissionRecord::from_wire_fields(
-            self.admission_kind.as_deref(),
-            self.admission_signer_did.as_deref(),
-            self.admission_signature.as_deref(),
-            self.enrollment_request_id.as_deref(),
-            self.enrollment_request_digest.as_deref(),
-            self.enrollment_admin_did.as_deref(),
-            self.enrollment_authorization_sequence,
-            self.enrollment_authorization_expires_at.as_deref(),
-            self.runtime_issuer_did.as_deref(),
-            self.runtime_source_request_id.as_deref(),
-            self.runtime_source_kind.as_deref(),
-            self.runtime_bridge_author_did.as_deref(),
-        )
-        .map_err(anyhow::Error::msg)
-    }
-
-    fn signing_fields(&self) -> AgentRequestSigningFields<'_> {
-        AgentRequestSigningFields {
-            request_id: &self.request_id,
-            agent_did: &self.agent_did,
-            requester_did: self.requester_did.as_deref(),
-            behavior_id: self.behavior_id.as_deref(),
-            session_id: &self.session_id,
-            retry_parent_request: self.retry_parent_request.as_deref(),
-            retry_parent_request_doc_id: self.retry_parent_request_doc_id.as_deref(),
-            retry_root_request: self.retry_root_request.as_deref(),
-            retry_key: self.retry_key.as_deref(),
-            content: &self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata.as_deref(),
-            execution_origin: self.execution_origin.as_deref(),
-            caused_by_trigger_id: self.caused_by_trigger_id.as_deref(),
-            caused_by_trigger_kind: self.caused_by_trigger_kind.as_deref(),
-            caused_by_correlation: self.caused_by_correlation.as_deref(),
-            caused_by_trigger_context: self.caused_by_trigger_context.as_deref(),
-            caused_by_source_doc_id: self.caused_by_source_doc_id.as_deref(),
-            caused_by_trigger_doc_id: self.caused_by_trigger_doc_id.as_deref(),
-            created_at: &self.created_at,
-            retry_count: self.retry_count,
-            max_retries: self.max_retries,
-            valid_until: self.valid_until.as_deref(),
-            subagent_depth: self.subagent_depth.unwrap_or(0),
-            caused_by_parent_request_id: self.caused_by_parent_request_id.as_deref(),
-            caused_by_parent_request_doc_id: self.caused_by_parent_request_doc_id.as_deref(),
-            caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id.as_deref(),
-            caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id.as_deref(),
-            workspace_id: self.workspace_id.as_deref(),
-            workspace_authority: self.workspace_authority.as_deref(),
-            workspace_owner_deployment_id: self.workspace_owner_deployment_id.as_deref(),
-            workspace_seal_hash: self.workspace_seal_hash.as_deref(),
-        }
-    }
-
-    fn into_agent_request(self, doc_id: String) -> Result<AgentRequest> {
-        let request = AgentRequest {
-            doc_id,
-            request_id: self.request_id,
-            agent_did: self.agent_did,
-            requester_did: clean_string(self.requester_did),
-            behavior_id: clean_string(self.behavior_id),
-            session_id: self.session_id,
-            content: self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata,
-            execution_origin: clean_string(self.execution_origin),
-            created_at: self.created_at,
-            deadline: self.deadline,
-            subagent_depth: self.subagent_depth.unwrap_or(0),
-            caused_by_parent_request_id: clean_string(self.caused_by_parent_request_id),
-            caused_by_parent_request_doc_id: clean_string(self.caused_by_parent_request_doc_id),
-            caused_by_parent_tool_call_id: clean_string(self.caused_by_parent_tool_call_id),
-            caused_by_parent_tool_call_doc_id: clean_string(self.caused_by_parent_tool_call_doc_id),
-            caused_by_trigger_id: clean_string(self.caused_by_trigger_id),
-            caused_by_trigger_kind: clean_string(self.caused_by_trigger_kind),
-            caused_by_source_doc_id: clean_string(self.caused_by_source_doc_id),
-            caused_by_correlation: clean_string(self.caused_by_correlation),
-            caused_by_trigger_context: clean_string(self.caused_by_trigger_context),
-            workspace_id: clean_string(self.workspace_id),
-            workspace_authority: clean_string(self.workspace_authority),
-            workspace_owner_deployment_id: clean_string(self.workspace_owner_deployment_id),
-            workspace_seal_hash: clean_string(self.workspace_seal_hash),
-        };
-        crate::watcher::validate_agent_request(&request)?;
-        Ok(request)
-    }
+fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields<'_>> {
+    let subagent_depth = row
+        .subagent_depth
+        .map(u32::try_from)
+        .transpose()
+        .context("AgentRequest subagent_depth must fit in u32")?
+        .unwrap_or(0);
+    Ok(AgentRequestSigningFields {
+        request_id: &row.request_id,
+        agent_did: row
+            .agent_did
+            .as_deref()
+            .context("AgentRequest is missing agent_did")?,
+        requester_did: row.requester_did.as_deref(),
+        behavior_id: row.behavior_id.as_deref(),
+        session_id: row
+            .session_id
+            .as_deref()
+            .context("AgentRequest is missing session_id")?,
+        retry_parent_request: row.retry_parent_request.as_deref(),
+        retry_parent_request_doc_id: row.retry_parent_request_doc_id.as_deref(),
+        retry_root_request: row.retry_root_request.as_deref(),
+        retry_key: row.retry_key.as_deref(),
+        content: row
+            .content
+            .as_deref()
+            .context("AgentRequest is missing content")?,
+        temperature: row.temperature,
+        top_p: row.top_p,
+        top_k: row.top_k,
+        seed: row.seed,
+        max_tokens: row.max_tokens,
+        max_total_tokens: row.max_total_tokens,
+        metadata: row.metadata.as_deref(),
+        execution_origin: row.execution_origin.as_deref(),
+        caused_by_trigger_id: row.caused_by_trigger_id.as_deref(),
+        caused_by_trigger_kind: row.caused_by_trigger_kind.as_deref(),
+        caused_by_correlation: row.caused_by_correlation.as_deref(),
+        caused_by_trigger_context: row.caused_by_trigger_context.as_deref(),
+        caused_by_source_doc_id: row.caused_by_source_doc_id.as_deref(),
+        caused_by_trigger_doc_id: row.caused_by_trigger_doc_id.as_deref(),
+        created_at: row
+            .created_at
+            .as_deref()
+            .context("AgentRequest is missing created_at")?,
+        retry_count: row.retry_count,
+        max_retries: row.max_retries,
+        valid_until: row.valid_until.as_deref(),
+        subagent_depth,
+        caused_by_parent_request_id: row.caused_by_parent_request_id.as_deref(),
+        caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id.as_deref(),
+        caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id.as_deref(),
+        caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id.as_deref(),
+        workspace_id: row.workspace_id.as_deref(),
+        workspace_authority: row.workspace_authority.as_deref(),
+        workspace_owner_deployment_id: row.workspace_owner_deployment_id.as_deref(),
+        workspace_seal_hash: row.workspace_seal_hash.as_deref(),
+    })
 }
 
-fn clean_string(value: Option<String>) -> Option<String> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then(|| trimmed.to_string())
+fn row_into_agent_request(row: AgentRequestRow, expected_doc_id: &str) -> Result<AgentRequest> {
+    anyhow::ensure!(
+        row.doc_id.as_deref() == Some(expected_doc_id),
+        "fresh AgentRequest document binding changed before admission"
+    );
+    AgentRequest::try_from(row)
+}
+
+fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResult<&'a str> {
+    value.ok_or_else(|| {
+        AgentRequestAdmissionError::denied(anyhow::anyhow!("AgentRequest is missing {field}"))
     })
 }
 
 async fn load_signed_request(
     node: &EmbeddedNode,
     doc_id: &str,
-) -> AdmissionResult<SignedAgentRequestRow> {
+) -> AdmissionResult<AgentRequestRow> {
     let doc_id = escape_graphql_string(doc_id);
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                request_id agent_did requester_did behavior_id session_id
+                _docID request_id agent_did requester_did behavior_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
                 content temperature top_p top_k seed max_tokens max_total_tokens metadata
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
@@ -1249,7 +1179,7 @@ pub(crate) async fn load_request_for_admission_test(
     let row = load_signed_request(node, doc_id)
         .await
         .map_err(anyhow::Error::from)?;
-    row.into_agent_request(doc_id.to_string())
+    row_into_agent_request(row, doc_id)
 }
 
 #[cfg(test)]
@@ -1320,11 +1250,10 @@ mod tests {
             .expect("created request doc id")
             .to_string();
 
-        let mut queued = super::load_signed_request(node.as_ref(), &doc_id)
+        let row = super::load_signed_request(node.as_ref(), &doc_id)
             .await
-            .unwrap()
-            .into_agent_request(doc_id)
             .unwrap();
+        let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();
 
         let (_authority_owner, authority) = enrollment_authority_channel();

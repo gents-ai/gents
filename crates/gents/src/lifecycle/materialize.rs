@@ -58,20 +58,15 @@ async fn resolve_created_agent_request_doc_id(
     }
 
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID }} }}"#
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 2) {{ _docID request_id }} }}"#
     );
     let query_resp = node.execute(&query).await;
     if query_resp.has_errors() {
         anyhow::bail!("{lookup_error}: {:?}", query_resp.errors);
     }
 
-    let rows = query_resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let rows: Vec<gents_protocol::row::AgentRequestRow> =
+        crate::graphql::rows(&query_resp, "AgentRequest")?;
     if rows.len() != 1 {
         anyhow::bail!(
             "{missing_doc_id_error}: request_id lookup returned {} documents",
@@ -79,8 +74,7 @@ async fn resolve_created_agent_request_doc_id(
         );
     }
     rows.first()
-        .and_then(|row| row.get("_docID"))
-        .and_then(|doc_id| doc_id.as_str())
+        .and_then(|row| row.doc_id.as_deref())
         .ok_or_else(|| anyhow::anyhow!("{missing_doc_id_error}"))
         .map(str::to_string)
 }
@@ -546,7 +540,7 @@ pub async fn activate_workspace_bound_request(
     if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                lifecycle_state workspace_id
+                request_id lifecycle_state workspace_id
             }} }}"#,
             doc_id = escape_graphql_string(request_doc_id),
         );
@@ -556,23 +550,15 @@ pub async fn activate_workspace_bound_request(
             "recover workspace-bound request activation",
         )
         .await?;
-        let row = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentRequest"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(serde_json::Value::as_object);
+        let row = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+            &response,
+            "AgentRequest",
+        )?;
         let activation_already_visible = row.is_some_and(|row| {
-            row.get("workspace_id")
-                .and_then(serde_json::Value::as_str)
+            row.workspace_id
+                .as_deref()
                 .is_some_and(|workspace_id| !workspace_id.trim().is_empty())
-                && row
-                    .get("lifecycle_state")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|state| {
-                        state != RequestLifecycleState::WorkspaceBindingPending.as_str()
-                    })
+                && row.lifecycle_state != Some(RequestLifecycleState::WorkspaceBindingPending)
         });
         if activation_already_visible {
             return Ok(());

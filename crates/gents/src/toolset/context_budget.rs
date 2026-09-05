@@ -5,6 +5,7 @@ use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -45,7 +46,7 @@ struct ContextEnvelope {
     #[serde(rename = "InferenceProfile", default)]
     profiles: Vec<ProfileRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "InferenceCall", default)]
     inference_calls: Vec<InferenceCallRow>,
 }
@@ -72,12 +73,6 @@ struct ProfileRow {
     profile_id: String,
     #[serde(default)]
     context_window: Option<i64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -238,6 +233,7 @@ fn context_query(agent_did: &str) -> String {
                 context_window
             }}
             AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}, order: {{ created_at: DESC }}, limit: {RECENT_REQUEST_SCAN}) {{
+                request_id
                 session_id
             }}
             InferenceCall(
@@ -313,7 +309,7 @@ fn max_context_window(behaviors: &[BehaviorRow], profiles: &[ProfileRow]) -> Opt
         .max()
 }
 
-fn distinct_session_ids(requests: &[RequestRow]) -> Vec<String> {
+fn distinct_session_ids(requests: &[AgentRequestRow]) -> Vec<String> {
     requests
         .iter()
         .filter_map(|request| {

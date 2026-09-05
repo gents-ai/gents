@@ -16,6 +16,8 @@ use gents::{
     upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
     ToolSelectionDocument,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -52,23 +54,6 @@ struct ToolCallRow {
     #[allow(dead_code)]
     stuck_since: Option<String>,
     tool_failure_class: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChildRequestRow {
-    request_id: String,
-    session_id: String,
-    behavior_id: String,
-    content: String,
-    lifecycle_state: Option<String>,
-    failure_reason: Option<String>,
-    subagent_depth: Option<i64>,
-    deadline: Option<String>,
-    valid_until: Option<String>,
-    caused_by_parent_request_id: Option<String>,
-    caused_by_parent_tool_call_id: Option<String>,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
 }
 
 async fn setup_spawn_fixture(
@@ -406,7 +391,7 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
         .map_or(0, Vec::len)
 }
 
-async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> ChildRequestRow {
+async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -436,7 +421,7 @@ async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> Chi
 async fn fetch_child_request_optional(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> Option<ChildRequestRow> {
+) -> Option<AgentRequestRow> {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let query = format!(
         r#"{{
@@ -465,7 +450,7 @@ async fn fetch_child_request_optional(
 async fn child_request_for_tool(
     node: &EmbeddedNode,
     parent_tool_call_id: &str,
-) -> Option<ChildRequestRow> {
+) -> Option<AgentRequestRow> {
     let escaped_parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
     let query = format!(
         r#"{{
@@ -496,7 +481,7 @@ async fn child_request_for_tool(
 async fn wait_for_child_request_for_tool(
     node: &EmbeddedNode,
     parent_tool_call_id: &str,
-) -> ChildRequestRow {
+) -> AgentRequestRow {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(row) = child_request_for_tool(node, parent_tool_call_id).await {
@@ -514,8 +499,8 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
         if let Some(child) = fetch_child_request_optional(node, child_request_id).await {
-            if !child.session_id.is_empty() {
-                return child.session_id;
+            if let Some(session_id) = child.session_id.filter(|value| !value.is_empty()) {
+                return session_id;
             }
         }
         assert!(

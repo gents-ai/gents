@@ -27,6 +27,7 @@ use crate::lifecycle::queue::{
 };
 use crate::session::execute_mutation_with_retry;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
@@ -417,30 +418,6 @@ impl ChildEdge {
 }
 
 #[derive(Debug, Deserialize)]
-struct ParentRequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    session_id: String,
-    behavior_id: Option<String>,
-    subagent_depth: Option<u32>,
-    deadline: Option<String>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ParentAuthorizationRequestRow {
-    behavior_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
 struct AgentBehaviorToolSelectionRow {
     tool_selection_id: Option<String>,
 }
@@ -502,18 +479,6 @@ struct ReadToolOutputRow {
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
     result: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ActiveSessionRequestRow {
-    request_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct PendingWakeupRow {
-    request_id: Option<String>,
-    execution_origin: Option<String>,
-    metadata: Option<String>,
 }
 
 pub(crate) enum ReadToolOutputOutcome {
@@ -761,7 +726,7 @@ pub async fn handle_read_subagent(
             None => {
                 let state = row
                     .lifecycle_state
-                    .filter(|state| !state.trim().is_empty())
+                    .map(|state| state.as_str().to_string())
                     .ok_or_else(|| anyhow!("child request has no authoritative lifecycle state"))?;
                 (false, state)
             }
@@ -1308,7 +1273,9 @@ pub(crate) async fn active_session_request_id(
         );
     }
     Ok(
-        first_row::<ActiveSessionRequestRow>(response.data.as_ref(), "AgentRequest")
+        rows::<AgentRequestRow>(response.data.as_ref(), "AgentRequest")?
+            .into_iter()
+            .next()
             .map(|row| row.request_id),
     )
 }
@@ -1351,22 +1318,23 @@ pub(crate) async fn pending_automated_wakeup_request_ids(
             response.errors
         );
     }
-    let rows: Vec<PendingWakeupRow> = rows(response.data.as_ref(), "AgentRequest")?;
+    let rows: Vec<AgentRequestRow> = rows(response.data.as_ref(), "AgentRequest")?;
     Ok(rows
         .into_iter()
         .filter(|row| {
             row.execution_origin.as_deref() == Some("scheduled")
                 && is_automated_wakeup(row.metadata.as_deref())
         })
-        .filter_map(|row| non_empty_string(row.request_id.as_deref()))
+        .filter_map(|row| non_empty_string(Some(&row.request_id)))
         .collect())
 }
 
-fn child_terminal_state_name(row: &ChildRequestTerminalRow) -> Option<String> {
+fn child_terminal_state_name(row: &AgentRequestRow) -> Option<String> {
+    let as_string = || row.lifecycle_state.map(|state| state.as_str().to_string());
     if child_request_completed(row) {
-        return row.lifecycle_state.clone();
+        return as_string();
     }
-    project_child_terminal(row).and_then(|_| row.lifecycle_state.clone())
+    project_child_terminal(row).and_then(|_| as_string())
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -1500,10 +1468,12 @@ pub(crate) async fn load_parent_subagent_context(
         );
     }
 
-    let row: ParentRequestRow = first_row(response.data.as_ref(), "AgentRequest")
+    let row = rows::<AgentRequestRow>(response.data.as_ref(), "AgentRequest")?
+        .into_iter()
+        .next()
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
     anyhow::ensure!(
-        row.request_id == parent_request_id && row.doc_id == request_doc_id,
+        row.request_id == parent_request_id && row.doc_id.as_deref() == Some(&request_doc_id),
         "parent AgentRequest binding changed while loading {parent_request_id}"
     );
     let behavior_id = row
@@ -1516,14 +1486,24 @@ pub(crate) async fn load_parent_subagent_context(
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no valid deadline"))?;
+    let session_id = row
+        .session_id
+        .clone()
+        .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} has no session_id"))?;
+    let subagent_depth = row
+        .subagent_depth
+        .map(u32::try_from)
+        .transpose()
+        .context("parent AgentRequest subagent_depth must fit in u32")?
+        .unwrap_or_default();
     let selection = load_subagent_tool_selection(node, &behavior_id).await?;
 
     Ok(ParentSubagentContext {
-        session_id: row.session_id,
+        session_id,
         request_id: row.request_id,
-        request_doc_id: row.doc_id,
+        request_doc_id,
         behavior_id,
-        subagent_depth: row.subagent_depth.unwrap_or_default(),
+        subagent_depth,
         request_deadline_at: deadline,
         allowed_targets: selection.allowed_targets,
         subagent_spawn_enabled: selection.spawn_enabled,
@@ -1553,6 +1533,7 @@ pub(crate) async fn load_parent_subagent_authorization(
                 filter: {{ _docID: {{ _eq: "{escaped_request_doc_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 behavior_id
             }}
         }}"#
@@ -1565,7 +1546,9 @@ pub(crate) async fn load_parent_subagent_authorization(
         );
     }
 
-    let row: ParentAuthorizationRequestRow = first_row(response.data.as_ref(), "AgentRequest")
+    let row = rows::<AgentRequestRow>(response.data.as_ref(), "AgentRequest")?
+        .into_iter()
+        .next()
         .ok_or_else(|| anyhow!("parent AgentRequest {parent_request_id} not found"))?;
     let behavior_id = row
         .behavior_id
@@ -2089,7 +2072,7 @@ pub(crate) async fn load_child_final_response(
 pub(crate) async fn load_child_terminal_row(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> Result<Option<ChildRequestTerminalRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let Some(child_request_doc_id) =
         crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
     else {
@@ -2102,6 +2085,7 @@ pub(crate) async fn load_child_terminal_row(
                 filter: {{ _docID: {{ _eq: "{escaped_child_request_doc_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 lifecycle_state
                 failure_reason
             }}
@@ -2114,10 +2098,11 @@ pub(crate) async fn load_child_terminal_row(
             response.errors
         );
     }
-    Ok(first_row::<ChildRequestTerminalRow>(
-        response.data.as_ref(),
-        "AgentRequest",
-    ))
+    Ok(
+        rows::<AgentRequestRow>(response.data.as_ref(), "AgentRequest")?
+            .into_iter()
+            .next(),
+    )
 }
 
 fn render_assistant_message_text(content: &str) -> Result<String> {
@@ -2152,14 +2137,8 @@ fn render_assistant_message_text(content: &str) -> Result<String> {
     Ok(parts.join("\n"))
 }
 
-#[derive(Debug, Deserialize)]
-pub(crate) struct ChildRequestTerminalRow {
-    pub lifecycle_state: Option<String>,
-    pub failure_reason: Option<String>,
-}
-
-pub(crate) fn project_child_terminal(row: &ChildRequestTerminalRow) -> Option<ChildTerminal> {
-    match RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref()) {
+pub(crate) fn project_child_terminal(row: &AgentRequestRow) -> Option<ChildTerminal> {
+    match row.lifecycle_state {
         Some(RequestLifecycleState::Completed) => None,
         Some(RequestLifecycleState::Failed) => Some(ChildTerminal::Failed {
             reason: non_empty_string(row.failure_reason.as_deref())
@@ -2208,9 +2187,8 @@ pub(crate) fn child_terminal_reason(terminal: &ChildTerminal) -> (String, Failur
     }
 }
 
-pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
-    RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref())
-        == Some(RequestLifecycleState::Completed)
+pub(crate) fn child_request_completed(row: &AgentRequestRow) -> bool {
+    row.lifecycle_state == Some(RequestLifecycleState::Completed)
 }
 
 pub(crate) fn subagent_tool_not_allowed_payload(
@@ -2417,42 +2395,36 @@ mod tests {
 
     #[test]
     fn project_child_terminal_maps_child_states() {
+        let row = |state, failure_reason| AgentRequestRow {
+            request_id: "child".to_string(),
+            lifecycle_state: Some(state),
+            failure_reason,
+            ..Default::default()
+        };
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("failed".to_string()),
-                failure_reason: Some("bad output".to_string()),
-            }),
+            project_child_terminal(&row(
+                RequestLifecycleState::Failed,
+                Some("bad output".to_string())
+            )),
             Some(ChildTerminal::Failed {
                 reason: "bad output".to_string(),
                 failure_class: FailureClass::External,
             })
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("dead".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row(RequestLifecycleState::Dead, None)),
             Some(ChildTerminal::Dead)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("interrupted".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row(RequestLifecycleState::Interrupted, None)),
             Some(ChildTerminal::Interrupted)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("superseded".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row(RequestLifecycleState::Superseded, None)),
             Some(ChildTerminal::Superseded)
         );
         assert_eq!(
-            project_child_terminal(&ChildRequestTerminalRow {
-                lifecycle_state: Some("completed".to_string()),
-                failure_reason: None,
-            }),
+            project_child_terminal(&row(RequestLifecycleState::Completed, None)),
             None
         );
     }

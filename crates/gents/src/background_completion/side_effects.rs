@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context as _;
 
 pub(super) async fn ensure_projection_side_effects(
     node: &EmbeddedNode,
@@ -216,12 +217,6 @@ pub(super) async fn existing_tool_completion_notification(
     Ok(None)
 }
 
-#[derive(Debug, Deserialize)]
-struct BoundWakeRow {
-    request_id: String,
-    metadata: Option<String>,
-}
-
 pub(super) async fn bound_background_wake_request(
     node: &EmbeddedNode,
     notification: &ExistingNotification,
@@ -257,7 +252,7 @@ pub(super) async fn bound_background_wake_request(
             response.errors
         );
     }
-    let Some(row) = first_row::<BoundWakeRow>(response.data.as_ref(), "AgentRequest") else {
+    let Some(row) = request_rows(response.data.as_ref())?.into_iter().next() else {
         return Ok(None);
     };
     let matches = row.request_id == request_id
@@ -267,13 +262,6 @@ pub(super) async fn bound_background_wake_request(
                 && hints.key.as_deref() == Some(queue_key)
         });
     Ok(matches.then_some(row.request_id))
-}
-
-#[derive(Debug, Deserialize)]
-struct WakeupRow {
-    request_id: String,
-    metadata: Option<String>,
-    created_at: String,
 }
 
 pub(super) async fn existing_wakeup_after(
@@ -306,12 +294,7 @@ pub(super) async fn existing_wakeup_after(
         );
     }
 
-    let rows: Vec<WakeupRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows = request_rows(response.data.as_ref())?;
     for row in rows {
         let matches_key = parse_queue_hints(row.metadata.as_deref()).is_some_and(|hints| {
             hints.source == QueueSource::BackgroundCompletion
@@ -322,12 +305,24 @@ pub(super) async fn existing_wakeup_after(
             continue;
         }
 
-        let created_at = parse_utc_timestamp(&row.created_at, "AgentRequest.created_at")?;
+        let created_at = parse_utc_timestamp(
+            row.created_at
+                .as_deref()
+                .context("AgentRequest.created_at is missing")?,
+            "AgentRequest.created_at",
+        )?;
         if created_at >= *notification_timestamp {
             return Ok(Some(row.request_id));
         }
     }
     Ok(None)
+}
+
+fn request_rows(data: Option<&serde_json::Value>) -> Result<Vec<AgentRequestRow>> {
+    let value = data
+        .and_then(|data| data.get("AgentRequest"))
+        .context("AgentRequest field missing from query response")?;
+    serde_json::from_value(value.clone()).context("decode AgentRequest rows")
 }
 
 fn parse_utc_timestamp(value: &str, field: &str) -> Result<DateTime<Utc>> {

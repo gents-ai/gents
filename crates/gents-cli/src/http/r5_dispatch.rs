@@ -9,6 +9,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -45,7 +46,7 @@ struct SubagentDispatchQueryEnvelope {
     #[serde(rename = "AgentToolCall", default)]
     bridges: Vec<BridgeRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentBehavior", default)]
     behaviors: Vec<BehaviorRow>,
 }
@@ -64,22 +65,6 @@ struct BridgeRow {
     started_at: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    request_id: String,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    claimed_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -256,7 +241,11 @@ fn build_subagent_dispatch_snapshot(
             let dispatch_state = clean_optional_string(bridge.lifecycle_state.as_deref())
                 .or_else(|| clean_optional_string(bridge.status.as_deref()))
                 .or_else(|| {
-                    child.and_then(|child| clean_optional_string(child.lifecycle_state.as_deref()))
+                    child.and_then(|child| {
+                        child
+                            .lifecycle_state
+                            .map(|state| state.as_str().to_string())
+                    })
                 })
                 .unwrap_or_else(|| "unknown".to_string());
             let started_at = clean_optional_string(bridge.started_at.as_deref())

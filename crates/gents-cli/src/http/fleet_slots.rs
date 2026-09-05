@@ -5,8 +5,8 @@ use chrono::{DateTime, Utc};
 use gents::tool_call_lifecycle::deadline_is_expired;
 use gents::{call_state_holds_backend_slot, UNKNOWN_PROBE_STATUS};
 use gents_protocol::row::{
-    project_behavior_readiness_summary, AgentBehaviorReadinessRow, BehaviorReadinessState,
-    ProjectedBehaviorReadinessSummary,
+    project_behavior_readiness_summary, AgentBehaviorReadinessRow, AgentRequestRow,
+    BehaviorReadinessState, ProjectedBehaviorReadinessSummary,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,7 +76,7 @@ struct FleetSlotQueryEnvelope {
     #[serde(rename = "InferenceCall", default)]
     calls: Vec<InferenceCallRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentBehaviorReadiness", default)]
     behavior_readiness: Vec<AgentBehaviorReadinessRow>,
 }
@@ -163,14 +163,6 @@ struct InferenceCallRow {
     call_state: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    deadline: Option<String>,
-}
-
 #[derive(Clone, Default)]
 struct SlotCounts {
     assigned: i64,
@@ -220,6 +212,7 @@ fn fleet_slot_snapshot_query() -> &'static str {
         AgentRequest(filter: {
             lifecycle_state: { _eq: "processing" }
         }) {
+            request_id
             behavior_id
             deadline
         }
@@ -469,6 +462,10 @@ mod tests {
     };
     use serde_json::json;
 
+    fn empty_request_row() -> AgentRequestRow {
+        serde_json::from_value(json!({ "request_id": "" })).unwrap()
+    }
+
     fn readiness_row(
         agent_did: &str,
         default_behavior_id: &str,
@@ -562,9 +559,10 @@ mod tests {
                         call_state: "queued".to_string(),
                     },
                 ],
-                requests: vec![RequestRow {
+                requests: vec![AgentRequestRow {
                     behavior_id: Some("behavior-a".to_string()),
                     deadline: Some("2026-05-20T11:59:00Z".to_string()),
+                    ..empty_request_row()
                 }],
                 behavior_readiness: vec![readiness_row(
                     "did:test:test",
@@ -655,17 +653,20 @@ mod tests {
                     },
                 ],
                 requests: vec![
-                    RequestRow {
+                    AgentRequestRow {
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: Some("2026-05-20T11:59:00Z".to_string()),
+                        ..empty_request_row()
                     },
-                    RequestRow {
+                    AgentRequestRow {
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: Some("not-a-date".to_string()),
+                        ..empty_request_row()
                     },
-                    RequestRow {
+                    AgentRequestRow {
                         behavior_id: Some("behavior-disabled".to_string()),
                         deadline: None,
+                        ..empty_request_row()
                     },
                 ],
                 behavior_readiness: Vec::new(),

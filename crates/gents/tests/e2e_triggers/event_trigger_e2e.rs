@@ -35,6 +35,7 @@ use std::time::Duration;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -140,17 +141,6 @@ where
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentRequestRow {
-    #[serde(rename = "_docID")]
-    _doc_id: String,
-    request_id: String,
-    content: String,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-    execution_origin: Option<String>,
 }
 
 async fn query_agent_requests_for_trigger(
@@ -396,7 +386,8 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     );
     let expected_content = format!("fired for {EXTERNAL_ID}");
     assert_eq!(
-        request.content, expected_content,
+        request.content.as_deref(),
+        Some(expected_content.as_str()),
         "rendered prompt should substitute doc.external_id: {request:?}"
     );
     assert!(

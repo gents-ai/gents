@@ -1,38 +1,14 @@
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use super::{first_optional_row, first_row};
 
-fn null_string_default<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RequestSnapshotRow {
-    lifecycle_state: String,
-    behavior_id: String,
-    #[serde(deserialize_with = "null_string_default")]
-    backend_id: String,
-    execution_origin: String,
-    #[serde(deserialize_with = "null_string_default")]
-    retry_parent_request: String,
-    retry_root_request: String,
-    #[serde(deserialize_with = "null_string_default")]
-    superseded_by_request: String,
-    retry_count: i64,
-    max_retries: i64,
-    claimed_at: Option<String>,
-    deadline: Option<String>,
-    failure_reason: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
-    pub lifecycle_state: String,
+    pub lifecycle_state: RequestLifecycleState,
     pub behavior_id: String,
     pub backend_id: String,
     pub execution_origin: String,
@@ -46,18 +22,20 @@ pub struct RequestSnapshot {
     pub failure_reason: String,
 }
 
-impl From<RequestSnapshotRow> for RequestSnapshot {
-    fn from(row: RequestSnapshotRow) -> Self {
+impl From<AgentRequestRow> for RequestSnapshot {
+    fn from(row: AgentRequestRow) -> Self {
         Self {
-            lifecycle_state: row.lifecycle_state,
-            behavior_id: row.behavior_id,
-            backend_id: row.backend_id,
-            execution_origin: row.execution_origin,
-            retry_parent_request: row.retry_parent_request,
-            retry_root_request: row.retry_root_request,
-            superseded_by_request: row.superseded_by_request,
-            retry_count: row.retry_count,
-            max_retries: row.max_retries,
+            lifecycle_state: row
+                .lifecycle_state
+                .expect("request snapshot is missing lifecycle_state"),
+            behavior_id: row.behavior_id.unwrap_or_default(),
+            backend_id: row.backend_id.unwrap_or_default(),
+            execution_origin: row.execution_origin.unwrap_or_default(),
+            retry_parent_request: row.retry_parent_request.unwrap_or_default(),
+            retry_root_request: row.retry_root_request.unwrap_or_default(),
+            superseded_by_request: row.superseded_by_request.unwrap_or_default(),
+            retry_count: row.retry_count.unwrap_or_default(),
+            max_retries: row.max_retries.unwrap_or_default(),
             claimed_at_present: row
                 .claimed_at
                 .as_deref()
@@ -155,6 +133,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 lifecycle_state
                 behavior_id
                 backend_id
@@ -171,7 +150,7 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_row::<RequestSnapshotRow>(&resp, "AgentRequest").into()
+    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
 }
 
 pub async fn fetch_request_lineage_snapshot(
@@ -185,13 +164,18 @@ pub async fn fetch_request_lineage_snapshot(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 caused_by_trigger_id
                 caused_by_trigger_kind
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
+    let row = first_row::<AgentRequestRow>(&resp, "AgentRequest");
+    RequestLineageSnapshot {
+        caused_by_trigger_id: row.caused_by_trigger_id,
+        caused_by_trigger_kind: row.caused_by_trigger_kind,
+    }
 }
 
 pub async fn fetch_request_lineage_snapshot_by_tuple(
@@ -212,33 +196,28 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
                 }},
                 limit: 1
             ) {{
+                request_id
                 caused_by_trigger_id
                 caused_by_trigger_kind
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_optional_row::<RequestLineageSnapshot>(&resp, "AgentRequest")
+    first_optional_row::<AgentRequestRow>(&resp, "AgentRequest").map(|row| RequestLineageSnapshot {
+        caused_by_trigger_id: row.caused_by_trigger_id,
+        caused_by_trigger_kind: row.caused_by_trigger_kind,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshotRaw {
-    pub lifecycle_state: String,
     pub interrupt_requested_at: Option<String>,
     pub valid_until: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct RequestSnapshotRawRow {
-    lifecycle_state: String,
-    interrupt_requested_at: Option<String>,
-    valid_until: Option<String>,
-}
-
-impl From<RequestSnapshotRawRow> for RequestSnapshotRaw {
-    fn from(row: RequestSnapshotRawRow) -> Self {
+impl From<AgentRequestRow> for RequestSnapshotRaw {
+    fn from(row: AgentRequestRow) -> Self {
         Self {
-            lifecycle_state: row.lifecycle_state,
             interrupt_requested_at: row.interrupt_requested_at.filter(|value| !value.is_empty()),
             valid_until: row.valid_until.filter(|value| !value.is_empty()),
         }
@@ -253,14 +232,14 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 limit: 1
             ) {{
-                lifecycle_state
+                request_id
                 interrupt_requested_at
                 valid_until
             }}
         }}"#
     );
     let resp = node.execute(&query).await;
-    first_row::<RequestSnapshotRawRow>(&resp, "AgentRequest").into()
+    first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
 }
 
 pub async fn fetch_conversation_snapshot(

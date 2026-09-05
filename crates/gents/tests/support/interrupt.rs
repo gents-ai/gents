@@ -3,6 +3,7 @@ use std::time::Duration;
 use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use gents::defra_node::{EmbeddedNode, QueryResponse};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -379,6 +380,8 @@ pub async fn wait_for_request_lifecycle_state(
     request_doc_id: &str,
     expected: &str,
 ) {
+    let expected = RequestLifecycleState::parse(expected)
+        .expect("expected request lifecycle state must be canonical");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;

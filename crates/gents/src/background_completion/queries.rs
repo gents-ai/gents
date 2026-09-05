@@ -1,18 +1,10 @@
 use super::*;
-
-#[derive(Debug, Deserialize)]
-pub(super) struct ChildLinkageRow {
-    pub(super) request_id: String,
-    pub(super) caused_by_parent_request_id: Option<String>,
-    pub(super) caused_by_parent_request_doc_id: Option<String>,
-    pub(super) caused_by_parent_tool_call_id: Option<String>,
-    pub(super) caused_by_parent_tool_call_doc_id: Option<String>,
-}
+use anyhow::Context as _;
 
 pub(super) async fn load_child_linkage(
     node: &EmbeddedNode,
     child_request_id: &str,
-) -> Result<Option<ChildLinkageRow>> {
+) -> Result<Option<AgentRequestRow>> {
     let Some(child_request_doc_id) =
         crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
     else {
@@ -40,7 +32,7 @@ pub(super) async fn load_child_linkage(
             response.errors
         );
     }
-    let row = first_row::<ChildLinkageRow>(response.data.as_ref(), "AgentRequest");
+    let row = request_rows(response.data.as_ref())?.into_iter().next();
     if row
         .as_ref()
         .is_some_and(|row| row.request_id != child_request_id)
@@ -50,11 +42,6 @@ pub(super) async fn load_child_linkage(
         );
     }
     Ok(row)
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct RequestIdRow {
-    pub(super) request_id: String,
 }
 
 pub(super) async fn load_request_id_by_doc_id(
@@ -77,14 +64,10 @@ pub(super) async fn load_request_id_by_doc_id(
             response.errors
         );
     }
-    Ok(first_row::<RequestIdRow>(response.data.as_ref(), "AgentRequest").map(|row| row.request_id))
-}
-
-#[derive(Debug, Deserialize)]
-pub(super) struct TerminalChildRow {
-    pub(super) request_id: String,
-    pub(super) caused_by_parent_request_id: Option<String>,
-    pub(super) caused_by_parent_tool_call_id: Option<String>,
+    Ok(request_rows(response.data.as_ref())?
+        .into_iter()
+        .next()
+        .map(|row| row.request_id))
 }
 
 pub(super) async fn load_terminal_child_request_ids(node: &EmbeddedNode) -> Result<Vec<String>> {
@@ -110,12 +93,7 @@ pub(super) async fn load_terminal_child_request_ids(node: &EmbeddedNode) -> Resu
         );
     }
 
-    let rows: Vec<TerminalChildRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows = request_rows(response.data.as_ref())?;
     Ok(rows
         .into_iter()
         .filter(|row| {
@@ -124,4 +102,11 @@ pub(super) async fn load_terminal_child_request_ids(node: &EmbeddedNode) -> Resu
         })
         .map(|row| row.request_id)
         .collect())
+}
+
+fn request_rows(data: Option<&serde_json::Value>) -> Result<Vec<AgentRequestRow>> {
+    let value = data
+        .and_then(|data| data.get("AgentRequest"))
+        .context("AgentRequest field missing from query response")?;
+    serde_json::from_value(value.clone()).context("decode AgentRequest rows")
 }

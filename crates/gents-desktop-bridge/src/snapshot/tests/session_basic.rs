@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
 fn session_snapshot_is_agent_scoped_when_session_ids_match() {
@@ -253,7 +254,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -277,6 +278,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+            ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -295,7 +297,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -319,6 +321,7 @@ fn session_snapshot_exposes_pending_turn_when_latest_request_is_not_materialized
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+            ..Default::default()
             },
         ],
         messages: vec![
@@ -411,7 +414,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("processing".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -435,6 +438,7 @@ fn session_snapshot_hides_pending_turn_once_user_message_is_materialized() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         messages: vec![AgentMessageRow {
             message_key: "msg-2".to_string(),
@@ -490,7 +494,7 @@ fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -514,6 +518,7 @@ fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-2".to_string(),
@@ -532,7 +537,7 @@ fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("processing".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Processing),
                 backend_id: None,
                 execution_origin: Some("interactive".to_string()),
                 failure_reason: None,
@@ -556,6 +561,7 @@ fn unbound_replica_forks_do_not_swallow_a_later_pending_turn() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         messages: vec![

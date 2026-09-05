@@ -7,6 +7,7 @@ use gents::{
     DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT,
 };
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -265,6 +266,8 @@ async fn load_request_show_snapshot(
         .and_then(|rows| rows.first())
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+    let canonical_request: AgentRequestRow = serde_json::from_value(request_row.clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))?;
 
     let response_response = post_graphql(graphql, &response_query(request_id))
         .await
@@ -301,7 +304,8 @@ async fn load_request_show_snapshot(
         after = descendants.next_cursor;
     }
 
-    let request_agent_did = string_field(&request_row, "agent_did").unwrap_or_default();
+    let request_terminal = canonical_request.is_terminal();
+    let request_agent_did = canonical_request.agent_did.unwrap_or_default();
     let liveness = crate::commands::status::load_liveness_value(graphql, &request_agent_did).await;
     let active_tool_calls = active_tool_call_keys(&liveness);
     let native_executors_available = liveness
@@ -309,10 +313,6 @@ async fn load_request_show_snapshot(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let native_executor_values = value_array(&liveness, "/active_native_executors");
-    let request_terminal = RequestLifecycleState::is_terminal_str(
-        string_field(&request_row, "lifecycle_state").as_deref(),
-    );
-
     let tool_names = tool_rows
         .iter()
         .filter_map(|row| string_field(row, "tool_name"))
@@ -1122,8 +1122,8 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     let cancel_cause: CancelCause = args.cause.into();
 
     let before = fetch_interrupt_request_row(&graphql, &request_id).await?;
-    let already_interrupted = request_row_string(&before, "interrupt_requested_at").is_some();
-    let already_terminal = request_row_is_terminal(&before);
+    let already_interrupted = nonempty_owned(before.interrupt_requested_at.as_deref()).is_some();
+    let already_terminal = before.is_terminal();
 
     if !already_interrupted && !already_terminal {
         let now = chrono::Utc::now().to_rfc3339();
@@ -1141,12 +1141,12 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     }
 
     let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;
-    let interrupt_landed_at = request_row_string(&row, "interrupt_requested_at");
+    let interrupt_landed_at = nonempty_owned(row.interrupt_requested_at.as_deref());
     if !already_terminal && interrupt_landed_at.is_none() {
         anyhow::bail!("request {request_id} did not persist interrupt_requested_at");
     }
 
-    if args.wait && !request_row_is_terminal(&row) {
+    if args.wait && !row.is_terminal() {
         let timeout = parse_duration_suffix(&args.timeout)?;
         row = wait_for_terminal_request_state(&graphql, &request_id, timeout, row).await?;
     }
@@ -1169,7 +1169,7 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
     Ok(())
 }
 
-async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<Value> {
+async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<AgentRequestRow> {
     let query = format!(
         r#"{{
             AgentRequest(
@@ -1195,28 +1195,31 @@ async fn fetch_interrupt_request_row(graphql: &str, request_id: &str) -> Result<
         request_id = escape_graphql_string(request_id),
     );
     let response = post_graphql(graphql, &query).await?;
-    response
+    let row = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
+    serde_json::from_value(row).with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
 async fn wait_for_terminal_request_state(
     graphql: &str,
     request_id: &str,
     timeout: Duration,
-    mut last_row: Value,
-) -> Result<Value> {
+    mut last_row: AgentRequestRow,
+) -> Result<AgentRequestRow> {
     let deadline = Instant::now() + timeout;
     loop {
-        if request_row_is_terminal(&last_row) {
+        if last_row.is_terminal() {
             return Ok(last_row);
         }
         if Instant::now() >= deadline {
-            let state = request_row_string(&last_row, "lifecycle_state")
-                .unwrap_or_else(|| "<missing>".to_string());
+            let state = last_row
+                .lifecycle_state
+                .map(RequestLifecycleState::as_str)
+                .unwrap_or("<missing>");
             anyhow::bail!(
                 "timed out waiting for request {request_id} to reach a terminal state after {}s (last lifecycle_state={state})",
                 timeout.as_secs()
@@ -1227,43 +1230,41 @@ async fn wait_for_terminal_request_state(
     }
 }
 
-fn request_row_is_terminal(row: &Value) -> bool {
-    RequestLifecycleState::is_terminal_str(row.get("lifecycle_state").and_then(Value::as_str))
-}
-
-fn request_row_string(row: &Value, key: &str) -> Option<String> {
-    row.get(key)
-        .and_then(Value::as_str)
+fn nonempty_owned(value: Option<&str>) -> Option<String> {
+    value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
 }
 
 fn request_interrupt_summary(
-    row: &Value,
+    row: &AgentRequestRow,
     cause: &str,
     interrupt_landed_at: Option<&str>,
     already_interrupted: bool,
     already_terminal: bool,
 ) -> Value {
-    let lifecycle_state = request_row_string(row, "lifecycle_state").unwrap_or_default();
+    let lifecycle_state = row
+        .lifecycle_state
+        .map(RequestLifecycleState::as_str)
+        .unwrap_or_default();
     json!({
-        "request_id": request_row_string(row, "request_id").unwrap_or_default(),
-        "agent_did": request_row_string(row, "agent_did"),
-        "behavior_id": request_row_string(row, "behavior_id"),
-        "session_id": request_row_string(row, "session_id"),
+        "request_id": row.request_id,
+        "agent_did": nonempty_owned(row.agent_did.as_deref()),
+        "behavior_id": nonempty_owned(row.behavior_id.as_deref()),
+        "session_id": nonempty_owned(row.session_id.as_deref()),
         "lifecycle_state": lifecycle_state,
-        "failure_reason": request_row_string(row, "failure_reason"),
-        "interrupt_requested_at": request_row_string(row, "interrupt_requested_at"),
+        "failure_reason": nonempty_owned(row.failure_reason.as_deref()),
+        "interrupt_requested_at": nonempty_owned(row.interrupt_requested_at.as_deref()),
         "interrupt_landed_at": interrupt_landed_at,
         "cause": cause,
         "already_interrupted": already_interrupted,
         "already_terminal": already_terminal,
-        "terminal": RequestLifecycleState::is_terminal_str(Some(lifecycle_state.as_str())),
-        "created_at": request_row_string(row, "created_at"),
-        "claimed_at": request_row_string(row, "claimed_at"),
-        "deadline": request_row_string(row, "deadline"),
-        "valid_until": request_row_string(row, "valid_until"),
+        "terminal": row.is_terminal(),
+        "created_at": nonempty_owned(row.created_at.as_deref()),
+        "claimed_at": nonempty_owned(row.claimed_at.as_deref()),
+        "deadline": nonempty_owned(row.deadline.as_deref()),
+        "valid_until": nonempty_owned(row.valid_until.as_deref()),
     })
 }
 
@@ -1325,22 +1326,33 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
     let graphql = resolve_graphql_endpoint(args.graphql.as_deref(), args.home.as_deref())?;
     let stale_id = resolve_request_id(args.request_id.as_deref(), args.request_id_flag.as_deref())?;
     let stale = fetch_request_view(&graphql, &stale_id).await?;
-    if RequestLifecycleState::parse_opt(Some(stale.lifecycle_state.as_str()))
-        != Some(RequestLifecycleState::Dead)
-        || stale.failure_reason != "Stale"
+    if stale.lifecycle_state != Some(RequestLifecycleState::Dead)
+        || stale.failure_reason.as_deref() != Some("Stale")
     {
         anyhow::bail!(
             "request {stale_id} is not a stale terminal (lifecycle_state={}, failure_reason={}); resend is only valid for stale-dead requests",
-            stale.lifecycle_state,
-            stale.failure_reason
+            stale.lifecycle_state.map_or("<missing>", RequestLifecycleState::as_str),
+            stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }
+    let stale_agent_did = stale
+        .agent_did
+        .as_deref()
+        .context("stale request has no agent_did")?;
+    let stale_content = stale
+        .content
+        .as_deref()
+        .context("stale request has no content")?;
+    let stale_doc_id = stale
+        .doc_id
+        .as_deref()
+        .context("stale request has no _docID")?;
     let valid_until = Some(chrono::Utc::now() + chrono::Duration::minutes(5));
-    ensure_local_request_signer(args.home.as_deref(), &stale.agent_did)?;
+    ensure_local_request_signer(args.home.as_deref(), stale_agent_did)?;
     let submitted = create_agent_request(
         &graphql,
-        &stale.agent_did,
-        &stale.content,
+        stale_agent_did,
+        stale_content,
         None,
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
@@ -1353,7 +1365,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
             metadata: stale.metadata.clone(),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),
-            retry_parent_request_doc_id: Some(stale.doc_id.clone()),
+            retry_parent_request_doc_id: Some(stale_doc_id.to_string()),
             retry_root_request: stale.retry_root_request.clone(),
         },
     )

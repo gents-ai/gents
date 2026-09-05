@@ -1,6 +1,7 @@
 use super::*;
 use crate::identity::AgentIdentity;
 use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::sync::Arc;
 use tempfile::TempDir;
 
@@ -28,7 +29,8 @@ struct QueueRow {
     behavior_id: String,
     content: String,
     metadata: Option<String>,
-    lifecycle_state: Option<String>,
+    #[serde(default)]
+    lifecycle_state: Option<RequestLifecycleState>,
     execution_origin: String,
     superseded_by_request: Option<String>,
     superseded_by_request_doc_id: Option<String>,
@@ -254,7 +256,6 @@ mod pin_tests {
     use super::*;
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
     use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
-    use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     fn pin_parent_request() -> AgentRequest {
         let mut parent = parent_request(PIN_FIXED_DID, "sess-pin-parent");

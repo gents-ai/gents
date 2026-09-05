@@ -1,7 +1,8 @@
 use super::lookup::lookup_response_status_by_request_id;
-use super::rows::{DedupPlan, DedupRow, RequestViewRow, StatusRow};
+use super::rows::{DedupPlan, StatusRow};
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 impl RequestLifecycle {
     pub(super) async fn check_deduplication(&self) -> Result<DedupPlan> {
@@ -29,22 +30,23 @@ impl RequestLifecycle {
             anyhow::bail!("deduplication check failed: {:?}", resp.errors);
         }
 
-        let rows: Vec<DedupRow> = resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
-        let active_blocker = rows
+        let active_blocker = rows.iter().find(|row| {
+            row.doc_id.as_deref() != Some(self.request.doc_id.as_str())
+                && row.lifecycle_state != Some(RequestLifecycleState::Pending)
+        });
+        let first_pending = rows
             .iter()
-            .find(|row| row.doc_id != self.request.doc_id && row.is_active_non_pending());
-        let first_pending = rows.iter().find(|row| row.is_pending());
+            .find(|row| row.lifecycle_state == Some(RequestLifecycleState::Pending));
         let is_earliest = active_blocker.is_none()
-            && first_pending.is_some_and(|row| row.doc_id == self.request.doc_id);
+            && first_pending
+                .is_some_and(|row| row.doc_id.as_deref() == Some(self.request.doc_id.as_str()));
         let blocking_request_id = active_blocker
             .or_else(|| {
-                first_pending.and_then(|row| (row.doc_id != self.request.doc_id).then_some(row))
+                first_pending.and_then(|row| {
+                    (row.doc_id.as_deref() != Some(self.request.doc_id.as_str())).then_some(row)
+                })
             })
             .map(|row| row.request_id.clone());
 
@@ -65,7 +67,7 @@ impl RequestLifecycle {
         })
     }
 
-    pub(super) async fn request_view(&self) -> Result<Option<RequestViewRow>> {
+    pub(super) async fn request_view(&self) -> Result<Option<AgentRequestRow>> {
         let doc_id = &self.request.doc_id;
         let query = format!(
             r#"{{
@@ -73,6 +75,7 @@ impl RequestLifecycle {
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                     limit: 1
                 ) {{
+                    request_id
                     lifecycle_state
                     backend_id
                     execution_origin
@@ -85,12 +88,7 @@ impl RequestLifecycle {
             anyhow::bail!("request status query failed: {:?}", resp.errors);
         }
 
-        let rows: Vec<RequestViewRow> = resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentRequest"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
+        let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 
         Ok(rows.into_iter().next())
     }

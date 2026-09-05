@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use gents::StreamWriter;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::transcript::present_persisted_message;
 
 use super::support::fixtures::test_identity;
@@ -349,6 +350,8 @@ async fn wait_for_request_lifecycle_state_realtime(
     request_doc_id: &str,
     expected: &str,
 ) -> RequestSnapshot {
+    let expected = RequestLifecycleState::parse(expected)
+        .expect("expected request lifecycle state must be canonical");
     let started = std::time::Instant::now();
     loop {
         let snapshot = fetch_request_snapshot(node, request_doc_id).await;
@@ -446,7 +449,11 @@ async fn drive_streaming_response_interrupt_flow_case(
         .await;
 
     let pre_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
-    assert_eq!(pre_request.lifecycle_state, case.pre_request_state);
+    assert_eq!(
+        pre_request.lifecycle_state,
+        RequestLifecycleState::parse(&case.pre_request_state)
+            .expect("generated pre-request state must be canonical")
+    );
     let pre_response = load_streaming_response_row(&db.node, &response_doc_id).await;
     assert_eq!(pre_response.status, case.pre_response_status);
     let pre_call = wait_for_inference_call_state(
@@ -472,7 +479,11 @@ async fn drive_streaming_response_interrupt_flow_case(
     assert_eq!(post_call.call_state, case.post_inference_call_state);
 
     let post_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
-    assert_eq!(post_request.lifecycle_state, case.post_request_state);
+    assert_eq!(
+        post_request.lifecycle_state,
+        RequestLifecycleState::parse(&case.post_request_state)
+            .expect("generated post-request state must be canonical")
+    );
     assert_eq!(
         request_state_is_terminal(&post_request.lifecycle_state),
         case.request_terminal
@@ -935,11 +946,8 @@ fn live_tail_shape(row: &StreamingResponseRow) -> &'static str {
     }
 }
 
-fn request_state_is_terminal(state: &str) -> bool {
-    matches!(
-        state,
-        "completed" | "failed" | "superseded" | "dead" | "interrupted"
-    )
+fn request_state_is_terminal(state: &RequestLifecycleState) -> bool {
+    state.is_terminal()
 }
 
 fn response_status_is_terminal(status: &str) -> bool {

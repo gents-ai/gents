@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -1541,9 +1542,9 @@ async fn insert_inference_call(node: &EmbeddedNode, request_id: &str, call_state
     );
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct RequestRecoveryRow {
-    lifecycle_state: String,
+    lifecycle_state: RequestLifecycleState,
 }
 
 async fn fetch_request_recovery_row(node: &EmbeddedNode, request_id: &str) -> RequestRecoveryRow {
@@ -1551,11 +1552,18 @@ async fn fetch_request_recovery_row(node: &EmbeddedNode, request_id: &str) -> Re
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
+                request_id
                 lifecycle_state
             }}
         }}"#
     );
-    first_row(&node.execute(&query).await, "AgentRequest")
+    let row: gents_protocol::row::AgentRequestRow =
+        first_row(&node.execute(&query).await, "AgentRequest");
+    RequestRecoveryRow {
+        lifecycle_state: row
+            .lifecycle_state
+            .expect("AgentRequest.lifecycle_state must be present"),
+    }
 }
 
 #[derive(Debug, Deserialize)]

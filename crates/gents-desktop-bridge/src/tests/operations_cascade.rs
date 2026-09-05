@@ -2,6 +2,7 @@ use crate::cascade::{
     build_cascade_preview, CascadeClassification, CascadeWalkRequest, CascadeWalkRow,
 };
 use crate::types::DesktopPreviewInterruptCascadeRequest;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[test]
 fn cascade_request_default_shape() {
@@ -28,7 +29,7 @@ fn cascade_row_carries_lineage() {
         request_id: "req_b91".into(),
         session_id: Some("sess_1".into()),
         behavior_id: Some("amy-general".into()),
-        lifecycle_state: Some("processing".into()),
+        lifecycle_state: Some(RequestLifecycleState::Processing),
         parent_request_id: Some("req_root".into()),
         parent_tool_call_id: Some("tc_42".into()),
         tool_name: Some("summarize".into()),
@@ -86,8 +87,8 @@ async fn walk_returns_classified_descendants_for_five_child_fixture() {
         kinds
     );
     assert_eq!(
-        result.root_state.as_deref(),
-        Some("processing"),
+        result.root_state,
+        Some(RequestLifecycleState::Processing),
         "root_state mismatch"
     );
 }
@@ -129,6 +130,40 @@ async fn walk_returns_no_rows_for_standalone_root() {
         "expected empty rows for standalone root, got: {:?}",
         result.rows
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn walk_rejects_an_unknown_request_lifecycle_state() {
+    let (core, _tmp) = super::support::seed_standalone_fixture().await;
+    let response = core
+        .node()
+        .execute(
+            r#"mutation {
+                update_AgentRequest(
+                    filter: { request_id: { _eq: "req_solo" } },
+                    input: { lifecycle_state: "notARequestState" }
+                ) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
+        "mutation failed: {:?}",
+        response.errors
+    );
+
+    let error = crate::cascade::walk(
+        &core,
+        &CascadeWalkRequest {
+            root_request_id: "req_solo".into(),
+            agent_did: Some("did:test:operator".into()),
+            include_terminal: false,
+        },
+    )
+    .await
+    .expect_err("unknown lifecycle state must fail at the row boundary");
+
+    assert!(error.contains("notARequestState"), "{error}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

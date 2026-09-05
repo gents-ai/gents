@@ -1,3 +1,5 @@
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use super::runner::Observation;
 
 pub fn assert_all_safety(o: &Observation) {
@@ -144,7 +146,7 @@ pub mod crash {
 }
 
 pub mod completion {
-    use super::Observation;
+    use super::{Observation, RequestLifecycleState};
 
     pub fn bridge_terminal_unique(o: &Observation) {
         for bridge in &o.a_bridge_rows {
@@ -176,7 +178,7 @@ pub mod completion {
     pub fn projection_matches_bridge_mapping(o: &Observation) {
         for bridge in &o.a_bridge_rows {
             if let Some(child) = o.child_for_bridge(bridge) {
-                if child.lifecycle_state == "interrupted" {
+                if child.lifecycle_state == RequestLifecycleState::Interrupted {
                     assert!(
                         bridge.lifecycle_state == "running"
                             || bridge.lifecycle_state == "cancelled",
@@ -203,7 +205,7 @@ pub mod completion {
 }
 
 pub mod cancel_propagation {
-    use super::Observation;
+    use super::{Observation, RequestLifecycleState};
 
     pub fn cancel_intent_durable(o: &Observation) {
         for bridge in &o.a_bridge_rows {
@@ -216,16 +218,23 @@ pub mod cancel_propagation {
         }
     }
 
+    /// A child that was actually interrupted legitimately settles into the
+    /// `Interrupted` terminal state — that is the intended outcome of the
+    /// interrupt, not a violation. The banned set is therefore "terminal via
+    /// some other, natural path" (completed/failed/dead/superseded): terminal
+    /// states reachable without an interrupt ever landing. `Interrupted`
+    /// itself is `RequestLifecycleState::is_terminal() == true` but is
+    /// explicitly exempted here, same shape as
+    /// `tool_call_lifecycle::recovery::request_is_cancel_worthy_terminal`.
     pub fn cascade_interrupts_only_running(o: &Observation) {
         for child in &o.b_child_requests {
             if child.interrupt_requested_at.is_some() {
+                let naturally_terminal = child.lifecycle_state.is_terminal()
+                    && child.lifecycle_state != RequestLifecycleState::Interrupted;
                 assert!(
-                    !matches!(
-                        child.lifecycle_state.as_str(),
-                        "completed" | "failed" | "dead" | "superseded"
-                    ),
-                    "natural terminal child {} was interrupted",
-                    child.request_id
+                    !naturally_terminal,
+                    "natural terminal child {} was interrupted (lifecycle_state={})",
+                    child.request_id, child.lifecycle_state
                 );
             }
         }

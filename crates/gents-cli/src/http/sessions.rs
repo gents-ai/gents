@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -47,7 +48,7 @@ pub(crate) struct SessionHistoryParams {
 #[derive(Debug, Serialize, Deserialize)]
 struct RecentEnvelope {
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,7 +56,7 @@ struct DetailsEnvelope {
     #[serde(rename = "AgentSession", default)]
     sessions: Vec<SessionRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
+    requests: Vec<AgentRequestRow>,
     #[serde(rename = "AgentMessage", default)]
     messages: Vec<MessageRow>,
     #[serde(rename = "CompactionEntry", default)]
@@ -76,20 +77,6 @@ struct SessionRow {
     ended: Option<String>,
     #[serde(default)]
     status: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    request_id: Option<String>,
-    #[serde(default)]
-    session_id: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +202,7 @@ fn decode<T: serde::de::DeserializeOwned>(response: Value, label: &str) -> Resul
     serde_json::from_value(data).with_context(|| format!("decoding {label} query response"))
 }
 
-fn recent_session_ids(requests: &[RequestRow], limit: usize) -> Vec<String> {
+fn recent_session_ids(requests: &[AgentRequestRow], limit: usize) -> Vec<String> {
     let mut seen = BTreeSet::new();
     let mut session_ids = Vec::new();
     for request in requests {
@@ -275,9 +262,10 @@ fn build_session_history_snapshot(
                 status: session.and_then(|row| clean(row.status.as_deref())),
                 started_at: session.and_then(|row| clean(row.started.as_deref())),
                 ended_at: session.and_then(|row| clean(row.ended.as_deref())),
-                latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_deref())),
+                latest_request_id: latest_request.and_then(|row| clean(Some(&row.request_id))),
                 latest_request_lifecycle_state: latest_request
-                    .and_then(|row| clean(row.lifecycle_state.as_deref())),
+                    .and_then(|row| row.lifecycle_state)
+                    .map(|state| state.as_str().to_string()),
                 latest_request_created_at: latest_request
                     .and_then(|row| clean(row.created_at.as_deref())),
                 request_count: requests.len() as i64,
@@ -298,8 +286,8 @@ fn build_session_history_snapshot(
     }
 }
 
-fn group_requests(requests: Vec<RequestRow>) -> BTreeMap<String, Vec<RequestRow>> {
-    let mut by_session = BTreeMap::<String, Vec<RequestRow>>::new();
+fn group_requests(requests: Vec<AgentRequestRow>) -> BTreeMap<String, Vec<AgentRequestRow>> {
+    let mut by_session = BTreeMap::<String, Vec<AgentRequestRow>>::new();
     for request in requests {
         let Some(session_id) = clean(request.session_id.as_deref()) else {
             continue;
@@ -340,6 +328,10 @@ mod tests {
         serde_json::from_value(value).unwrap()
     }
 
+    fn empty_request_row() -> AgentRequestRow {
+        serde_json::from_value(json!({ "request_id": "" })).unwrap()
+    }
+
     fn at(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
     }
@@ -347,26 +339,35 @@ mod tests {
     #[test]
     fn builds_agent_scoped_recent_session_history() {
         let recent = vec![
-            RequestRow {
-                request_id: Some("req-newer".to_string()),
+            AgentRequestRow {
+                request_id: "req-newer".to_string(),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                lifecycle_state: Some("terminal".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
+                ),
                 created_at: Some("2026-06-05T10:00:00Z".to_string()),
+                ..empty_request_row()
             },
-            RequestRow {
-                request_id: Some("req-other".to_string()),
+            AgentRequestRow {
+                request_id: "req-other".to_string(),
                 session_id: Some("session-b".to_string()),
                 behavior_id: Some("behavior-b".to_string()),
-                lifecycle_state: Some("running".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                ),
                 created_at: Some("2026-06-05T09:00:00Z".to_string()),
+                ..empty_request_row()
             },
-            RequestRow {
-                request_id: Some("req-older".to_string()),
+            AgentRequestRow {
+                request_id: "req-older".to_string(),
                 session_id: Some("session-a".to_string()),
                 behavior_id: Some("behavior-a".to_string()),
-                lifecycle_state: Some("terminal".to_string()),
+                lifecycle_state: Some(
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Completed,
+                ),
                 created_at: Some("2026-06-05T08:00:00Z".to_string()),
+                ..empty_request_row()
             },
         ];
         let session_ids = recent_session_ids(&recent, 2);

@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents_protocol::client_protocol::RequestLifecycleState;
-use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
+use gents_protocol::row::{
+    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, AgentRequestRow,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -29,15 +31,7 @@ struct FleetEnvelope {
     #[serde(rename = "AgentBehaviorReadiness", default)]
     readiness: Vec<AgentBehaviorReadinessRow>,
     #[serde(rename = "AgentRequest", default)]
-    requests: Vec<RequestRow>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
+    requests: Vec<AgentRequestRow>,
 }
 
 pub(crate) async fn load_fleet_snapshot(graphql: &str) -> Result<FleetSnapshot> {
@@ -56,6 +50,7 @@ fn fleet_query() -> String {
             updated_at
         }}
         AgentRequest(filter: {{ lifecycle_state: {{ _in: {} }} }}) {{
+            request_id
             agent_did
             lifecycle_state
         }}
@@ -86,9 +81,11 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
             continue;
         }
         let entry = counts.entry(agent_did).or_default();
-        match request.lifecycle_state.as_deref().map(str::trim) {
-            Some("claimed" | "processing") => entry.0 += 1,
-            Some("pending") => entry.1 += 1,
+        match request.lifecycle_state {
+            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing) => {
+                entry.0 += 1
+            }
+            Some(RequestLifecycleState::Pending) => entry.1 += 1,
             _ => {}
         }
     }
@@ -173,10 +170,10 @@ mod tests {
                     readiness("did:b", BehaviorReadinessProcessState::Recovering, "2026-06-02T11:58:00Z")
                 ],
                 "AgentRequest": [
-                    { "agent_did": "did:a", "lifecycle_state": "processing" },
-                    { "agent_did": "did:a", "lifecycle_state": "pending" },
-                    { "agent_did": "did:a", "lifecycle_state": "pending" },
-                    { "agent_did": "did:b", "lifecycle_state": "claimed" }
+                    { "request_id": "req-a1", "agent_did": "did:a", "lifecycle_state": "processing" },
+                    { "request_id": "req-a2", "agent_did": "did:a", "lifecycle_state": "pending" },
+                    { "request_id": "req-a3", "agent_did": "did:a", "lifecycle_state": "pending" },
+                    { "request_id": "req-b1", "agent_did": "did:b", "lifecycle_state": "claimed" }
                 ]
             })),
         );

@@ -35,42 +35,6 @@ struct RetryRequestIdInjection {
     new_request_id: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct RecoveryRequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    behavior_id: String,
-    session_id: String,
-    content: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
-    lifecycle_state: String,
-    #[serde(deserialize_with = "null_string_default")]
-    backend_id: String,
-    #[serde(deserialize_with = "null_string_default")]
-    execution_origin: String,
-    retry_root_request: String,
-    #[serde(deserialize_with = "null_string_default")]
-    retry_parent_request: String,
-    retry_parent_request_doc_id: Option<String>,
-    retry_count: i64,
-    max_retries: i64,
-}
-
-fn null_string_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
-}
-
 #[test]
 fn prepare_prompt_submission_strips_skill_selector_and_records_metadata() -> Result<()> {
     let (content, options) = prepare_prompt_submission(
@@ -327,8 +291,9 @@ async fn drive_session_recovery_case_with_core(
         assert_eq!(
             fetch_request_row_for_test(core.node(), &pre.pre_latest_request_id)
                 .await?
-                .lifecycle_state,
-            case.pre_latest_state,
+                .lifecycle_state
+                .map(|state| state.as_str()),
+            Some(case.pre_latest_state.as_str()),
             "pre latest request state must match Lean witness for {}",
             case.name
         );
@@ -342,7 +307,7 @@ async fn drive_session_recovery_case_with_core(
     }
     if case.pre_failed_exists {
         assert_eq!(
-            pre.parent.lifecycle_state.as_deref(),
+            pre.parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),
             "pre failed request state must match Lean witness for {}",
             case.name
@@ -476,7 +441,7 @@ async fn seed_session_recovery_pre_state(
     let parent = if case.pre_failed_exists {
         let parent = request_from_store_for_test(core, &failed_request_id)?;
         assert_eq!(
-            parent.lifecycle_state.as_deref(),
+            parent.lifecycle_state.map(|state| state.as_str()),
             Some(case.pre_failed_state.as_str()),
             "seeded retry parent lifecycle must match Lean witness for {}",
             case.name
@@ -584,7 +549,10 @@ fn synthetic_missing_retry_parent(
         max_tokens: None,
         max_total_tokens: None,
         metadata: None,
-        lifecycle_state: Some(case.pre_failed_state.clone()),
+        lifecycle_state: Some(
+            RequestLifecycleState::parse(&case.pre_failed_state)
+                .expect("Lean recovery case must use a canonical request state"),
+        ),
         backend_id: Some(case.pre_backend.clone()),
         execution_origin: Some(case.pre_origin.clone()),
         caused_by_trigger_id: None,
@@ -608,6 +576,7 @@ fn synthetic_missing_retry_parent(
         workspace_authority: None,
         workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
+        ..Default::default()
     }
 }
 
@@ -667,30 +636,66 @@ async fn assert_legal_session_recovery_post_state(
 
     let new_request = fetch_request_row_for_test(core.node(), new_request_id).await?;
     assert_eq!(new_request.request_id, new_request_id);
-    assert_eq!(new_request.session_id, pre.session_id);
-    assert_eq!(new_request.agent_did, core.principal().did());
-    assert_eq!(new_request.behavior_id, RECOVERY_BEHAVIOR_ID);
     assert_eq!(
-        new_request.content,
-        pre.parent.content.as_deref().unwrap_or_default()
+        new_request.session_id.as_deref(),
+        Some(pre.session_id.as_str())
     );
-    assert_eq!(new_request.lifecycle_state, case.post_new_state);
-    assert_eq!(new_request.retry_parent_request, pre.failed_request_id);
-    assert_eq!(new_request.retry_root_request, pre.failed_request_id);
-    assert_eq!(new_request.retry_count, case.post_retry_count as i64);
-    assert_eq!(new_request.max_retries, case.max_retries as i64);
+    assert_eq!(
+        new_request.agent_did.as_deref(),
+        Some(core.principal().did())
+    );
+    assert_eq!(
+        new_request.behavior_id.as_deref(),
+        Some(RECOVERY_BEHAVIOR_ID)
+    );
+    assert_eq!(
+        new_request.content.as_deref(),
+        pre.parent.content.as_deref()
+    );
+    assert_eq!(
+        new_request.lifecycle_state.map(|state| state.as_str()),
+        Some(case.post_new_state.as_str())
+    );
+    assert_eq!(
+        new_request.retry_parent_request.as_deref(),
+        Some(pre.failed_request_id.as_str())
+    );
+    assert_eq!(
+        new_request.retry_root_request.as_deref(),
+        Some(pre.failed_request_id.as_str())
+    );
+    assert_eq!(new_request.retry_count, Some(case.post_retry_count as i64));
+    assert_eq!(new_request.max_retries, Some(case.max_retries as i64));
     if case.origin_preserved {
-        assert_eq!(new_request.execution_origin, case.post_new_origin);
+        assert_eq!(
+            new_request.execution_origin.as_deref(),
+            Some(case.post_new_origin.as_str())
+        );
     }
     if case.backend_preserved {
-        assert_eq!(new_request.backend_id, case.post_new_backend);
+        assert_eq!(
+            new_request.backend_id.as_deref(),
+            Some(case.post_new_backend.as_str())
+        );
     }
 
     let failed_request = fetch_request_row_for_test(core.node(), &pre.failed_request_id).await?;
-    assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
-    assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
-    assert_eq!(failed_request.backend_id, case.pre_backend);
-    assert_eq!(failed_request.execution_origin, case.pre_origin);
+    assert_eq!(
+        failed_request.lifecycle_state.map(|state| state.as_str()),
+        Some(case.post_failed_state.as_str())
+    );
+    assert_eq!(
+        failed_request.retry_count,
+        Some(case.pre_retry_count as i64)
+    );
+    assert_eq!(
+        failed_request.backend_id.as_deref(),
+        Some(case.pre_backend.as_str())
+    );
+    assert_eq!(
+        failed_request.execution_origin.as_deref(),
+        Some(case.pre_origin.as_str())
+    );
     assert_eq!(
         request_count_by_id_for_test(core.node(), &pre.failed_request_id).await?,
         if case.old_request_retained { 1 } else { 0 },
@@ -854,7 +859,7 @@ fn request_from_store_for_test(core: &ClientCore, request_id: &str) -> Result<Ag
 async fn fetch_request_row_for_test(
     node: &EmbeddedNode,
     request_id: &str,
-) -> Result<RecoveryRequestRow> {
+) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
     query_single_for_test(
             node,
@@ -895,7 +900,7 @@ async fn latest_request_id_for_session_for_test(
     session_id: &str,
 ) -> Result<String> {
     let escaped_session_id = escape_graphql_string(session_id);
-    let request: RecoveryRequestRow = query_single_for_test(
+    let request: AgentRequestRow = query_single_for_test(
         node,
         &format!(
             r#"{{
@@ -1155,7 +1160,7 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
         .await?;
-    parent.lifecycle_state = Some("failed".to_string());
+    parent.lifecycle_state = Some(RequestLifecycleState::Failed);
     parent.deadline = Some(deadline.to_rfc3339());
     parent.retry_count = Some(0);
     parent.max_retries = Some(i64::from(DEFAULT_REQUEST_MAX_RETRIES));
@@ -1249,12 +1254,18 @@ async fn retry_request_preserves_parent_overrides_and_metadata() -> Result<()> {
     let submitted = core.retry_request(&parent).await?;
     let retried = fetch_request_row_for_test(core.node(), &submitted.request_id).await?;
     let original_row = fetch_request_row_for_test(core.node(), &original.request_id).await?;
-    assert_eq!(retried.retry_parent_request, original.request_id);
+    assert_eq!(
+        retried.retry_parent_request.as_deref(),
+        Some(original.request_id.as_str())
+    );
     assert_eq!(
         retried.retry_parent_request_doc_id.as_deref(),
-        Some(original_row.doc_id.as_str())
+        original_row.doc_id.as_deref()
     );
-    assert_eq!(retried.retry_root_request, original.request_id);
+    assert_eq!(
+        retried.retry_root_request.as_deref(),
+        Some(original.request_id.as_str())
+    );
     assert_eq!(retried.temperature, Some(0.35));
     assert_eq!(retried.top_p, Some(0.92));
     assert_eq!(retried.top_k, Some(32));

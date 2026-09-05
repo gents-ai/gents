@@ -1,4 +1,5 @@
 use super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
@@ -42,7 +43,7 @@ fn request_backed_conversation_summaries_include_in_flight_sessions() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            lifecycle_state: Some("pending".to_string()),
+            lifecycle_state: Some(RequestLifecycleState::Pending),
             backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: None,
@@ -66,6 +67,7 @@ fn request_backed_conversation_summaries_include_in_flight_sessions() {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
+            ..Default::default()
         }],
         ..ClientStoreRows::default()
     });
@@ -104,7 +106,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("scheduled".to_string()),
                 failure_reason: None,
@@ -128,6 +130,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-new".to_string(),
@@ -146,7 +149,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("scheduled".to_string()),
                 failure_reason: None,
@@ -170,6 +173,7 @@ fn conversation_task_tag_uses_latest_schedule_lineage() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         ..ClientStoreRows::default()
@@ -221,7 +225,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("scheduled".to_string()),
                 failure_reason: None,
@@ -245,6 +249,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
             AgentRequestRow {
                 request_id: "req-mini-2".to_string(),
@@ -263,7 +268,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: Some("scheduled".to_string()),
                 failure_reason: None,
@@ -287,6 +292,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             },
         ],
         ..ClientStoreRows::default()
@@ -417,7 +423,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: None,
                 execution_origin: case.expected_execution_origin.clone(),
                 failure_reason: None,
@@ -441,6 +447,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 workspace_authority: None,
                 workspace_owner_deployment_id: None,
                 workspace_seal_hash: None,
+                ..Default::default()
             }],
             ..ClientStoreRows::default()
         });

@@ -11,6 +11,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::graphql::graphql_response_with_transaction_retry as execute_graphql_with_conflict_retry;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -448,17 +449,6 @@ async fn wait_for_revoked_route_teardown(
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct AgentRequestRow {
-    #[serde(rename = "_docID")]
-    _doc_id: String,
-    request_id: String,
-    content: String,
-    caused_by_trigger_id: Option<String>,
-    caused_by_trigger_kind: Option<String>,
-    execution_origin: Option<String>,
-}
-
 async fn query_agent_requests_for_trigger(
     node: &EmbeddedNode,
     trigger_id: &str,
@@ -801,7 +791,10 @@ async fn app_collection_pairing_fires_event_trigger_via_reconcile() {
     assert_eq!(request.caused_by_trigger_id.as_deref(), Some(TRIGGER_ID));
     assert_eq!(request.caused_by_trigger_kind.as_deref(), Some("event"));
     assert_eq!(request.execution_origin.as_deref(), Some("scheduled"));
-    assert_eq!(request.content, format!("fired for {EXTERNAL_ID}"));
+    assert_eq!(
+        request.content.as_deref(),
+        Some(format!("fired for {EXTERNAL_ID}").as_str())
+    );
     assert!(!request.request_id.is_empty());
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

@@ -13,6 +13,8 @@ use gents::tool_call_lifecycle::{
 use gents::{
     default_behavior_id_for_agent, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -27,15 +29,6 @@ struct RunningAgent {
     db: TestDb,
     booted: BootedAgent,
     _endpoint: MockModelEndpoint,
-}
-
-#[derive(Debug, Deserialize)]
-struct RequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    agent_did: String,
-    lifecycle_state: Option<String>,
-    interrupt_requested_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -174,7 +167,8 @@ async fn drive_declarative_cancel_propagation() {
     let parent_request_doc_id = fetch_request(coord_node.as_ref(), parent_request_id)
         .await
         .expect("created parent AgentRequest")
-        .doc_id;
+        .doc_id
+        .expect("created AgentRequest._docID");
 
     create_processing_request(
         host.db.node.as_ref(),
@@ -277,10 +271,13 @@ async fn drive_declarative_cancel_propagation() {
         Duration::from_secs(30),
     )
     .await;
-    assert_eq!(interrupted_on_host.agent_did, host_did);
     assert_eq!(
-        interrupted_on_host.lifecycle_state.as_deref(),
-        Some("processing")
+        interrupted_on_host.agent_did.as_deref(),
+        Some(host_did.as_str())
+    );
+    assert_eq!(
+        interrupted_on_host.lifecycle_state,
+        Some(RequestLifecycleState::Processing)
     );
 
     let interrupted_on_coord = wait_for_interrupt_requested_at(
@@ -289,7 +286,10 @@ async fn drive_declarative_cancel_propagation() {
         Duration::from_secs(30),
     )
     .await;
-    assert_eq!(interrupted_on_coord.agent_did, host_did);
+    assert_eq!(
+        interrupted_on_coord.agent_did.as_deref(),
+        Some(host_did.as_str())
+    );
 
     let ack_outcomes = observe_cancel_cascade_ack(coord_node.clone(), &coord_did)
         .await
@@ -582,7 +582,7 @@ async fn wait_for_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
     timeout: Duration,
-) -> RequestRow {
+) -> AgentRequestRow {
     let deadline = Instant::now() + timeout;
     let mut last = None;
     loop {
@@ -603,12 +603,13 @@ async fn wait_for_interrupt_requested_at(
     }
 }
 
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestRow> {
+async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                 _docID
+                request_id
                 agent_did
                 lifecycle_state
                 interrupt_requested_at

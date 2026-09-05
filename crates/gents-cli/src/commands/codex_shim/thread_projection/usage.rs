@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents_codex_protocol as codex;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -41,11 +42,6 @@ struct RequestUsageAccumulator {
     output_tokens: i64,
     has_real_output: bool,
     proxy_output_tokens: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentRequestUsageRow {
-    request_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,7 +191,7 @@ async fn session_request_ids(
         }}"#
     );
     let response = query_node_json(&state.node, &query).await?;
-    let rows = rows::<AgentRequestUsageRow>(&response, "AgentRequest")
+    let rows = rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest rows for token usage")?;
     Ok(rows
         .into_iter()

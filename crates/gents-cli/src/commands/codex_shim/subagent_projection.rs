@@ -7,6 +7,7 @@ use gents_codex_protocol as codex;
 use gents_protocol::client_protocol::{
     project_persisted_attempt, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
 };
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
@@ -90,29 +91,65 @@ pub(super) struct LinkedSubagentThread {
     pub(super) created_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct RequestRow {
-    request_id: String,
-    #[serde(default)]
-    content: String,
-    session_id: String,
-    agent_did: String,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    lifecycle_state: Option<String>,
-    #[serde(default)]
-    superseded_by_request: Option<String>,
-    #[serde(default)]
-    failure_reason: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    subagent_depth: Option<u32>,
-    #[serde(default)]
-    caused_by_parent_request_id: Option<String>,
-    #[serde(default)]
-    caused_by_parent_tool_call_id: Option<String>,
+#[derive(Clone, Debug)]
+struct RequestProjectionRow(AgentRequestRow);
+
+impl std::ops::Deref for RequestProjectionRow {
+    type Target = AgentRequestRow;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for RequestProjectionRow {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl RequestProjectionRow {
+    fn decode(row: Value) -> Result<Self> {
+        let row: AgentRequestRow =
+            serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
+        row.session_id
+            .as_deref()
+            .context("AgentRequest row missing session_id")?;
+        row.agent_did
+            .as_deref()
+            .context("AgentRequest row missing agent_did")?;
+        if let Some(depth) = row.subagent_depth {
+            u32::try_from(depth).context("AgentRequest subagent_depth is outside u32 range")?;
+        }
+        Ok(Self(row))
+    }
+
+    fn session_id(&self) -> &str {
+        self.0
+            .session_id
+            .as_deref()
+            .expect("request projection validates session_id")
+    }
+
+    fn agent_did(&self) -> &str {
+        self.0
+            .agent_did
+            .as_deref()
+            .expect("request projection validates agent_did")
+    }
+
+    fn content(&self) -> &str {
+        self.0.content.as_deref().unwrap_or_default()
+    }
+
+    fn depth(&self) -> u32 {
+        self.0
+            .subagent_depth
+            .map(u32::try_from)
+            .transpose()
+            .expect("request projection validates subagent_depth")
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -234,8 +271,8 @@ async fn load_authorized_subagent_threads_for_roots(
         &root_requests_query(state, root_session_ids),
     )
     .await?;
-    let mut requests = decode_rows::<RequestRow>(&response, "AgentRequest")
-        .context("decoding Codex root AgentRequest rows")?;
+    let mut requests =
+        decode_request_rows(&response).context("decoding Codex root AgentRequest rows")?;
     let mut seen_request_ids = requests
         .iter()
         .map(|row| row.request_id.clone())
@@ -259,7 +296,7 @@ async fn load_authorized_subagent_threads_for_roots(
         let mut frontier_sessions = requests
             .iter()
             .filter(|row| is_projectable_root(row, &state.agent_did, &state.behavior_id))
-            .map(|row| row.session_id.clone())
+            .map(|row| row.session_id().to_string())
             .chain(links.iter().map(|link| link.session_id.clone()))
             .filter(|session_id| scanned_sessions.insert(session_id.clone()))
             .collect::<Vec<_>>();
@@ -272,14 +309,14 @@ async fn load_authorized_subagent_threads_for_roots(
                 &requests_for_sessions_query(&frontier_sessions),
             )
             .await?;
-            let rows = decode_rows::<RequestRow>(&response, "AgentRequest")
+            let rows = decode_request_rows(&response)
                 .context("decoding linked-session AgentRequest rows")?;
             extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
         }
 
         let mut parent_request_ids = requests
             .iter()
-            .filter(|row| scanned_sessions.contains(&row.session_id))
+            .filter(|row| scanned_sessions.contains(row.session_id()))
             .map(|row| row.request_id.clone())
             .filter(|request_id| scanned_parent_requests.insert(request_id.clone()))
             .collect::<Vec<_>>();
@@ -319,8 +356,8 @@ async fn load_authorized_subagent_threads_for_roots(
                 &requests_by_id_query(&child_request_ids),
             )
             .await?;
-            let rows = decode_rows::<RequestRow>(&response, "AgentRequest")
-                .context("decoding child AgentRequest frontier")?;
+            let rows =
+                decode_request_rows(&response).context("decoding child AgentRequest frontier")?;
             extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
         }
 
@@ -346,7 +383,7 @@ async fn load_authorized_subagent_threads_for_roots(
 
 async fn attach_canonical_request_heads(
     state: &ShimState,
-    requests: &[RequestRow],
+    requests: &[RequestProjectionRow],
     links: &mut [LinkedSubagentThread],
 ) -> Result<()> {
     let mut session_ids = links
@@ -376,7 +413,7 @@ async fn attach_canonical_request_heads(
 }
 
 fn apply_canonical_request_heads(
-    requests: &[RequestRow],
+    requests: &[RequestProjectionRow],
     heads: &HashMap<String, String>,
     links: &mut [LinkedSubagentThread],
 ) {
@@ -391,10 +428,10 @@ fn apply_canonical_request_heads(
         let Some(request) = requests_by_id.get(request_id.as_str()) else {
             continue;
         };
-        if request.session_id != link.session_id
-            || request.agent_did != link.agent_did
+        if request.session_id() != link.session_id
+            || request.agent_did() != link.agent_did
             || nonempty(request.behavior_id.as_deref()) != Some(link.behavior_id.as_str())
-            || request.subagent_depth.unwrap_or_default() != link.depth
+            || request.depth() != link.depth
         {
             continue;
         }
@@ -597,9 +634,9 @@ fn conversation_heads_for_sessions_query(session_ids: &[String]) -> String {
 }
 
 fn extend_unique_requests(
-    requests: &mut Vec<RequestRow>,
+    requests: &mut Vec<RequestProjectionRow>,
     seen_request_ids: &mut HashSet<String>,
-    rows: Vec<RequestRow>,
+    rows: Vec<RequestProjectionRow>,
 ) {
     requests.extend(
         rows.into_iter()
@@ -608,7 +645,7 @@ fn extend_unique_requests(
 }
 
 fn resolve_authorized_subagent_threads(
-    requests: &[RequestRow],
+    requests: &[RequestProjectionRow],
     tools: &[ToolLinkRow],
     shim_agent_did: &str,
     shim_behavior_id: &str,
@@ -619,7 +656,7 @@ fn resolve_authorized_subagent_threads(
         .filter(|(_, row)| is_projectable_root(row, shim_agent_did, shim_behavior_id))
         .map(|(row_index, row)| AuthorizedRequest {
             row_index,
-            root_session_id: row.session_id.clone(),
+            root_session_id: row.session_id().to_string(),
         })
         .collect::<Vec<_>>();
     let mut authorized = roots
@@ -687,11 +724,11 @@ fn resolve_authorized_subagent_threads(
             else {
                 continue;
             };
-            let child_depth = child.subagent_depth.unwrap_or_default();
+            let child_depth = child.depth();
             if child_depth == 0 || child_depth > MAX_SUBAGENT_DEPTH {
                 continue;
             }
-            if Uuid::parse_str(&child.session_id).is_err() {
+            if Uuid::parse_str(child.session_id()).is_err() {
                 continue;
             }
 
@@ -702,11 +739,11 @@ fn resolve_authorized_subagent_threads(
                 .find_map(|parent_index| {
                     let root_session_id = authorized.get(parent_index)?;
                     let parent = &requests[*parent_index];
-                    (parent.subagent_depth.unwrap_or_default() + 1 == child_depth).then_some(())?;
+                    (parent.depth() + 1 == child_depth).then_some(())?;
                     let key = (
                         parent.request_id.clone(),
-                        parent.session_id.clone(),
-                        parent.agent_did.clone(),
+                        parent.session_id().to_string(),
+                        parent.agent_did().to_string(),
                         parent_tool_call_id.to_string(),
                     );
                     let tool = tools_by_parent_call.get(&key)?.iter().find(|tool| {
@@ -714,7 +751,7 @@ fn resolve_authorized_subagent_threads(
                             && nonempty(tool.child_request_id.as_deref())
                                 == Some(child.request_id.as_str())
                             && nonempty(tool.spawn_target_did.as_deref())
-                                .is_none_or(|target| target == child.agent_did)
+                                .is_none_or(|target| target == child.agent_did())
                     })?;
                     Some((*parent_index, root_session_id.clone(), *tool))
                 })
@@ -729,20 +766,20 @@ fn resolve_authorized_subagent_threads(
             links.push(LinkedSubagentThread {
                 request_id: child.request_id.clone(),
                 latest_request_id: child.request_id.clone(),
-                latest_request_content: child.content.clone(),
+                latest_request_content: child.content().to_string(),
                 latest_request_created_at: child.created_at.clone(),
-                session_id: child.session_id.clone(),
+                session_id: child.session_id().to_string(),
                 parent_request_id: parent.request_id.clone(),
                 parent_tool_call_id: parent_tool_call_id.to_string(),
-                parent_session_id: parent.session_id.clone(),
+                parent_session_id: parent.session_id().to_string(),
                 root_session_id: root_session_id.clone(),
                 depth: child_depth,
-                agent_did: child.agent_did.clone(),
+                agent_did: child.agent_did().to_string(),
                 behavior_id,
                 model: None,
                 nickname,
                 client_projection: project_persisted_attempt(
-                    nonempty(child.lifecycle_state.as_deref()).unwrap_or(""),
+                    child.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
                     nonempty(child.superseded_by_request.as_deref()).is_some(),
                     None,
                 ),
@@ -801,12 +838,12 @@ fn resolve_authorized_subagent_threads(
     links
 }
 
-fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestRow) {
+fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestProjectionRow) {
     link.latest_request_id = latest.request_id.clone();
-    link.latest_request_content = latest.content.clone();
+    link.latest_request_content = latest.content().to_string();
     link.latest_request_created_at = latest.created_at.clone();
     link.client_projection = project_persisted_attempt(
-        nonempty(latest.lifecycle_state.as_deref()).unwrap_or(""),
+        latest.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
         nonempty(latest.superseded_by_request.as_deref()).is_some(),
         None,
     );
@@ -817,19 +854,19 @@ fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestRow) {
         .map(ToOwned::to_owned);
 }
 
-fn request_context_key(row: &RequestRow) -> RequestContextKey {
+fn request_context_key(row: &RequestProjectionRow) -> RequestContextKey {
     RequestContextKey {
-        session_id: row.session_id.clone(),
-        agent_did: row.agent_did.clone(),
+        session_id: row.session_id().to_string(),
+        agent_did: row.agent_did().to_string(),
         behavior_id: nonempty(row.behavior_id.as_deref()).map(ToOwned::to_owned),
-        depth: row.subagent_depth.unwrap_or_default(),
+        depth: row.depth(),
     }
 }
 
-fn is_projectable_root(row: &RequestRow, agent_did: &str, behavior_id: &str) -> bool {
-    row.agent_did == agent_did
+fn is_projectable_root(row: &RequestProjectionRow, agent_did: &str, behavior_id: &str) -> bool {
+    row.agent_did() == agent_did
         && nonempty(row.behavior_id.as_deref()) == Some(behavior_id)
-        && row.subagent_depth.unwrap_or_default() == 0
+        && row.depth() == 0
         && nonempty(row.caused_by_parent_request_id.as_deref()).is_none()
         && nonempty(row.caused_by_parent_tool_call_id.as_deref()).is_none()
 }
@@ -854,6 +891,17 @@ where
         .unwrap_or_default()
         .into_iter()
         .map(serde_json::from_value)
+        .collect()
+}
+
+fn decode_request_rows(response: &Value) -> Result<Vec<RequestProjectionRow>> {
+    response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(RequestProjectionRow::decode)
         .collect()
 }
 
@@ -1064,28 +1112,19 @@ mod tests {
         depth: u32,
         parent_request_id: Option<&str>,
         parent_tool_call_id: Option<&str>,
-    ) -> RequestRow {
-        RequestRow {
-            request_id: request_id.to_string(),
-            content: format!("content for {request_id}"),
-            session_id: session_id.to_string(),
-            agent_did: if depth == 0 { "did:root" } else { "did:child" }.to_string(),
-            behavior_id: Some(if depth == 0 { "root" } else { "reviewer" }.to_string()),
-            lifecycle_state: Some(
-                if depth == 0 {
-                    "processing"
-                } else {
-                    "completed"
-                }
-                .to_string(),
-            ),
-            superseded_by_request: None,
-            failure_reason: None,
-            created_at: None,
-            subagent_depth: Some(depth),
-            caused_by_parent_request_id: parent_request_id.map(ToOwned::to_owned),
-            caused_by_parent_tool_call_id: parent_tool_call_id.map(ToOwned::to_owned),
-        }
+    ) -> RequestProjectionRow {
+        RequestProjectionRow::decode(json!({
+            "request_id": request_id,
+            "content": format!("content for {request_id}"),
+            "session_id": session_id,
+            "agent_did": if depth == 0 { "did:root" } else { "did:child" },
+            "behavior_id": if depth == 0 { "root" } else { "reviewer" },
+            "lifecycle_state": if depth == 0 { "processing" } else { "completed" },
+            "subagent_depth": depth,
+            "caused_by_parent_request_id": parent_request_id,
+            "caused_by_parent_tool_call_id": parent_tool_call_id,
+        }))
+        .expect("canonical AgentRequest test row")
     }
 
     #[test]
@@ -1194,10 +1233,10 @@ mod tests {
             Some("spawn-call"),
         );
         child.created_at = Some("2026-01-01T00:00:01Z".to_string());
-        child.lifecycle_state = Some("completed".to_string());
+        child.lifecycle_state = Some(RequestLifecycleState::Completed);
         let mut followup = request("child-followup", &child_session, 1, None, None);
         followup.created_at = Some("2026-01-01T00:00:02Z".to_string());
-        followup.lifecycle_state = Some("processing".to_string());
+        followup.lifecycle_state = Some(RequestLifecycleState::Processing);
         let requests = vec![
             request("root-request", &root_session, 0, None, None),
             child,
@@ -1240,10 +1279,10 @@ mod tests {
             Some("spawn-call"),
         );
         canonical.created_at = Some("2026-01-01T00:00:01Z".to_string());
-        canonical.lifecycle_state = Some("completed".to_string());
+        canonical.lifecycle_state = Some(RequestLifecycleState::Completed);
         let mut timestamp_fallback = request("child-followup", &child_session, 1, None, None);
         timestamp_fallback.created_at = Some("2026-01-01T00:00:02Z".to_string());
-        timestamp_fallback.lifecycle_state = Some("processing".to_string());
+        timestamp_fallback.lifecycle_state = Some(RequestLifecycleState::Processing);
         let requests = vec![
             request("root-request", &root_session, 0, None, None),
             canonical,

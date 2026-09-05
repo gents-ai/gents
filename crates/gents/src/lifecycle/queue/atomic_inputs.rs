@@ -261,12 +261,11 @@ async fn background_completion_transaction_attempt(
         });
     }
 
-    let pending = response["data"]["pending"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default()
+    let pending_rows: Vec<AgentRequestRow> =
+        serde_json::from_value(response["data"]["pending"].clone())
+            .context("decode pending AgentRequest rows")?;
+    let pending = pending_rows
         .into_iter()
-        .filter_map(|row| serde_json::from_value::<PendingQueueRow>(row).ok())
         .find(|row| {
             queue_source_and_key_match(
                 row.metadata.as_deref(),

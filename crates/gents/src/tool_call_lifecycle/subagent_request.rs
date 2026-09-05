@@ -6,7 +6,7 @@
 //! with the addition of subagent parent-linkage fields and the depth
 //! cap enforced by Lean's `Subagent.maxSubagentDepth`.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
@@ -277,7 +277,11 @@ async fn create_subagent_request_inner(
     match &admission_source {
         SubagentAdmissionSource::LocalChild => {
             let parent = load_parent_request_by_doc_id(node, &parent_doc_ids.0).await?;
-            if parent.request_id != parent_request_id || parent.agent_did != agent_did {
+            let parent_agent_did = parent
+                .agent_did
+                .as_deref()
+                .context("parent AgentRequest is missing agent_did")?;
+            if parent.request_id != parent_request_id || parent_agent_did != agent_did {
                 return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
             }
         }
@@ -374,23 +378,17 @@ async fn create_subagent_request_inner(
     Ok(request_id)
 }
 
-#[derive(Debug, Deserialize)]
-struct ParentRequestLookupRow {
-    request_id: String,
-    agent_did: String,
-}
-
 async fn load_parent_request_by_doc_id(
     node: &EmbeddedNode,
     parent_request_doc_id: &str,
-) -> Result<ParentRequestLookupRow> {
+) -> Result<gents_protocol::row::AgentRequestRow> {
     let escaped_doc_id = escape_graphql_string(parent_request_doc_id);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
-            ) {{ request_id agent_did }}
+            ) {{ _docID request_id agent_did }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -400,14 +398,20 @@ async fn load_parent_request_by_doc_id(
             response.errors
         );
     }
-    let mut rows: Vec<ParentRequestLookupRow> = response
+    let rows = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+        .context("query exact parent AgentRequest returned no AgentRequest data")?;
+    let mut rows = decode_parent_request_rows(rows)?;
     rows.pop()
         .ok_or_else(|| anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent))
+}
+
+fn decode_parent_request_rows(
+    rows: &serde_json::Value,
+) -> Result<Vec<gents_protocol::row::AgentRequestRow>> {
+    serde_json::from_value(rows.clone()).context("decode exact parent AgentRequest rows")
 }
 
 #[derive(Debug, Deserialize)]
@@ -487,6 +491,20 @@ mod tests {
         for parent_depth in 3..=10 {
             assert!(parent_depth >= MAX_SUBAGENT_DEPTH);
         }
+    }
+
+    #[test]
+    fn parent_request_lookup_rejects_malformed_canonical_row() {
+        let err = decode_parent_request_rows(&serde_json::json!([{
+            "_docID": "parent-doc",
+            "request_id": 17,
+            "agent_did": "did:key:parent"
+        }]))
+        .expect_err("non-string request_id must fail canonical row decoding");
+
+        assert!(err
+            .to_string()
+            .contains("decode exact parent AgentRequest rows"));
     }
 }
 

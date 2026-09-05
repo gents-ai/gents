@@ -148,11 +148,11 @@ pub(super) fn build_atif_trajectory(
                 ),
                 (
                     "status",
-                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
+                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
                 ),
                 (
                     "lifecycle_state",
-                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
+                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
                 ),
             ]),
         });
@@ -330,11 +330,11 @@ pub(super) fn build_atif_trajectory(
                 ("request_id", string_value(&timeline.request_id)),
                 (
                     "status",
-                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
+                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
                 ),
                 (
                     "lifecycle_state",
-                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
+                    optional_string_value(timeline.request.lifecycle_state.map(|s| s.as_str())),
                 ),
                 ("inference_call_count", Some(json!(inference_call_count))),
                 ("tool_call_count", Some(json!(tool_call_count))),
@@ -981,6 +981,7 @@ mod tests {
         AssistantContent, Message, Reasoning, ToolCall, ToolFunction, ToolResultContent,
         UserContent,
     };
+    use gents_protocol::request_lifecycle::RequestLifecycleState;
 
     fn tool_timeline() -> RunTimeline {
         build_run_timeline(RunTimelineRows {
@@ -993,7 +994,7 @@ mod tests {
                 content: Some("Fix the project.".to_string()),
                 seed: Some(7),
                 max_total_tokens: Some(10_000),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 backend_id: Some("d4f".to_string()),
                 created_at: Some("2026-07-31T20:00:00Z".to_string()),
                 ..TimelineRequestRow::default()
@@ -1141,7 +1142,7 @@ mod tests {
                 request_id: "req-root".to_string(),
                 doc_id: Some("req-root-doc".to_string()),
                 max_total_tokens: Some(10_000),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 content: Some("hi".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1205,7 +1206,7 @@ mod tests {
             request: TimelineRequestRow {
                 request_id: "req-title".to_string(),
                 doc_id: Some("req-title-doc".to_string()),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 content: Some("hello".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1253,7 +1254,7 @@ mod tests {
                 request_id: "req-empty".to_string(),
                 doc_id: Some("req-empty-doc".to_string()),
                 max_total_tokens: Some(5_000),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 content: Some("hello".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1373,7 +1374,7 @@ mod tests {
                 request_id: "req-decoded".to_string(),
                 session_id: Some("session-decoded".to_string()),
                 content: Some("Fix the project.".to_string()),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 created_at: Some("2026-07-31T20:00:00Z".to_string()),
                 ..TimelineRequestRow::default()
             },

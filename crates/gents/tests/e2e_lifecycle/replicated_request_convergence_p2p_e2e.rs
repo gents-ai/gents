@@ -32,7 +32,8 @@ use gents::agent::p2p_reconcile::{
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{RequestLifecycle, TERMINAL_REDRIVE_CAP};
-use serde::Deserialize;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
 use crate::support::test_p2p_db;
@@ -40,14 +41,6 @@ use crate::support::test_p2p_db;
 const OWNER_DID: &str = "did:test:convergence-p2p-owner";
 const PEER_DID: &str = "did:test:convergence-p2p-peer";
 const BEHAVIOR_ID: &str = "convergence-p2p-behavior";
-
-#[derive(Debug, Clone, Deserialize)]
-struct RequestRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    agent_did: String,
-    lifecycle_state: String,
-}
 
 async fn install_one_way_replicator(
     sender: &Arc<EmbeddedNode>,
@@ -226,12 +219,13 @@ async fn terminalize_request(
     );
 }
 
-async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestRow> {
+async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                 _docID
+                request_id
                 agent_did
                 lifecycle_state
             }}
@@ -253,15 +247,15 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestR
 async fn wait_for_request_lifecycle(
     node: &EmbeddedNode,
     request_id: &str,
-    expected_lifecycle: &str,
+    expected_lifecycle: RequestLifecycleState,
     timeout: Duration,
     label: &str,
-) -> RequestRow {
+) -> AgentRequestRow {
     let deadline = Instant::now() + timeout;
-    let mut last: Option<RequestRow> = None;
+    let mut last: Option<AgentRequestRow> = None;
     loop {
         if let Some(row) = fetch_request(node, request_id).await {
-            if row.lifecycle_state == expected_lifecycle {
+            if row.lifecycle_state == Some(expected_lifecycle) {
                 return row;
             }
             last = Some(row);
@@ -298,23 +292,24 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let on_peer_processing = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "processing",
+        RequestLifecycleState::Processing,
         Duration::from_secs(30),
         "peer (intermediate)",
     )
     .await;
     assert_eq!(
-        on_peer_processing.agent_did, OWNER_DID,
+        on_peer_processing.agent_did.as_deref(),
+        Some(OWNER_DID),
         "peer replica must retain the owner's DID (peer is passive)"
     );
-    assert_ne!(on_peer_processing.agent_did, PEER_DID);
+    assert_ne!(on_peer_processing.agent_did.as_deref(), Some(PEER_DID));
 
     terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
 
     let on_owner = wait_for_request_lifecycle(
         owner.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(5),
         "owner",
     )
@@ -323,12 +318,12 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let on_peer_terminal = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(30),
         "peer (terminal, first delivery)",
     )
     .await;
-    assert_eq!(on_peer_terminal.agent_did, OWNER_DID);
+    assert_eq!(on_peer_terminal.agent_did.as_deref(), Some(OWNER_DID));
     assert_eq!(
         on_peer_terminal.lifecycle_state, on_owner.lifecycle_state,
         "peer must match owner terminal exactly"
@@ -346,12 +341,12 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let after_redrive = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(15),
         "peer (after re-drive)",
     )
     .await;
-    assert_eq!(after_redrive.agent_did, OWNER_DID);
+    assert_eq!(after_redrive.agent_did.as_deref(), Some(OWNER_DID));
     assert_eq!(after_redrive.doc_id, on_peer_terminal.doc_id);
 
     let mut total_reasserted = first.reasserted;
@@ -379,8 +374,11 @@ async fn p2p_owner_terminal_converges_and_redrive_stays_stable() {
     let final_peer = fetch_request(peer.node.as_ref(), request_id)
         .await
         .expect("peer still has the request");
-    assert_eq!(final_peer.lifecycle_state, "completed");
-    assert_eq!(final_peer.agent_did, OWNER_DID);
+    assert_eq!(
+        final_peer.lifecycle_state,
+        Some(RequestLifecycleState::Completed)
+    );
+    assert_eq!(final_peer.agent_did.as_deref(), Some(OWNER_DID));
 
     owner.node.shutdown().await;
     peer.node.shutdown().await;
@@ -405,7 +403,7 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     wait_for_request_lifecycle(
         owner.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(5),
         "owner (pre-join)",
     )
@@ -429,12 +427,12 @@ async fn p2p_full_replay_converges_after_offline_peer_exhausts_redrive_cap() {
     let on_peer = wait_for_request_lifecycle(
         peer.node.as_ref(),
         request_id,
-        "completed",
+        RequestLifecycleState::Completed,
         Duration::from_secs(30),
         "peer (after full replay)",
     )
     .await;
-    assert_eq!(on_peer.agent_did, OWNER_DID);
+    assert_eq!(on_peer.agent_did.as_deref(), Some(OWNER_DID));
     let still_exhausted =
         RequestLifecycle::redrive_terminal_convergence(owner.node.as_ref(), OWNER_DID)
             .await
@@ -468,7 +466,7 @@ async fn p2p_terminal_redrive_pushes_once_per_routed_request() {
         wait_for_request_lifecycle(
             peer.node.as_ref(),
             &request_id,
-            "completed",
+            RequestLifecycleState::Completed,
             Duration::from_secs(30),
             "peer (wave seed)",
         )

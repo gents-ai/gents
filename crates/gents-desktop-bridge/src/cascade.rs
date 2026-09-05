@@ -11,6 +11,7 @@ use std::sync::Arc;
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde_json::Value;
 
 use crate::snapshot::{compute_preview_signature, PreviewSignatureInput, PreviewSignatureRow};
@@ -47,10 +48,6 @@ impl GraphqlAccess {
     }
 }
 
-fn request_row_is_terminal(row: &Value) -> bool {
-    RequestLifecycleState::is_terminal_str(string_field(row, "lifecycle_state").as_deref())
-}
-
 #[derive(Debug, Clone)]
 pub struct CascadeWalkRequest {
     pub root_request_id: String,
@@ -71,7 +68,7 @@ pub struct CascadeWalkRow {
     pub request_id: String,
     pub session_id: Option<String>,
     pub behavior_id: Option<String>,
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<RequestLifecycleState>,
     pub parent_request_id: Option<String>,
     pub parent_tool_call_id: Option<String>,
     pub tool_name: Option<String>,
@@ -82,7 +79,7 @@ pub struct CascadeWalkRow {
 
 #[derive(Debug, Clone, Default)]
 pub struct CascadeWalkResult {
-    pub root_state: Option<String>,
+    pub root_state: Option<RequestLifecycleState>,
     pub root_interrupt_requested_at: Option<String>,
     pub rows: Vec<CascadeWalkRow>,
 }
@@ -108,8 +105,8 @@ pub async fn walk(
         .await
         .map_err(|e| format!("cascade::walk: root request not found: {e}"))?;
 
-    let root_lifecycle_state = string_field(&root, "lifecycle_state");
-    let root_interrupt_requested_at = string_field(&root, "interrupt_requested_at");
+    let root_lifecycle_state = root.lifecycle_state;
+    let root_interrupt_requested_at = root.interrupt_requested_at;
 
     let mut result = CascadeWalkResult {
         root_state: root_lifecycle_state,
@@ -213,11 +210,11 @@ async fn bfs(
             }
         };
 
-        let child_lifecycle_state = string_field(&child_row, "lifecycle_state");
-        let child_session_id = string_field(&child_row, "session_id");
-        let child_behavior_id = string_field(&child_row, "behavior_id");
+        let child_lifecycle_state = child_row.lifecycle_state;
+        let child_session_id = child_row.session_id;
+        let child_behavior_id = child_row.behavior_id;
 
-        let is_terminal = RequestLifecycleState::is_terminal_str(child_lifecycle_state.as_deref());
+        let is_terminal = child_lifecycle_state.is_some_and(RequestLifecycleState::is_terminal);
 
         let classification = if is_terminal {
             CascadeClassification::AlreadyTerminal
@@ -277,7 +274,7 @@ async fn fetch_request(
     access: &GraphqlAccess,
     request_id: &str,
     agent_did: Option<&str>,
-) -> Result<Value, String> {
+) -> Result<AgentRequestRow, String> {
     let escaped = escape_graphql_string(request_id);
     let agent_did_clause = agent_did
         .map(|did| {
@@ -308,11 +305,14 @@ async fn fetch_request(
             &format!("AgentRequest query for {request_id}"),
         )
         .await?;
-    data.get("AgentRequest")
+    let row = data
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .and_then(|rows| rows.first())
         .cloned()
-        .ok_or_else(|| format!("request {request_id} not found in AgentRequest collection"))
+        .ok_or_else(|| format!("request {request_id} not found in AgentRequest collection"))?;
+    serde_json::from_value(row)
+        .map_err(|error| format!("invalid AgentRequest row for {request_id}: {error}"))
 }
 
 /// Builds a `CascadeCancelPreview` by walking the descendant tree of
@@ -343,7 +343,7 @@ pub async fn build_cascade_preview(
             request_id: row.request_id.clone(),
             session_id: row.session_id.clone(),
             behavior_id: row.behavior_id.clone(),
-            lifecycle_state: row.lifecycle_state.clone(),
+            lifecycle_state: row.lifecycle_state.map(|state| state.to_string()),
             parent_request_id: row.parent_request_id.clone(),
             parent_tool_call_id: row.parent_tool_call_id.clone(),
             tool_name: row.tool_name.clone(),
@@ -352,7 +352,7 @@ pub async fn build_cascade_preview(
         };
         sig_rows.push(PreviewSignatureRow {
             request_id: row.request_id.clone(),
-            lifecycle_state: row.lifecycle_state.clone(),
+            lifecycle_state: row.lifecycle_state.map(|state| state.to_string()),
             await_mode: row.await_mode.clone(),
             cancel_policy: row.cancel_policy.clone(),
             parent_tool_call_id: row.parent_tool_call_id.clone(),
@@ -367,7 +367,7 @@ pub async fn build_cascade_preview(
 
     let preview_signature = compute_preview_signature(&PreviewSignatureInput {
         root_request_id: req.request_id.clone(),
-        root_state: result.root_state.clone(),
+        root_state: result.root_state.map(|state| state.to_string()),
         root_interrupt_requested_at: result.root_interrupt_requested_at.clone(),
         affected: sig_rows,
     });
@@ -375,7 +375,7 @@ pub async fn build_cascade_preview(
     Ok(CascadeCancelPreview {
         root_request_id: req.request_id.clone(),
         preview_signature,
-        root_state: result.root_state,
+        root_state: result.root_state.map(|state| state.to_string()),
         will_interrupt,
         will_detach,
         already_terminal,
@@ -421,14 +421,14 @@ pub async fn latch_root_interrupt(
     // and processing. A stale phone button must not write a fresh interrupt
     // latch onto a terminal row: besides corrupting the audit trail, that
     // falsely reports an accepted operator action after the work is done.
-    if request_row_is_terminal(&row) {
+    if row.is_terminal() {
         return Err(format!(
             "request {request_id} is already terminal and cannot be interrupted"
         ));
     }
 
     // 2. If already interrupted, return idempotent result.
-    if let Some(existing) = string_field(&row, "interrupt_requested_at") {
+    if let Some(existing) = row.interrupt_requested_at {
         return Ok(LatchResult {
             interrupt_requested_at: existing,
             was_first: false,
@@ -472,12 +472,12 @@ pub async fn latch_root_interrupt(
         let current = fetch_request(core, &access, request_id, agent_did)
             .await
             .map_err(|error| format!("latch_root_interrupt recheck: {error}"))?;
-        if request_row_is_terminal(&current) {
+        if current.is_terminal() {
             return Err(format!(
                 "request {request_id} became terminal before the interrupt could be latched"
             ));
         }
-        if let Some(existing) = string_field(&current, "interrupt_requested_at") {
+        if let Some(existing) = current.interrupt_requested_at {
             return Ok(LatchResult {
                 interrupt_requested_at: existing,
                 was_first: false,
@@ -613,10 +613,10 @@ async fn latch_descendant_interrupt_with_access(
     let row = fetch_request(core, access, request_id, None)
         .await
         .map_err(|error| format!("latch_cascade_descendant: {error}"))?;
-    if request_row_is_terminal(&row) {
+    if row.is_terminal() {
         return Ok(None);
     }
-    if let Some(existing) = string_field(&row, "interrupt_requested_at") {
+    if let Some(existing) = row.interrupt_requested_at {
         return Ok(Some(LatchResult {
             interrupt_requested_at: existing,
             was_first: false,
@@ -660,10 +660,10 @@ async fn latch_descendant_interrupt_with_access(
     let current = fetch_request(core, access, request_id, None)
         .await
         .map_err(|error| format!("latch_cascade_descendant recheck: {error}"))?;
-    if request_row_is_terminal(&current) {
+    if current.is_terminal() {
         return Ok(None);
     }
-    if let Some(existing) = string_field(&current, "interrupt_requested_at") {
+    if let Some(existing) = current.interrupt_requested_at {
         return Ok(Some(LatchResult {
             interrupt_requested_at: existing,
             was_first: false,

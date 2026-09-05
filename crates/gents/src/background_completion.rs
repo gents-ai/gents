@@ -14,6 +14,7 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
@@ -115,9 +116,10 @@ use datetime_fields::{
 use notification_delivery::SideEffects;
 use queries::{load_child_linkage, load_request_id_by_doc_id, load_terminal_child_request_ids};
 use reconciliation::request_is_locally_owned;
+#[cfg(test)]
+use rendering::first_row;
 use rendering::{
-    compact_summary, first_row, non_empty, render_notification, render_tool_completion,
-    xml_escape_attr,
+    compact_summary, non_empty, render_notification, render_tool_completion, xml_escape_attr,
 };
 use side_effects::{
     bound_background_wake_request, bridge_state_is_terminal, ensure_projection_side_effects,

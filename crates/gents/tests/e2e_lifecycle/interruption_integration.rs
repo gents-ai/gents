@@ -3,6 +3,7 @@ use std::sync::Arc;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ClaimOutcome, ExecutionOrigin};
 use gents::{interrupt_request, AgentIdentity, Gents, RequestLifecycle, ToolCeiling};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::transcript::present_persisted_message;
 
 use crate::support::fixtures::test_identity;
@@ -79,7 +80,7 @@ async fn offline_replay_of_stale_requests_does_not_call_backend() {
 
     for (doc_id, _, _) in &request_doc_ids {
         let snap = fetch_request_snapshot(&db.node, doc_id).await;
-        assert_eq!(snap.lifecycle_state, "dead");
+        assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
         assert_eq!(snap.failure_reason, "Stale");
         assert_eq!(
             snap.backend_id, "",

@@ -302,6 +302,8 @@ fn import_langgraph_capture(
                 .map(ToOwned::to_owned)
         })
         .unwrap_or_else(|| "completed".to_string());
+    let lifecycle_state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
+        .with_context(|| format!("invalid mapped request lifecycle state {status:?}"))?;
     let started_at = "2026-06-05T00:00:00Z";
     let hint = langgraph_state_history_hint(capture, mapping, &session_id)
         .context("building LangGraph state/history projection hint")?;
@@ -343,7 +345,7 @@ fn import_langgraph_capture(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         metadata: Some(root_metadata),
-        lifecycle_state: Some(status.clone()),
+        lifecycle_state: Some(lifecycle_state),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
         retry_count: Some(0),
@@ -354,7 +356,7 @@ fn import_langgraph_capture(
             request_id: child_request_id.clone(),
             session_id: Some(session_id.clone()),
             content: Some("Imported LangGraph child request boundary".to_string()),
-            lifecycle_state: Some(status.clone()),
+            lifecycle_state: Some(lifecycle_state),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
             retry_count: Some(0),
@@ -833,6 +835,8 @@ fn import_multi_agent_capture(
         .status
         .clone()
         .unwrap_or_else(|| "completed".to_string());
+    let lifecycle_state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
+        .with_context(|| format!("invalid mapped request lifecycle state {status:?}"))?;
     let started_at = "2026-06-05T00:00:00Z";
     let root_participant = mapping.participants.iter().find(|participant| {
         participant
@@ -870,7 +874,7 @@ fn import_multi_agent_capture(
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
         metadata: Some(root_metadata(capture, mapping)?),
-        lifecycle_state: Some(status.clone()),
+        lifecycle_state: Some(lifecycle_state),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
         retry_count: Some(0),
@@ -900,7 +904,7 @@ fn import_multi_agent_capture(
                 .map(participant_metadata)
                 .transpose()
                 .context("serializing child request participant metadata")?,
-            lifecycle_state: Some(status.clone()),
+            lifecycle_state: Some(lifecycle_state),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
             retry_count: Some(0),

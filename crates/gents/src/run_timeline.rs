@@ -115,7 +115,7 @@ pub struct TimelineRequestRow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub lifecycle_state: Option<String>,
+    pub lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,6 +156,43 @@ pub struct TimelineRequestRow {
     pub execution_origin: Option<String>,
     #[serde(default, skip_serializing_if = "RetrySummary::is_empty")]
     pub retry_summary: RetrySummary,
+}
+
+impl From<gents_protocol::row::AgentRequestRow> for TimelineRequestRow {
+    fn from(row: gents_protocol::row::AgentRequestRow) -> Self {
+        Self {
+            doc_id: row.doc_id,
+            request_id: row.request_id,
+            agent_did: row.agent_did,
+            behavior_id: row.behavior_id,
+            session_id: row.session_id,
+            content: row.content,
+            seed: row.seed,
+            max_total_tokens: row.max_total_tokens,
+            metadata: row.metadata,
+            lifecycle_state: row.lifecycle_state,
+            backend_id: row.backend_id,
+            failure_reason: row.failure_reason,
+            created_at: row.created_at,
+            retry_count: row.retry_count,
+            interrupt_requested_at: row.interrupt_requested_at,
+            caused_by_trigger_id: row.caused_by_trigger_id,
+            caused_by_trigger_kind: row.caused_by_trigger_kind,
+            caused_by_correlation: row.caused_by_correlation,
+            caused_by_trigger_context: row.caused_by_trigger_context,
+            caused_by_source_doc_id: row.caused_by_source_doc_id,
+            caused_by_parent_request_id: row.caused_by_parent_request_id,
+            caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,
+            caused_by_parent_tool_call_id: row.caused_by_parent_tool_call_id,
+            caused_by_parent_tool_call_doc_id: row.caused_by_parent_tool_call_doc_id,
+            workspace_id: row.workspace_id,
+            workspace_authority: row.workspace_authority,
+            workspace_owner_deployment_id: row.workspace_owner_deployment_id,
+            workspace_seal_hash: row.workspace_seal_hash,
+            execution_origin: row.execution_origin,
+            retry_summary: RetrySummary::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1345,8 +1382,7 @@ fn retry_summary_for_request(
 }
 
 fn request_completed(request: &TimelineRequestRow) -> bool {
-    RequestLifecycleState::parse_opt(request.lifecycle_state.as_deref())
-        == Some(RequestLifecycleState::Completed)
+    request.lifecycle_state == Some(RequestLifecycleState::Completed)
 }
 
 fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequestRow) {
@@ -1362,7 +1398,9 @@ fn push_request_event(events: &mut Vec<RunTimelineEvent>, request: &TimelineRequ
         agent_did: request.agent_did.clone(),
         behavior_id: request.behavior_id.clone(),
         session_id: request.session_id.clone(),
-        lifecycle_state: request.lifecycle_state.clone(),
+        lifecycle_state: request
+            .lifecycle_state
+            .map(|state| state.as_str().to_string()),
         failure_reason: request.failure_reason.clone(),
         content: request.content.clone(),
         metadata: request.metadata.clone(),
@@ -1874,7 +1912,7 @@ mod tests {
                 agent_did: Some("did:test:amy".to_string()),
                 behavior_id: Some("amy".to_string()),
                 session_id: Some("session-1".to_string()),
-                lifecycle_state: Some("complete".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 caused_by_trigger_id: Some("trigger-1".to_string()),
                 caused_by_trigger_kind: Some("event".to_string()),
                 caused_by_source_doc_id: Some("source-doc-1".to_string()),
@@ -2293,7 +2331,7 @@ mod tests {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-recovered".to_string(),
-                lifecycle_state: Some("completed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Completed),
                 created_at: Some("2026-05-04T12:00:00Z".to_string()),
                 ..Default::default()
             },
@@ -2335,7 +2373,7 @@ mod tests {
         let rows = RunTimelineRows {
             request: TimelineRequestRow {
                 request_id: "req-failed".to_string(),
-                lifecycle_state: Some("failed".to_string()),
+                lifecycle_state: Some(RequestLifecycleState::Failed),
                 created_at: Some("2026-05-04T12:00:00Z".to_string()),
                 ..Default::default()
             },

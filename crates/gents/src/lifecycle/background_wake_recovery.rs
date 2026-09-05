@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
@@ -19,40 +20,6 @@ use super::{BackgroundWakeRedriveReport, RequestLifecycle};
 const BACKGROUND_WAKE_REDRIVE_BATCH_LIMIT: usize = 64;
 const BACKGROUND_WAKE_RETRY_BASE_SECONDS: i64 = 5;
 const BACKGROUND_WAKE_RETRY_MAX_SECONDS: i64 = 60;
-
-#[derive(Debug, Clone, Deserialize)]
-struct FailedWakeRow {
-    #[serde(rename = "_docID")]
-    doc_id: String,
-    request_id: String,
-    agent_did: String,
-    behavior_id: String,
-    session_id: String,
-    retry_root_request: Option<String>,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
-    backend_id: Option<String>,
-    subagent_depth: Option<u32>,
-    retry_count: i64,
-    max_retries: i64,
-    terminalized_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SuccessorRow {
-    retry_parent_request_doc_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct PendingWakeRow {
-    session_id: String,
-    metadata: Option<String>,
-}
 
 #[derive(Debug, Clone, Deserialize)]
 struct ConversationRow {
@@ -106,31 +73,35 @@ impl RequestLifecycle {
         };
         let successor_parents = successors
             .into_iter()
-            .filter_map(|row| clean(row.retry_parent_request_doc_id))
+            .filter_map(|row: AgentRequestRow| clean(row.retry_parent_request_doc_id))
             .collect::<BTreeSet<_>>();
         let pending_keys = pending
             .into_iter()
-            .filter_map(|row| {
+            .filter_map(|row: AgentRequestRow| {
                 let hints = parse_queue_hints(row.metadata.as_deref())?;
-                automated_queue_key(&hints).map(|key| (row.session_id, key))
+                automated_queue_key(&hints)
+                    .and_then(|key| row.session_id.map(|session| (session, key)))
             })
             .collect::<BTreeSet<_>>();
 
         let mut eligible = Vec::new();
         for candidate in candidates {
-            let Some(queue_key) = eligible_queue_key(&candidate) else {
+            let Some(queue_key) = eligible_queue_key(&candidate)? else {
                 report.ineligible += 1;
                 continue;
             };
-            if successor_parents.contains(&candidate.doc_id) {
+            if successor_parents.contains(required_str(candidate.doc_id.as_deref(), "_docID")?) {
                 report.already_redriven += 1;
                 continue;
             }
-            if pending_keys.contains(&(candidate.session_id.clone(), queue_key)) {
+            if pending_keys.contains(&(
+                required_str(candidate.session_id.as_deref(), "session_id")?.to_string(),
+                queue_key,
+            )) {
                 report.coalesced += 1;
                 continue;
             }
-            if !retry_is_due(&candidate, chrono::Utc::now()) {
+            if !retry_is_due(&candidate, chrono::Utc::now())? {
                 report.deferred += 1;
                 continue;
             }
@@ -147,9 +118,9 @@ impl RequestLifecycle {
                     tracing::info!(
                         source_request_id = %candidate.request_id,
                         request_id,
-                        session_id = %candidate.session_id,
-                        retry_count = candidate.retry_count + 1,
-                        max_retries = candidate.max_retries,
+                        session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
+                        retry_count = required_i64(candidate.retry_count, "retry_count")? + 1,
+                        max_retries = required_i64(candidate.max_retries, "max_retries")?,
                         "redrove failed background-completion wake"
                     );
                 }
@@ -160,7 +131,7 @@ impl RequestLifecycle {
                     report.failed += 1;
                     tracing::warn!(
                         request_id = %candidate.request_id,
-                        session_id = %candidate.session_id,
+                        session_id = required_str(candidate.session_id.as_deref(), "session_id")?,
                         error = %error,
                         "failed to redrive background-completion wake"
                     );
@@ -174,7 +145,11 @@ impl RequestLifecycle {
 async fn load_candidates(
     node: &EmbeddedNode,
     agent_did: &str,
-) -> Result<(Vec<FailedWakeRow>, Vec<SuccessorRow>, Vec<PendingWakeRow>)> {
+) -> Result<(
+    Vec<AgentRequestRow>,
+    Vec<AgentRequestRow>,
+    Vec<AgentRequestRow>,
+)> {
     let agent_did = escape_graphql_string(agent_did);
     let response = node
         .execute(&format!(
@@ -192,11 +167,11 @@ async fn load_candidates(
                 successors: AgentRequest(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
                     retry_parent_request_doc_id: {{ _neq: null }}
-                }}) {{ retry_parent_request_doc_id }}
+                }}) {{ request_id retry_parent_request_doc_id }}
                 pending: AgentRequest(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
                     lifecycle_state: {{ _eq: "pending" }}
-                }}) {{ session_id metadata }}
+                }}) {{ request_id session_id metadata }}
             }}"#
         ))
         .await;
@@ -204,11 +179,39 @@ async fn load_candidates(
         anyhow::bail!("querying failed background wakes: {:?}", response.errors);
     }
     let data = response.data.context("background wake query has no data")?;
+    let failed: Vec<AgentRequestRow> =
+        serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?;
+    for candidate in &failed {
+        validate_failed_wake(candidate)?;
+    }
     Ok((
-        serde_json::from_value(data["failed"].clone()).context("decoding failed wakes")?,
+        failed,
         serde_json::from_value(data["successors"].clone()).context("decoding successors")?,
         serde_json::from_value(data["pending"].clone()).context("decoding pending wakes")?,
     ))
+}
+
+fn required_str<'a>(value: Option<&'a str>, field: &str) -> Result<&'a str> {
+    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+}
+
+fn required_i64(value: Option<i64>, field: &str) -> Result<i64> {
+    value.ok_or_else(|| anyhow::anyhow!("failed background wake is missing {field}"))
+}
+
+fn validate_failed_wake(candidate: &AgentRequestRow) -> Result<()> {
+    required_str(candidate.doc_id.as_deref(), "_docID")?;
+    required_str(candidate.agent_did.as_deref(), "agent_did")?;
+    required_str(candidate.behavior_id.as_deref(), "behavior_id")?;
+    required_str(candidate.session_id.as_deref(), "session_id")?;
+    required_i64(candidate.retry_count, "retry_count")?;
+    required_i64(candidate.max_retries, "max_retries")?;
+    candidate
+        .subagent_depth
+        .map(u32::try_from)
+        .transpose()
+        .context("failed background wake subagent_depth must fit in u32")?;
+    Ok(())
 }
 
 fn clean(value: Option<String>) -> Option<String> {
@@ -221,12 +224,14 @@ fn automated_queue_key(hints: &super::queue::QueueHints) -> Option<String> {
         .flatten()
 }
 
-fn eligible_queue_key(candidate: &FailedWakeRow) -> Option<String> {
-    if candidate.retry_count < 0 || candidate.retry_count >= candidate.max_retries {
-        return None;
+fn eligible_queue_key(candidate: &AgentRequestRow) -> Result<Option<String>> {
+    let retry_count = required_i64(candidate.retry_count, "retry_count")?;
+    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
+    if retry_count < 0 || retry_count >= max_retries {
+        return Ok(None);
     }
-    let hints = parse_queue_hints(candidate.metadata.as_deref())?;
-    automated_queue_key(&hints)
+    Ok(parse_queue_hints(candidate.metadata.as_deref())
+        .and_then(|hints| automated_queue_key(&hints)))
 }
 
 pub fn background_wake_retry_delay(retry_count: i64) -> chrono::Duration {
@@ -251,12 +256,15 @@ pub fn background_wake_next_retry_at(
     Some(terminalized_at + background_wake_retry_delay(retry_count))
 }
 
-fn retry_is_due(candidate: &FailedWakeRow, now: chrono::DateTime<chrono::Utc>) -> bool {
-    background_wake_next_retry_at(candidate.terminalized_at.as_deref(), candidate.retry_count)
-        .is_none_or(|next_retry_at| next_retry_at <= now)
+fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+    Ok(background_wake_next_retry_at(
+        candidate.terminalized_at.as_deref(),
+        required_i64(candidate.retry_count, "retry_count")?,
+    )
+    .is_none_or(|next_retry_at| next_retry_at <= now))
 }
 
-async fn redrive_one(node: &EmbeddedNode, candidate: &FailedWakeRow) -> Result<RedriveOutcome> {
+async fn redrive_one(node: &EmbeddedNode, candidate: &AgentRequestRow) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
     let mut last_error = None;
     for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
@@ -296,23 +304,26 @@ fn retryable_transaction_error(error: &anyhow::Error) -> bool {
 
 async fn redrive_in_transaction(
     txn: &ConfigApplyTxn<'_>,
-    candidate: &FailedWakeRow,
+    candidate: &AgentRequestRow,
     request_id: &str,
 ) -> Result<RedriveOutcome> {
-    let retry_key = format!("retry:doc:{}", candidate.doc_id);
+    let retry_key = format!(
+        "retry:doc:{}",
+        required_str(candidate.doc_id.as_deref(), "_docID")?
+    );
     let response = txn
-        .execute(&precondition_query(candidate, &retry_key))
+        .execute(&precondition_query(candidate, &retry_key)?)
         .await?;
     let data = response.get("data").context("redrive query has no data")?;
-    if rows(data, "successor").is_some_and(|rows| !rows.is_empty()) {
+    if !agent_request_rows(data, "successor")?.is_empty() {
         return Ok(RedriveOutcome::AlreadyCreated);
     }
-    if rows(data, "source").map_or(0, <[_]>::len) != 1 {
+    if agent_request_rows(data, "source")?.len() != 1 {
         return Ok(RedriveOutcome::Ineligible);
     }
-    let queue_key = eligible_queue_key(candidate).context("wake became ineligible")?;
-    if rows(data, "pending").into_iter().flatten().any(|row| {
-        parse_queue_hints(row.get("metadata").and_then(serde_json::Value::as_str))
+    let queue_key = eligible_queue_key(candidate)?.context("wake became ineligible")?;
+    if agent_request_rows(data, "pending")?.iter().any(|row| {
+        parse_queue_hints(row.metadata.as_deref())
             .and_then(|hints| automated_queue_key(&hints))
             .is_some_and(|key| key == queue_key)
     }) {
@@ -354,40 +365,45 @@ async fn redrive_in_transaction(
     })
 }
 
-fn rows<'a>(data: &'a serde_json::Value, name: &str) -> Option<&'a [serde_json::Value]> {
-    data.get(name)
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
+fn agent_request_rows(data: &serde_json::Value, name: &str) -> Result<Vec<AgentRequestRow>> {
+    serde_json::from_value(
+        data.get(name)
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!([])),
+    )
+    .with_context(|| format!("decoding {name} AgentRequest rows"))
 }
 
-fn precondition_query(candidate: &FailedWakeRow, retry_key: &str) -> String {
-    let doc_id = escape_graphql_string(&candidate.doc_id);
-    let agent_did = escape_graphql_string(&candidate.agent_did);
-    let session_id = escape_graphql_string(&candidate.session_id);
+fn precondition_query(candidate: &AgentRequestRow, retry_key: &str) -> Result<String> {
+    let doc_id = escape_graphql_string(required_str(candidate.doc_id.as_deref(), "_docID")?);
+    let agent_did =
+        escape_graphql_string(required_str(candidate.agent_did.as_deref(), "agent_did")?);
+    let session_id =
+        escape_graphql_string(required_str(candidate.session_id.as_deref(), "session_id")?);
     let retry_key = escape_graphql_string(retry_key);
-    format!(
+    Ok(format!(
         r#"{{
             source: AgentRequest(filter: {{
                 _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
                 lifecycle_state: {{ _eq: "failed" }},
                 execution_origin: {{ _eq: "scheduled" }}
-            }}, limit: 1) {{ _docID }}
+            }}, limit: 1) {{ request_id _docID }}
             successor: AgentRequest(
                 filter: {{ retry_key: {{ _eq: "{retry_key}" }} }}, limit: 1
-            ) {{ _docID }}
+            ) {{ request_id _docID }}
             pending: AgentRequest(filter: {{
                 session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
                 lifecycle_state: {{ _eq: "pending" }}
-            }}) {{ metadata }}
+            }}) {{ request_id metadata }}
             conversations: AgentConversation(filter: {{
                 session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}
             }}) {{ _docID latest_request_id updated_at title preview_text }}
         }}"#
-    )
+    ))
 }
 
 async fn redrive_mutation(
-    candidate: &FailedWakeRow,
+    candidate: &AgentRequestRow,
     conversation: &ConversationRow,
     request_id: &str,
     retry_key: &str,
@@ -399,22 +415,34 @@ async fn redrive_mutation(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(&candidate.request_id);
+    let agent_did = required_str(candidate.agent_did.as_deref(), "agent_did")?;
+    let behavior_id = required_str(candidate.behavior_id.as_deref(), "behavior_id")?;
+    let session_id = required_str(candidate.session_id.as_deref(), "session_id")?;
+    let doc_id = required_str(candidate.doc_id.as_deref(), "_docID")?;
+    let subagent_depth = candidate
+        .subagent_depth
+        .map(u32::try_from)
+        .transpose()
+        .context("failed background wake subagent_depth must fit in u32")?
+        .unwrap_or_default();
+    let retry_count = required_i64(candidate.retry_count, "retry_count")?;
+    let max_retries = required_i64(candidate.max_retries, "max_retries")?;
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-            &candidate.agent_did,
+            agent_did,
             &candidate.request_id,
         );
     let parent_link = ParentLink {
-        depth: candidate.subagent_depth.unwrap_or_default(),
+        depth: subagent_depth,
         parent_request_id: candidate.request_id.clone(),
-        parent_request_doc_id: candidate.doc_id.clone(),
+        parent_request_doc_id: doc_id.to_string(),
         ..Default::default()
     };
     let identity = RequestIdentity {
         request_id: request_id.to_string(),
-        agent_did: candidate.agent_did.clone(),
-        behavior_id: candidate.behavior_id.clone(),
-        session_id: candidate.session_id.clone(),
+        agent_did: agent_did.to_string(),
+        behavior_id: behavior_id.to_string(),
+        session_id: session_id.to_string(),
         content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,
         created_at: now.clone(),
@@ -423,10 +451,10 @@ async fn redrive_mutation(
         subagent: Some(parent_link),
         retry: Some(RetryLink {
             parent_request_id: candidate.request_id.clone(),
-            parent_request_doc_id: candidate.doc_id.clone(),
+            parent_request_doc_id: doc_id.to_string(),
             root_request_id: retry_root.to_string(),
-            retry_count: candidate.retry_count + 1,
-            max_retries: candidate.max_retries,
+            retry_count: retry_count + 1,
+            max_retries,
         }),
         sampling: Some(SamplingCarryover {
             temperature: candidate.temperature,
@@ -483,12 +511,12 @@ mod pin_tests {
         let tempdir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(tempdir.path());
 
-        let candidate = FailedWakeRow {
-            doc_id: "failed-doc-1".to_string(),
+        let candidate = AgentRequestRow {
+            doc_id: Some("failed-doc-1".to_string()),
             request_id: "failed-request-1".to_string(),
-            agent_did: PIN_FIXED_DID.to_string(),
-            behavior_id: "behavior-1".to_string(),
-            session_id: "sess-redrive-1".to_string(),
+            agent_did: Some(PIN_FIXED_DID.to_string()),
+            behavior_id: Some("behavior-1".to_string()),
+            session_id: Some("sess-redrive-1".to_string()),
             retry_root_request: Some("root-request-1".to_string()),
             temperature: Some(0.7),
             top_p: Some(0.9),
@@ -499,9 +527,10 @@ mod pin_tests {
             metadata: Some(r#"{"queue":{"source":"scheduled"}}"#.to_string()),
             backend_id: Some("backend-1".to_string()),
             subagent_depth: Some(1),
-            retry_count: 2,
-            max_retries: 5,
+            retry_count: Some(2),
+            max_retries: Some(5),
             terminalized_at: Some("2029-12-31T23:59:59Z".to_string()),
+            ..Default::default()
         };
         let request_id = "redrive-request-1".to_string();
         let retry_key = "redrive-retry-key-1".to_string();
@@ -518,15 +547,15 @@ mod pin_tests {
             .unwrap_or_else(|| candidate.request_id.clone());
         let admission =
             gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-                &candidate.agent_did,
+                candidate.agent_did.as_deref().unwrap(),
                 &candidate.request_id,
             );
         let spec = crate::lifecycle::materialize::RequestSpec {
             identity: crate::lifecycle::materialize::RequestIdentity {
                 request_id: request_id.clone(),
-                agent_did: candidate.agent_did.clone(),
-                behavior_id: candidate.behavior_id.clone(),
-                session_id: candidate.session_id.clone(),
+                agent_did: candidate.agent_did.clone().unwrap(),
+                behavior_id: candidate.behavior_id.clone().unwrap(),
+                session_id: candidate.session_id.clone().unwrap(),
                 content: BACKGROUND_COMPLETION_WAKE_PROMPT.to_string(),
                 execution_origin: crate::lifecycle::ExecutionOrigin::Scheduled,
                 created_at: now,
@@ -538,18 +567,23 @@ mod pin_tests {
             trigger_doc_id: None,
             workspace: None,
             subagent: Some(crate::lifecycle::materialize::ParentLink {
-                depth: candidate.subagent_depth.unwrap_or_default(),
+                depth: candidate
+                    .subagent_depth
+                    .map(u32::try_from)
+                    .transpose()
+                    .unwrap()
+                    .unwrap_or_default(),
                 parent_request_id: candidate.request_id.clone(),
-                parent_request_doc_id: candidate.doc_id.clone(),
+                parent_request_doc_id: candidate.doc_id.clone().unwrap(),
                 parent_tool_call_id: None,
                 parent_tool_call_doc_id: None,
             }),
             retry: Some(crate::lifecycle::materialize::RetryLink {
                 parent_request_id: candidate.request_id.clone(),
-                parent_request_doc_id: candidate.doc_id.clone(),
+                parent_request_doc_id: candidate.doc_id.clone().unwrap(),
                 root_request_id: retry_root,
-                retry_count: candidate.retry_count + 1,
-                max_retries: candidate.max_retries,
+                retry_count: candidate.retry_count.unwrap() + 1,
+                max_retries: candidate.max_retries.unwrap(),
             }),
             sampling: Some(crate::lifecycle::materialize::SamplingCarryover {
                 temperature: candidate.temperature,

@@ -145,6 +145,7 @@ async fn fetch_interrupt_and_ttl(
                 filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
             ) {{
+                request_id
                 interrupt_requested_at
                 valid_until
             }}
@@ -154,22 +155,17 @@ async fn fetch_interrupt_and_ttl(
     if resp.has_errors() {
         anyhow::bail!("fetch_interrupt_and_ttl for {doc_id}: {:?}", resp.errors);
     }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array());
-    let row = rows
-        .and_then(|arr| arr.first())
-        .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&resp, "AgentRequest")?
+            .ok_or_else(|| anyhow::anyhow!("AgentRequest {doc_id} not found"))?;
     let interrupt = row
-        .get("interrupt_requested_at")
-        .and_then(|v| v.as_str())
+        .interrupt_requested_at
+        .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from);
     let valid = row
-        .get("valid_until")
-        .and_then(|v| v.as_str())
+        .valid_until
+        .as_deref()
         .filter(|s| !s.is_empty())
         .map(String::from);
     Ok((interrupt, valid))
@@ -238,7 +234,7 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("interrupted"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Interrupted))
             {
                 return Ok(());
             }
@@ -247,7 +243,8 @@ impl RequestLifecycle {
                 self.request.request_id,
                 request_view
                     .as_ref()
-                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .and_then(|row| row.lifecycle_state)
+                    .map(RequestLifecycleState::as_str)
                     .unwrap_or("missing")
             );
         }
@@ -290,7 +287,7 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("dead"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Dead))
             {
                 return Ok(());
             }
@@ -299,7 +296,8 @@ impl RequestLifecycle {
                 self.request.request_id,
                 request_view
                     .as_ref()
-                    .and_then(|row| row.lifecycle_state.as_deref())
+                    .and_then(|row| row.lifecycle_state)
+                    .map(RequestLifecycleState::as_str)
                     .unwrap_or("missing")
             );
         }
@@ -407,14 +405,15 @@ impl RequestLifecycle {
             let request_view = self.request_view().await?;
             if !request_view
                 .as_ref()
-                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("failed"))
+                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Failed))
             {
                 anyhow::bail!(
                     "request {} could not reject admission from lifecycle_state={}",
                     self.request.request_id,
                     request_view
                         .as_ref()
-                        .and_then(|row| row.lifecycle_state.as_deref())
+                        .and_then(|row| row.lifecycle_state)
+                        .map(RequestLifecycleState::as_str)
                         .unwrap_or("missing")
                 );
             }
