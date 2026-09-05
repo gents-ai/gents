@@ -163,7 +163,7 @@ jobs:
       # explicitly instead of relying on mutable host toolchain state.
       - uses: dtolnay/rust-toolchain@1.97.1
         with:
-          components: rustfmt
+          components: rustfmt,rust-src
           targets: wasm32-unknown-unknown
 
       - name: Install elan
