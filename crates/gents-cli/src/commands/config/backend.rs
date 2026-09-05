@@ -3,6 +3,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::{discover_backend_models, BackendProviderKind, InferenceBackend};
+use gents_protocol::graphql::{extract_mutation_doc_id, string_list_field};
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -88,6 +89,11 @@ pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
 }
 
 pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
+    if args.write && normalize_optional_string(args.backend_id.as_deref()).is_none() {
+        anyhow::bail!(
+            "--write requires --backend-id: the discovered models are written to that backend document"
+        );
+    }
     let target = resolve_backend_discovery_target(&args).await?;
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
@@ -147,6 +153,22 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         Err(error) => return Err(error),
     };
 
+    // An empty list would render `models: null` and wipe the column, so it is never written.
+    let models_written = if args.write && !discovered_models.is_empty() {
+        write_discovered_models(
+            args.graphql
+                .as_deref()
+                .expect("checked graphql when backend_id is set"),
+            target
+                .backend_id
+                .as_deref()
+                .expect("checked backend_id when --write is set"),
+            &discovered_models,
+        )
+        .await?
+    } else {
+        0
+    };
     let output = json!({
         "backend_id": target.backend_id,
         "backend_preset": target.preset.map(BackendPresetArg::as_str),
@@ -155,6 +177,9 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         "api_key": target.api_key.as_ref().map(|_| "<redacted>"),
         "api_key_env_var": target.api_key_env_var,
         "discovered_models": discovered_models,
+        "models_written": models_written,
+        "write_skipped": (args.write && models_written == 0)
+            .then_some("discovery returned no models; models[] left unchanged"),
     });
     print_json(&output)?;
     Ok(())
@@ -191,6 +216,30 @@ async fn load_oauth_credential_for_discovery(
         crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
             .await?;
     Ok((credential, agent_did))
+}
+
+/// Rewrites `models[]` on the stored backend document and nothing else.
+async fn write_discovered_models(
+    graphql: &str,
+    backend_id: &str,
+    models: &[String],
+) -> Result<usize> {
+    let models_field = string_list_field("models", models)
+        .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;
+    let mutation = format!(
+        r#"mutation {{
+            update_InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{}" }} }},
+                input: {{ {} }}
+            ) {{ _docID }}
+        }}"#,
+        escape_graphql_string(backend_id),
+        models_field,
+    );
+    let response = post_graphql(graphql, &mutation).await?;
+    extract_mutation_doc_id(&response, "InferenceBackend")
+        .with_context(|| format!("updating models on backend {backend_id}"))?;
+    Ok(models.len())
 }
 
 /// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex

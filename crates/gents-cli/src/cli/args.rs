@@ -2422,6 +2422,11 @@ pub(crate) struct BackendDiscoverModelsArgs {
         help = "Agent home directory used to resolve the local agent DID for OAuth-credential backend discovery (defaults to ~/.gents). Pass --agent-did instead to target a specific agent"
     )]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Replace the backend document's models[] with the discovered models (requires --backend-id; nothing is written without this flag)"
+    )]
+    pub(crate) write: bool,
 }
 
 #[derive(clap::Args)]
