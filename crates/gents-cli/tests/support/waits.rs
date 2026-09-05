@@ -48,7 +48,14 @@ pub async fn wait_for_runtime_ready(
                     }
                 }
             }
-            Err(error) if runtime_schema_is_starting(&error) => {}
+            Err(error)
+                if runtime_schema_is_starting(&error)
+                    || error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<reqwest::Error>()
+                            .is_some_and(reqwest::Error::is_connect)
+                    }) => {}
+
             Err(error) => return Err(error),
         }
 

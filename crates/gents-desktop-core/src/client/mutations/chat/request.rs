@@ -2,8 +2,12 @@ use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigApplyTxn;
+use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::skills::prompt_slash_skill_selection;
-use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+use gents::{
+    build_signed_request, RequestIdentity, RequestSigner, RequestSpec, RetryLink, SamplingCarryover,
+};
+use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{Map, Value};
@@ -16,7 +20,6 @@ use super::super::graphql::{
 };
 use super::binding::resolve_agent_binding;
 
-const DEFAULT_REQUEST_MAX_RETRIES: u32 = 3;
 const RETRY_TRANSACTION_ATTEMPTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,35 +122,50 @@ pub async fn submit_request(
         };
     let created_at = canonical_request_created_at_after(parent_created_at.as_deref())?;
 
-    let mut create = AgentRequestCreate::base(
-        request_id.clone(),
-        agent_did,
-        requester_did,
-        binding.behavior_id.as_deref().unwrap_or(""),
-        session_id,
-        content,
-        "interactive",
-        created_at,
-        admission,
-    );
-    create.behavior_id = binding.behavior_id.clone();
-    create.retry_parent_request =
-        (!retry_parent_request.is_empty()).then_some(retry_parent_request);
-    create.retry_parent_request_doc_id = retry_parent_request_doc_id;
-    create.retry_root_request = Some(retry_root_request);
-    create.temperature = options.temperature;
-    create.top_p = options.top_p;
-    create.top_k = options.top_k;
-    create.seed = options.seed;
-    create.max_tokens = options.max_tokens;
-    create.max_total_tokens = options.max_total_tokens;
-    create.metadata = options.metadata;
-    create.valid_until = options
-        .valid_until
-        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    create.caused_by_source_doc_id = options.caused_by_source_doc_id;
-    create.max_retries = i64::from(DEFAULT_REQUEST_MAX_RETRIES);
-    gents::sign_agent_request_create(signer, &mut create).await?;
+    let create = build_signed_request(
+        RequestSpec {
+            retry: Some(RetryLink {
+                parent_request_id: (!retry_parent_request.is_empty())
+                    .then_some(retry_parent_request),
+                parent_request_doc_id: retry_parent_request_doc_id,
+                root_request_id: retry_root_request,
+                retry_count: 0,
+                max_retries: i64::from(DEFAULT_REQUEST_MAX_RETRIES),
+            }),
+            sampling: Some(SamplingCarryover {
+                temperature: options.temperature,
+                top_p: options.top_p,
+                top_k: options.top_k,
+                seed: options.seed,
+                max_tokens: options.max_tokens,
+                max_total_tokens: options.max_total_tokens,
+                backend_id: None,
+            }),
+            metadata: options.metadata,
+            valid_until: options
+                .valid_until
+                .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            trigger_lineage: TriggerLineage {
+                source_doc_id: options.caused_by_source_doc_id,
+                ..Default::default()
+            },
+            ..RequestSpec::new(
+                RequestIdentity {
+                    request_id: request_id.clone(),
+                    agent_did: agent_did.to_string(),
+                    requester_did: Some(requester_did.to_string()),
+                    behavior_id: binding.behavior_id.clone().unwrap_or_default(),
+                    session_id: session_id.to_string(),
+                    content: content.to_string(),
+                    execution_origin: ExecutionOrigin::Interactive,
+                    created_at,
+                },
+                admission,
+            )
+        },
+        RequestSigner::Identity(signer),
+    )
+    .await?;
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     execute_mutation(node, &mutation, "submit_request").await?;
 
@@ -401,33 +419,43 @@ async fn retry_request_in_txn(
     let backend_id = normalize_optional_string(parent.backend_id.as_deref()).unwrap_or("");
     let created_at = canonical_request_created_at_after(parent.created_at.as_deref())?;
     let binding = resolve_agent_binding(store, agent_did, behavior_id, Some(parent_session_id))?;
-    let mut create = AgentRequestCreate::base(
-        candidate_request_id,
-        agent_did,
-        requester_did,
-        binding.behavior_id.as_deref().unwrap_or(""),
-        parent_session_id,
-        content,
-        execution_origin,
-        created_at,
-        admission,
-    );
-    create.behavior_id = binding.behavior_id.clone();
-    create.retry_parent_request = Some(parent_request_id.to_string());
-    create.retry_parent_request_doc_id = Some(parent_doc_id);
-    create.retry_root_request = Some(retry_root_request.to_string());
-    create.retry_key = Some(retry_key);
-    create.temperature = parent.temperature;
-    create.top_p = parent.top_p;
-    create.top_k = parent.top_k;
-    create.seed = parent.seed;
-    create.max_tokens = parent.max_tokens;
-    create.max_total_tokens = parent.max_total_tokens;
-    create.metadata = parent.metadata;
-    create.backend_id = (!backend_id.is_empty()).then(|| backend_id.to_string());
-    create.retry_count = retry_count;
-    create.max_retries = max_retries;
-    gents::sign_agent_request_create(signer, &mut create).await?;
+    let create = build_signed_request(
+        RequestSpec {
+            retry: Some(RetryLink {
+                parent_request_id: Some(parent_request_id.to_string()),
+                parent_request_doc_id: Some(parent_doc_id),
+                root_request_id: retry_root_request.to_string(),
+                retry_count,
+                max_retries,
+            }),
+            retry_key: Some(retry_key),
+            sampling: Some(SamplingCarryover {
+                temperature: parent.temperature,
+                top_p: parent.top_p,
+                top_k: parent.top_k,
+                seed: parent.seed,
+                max_tokens: parent.max_tokens,
+                max_total_tokens: parent.max_total_tokens,
+                backend_id: (!backend_id.is_empty()).then(|| backend_id.to_string()),
+            }),
+            metadata: parent.metadata,
+            ..RequestSpec::new(
+                RequestIdentity {
+                    request_id: candidate_request_id.to_string(),
+                    agent_did: agent_did.to_string(),
+                    requester_did: Some(requester_did.to_string()),
+                    behavior_id: binding.behavior_id.clone().unwrap_or_default(),
+                    session_id: parent_session_id.to_string(),
+                    content: content.to_string(),
+                    execution_origin: ExecutionOrigin::from_persisted(Some(execution_origin))?,
+                    created_at,
+                },
+                admission,
+            )
+        },
+        RequestSigner::Identity(signer),
+    )
+    .await?;
     txn.execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
         .await?;
 

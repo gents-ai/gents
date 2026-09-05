@@ -194,13 +194,39 @@ fn production_pending_request_writers_use_the_signed_canonical_builder() {
     assert!(!oneshot.contains("add_AgentRequest(input:"));
     assert!(oneshot.contains("behavior.principal_identity().clone()"));
 
-    // #1336: materialize.rs's build_request is the sole owner of
-    // AgentRequestCreate::base construction in this crate; every other
-    // in-crate writer builds through build_request/build_signed_request
-    // instead of calling AgentRequestCreate::base itself. (gents-cli and
-    // gents-desktop-core author their own AgentRequestCreate values
-    // independently of this crate's constructor and are out of #1336's
-    // scope, so they are not checked here.)
+    // The runtime constructor owns stamped request fields for every client.
+    for (name, source) in [
+        (
+            "CLI requests",
+            include_str!("../../../gents-cli/src/request_helpers.rs"),
+        ),
+        (
+            "CLI task runs",
+            include_str!("../../../gents-cli/src/commands/config/task_run.rs"),
+        ),
+        (
+            "desktop requests",
+            include_str!("../../../gents-desktop-core/src/client/mutations/chat/request.rs"),
+        ),
+    ] {
+        // Inline test modules may construct protocol fixtures; a top-level
+        // cfg(test) module declaration must not truncate production code.
+        let production = source.split("#[cfg(test)]\nmod tests {").next().unwrap();
+        for forbidden in [
+            "AgentRequestCreate::base(",
+            "sign_agent_request_create",
+            "const DEFAULT_REQUEST_MAX_RETRIES",
+        ] {
+            assert!(
+                !production.contains(forbidden),
+                "{name} restored duplicate authoring: {forbidden}"
+            );
+        }
+        assert!(
+            production.contains("build_signed_request("),
+            "{name} lost the shared builder"
+        );
+    }
     assert_eq!(
         materialize.matches("AgentRequestCreate::base(").count(),
         1,

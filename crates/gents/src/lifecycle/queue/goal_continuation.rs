@@ -51,6 +51,7 @@ pub(crate) async fn enqueue_goal_continuation(
             &parent.request_id,
         );
     let identity = RequestIdentity {
+        requester_did: None,
         request_id: request_id.clone(),
         agent_did: parent.agent_did.clone(),
         behavior_id,

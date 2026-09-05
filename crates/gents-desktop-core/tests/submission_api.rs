@@ -72,6 +72,8 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
                 AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     request_id
                     agent_did
+                    requester_did
+                    admission_signer_did
                     behavior_id
                     session_id
                     content
@@ -91,6 +93,12 @@ async fn submit_request_writes_request_as_the_only_durable_input() -> Result<()>
     .await?;
     assert_eq!(request.request_id, submitted.request_id);
     assert_eq!(request.agent_did.as_deref(), Some(agent_did.as_str()));
+    assert_ne!(core.principal().did(), agent_did);
+    assert_eq!(request.requester_did.as_deref(), Some(agent_did.as_str()));
+    assert_eq!(
+        request.admission_signer_did.as_deref(),
+        Some(agent_did.as_str())
+    );
     assert_eq!(
         request.behavior_id.as_deref(),
         Some(format!("{agent_did}:default").as_str())

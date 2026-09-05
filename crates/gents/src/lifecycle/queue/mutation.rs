@@ -25,6 +25,7 @@ pub(super) async fn session_request_create_mutation(
             &parent.request_id,
         );
     let identity = RequestIdentity {
+        requester_did: None,
         request_id: request_id.to_string(),
         agent_did: parent.agent_did.clone(),
         behavior_id: behavior_id.to_string(),

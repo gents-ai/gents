@@ -34,7 +34,8 @@ pub use manual::{write_manual_agent_request, write_manual_agent_request_with_con
 pub use materialize::{
     activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    EnqueuedAgentRequest,
+    build_signed_request, EnqueuedAgentRequest, ParentLink, RequestIdentity, RequestSigner,
+    RequestSpec, RetryLink, SamplingCarryover,
 };
 pub(crate) use materialize::{
     write_pending_agent_request_with_lineage_and_conversation_title,
@@ -220,7 +221,7 @@ impl ExecutionOrigin {
         }
     }
 
-    pub(crate) fn from_persisted(value: Option<&str>) -> anyhow::Result<Self> {
+    pub fn from_persisted(value: Option<&str>) -> anyhow::Result<Self> {
         match value {
             Some("interactive") => Ok(Self::Interactive),
             Some("scheduled") => Ok(Self::Scheduled),

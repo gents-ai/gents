@@ -58,6 +58,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
             retry_root_request: None,
+            retry_key: None,
         },
     )
     .await?;
@@ -1367,6 +1368,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
             retry_parent_request: Some(stale_id.clone()),
             retry_parent_request_doc_id: Some(stale_doc_id.to_string()),
             retry_root_request: stale.retry_root_request.clone(),
+            retry_key: None,
         },
     )
     .await?;

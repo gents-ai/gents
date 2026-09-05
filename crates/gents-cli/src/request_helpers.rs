@@ -67,6 +67,7 @@ pub(crate) struct RequestSubmitOptions {
     pub(crate) retry_parent_request: Option<String>,
     pub(crate) retry_parent_request_doc_id: Option<String>,
     pub(crate) retry_root_request: Option<String>,
+    pub(crate) retry_key: Option<String>,
 }
 
 pub(crate) fn response_query(request_id: &str) -> String {
@@ -373,32 +374,47 @@ async fn prepare_agent_request(
         });
     let admission =
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did);
-    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id.clone(),
-        agent_did,
-        agent_did,
-        &behavior_id,
-        session_id.clone(),
-        request_content.clone(),
-        "interactive",
-        created_at.clone(),
-        admission,
-    );
-    create.temperature = options.temperature;
-    create.top_p = options.top_p;
-    create.top_k = options.top_k;
-    create.seed = options.seed;
-    create.max_tokens = options.max_tokens;
-    create.max_total_tokens = options.max_total_tokens;
-    create.metadata = request_metadata.clone();
-    create.valid_until = options
-        .valid_until
-        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    create.retry_parent_request =
-        (!retry_parent_value.is_empty()).then(|| retry_parent_value.to_string());
-    create.retry_parent_request_doc_id = options.retry_parent_request_doc_id.clone();
-    create.retry_root_request = Some(retry_root_value);
-    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
+    let create = gents::build_signed_request(
+        gents::RequestSpec {
+            sampling: Some(gents::SamplingCarryover {
+                temperature: options.temperature,
+                top_p: options.top_p,
+                top_k: options.top_k,
+                seed: options.seed,
+                max_tokens: options.max_tokens,
+                max_total_tokens: options.max_total_tokens,
+                backend_id: None,
+            }),
+            metadata: request_metadata.clone(),
+            valid_until: options
+                .valid_until
+                .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            retry_key: options.retry_key,
+            retry: Some(gents::RetryLink {
+                parent_request_id: (!retry_parent_value.is_empty())
+                    .then(|| retry_parent_value.to_string()),
+                parent_request_doc_id: options.retry_parent_request_doc_id,
+                root_request_id: retry_root_value,
+                retry_count: 0,
+                max_retries: i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
+            }),
+            ..gents::RequestSpec::new(
+                gents::RequestIdentity {
+                    request_id: request_id.clone(),
+                    agent_did: agent_did.to_string(),
+                    requester_did: None,
+                    behavior_id: behavior_id.clone(),
+                    session_id: session_id.clone(),
+                    content: request_content,
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: created_at.clone(),
+                },
+                admission,
+            )
+        },
+        gents::RequestSigner::RegisteredTarget,
+    )
+    .await?;
     let submitted = SubmittedRequest {
         request_id,
         session_id,
@@ -450,19 +466,19 @@ pub(crate) async fn create_goal_backed_agent_request(
         "goal-submit:{}",
         gents::goal::deterministic_goal_creation_key(agent_did, session_id)
     );
-    let (submitted, mut create) = prepare_agent_request(
+    let (submitted, create) = prepare_agent_request(
         graphql,
         agent_did,
         content,
         Some(session_id),
         behavior_id,
-        RequestSubmitOptions::default(),
+        RequestSubmitOptions {
+            retry_key: Some(retry_key.clone()),
+            ..Default::default()
+        },
         Some(request_id.clone()),
     )
     .await?;
-    create.retry_key = Some(retry_key.clone());
-    // retry_key is part of the signed immutable request semantics.
-    gents::sign_agent_request_create_as_registered_target(&mut create).await?;
 
     let access = gents::ConfigAccess::Graphql(graphql.to_string());
     gents::goal::submit_goal_backed_request(
@@ -971,6 +987,81 @@ mod tests {
         content_and_metadata_with_prompt_selected_skill_ids, create_agent_request,
         materialized_message_query, RequestSubmitOptions,
     };
+
+    #[tokio::test]
+    async fn prepared_request_signs_complete_client_semantics_once() -> anyhow::Result<()> {
+        use gents::AgentIdentity;
+        let dir = tempfile::tempdir()?;
+        let identity = gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None)?;
+        let did = identity.did().to_string();
+        let data = serde_json::json!({"data": {
+            "AgentPrincipal": [{"agent_did": did, "default_behavior_id": "default", "enabled": true}],
+            "AgentBehavior": [{"agent_did": did, "behavior_id": "default", "enabled": true}]
+        }});
+        let app = axum::Router::new().route(
+            "/graphql",
+            axum::routing::post(move || async move { axum::Json(data) }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/graphql", listener.local_addr()?);
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let result = super::prepare_agent_request(
+            &endpoint,
+            &did,
+            "/vuln-scan review this",
+            Some("session"),
+            None,
+            RequestSubmitOptions {
+                temperature: Some(0.35),
+                top_p: Some(0.92),
+                top_k: Some(32),
+                seed: Some(1234),
+                max_tokens: Some(2048),
+                max_total_tokens: Some(100_000),
+                metadata: Some(r#"{"case":"client"}"#.into()),
+                valid_until: Some("2030-01-01T00:00:00Z".parse()?),
+                retry_parent_request: Some("parent".into()),
+                retry_parent_request_doc_id: Some("parent-doc".into()),
+                retry_root_request: Some("root".into()),
+                retry_key: Some("goal-submit:key".into()),
+            },
+            Some("stable-request".into()),
+        )
+        .await;
+        server.abort();
+        let (_, create) = result?;
+        assert_eq!(create.request_id, "stable-request");
+        assert_eq!(create.requester_did, did);
+        assert_eq!(create.behavior_id.as_deref(), Some("default"));
+        assert_eq!(create.temperature, Some(0.35));
+        assert_eq!(create.top_p, Some(0.92));
+        assert_eq!(create.top_k, Some(32));
+        assert_eq!(create.seed, Some(1234));
+        assert_eq!(create.max_tokens, Some(2048));
+        assert_eq!(create.max_total_tokens, Some(100_000));
+        assert_eq!(create.valid_until.as_deref(), Some("2030-01-01T00:00:00Z"));
+        assert_eq!(create.retry_parent_request.as_deref(), Some("parent"));
+        assert_eq!(
+            create.retry_parent_request_doc_id.as_deref(),
+            Some("parent-doc")
+        );
+        assert_eq!(create.retry_root_request.as_deref(), Some("root"));
+        assert_eq!(create.retry_key.as_deref(), Some("goal-submit:key"));
+        assert_eq!((create.retry_count, create.max_retries), (0, 3));
+        let metadata: serde_json::Value =
+            serde_json::from_str(create.metadata.as_deref().unwrap())?;
+        assert_eq!(metadata["case"], "client");
+        assert_eq!(
+            metadata["selected_skill_ids"],
+            serde_json::json!(["vuln-scan"])
+        );
+        assert!(
+            identity
+                .verify(&did, &create.signing_payload(), &create.admission.signature)
+                .await?
+        );
+        Ok(())
+    }
 
     #[tokio::test]
     async fn create_agent_request_rejects_negative_seed_before_network_io() {
