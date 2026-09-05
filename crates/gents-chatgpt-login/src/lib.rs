@@ -12,6 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
+use gents_protocol::chatgpt_oauth::{token_endpoint, CLIENT_ID, DEFAULT_ISSUER};
 use rand::RngCore;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -19,10 +20,6 @@ use sha2::{Digest, Sha256};
 use tiny_http::{Header, Response, Server, StatusCode as TinyStatusCode};
 use tokio::sync::{mpsc, Notify};
 use url::Url;
-
-pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
-pub const DEFAULT_ISSUER: &str = "https://auth.openai.com";
-pub const REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR: &str = "CODEX_REFRESH_TOKEN_URL_OVERRIDE";
 
 const DEFAULT_PORT: u16 = 1455;
 const FALLBACK_PORT: u16 = 1457;
@@ -355,7 +352,7 @@ async fn exchange_code_for_tokens(
     pkce: &PkceCodes,
     code: &str,
 ) -> io::Result<LoginTokens> {
-    let endpoint = format!("{}/oauth/token", options.issuer.trim_end_matches('/'));
+    let endpoint = token_endpoint(&options.issuer);
     let response = build_http_client()?
         .post(endpoint)
         .form(&[

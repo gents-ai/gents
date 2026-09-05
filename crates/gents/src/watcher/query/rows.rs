@@ -12,6 +12,19 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
     })
 }
 
+/// Result of [`AgentRequestRow::preclaim_signal`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreclaimSignal {
+    /// No terminal or malformed signal; ordinary session-based claimability
+    /// applies.
+    None,
+    /// Interrupted, or `valid_until` has expired: claim immediately so the
+    /// row can be terminalized.
+    Terminal,
+    /// `valid_until` is present but did not parse: never claimable.
+    Malformed,
+}
+
 #[derive(Clone, Deserialize)]
 pub(super) struct AgentRequestRow {
     #[serde(rename = "_docID")]
@@ -81,15 +94,21 @@ impl AgentRequestRow {
         !self.is_pending()
     }
 
-    pub(super) fn has_preclaim_terminal_signal(&self) -> bool {
+    /// Pre-claim disposition from `interrupt_requested_at` and `valid_until`,
+    /// checked before the watcher issues any claim-scoped query.
+    pub(super) fn preclaim_signal(&self) -> PreclaimSignal {
         if normalize_optional_string(self.interrupt_requested_at.clone()).is_some() {
-            return true;
+            return PreclaimSignal::Terminal;
         }
-        normalize_optional_string(self.valid_until.clone()).is_some_and(|value| {
-            chrono::DateTime::parse_from_rfc3339(&value)
-                .map(|dt| chrono::Utc::now() > dt.with_timezone(&chrono::Utc))
-                .unwrap_or(false)
-        })
+        match crate::lifecycle::parse_valid_until(self.valid_until.as_deref(), chrono::Utc::now()) {
+            crate::lifecycle::TtlOutcome::Expired(_) => PreclaimSignal::Terminal,
+            // Fail closed: an unparseable TTL is not evidence the request is
+            // still live, so it must not be claimed as if unset.
+            crate::lifecycle::TtlOutcome::Malformed(_) => PreclaimSignal::Malformed,
+            crate::lifecycle::TtlOutcome::NotSet | crate::lifecycle::TtlOutcome::Live(_) => {
+                PreclaimSignal::None
+            }
+        }
     }
 
     pub(super) fn is_aged_background_completion_wakeup(

@@ -21,12 +21,15 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
 export class BridgeInvokeError extends Error {
   readonly code: BridgeErrorCode;
   readonly retryable: boolean;
+  /** The unreachable endpoint, for `code === "endpointUnreachable"`. */
+  readonly endpoint: string | null;
 
   constructor(payload: BridgeErrorPayload) {
     super(payload.message);
     this.name = "BridgeInvokeError";
     this.code = payload.code;
     this.retryable = payload.retryable;
+    this.endpoint = payload.endpoint;
   }
 }
 
@@ -45,12 +48,14 @@ export function asBridgeErrorPayload(
     typeof candidate.code === "string" &&
     BRIDGE_ERROR_CODES.has(candidate.code as BridgeErrorCode) &&
     typeof candidate.message === "string" &&
-    typeof candidate.retryable === "boolean"
+    typeof candidate.retryable === "boolean" &&
+    (typeof candidate.endpoint === "string" || candidate.endpoint === null)
   ) {
     return {
       code: candidate.code as BridgeErrorCode,
       message: candidate.message,
       retryable: candidate.retryable,
+      endpoint: candidate.endpoint as string | null,
     };
   }
   return null;

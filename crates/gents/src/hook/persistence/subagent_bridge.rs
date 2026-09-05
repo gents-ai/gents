@@ -295,7 +295,7 @@ impl DefraSessionHook {
 
                 if let Some(terminal) = project_child_terminal(&row) {
                     let status = child_terminal_status(&terminal);
-                    let (reason, failure_class) = child_terminal_error(&terminal);
+                    let (reason, failure_class) = child_terminal_reason(&terminal);
                     if edge.lifecycle_state == "running" {
                         let Some(mut lifecycle) =
                             self.take_owned_in_flight_lifecycle(internal_call_id).await
@@ -594,7 +594,7 @@ impl DefraSessionHook {
 
                 if let Some(terminal) = project_child_terminal(&row) {
                     let status = child_terminal_status(&terminal);
-                    let (reason, failure_class) = child_terminal_error(&terminal);
+                    let (reason, failure_class) = child_terminal_reason(&terminal);
                     if edge.lifecycle_state == "running" {
                         if let Some(mut lifecycle) = self
                             .take_or_load_in_flight_lifecycle(

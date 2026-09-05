@@ -3805,6 +3805,7 @@ name = "gents-chatgpt-login"
 version = "0.15.0"
 dependencies = [
  "base64 0.22.1",
+ "gents-protocol",
  "rand 0.9.2",
  "reqwest 0.12.28",
  "serde",

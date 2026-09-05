@@ -6,7 +6,7 @@ use serde::Deserialize;
 use super::{validate_agent_request, AgentRequest, DefraWatcher};
 
 mod rows;
-use rows::{AgentRequestRow, SessionQueueRow};
+use rows::{AgentRequestRow, PreclaimSignal, SessionQueueRow};
 
 pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
@@ -200,8 +200,17 @@ impl DefraWatcher {
         if !row.is_pending() {
             return Ok(false);
         }
-        if row.has_preclaim_terminal_signal() {
-            return Ok(true);
+        match row.preclaim_signal() {
+            PreclaimSignal::Terminal => return Ok(true),
+            PreclaimSignal::Malformed => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %row.request_id,
+                    "watcher refusing to claim AgentRequest with malformed valid_until"
+                );
+                return Ok(false);
+            }
+            PreclaimSignal::None => {}
         }
 
         let session_id = crate::graphql::escape_graphql_string(&row.session_id);
@@ -348,15 +357,25 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
 
     for row in rows {
         let is_pending = row.is_pending();
-        let is_preclaim_terminal = row.has_preclaim_terminal_signal();
         let pending_session_seen = seen_pending_sessions.contains(&row.session_id);
         let session_blocked = blocked_sessions.contains(&row.session_id);
 
-        if is_pending && (is_preclaim_terminal || (!session_blocked && !pending_session_seen)) {
-            claimable.push(row.clone());
-        }
-
         if is_pending {
+            match row.preclaim_signal() {
+                PreclaimSignal::Terminal => claimable.push(row.clone()),
+                PreclaimSignal::Malformed => {
+                    tracing::warn!(
+                        doc_id = %row.doc_id,
+                        request_id = %row.request_id,
+                        "watcher refusing to claim AgentRequest with malformed valid_until"
+                    );
+                }
+                PreclaimSignal::None => {
+                    if !session_blocked && !pending_session_seen {
+                        claimable.push(row.clone());
+                    }
+                }
+            }
             seen_pending_sessions.insert(row.session_id.clone());
         }
     }
@@ -470,5 +489,27 @@ mod tests {
         let ranked = prioritize_aged_background_wakes(rows, now);
         assert_eq!(ranked[0].request_id, "older-descendant");
         assert_eq!(ranked[1].request_id, "fresh-wake");
+    }
+
+    /// A malformed `valid_until` must fail closed (#1339): it is never
+    /// claimable, even though the sole other pending row in its session
+    /// would otherwise leave the ordinary FIFO gate open for it.
+    #[test]
+    fn malformed_valid_until_is_never_claimable() {
+        let mut row = pending_row(
+            "malformed-ttl",
+            "solo-session",
+            "2026-08-12T21:00:00Z",
+            None,
+            "interactive",
+        );
+        row["valid_until"] = serde_json::json!("not-a-timestamp");
+        let data = serde_json::json!({ "AgentRequest": [row] });
+        let rows = claimable_pending_rows_from_rows(active_runtime_rows(Some(&data)).unwrap());
+        assert!(
+            rows.is_empty(),
+            "malformed valid_until must never be claimable, got {} row(s)",
+            rows.len()
+        );
     }
 }

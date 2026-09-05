@@ -2,11 +2,20 @@ import { describe, expect, it } from "vitest";
 
 import { formatPeerConnectionError } from "./peerConnectionErrors.js";
 
+function endpointUnreachable(endpoint: string, message = "unused") {
+  return {
+    code: "endpointUnreachable" as const,
+    message,
+    retryable: true,
+    endpoint,
+  };
+}
+
 describe("formatPeerConnectionError", () => {
-  it("turns local runtime transport context into operator-facing copy", () => {
+  it("turns a structured local-runtime endpoint into operator-facing copy", () => {
     expect(
       formatPeerConnectionError(
-        "sending GET request to http://127.0.0.1:9191/api/v0/p2p/shareable-address",
+        endpointUnreachable("http://127.0.0.1:9191"),
         "local-runtime",
       ),
     ).toBe(
@@ -14,12 +23,10 @@ describe("formatPeerConnectionError", () => {
     );
   });
 
-  it("turns peer status transport context into discovery copy", () => {
+  it("turns a structured peer-status endpoint into discovery copy", () => {
     expect(
       formatPeerConnectionError(
-        new Error(
-          "sending GET request to http://127.0.0.1:9181/api/v0/p2p/shareable-address.",
-        ),
+        endpointUnreachable("http://127.0.0.1:9181"),
         "peer-status",
       ),
     ).toBe(
@@ -30,7 +37,7 @@ describe("formatPeerConnectionError", () => {
   it("lets a white-label host own runtime and CLI names", () => {
     expect(
       formatPeerConnectionError(
-        "sending GET request to http://127.0.0.1:9191/api/v0/p2p/shareable-address",
+        endpointUnreachable("http://127.0.0.1:9191"),
         "local-runtime",
         {
           runtimeProductName: "Indigo Relay",
@@ -42,7 +49,18 @@ describe("formatPeerConnectionError", () => {
     );
   });
 
-  it("keeps already useful errors unchanged", () => {
+  it("recognizes the structured error nested under a Tauri invoke wrapper's message field", () => {
+    expect(
+      formatPeerConnectionError(
+        { message: endpointUnreachable("http://127.0.0.1:9181") },
+        "peer-status",
+      ),
+    ).toBe(
+      "Could not fetch runtime connection details from http://127.0.0.1:9181. Check that the runtime is running and the address is reachable.",
+    );
+  });
+
+  it("keeps already useful errors unchanged when there's no structured endpoint", () => {
     expect(
       formatPeerConnectionError(
         "no running local Gents runtime found at /tmp/runtime.json; run `gents server` first",
@@ -51,5 +69,19 @@ describe("formatPeerConnectionError", () => {
     ).toBe(
       "no running local Gents runtime found at /tmp/runtime.json; run `gents server` first",
     );
+  });
+
+  it("leaves non-endpointUnreachable bridge errors unchanged", () => {
+    expect(
+      formatPeerConnectionError(
+        {
+          code: "backend",
+          message: "GraphQL mutation failed",
+          retryable: true,
+          endpoint: null,
+        },
+        "peer-status",
+      ),
+    ).toBe("GraphQL mutation failed");
   });
 });

@@ -114,11 +114,7 @@ pub(crate) fn build_session_live_delta_from_store(
         |agent_did| store.derive_turn_for_request_for_agent(request_id, agent_did),
     );
     let turn_state_label = turn_state.map(turn_state_label).map(str::to_owned);
-    if !matches!(
-        turn_state,
-        Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
-            | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
-    ) {
+    if !is_live_turn_state(turn_state) {
         return snapshot_required(turn_state_label, None);
     }
 

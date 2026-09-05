@@ -17,3 +17,12 @@ pub fn turn_state_label(state: ClientTurnState) -> &'static str {
         ClientTurnState::Interrupted => "interrupted",
     }
 }
+
+/// True for the two non-terminal turn states (`WaitingForClaim`,
+/// `Streaming`) that still have a live tail worth overlaying onto a
+/// snapshot. Single owner for the `Some(WaitingForClaim) | Some(Streaming)`
+/// check shared by `snapshot::session::projection` and
+/// `snapshot::session::live_delta`.
+pub(crate) fn is_live_turn_state(state: Option<ClientTurnState>) -> bool {
+    state.is_some_and(|state| !state.is_terminal())
+}

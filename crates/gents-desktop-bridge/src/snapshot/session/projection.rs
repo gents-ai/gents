@@ -170,11 +170,7 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
             .unwrap_or_default()
             .to_ascii_lowercase();
         include_live_tail
-            && matches!(
-                turn_state,
-                Some(gents_protocol::client_protocol::ClientTurnState::WaitingForClaim)
-                    | Some(gents_protocol::client_protocol::ClientTurnState::Streaming)
-            )
+            && is_live_turn_state(turn_state)
             && response.materialized_message_sequence.is_none()
             && response.interrupted_at.is_none()
             && !matches!(

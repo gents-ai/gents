@@ -123,12 +123,12 @@ impl DefraSessionHook {
                 map.get(internal_call_id).map(|lifecycle| {
                     (
                         lifecycle.state(),
-                        lifecycle.deadline_at(),
+                        lifecycle.is_deadline_expired(Utc::now()),
                         lifecycle.doc_id().map(str::to_string),
                     )
                 })
             };
-            let (state, deadline_at, tool_call_doc_id) = match observed {
+            let (state, deadline_expired, tool_call_doc_id) = match observed {
                 Some(entry) => entry,
                 None => {
                     return Ok(ToolCallHookAction::skip(format!(
@@ -170,7 +170,7 @@ impl DefraSessionHook {
 
             // Held calls keep aging against deadline_at: an unanswered
             // approval must not become a zombie.
-            if Utc::now() >= deadline_at {
+            if deadline_expired {
                 let mut map = self.in_flight_lifecycles.lock().await;
                 if let Some(lifecycle) = map.get_mut(internal_call_id) {
                     lifecycle.timeout_while_held().await?;

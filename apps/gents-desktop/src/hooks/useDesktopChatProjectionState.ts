@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type SetStateAction } from "react";
 
 import {
-  isTerminalTurnState,
   projectChatShell,
   reconcileProjectedWorkflow,
   type ChatWorkflowState,
@@ -14,6 +13,7 @@ import type {
   SyncHealthView,
 } from "@source-inc/gents-desktop-client";
 import {
+  isTerminalTurnState,
   projectDeploymentOperationalState,
   selectedBehaviorReadinessDecision,
 } from "@source-inc/gents-desktop-client";

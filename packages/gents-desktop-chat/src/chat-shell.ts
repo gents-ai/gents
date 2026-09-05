@@ -6,6 +6,7 @@ import type {
   PendingTurnView,
 } from "@source-inc/gents-desktop-client";
 import {
+  isTerminalTurnState,
   projectClientOperationalStatus,
   projectRouteOperationalStatus,
 } from "@source-inc/gents-desktop-client";
@@ -162,17 +163,6 @@ export function reconcileProjectedWorkflow(
   }
 
   return localWorkflow;
-}
-
-export function isTerminalTurnState(
-  turnState?: string | null,
-): turnState is "completed" | "failed" | "superseded" | "interrupted" {
-  return (
-    turnState === "completed" ||
-    turnState === "failed" ||
-    turnState === "superseded" ||
-    turnState === "interrupted"
-  );
 }
 
 function isTurnState(value?: string | null): value is TurnState {

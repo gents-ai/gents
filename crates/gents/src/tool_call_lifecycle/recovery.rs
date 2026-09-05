@@ -315,12 +315,13 @@ impl super::ToolCallLifecycle {
     /// 3. Require a terminal parent before any write.
     /// 4. Leave every native background row to the registry-aware orphan
     ///    sweep, regardless of parent state.
-    /// 5. Detached bridges under an *interrupted* parent are left running.
-    /// 6. Child-linked bridges under a *cleanly completed* parent are left
-    ///    running — clean completion is not a cancel signal (live cascade and
-    ///    recovery only cancel on cancel-worthy terminals).
-    /// 7. Then project already-terminal children onto bridges (matches startup
-    ///    child-precedence so restart and live ticks converge).
+    /// 5. Project already-terminal children onto bridges first (matches
+    ///    startup child-precedence so restart and live ticks converge).
+    /// 6. Only then: detached bridges under an *interrupted* parent (whose
+    ///    child hasn't independently gone terminal) are left running, and
+    ///    child-linked bridges under a *cleanly completed* parent are left
+    ///    running too — clean completion is not a cancel signal (live
+    ///    cascade and recovery only cancel on cancel-worthy terminals).
     ///
     /// Covers running native tool calls stranded under a terminal parent with
     /// no executor active.
@@ -371,13 +372,13 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            // Detached bridges may outlive an interrupted parent by design
-            // (startup recovery leaves them running too).
-            if is_detached_subagent_tool(&row) && request_is_interrupted(&parent) {
-                continue;
-            }
-
             // Child-terminal precedence only after owner + terminal-parent gates.
+            // (Detached bridges under an interrupted parent are still left
+            // running when their child hasn't independently gone terminal —
+            // that's `classify_terminal_parent_tool_recovery`'s
+            // `is_detached_subagent_tool && request_is_interrupted` branch,
+            // reached below. Checking child-terminal precedence first here
+            // matches the startup sweep's order, which does the same.)
             if recover_bridge_terminal_child(node, agent_did, &row).await? {
                 report.tool_calls_terminalized += 1;
                 tracing::info!(
@@ -389,18 +390,13 @@ impl super::ToolCallLifecycle {
                 continue;
             }
 
-            // Clean parent completion is not a cancel signal for linked
-            // background/cascade children — leave the bridge running.
-            if request_is_cleanly_completed(&parent) && child_request_id(&row).is_some() {
+            // Parent-driven cause, shared with the startup/orphan classifier
+            // (`classify_running_tool_recovery`) minus its deadline and
+            // live-background-parent screens: `None` covers the clean-parent-
+            // completion skip for linked background/cascade children (leave
+            // the bridge running — clean completion is not a cancel signal).
+            let Some(outcome) = classify_terminal_parent_tool_recovery(&row, &parent) else {
                 continue;
-            }
-
-            let outcome = if request_is_interrupted(&parent) {
-                RecoveryOutcome::Cancelled
-            } else {
-                // Cancel-worthy non-interrupt terminals, or a native composite
-                // stranded under a cleanly-completed parent.
-                RecoveryOutcome::Failed
             };
 
             // Cascade only for cancel-worthy terminals — never on clean complete.
@@ -2191,13 +2187,34 @@ fn classify_running_tool_recovery(
         && parent.is_some_and(|parent| !request_is_terminal(parent))
     {
         Some(RecoveryOutcome::BackgroundInterrupted)
-    } else if is_detached_subagent_tool(row) && parent.is_some_and(request_is_interrupted) {
+    } else {
+        parent.and_then(|parent| classify_terminal_parent_tool_recovery(row, parent))
+    }
+}
+
+/// Parent-driven recovery cause for a running tool call whose parent has
+/// already resolved (Lean `terminalParentToolRecover`: cause is
+/// `.parentInterrupted` when the parent is interrupted, else `.parentTerminal`
+/// — deadline expiry is not a predicate of `TerminalParentToolRow` at all).
+/// Shared by [`classify_running_tool_recovery`] (after its deadline and
+/// live-background-parent screens) and
+/// `ToolCallLifecycle::reconcile_terminal_parent_owned_tools`, whose Lean
+/// counterpart (`terminalParentOwnedToolSweep`) intentionally excludes
+/// deadline expiry from this sweep — a stranded row's own deadline is not
+/// evidence about its *parent's* terminal state, and deadline-expired rows
+/// are covered by the orphan/background sweep and the live in-flight
+/// deadline sweep instead.
+fn classify_terminal_parent_tool_recovery(
+    row: &RunningToolCallRow,
+    parent: &ParentRequestRow,
+) -> Option<RecoveryOutcome> {
+    if is_detached_subagent_tool(row) && request_is_interrupted(parent) {
         None
-    } else if parent.is_some_and(request_is_cleanly_completed) && child_request_id(row).is_some() {
+    } else if request_is_cleanly_completed(parent) && child_request_id(row).is_some() {
         None
-    } else if parent.is_some_and(request_is_interrupted) {
+    } else if request_is_interrupted(parent) {
         Some(RecoveryOutcome::Cancelled)
-    } else if parent.is_some_and(request_is_terminal) {
+    } else if request_is_terminal(parent) {
         Some(RecoveryOutcome::Failed)
     } else {
         None
