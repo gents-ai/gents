@@ -12,6 +12,18 @@ use crate::llm::message::{
     AssistantContent, Message, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 
+/// Lean `ClaudeMap.identity` and Rust `CLAUDE_CODE_IDENTITY` are the same
+/// bytes; the body-cases fence checks `system[0]` against the witness, so
+/// this pins the constant even for a witness set with no rows.
+#[test]
+fn identity_matches_lean_body_witness_head() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_claude_body_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        assert_eq!(case.system[0], CLAUDE_CODE_IDENTITY, "{}", case.name);
+    }
+}
+
 fn request_from_native(
     preamble: Option<&str>,
     history: Vec<Message>,
