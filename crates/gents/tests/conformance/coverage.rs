@@ -174,7 +174,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().tool_preflight_cases.len(), 9);
     assert_eq!(lean_contract_snapshot().tool_retry_cases.len(), 63);
     assert_eq!(lean_contract_snapshot().command_policy_cases.len(), 48);
-    assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 4);
+    assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
     assert_eq!(lean_recovery_sweep_cases().len(), 34);
@@ -543,6 +543,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         ));
     }
     for (category, domain, cases) in [
+        (
+            "artifact_mode_meet_cases",
+            "ArtifactModeMeetCases",
+            &snapshot.artifact_mode_meet_cases,
+        ),
+        (
+            "artifact_admission_cases",
+            "ArtifactAdmissionCases",
+            &snapshot.artifact_admission_cases,
+        ),
+        (
+            "artifact_spawn_cases",
+            "ArtifactSpawnCases",
+            &snapshot.artifact_spawn_cases,
+        ),
         (
             "workspace_path_capability_cases",
             "WorkspacePathCapabilityCases",
@@ -1248,6 +1263,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     }
 
     let valid_categories = [
+        "artifact_mode_meet_cases",
+        "artifact_admission_cases",
+        "artifact_spawn_cases",
         "inference_registry_cases",
         "request_execution_lease_cases",
         "request_execution_lease_trace_cases",

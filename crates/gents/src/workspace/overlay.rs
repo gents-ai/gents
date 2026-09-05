@@ -2,7 +2,7 @@
 //! request-scoped tool root, and fail closed when the authority cannot run.
 
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
@@ -61,6 +61,7 @@ pub(crate) struct WorkspacePlacementRecord {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkspaceOverlay {
+    pub workspace_artifact: Option<super::ArtifactGrant>,
     pub root: PathBuf,
     pub cwd: PathBuf,
     pub authority: WorkspaceAuthority,
@@ -117,14 +118,20 @@ pub(crate) fn require_workspace_principal(
     Ok(())
 }
 
-/// Unbound requests (`workspace_id` none/blank) stay on the behavior tool root.
+/// Ordinary unbound requests stay on the behavior tool root. Artifact execution
+/// requires a valid sealed binding before the request can dispatch any tool.
 #[inline(never)]
 pub(crate) async fn resolve_request_workspace_overlay(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request: &AgentRequest,
+    execution_generation: &str,
+    artifact_requested: bool,
     operator_tool_root: Option<&Path>,
 ) -> Result<Option<WorkspaceOverlay>> {
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
+        if artifact_requested {
+            bail!("artifact_write requires a sealed ReadOnly workspace binding");
+        }
         return Ok(None);
     };
     let authority = match request.workspace_authority.as_deref().map(str::trim) {
@@ -152,6 +159,11 @@ pub(crate) async fn resolve_request_workspace_overlay(
     let request_cwd = request_workspace_cwd(request);
     let sealed = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state)
         == Some("sealed");
+    // Reject before binding or provider dispatch: absence of a grant must never
+    // let an artifact-selected request fall through legacy CLI/LSP launch paths.
+    if artifact_requested && (!sealed || authority != WorkspaceAuthority::ReadOnly) {
+        bail!("artifact_write requires a sealed ReadOnly workspace binding");
+    }
     let live_tree_hash = if sealed {
         Some(super::adapter::working_tree_hash(Path::new(
             &placement.host_path,
@@ -159,7 +171,7 @@ pub(crate) async fn resolve_request_workspace_overlay(
     } else {
         None
     };
-    let overlay = bind_workspace_overlay(
+    let mut overlay = bind_workspace_overlay(
         &workspace,
         &placement,
         WorkspaceBindInput {
@@ -176,6 +188,22 @@ pub(crate) async fn resolve_request_workspace_overlay(
         },
     )?;
     ensure_request_binding(node, request, &workspace, &local_deployment_id, authority).await?;
+    if artifact_requested {
+        overlay.workspace_artifact = Some(
+            super::ArtifactGrant::create(
+                node.clone(),
+                request,
+                execution_generation,
+                &overlay.root,
+                &local_deployment_id,
+                workspace
+                    .seal_hash
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("artifact workspace requires a seal"))?,
+            )
+            .await?,
+        );
+    }
     Ok(Some(overlay))
 }
 
@@ -319,6 +347,7 @@ pub(crate) fn bind_workspace_overlay(
     };
 
     Ok(WorkspaceOverlay {
+        workspace_artifact: None,
         root,
         cwd,
         authority: input.authority,
@@ -784,4 +813,4 @@ pub(crate) async fn load_enabled_workspace_roots(node: &EmbeddedNode) -> Result<
 
 #[cfg(test)]
 #[path = "overlay_tests.rs"]
-mod overlay_tests;
+pub(crate) mod overlay_tests;

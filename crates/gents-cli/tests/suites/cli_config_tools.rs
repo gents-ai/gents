@@ -113,78 +113,82 @@ async fn tool_selection_upsert_defaults_enabled_modes_and_persists_command_polic
         Some("x-data")
     );
 
-    let output = run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "tools",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--selection-id",
-            &selection_id,
-            "--enable-bash",
-            "--bash-mode",
-            "Unrestricted",
-            "--command-execution-policy",
-            "unrestricted",
-            "--command-network-mode",
-            "enabled",
-            "--command-allowed-argv-prefix",
-            "ps",
-            "--command-forbidden-argv-prefix",
-            "rm -rf",
-        ],
-    )?;
-    assert_eq!(
-        output
-            .get("command_execution_policy")
-            .and_then(Value::as_str),
-        Some("unrestricted")
-    );
-    assert_eq!(
-        output.get("command_network_mode").and_then(Value::as_str),
-        Some("enabled")
-    );
+    for (execution_policy, network_mode) in
+        [("unrestricted", "enabled"), ("artifact_write", "disabled")]
+    {
+        let output = run_cli_json(
+            &home_dir,
+            &[
+                "config",
+                "tools",
+                "set",
+                "--graphql",
+                &graphql,
+                "--agent-did",
+                &agent_did,
+                "--selection-id",
+                &selection_id,
+                "--enable-bash",
+                "--bash-mode",
+                "Unrestricted",
+                "--command-execution-policy",
+                execution_policy,
+                "--command-network-mode",
+                network_mode,
+                "--command-allowed-argv-prefix",
+                "ps",
+                "--command-forbidden-argv-prefix",
+                "rm -rf",
+            ],
+        )?;
+        assert_eq!(
+            output
+                .get("command_execution_policy")
+                .and_then(Value::as_str),
+            Some(execution_policy)
+        );
+        assert_eq!(
+            output.get("command_network_mode").and_then(Value::as_str),
+            Some(network_mode)
+        );
 
-    let query = format!(
-        r#"{{
-            ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                bash_mode
-                command_execution_policy
-                command_network_mode
-                command_allowed_argv_prefixes
-                command_forbidden_argv_prefixes
-            }}
-        }}"#,
-        escape_graphql_string(&selection_id),
-    );
-    let response = graphql_query(&graphql, &query).await?;
-    let row = first_graphql_row(&response, "ToolSelection")?;
-    assert_eq!(
-        row.get("bash_mode").and_then(Value::as_str),
-        Some("Unrestricted")
-    );
-    assert_eq!(
-        row.get("command_execution_policy").and_then(Value::as_str),
-        Some("unrestricted")
-    );
-    assert_eq!(
-        row.get("command_network_mode").and_then(Value::as_str),
-        Some("enabled")
-    );
-    assert_eq!(
-        row.pointer("/command_allowed_argv_prefixes/0")
-            .and_then(Value::as_str),
-        Some("ps")
-    );
-    assert_eq!(
-        row.pointer("/command_forbidden_argv_prefixes/0")
-            .and_then(Value::as_str),
-        Some("rm -rf")
-    );
+        let query = format!(
+            r#"{{
+                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                    bash_mode
+                    command_execution_policy
+                    command_network_mode
+                    command_allowed_argv_prefixes
+                    command_forbidden_argv_prefixes
+                }}
+            }}"#,
+            escape_graphql_string(&selection_id),
+        );
+        let response = graphql_query(&graphql, &query).await?;
+        let row = first_graphql_row(&response, "ToolSelection")?;
+        assert_eq!(
+            row.get("bash_mode").and_then(Value::as_str),
+            Some("Unrestricted")
+        );
+        assert_eq!(
+            row.get("command_execution_policy").and_then(Value::as_str),
+            Some(execution_policy)
+        );
+        assert_eq!(
+            row.get("command_network_mode").and_then(Value::as_str),
+            Some(network_mode)
+        );
+        assert_eq!(
+            row.pointer("/command_allowed_argv_prefixes/0")
+                .and_then(Value::as_str),
+            Some("ps")
+        );
+        assert_eq!(
+            row.pointer("/command_forbidden_argv_prefixes/0")
+                .and_then(Value::as_str),
+            Some("rm -rf")
+        );
+    }
 
     Ok(())
 }

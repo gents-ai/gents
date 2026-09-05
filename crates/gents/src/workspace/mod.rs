@@ -12,6 +12,8 @@
 
 mod action_plan;
 pub(crate) mod adapter;
+mod artifact;
+pub use artifact::ArtifactGrant;
 mod binding;
 mod documents;
 mod executor;
@@ -73,3 +75,6 @@ pub(crate) use overlay::{
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) use overlay::overlay_tests::{artifact_test_fixture, ArtifactTestFixture};

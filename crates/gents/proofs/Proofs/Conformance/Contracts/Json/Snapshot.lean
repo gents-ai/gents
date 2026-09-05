@@ -1,3 +1,4 @@
+import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
@@ -192,6 +193,9 @@ def snapshotJson : String :=
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
+    ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","
+    ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
+    ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
     ++ "\"command_policy_cases\":"
       ++ jsonArray (CommandPolicy.commandPolicyCases.map commandPolicyCaseJson) ++ ","
     ++ "\"command_sandbox_cases\":"

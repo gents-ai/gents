@@ -106,6 +106,16 @@ impl NativeFsRunner {
         request: NativeFsRunnerRequest,
         tool_name: &'static str,
     ) -> Result<String, ToolError> {
+        let runner = resolve_runner_command(&self.effective_root(), &self.effective_base())?;
+        self.run_resolved(request, tool_name, runner).await
+    }
+
+    async fn run_resolved(
+        &self,
+        request: NativeFsRunnerRequest,
+        tool_name: &'static str,
+        runner: RunnerCommand,
+    ) -> Result<String, ToolError> {
         let runtime = current_tool_runtime_context();
         let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
         let deadline_at = Some(effective_deadline(request_deadline, chrono::Utc::now()));
@@ -117,19 +127,46 @@ impl NativeFsRunner {
             .as_ref()
             .and_then(|runtime| runtime.live_output.clone());
         let root = self.effective_root();
-        let base = self.effective_base();
-        let runner = resolve_runner_command(&root, &base)?;
+        let (argv, environment) = if runtime
+            .as_ref()
+            .is_some_and(|scope| scope.workspace_artifact.is_some())
+        {
+            // The native helper remains the same read-only typed protocol. In
+            // artifact scope its process must use the shared grant validation,
+            // sandbox and derived environment; never an unsandboxed fallback.
+            let constraints = super::CommandConstraints {
+                allowed_argv_prefixes: Vec::new(),
+                forbidden_argv_prefixes: Vec::new(),
+                network_mode: super::CommandNetworkMode::Disabled,
+                execution_mode: super::CommandExecutionMode::ArtifactWrite,
+                sandbox: super::CommandExecutionMode::ArtifactWrite,
+                deny_all_argv: false,
+                deny_git_metadata_writes: true,
+            };
+            let (program, args, environment, _) = super::prepare_managed_command(
+                &root,
+                &runner.argv[0],
+                &runner.argv[1..],
+                &constraints,
+            )
+            .await?;
+            let mut argv = vec![program.to_string_lossy().into_owned()];
+            argv.extend(args);
+            (argv, Some(environment))
+        } else {
+            (runner.argv, None)
+        };
         let stdin = serde_json::to_vec(&request)
             .with_context(|| format!("serializing native filesystem request for {tool_name}"))?;
 
         match run_managed_exec(ManagedExecRequest {
-            argv: runner.argv,
+            argv,
             cwd: runner.cwd,
             deadline_at,
             cancellation_token,
             max_output_bytes: MAX_NATIVE_RUNNER_OUTPUT_BYTES,
             stdin,
-            environment: None,
+            environment,
             tool_name: Some(tool_name.to_string()),
             live_output,
         })
@@ -380,6 +417,73 @@ fn truncate_error_preview(text: &str) -> String {
 mod tests {
     use super::*;
     use chrono::{Duration as ChronoDuration, Utc};
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn artifact_native_runner_uses_shared_sandbox_and_rejects_stale_grant() {
+        let mut fixture = crate::workspace::artifact_test_fixture(&[]).await;
+        let source = fixture.grant.source_root().to_path_buf();
+        let original = std::fs::read(source.join("README.md")).unwrap();
+        let context = ToolContext::new(source.clone(), false).unwrap();
+        let runner = NativeFsRunner::new(&context);
+        let scope = crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            workspace_cwd: Some(source.clone()),
+            workspace_root: Some(source.clone()),
+            workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),
+            workspace_artifact: Some(fixture.grant.clone()),
+        };
+        let request = || {
+            NativeFsRunnerRequest::ListFiles(gents_fs_runner::protocol::ListFilesArgs {
+                path: None,
+                recursive: false,
+                max_entries: 10,
+                raw_json: false,
+                max_entries_visited: None,
+                max_wall_ms: None,
+            })
+        };
+        let command = || RunnerCommand {
+            // Exercise the actual resolved-runner launch owner without changing
+            // process-wide GENTS_FS_RUNNER or requiring an adjacent binary.
+            argv: vec![
+                "/bin/sh".into(),
+                "-c".into(),
+                r#"cat README.md > "$CARGO_TARGET_DIR/native-readback" || exit 31
+if printf changed > README.md; then exit 32; fi
+printf '{"ok":true,"output":"sandboxed read","error":null}'"#
+                    .into(),
+            ],
+            cwd: source.clone(),
+        };
+        let output = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            None, tokio_util::sync::CancellationToken::new(), scope.clone(),
+            None, None, None, Default::default(), false,
+            runner.run_resolved(request(), "glob", command()),
+        ).await.unwrap();
+        assert_eq!(output, "sandboxed read");
+        assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);
+        assert_eq!(
+            std::fs::read(fixture.grant.root().join("target/native-readback")).unwrap(),
+            original
+        );
+        std::fs::remove_file(fixture.grant.root().join("target/native-readback")).unwrap();
+        fixture
+            .owner
+            .terminalize_owned_without_stream(
+                crate::lifecycle::RequestTerminalOutcome::Failed,
+                Some("end reader incarnation"),
+            )
+            .await
+            .unwrap();
+        let error = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            None, tokio_util::sync::CancellationToken::new(), scope,
+            None, None, None, Default::default(), false,
+            runner.run_resolved(request(), "glob", command()),
+        ).await.unwrap_err();
+        assert!(!error.to_string().is_empty());
+        assert!(!fixture.grant.root().join("target/native-readback").exists());
+        assert_eq!(std::fs::read(source.join("README.md")).unwrap(), original);
+    }
 
     #[test]
     fn effective_deadline_caps_long_request_deadlines() {

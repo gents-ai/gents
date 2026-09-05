@@ -1,3 +1,4 @@
+import Proofs.CommandPolicy.ArtifactAuthority
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Lattice.Basic
 
@@ -36,8 +37,38 @@ inductive EndpointScope (K V : Type) where
 inductive ExecMode where
   | readOnly
   | workspaceWrite
+  | artifactWrite
   | unrestricted
   deriving DecidableEq, Repr
+
+def ExecMode.toCommand : ExecMode → CommandPolicy.ExecutionMode
+  | .readOnly => .readOnly
+  | .workspaceWrite => .workspaceWrite
+  | .artifactWrite => .artifactWrite
+  | .unrestricted => .unrestricted
+
+def ExecMode.fromCommand : CommandPolicy.ExecutionMode → ExecMode
+  | .readOnly => .readOnly
+  | .workspaceWrite => .workspaceWrite
+  | .artifactWrite => .artifactWrite
+  | .unrestricted => .unrestricted
+
+def ExecMode.meet (a b : ExecMode) : ExecMode :=
+  fromCommand (a.toCommand.meet b.toCommand)
+
+theorem ExecMode.meet_toCommand (a b : ExecMode) :
+    (a.meet b).toCommand = a.toCommand.meet b.toCommand := by
+  cases a <;> cases b <;> decide
+
+@[simp] theorem ExecMode.meet_idem (a : ExecMode) : a.meet a = a := by
+  cases a <;> decide
+
+/-- Stable wire discriminator; not an authority ordering. -/
+def ExecMode.toContractCode : ExecMode → Nat
+  | .readOnly => 0
+  | .workspaceWrite => 1
+  | .unrestricted => 2
+  | .artifactWrite => 3
 
 inductive NetMode where
   | disabled
