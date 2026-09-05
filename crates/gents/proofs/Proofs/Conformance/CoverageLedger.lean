@@ -875,6 +875,11 @@ def caseCoverage : List CoverageEntry :=
       "gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "invalid_tool_progress_cases"
+      "InvalidToolProgressCases"
+      "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop")
+      "completion-retry" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "workspace_path_alias_cases"
       "WorkspacePathAliasCases"
       "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")

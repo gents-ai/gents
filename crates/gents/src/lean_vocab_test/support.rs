@@ -41,6 +41,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_logical_invocation_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
+    pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) workspace_capability_migration_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,

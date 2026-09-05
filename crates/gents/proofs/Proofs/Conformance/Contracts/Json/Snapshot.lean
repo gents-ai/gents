@@ -1,3 +1,4 @@
+import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
@@ -272,6 +273,8 @@ def snapshotJson : String :=
     ++ "\"cancel_propagation_cases\":"
       ++ jsonArray
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
+    ++ "\"invalid_tool_progress_cases\":"
+      ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"

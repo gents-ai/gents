@@ -1269,3 +1269,20 @@ The model consumes checked seal/owner/incarnation/root/platform observations; it
 does not prove filesystem canonicalization, symlink/hardlink or race safety,
 Seatbelt implementation, compiler behavior, or isolation from unsandboxed host
 actors. Real host containment and compiler QA remain separate acceptance gates.
+
+### Invalid tool progress (#1298)
+
+`CompletionRetry.InvalidToolProgress` models a cumulative allowance of eight
+invalid-arguments, policy-denied, or unknown-tool outcomes per owned request
+execution. Success and ordinary failures do not reset it; skips and background
+completion do not charge it. The eighth outcome is durably observed before the
+existing stream failure path delegates terminalization to the execution lease
+owner. No ninth tool dispatch is permitted, including within a multi-call turn.
+
+The model proves bounded counts over arbitrary finite traces, monotonic usage,
+a strictly decreasing remaining allowance on accepted invalid outcomes, and
+absorbing exhaustion. This bounds invalid churn, not infinite valid work or
+storage/provider availability. Outcome classification and persistence ordering
+remain runtime consumer obligations. Eleven generated traces in
+`invalid_tool_progress_cases` are follow-up coverage until actual owned-loop
+consumers verify them; the model is not a second lifecycle or permission owner.
