@@ -161,10 +161,8 @@ jobs:
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
       # explicitly instead of relying on mutable host toolchain state.
-      - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          components: rustfmt,rust-src
-          targets: wasm32-unknown-unknown
+      - name: Install pinned Rust toolchain and WASM target
+        run: .github/scripts/setup-rust.sh
 
       - name: Install elan
         # Runtime conformance, desktop-bridge, and support migration tests load

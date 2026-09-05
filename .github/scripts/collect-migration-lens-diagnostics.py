@@ -9,9 +9,15 @@ import shutil
 import sys
 
 
-target = Path(os.environ["CARGO_TARGET_DIR"])
 destination = Path(sys.argv[1])
 destination.mkdir(parents=True, exist_ok=True)
+if not os.environ.get("CARGO_TARGET_DIR"):
+    (destination / "manifest.json").write_text(json.dumps({
+        "github_sha": os.environ.get("GITHUB_SHA"),
+        "unavailable_reason": "CARGO_TARGET_DIR was not initialized; setup failed before compilation",
+    }, indent=2) + "\n")
+    sys.exit(0)
+target = Path(os.environ["CARGO_TARGET_DIR"])
 variables = {
     "GENTS_LENS_WORKSPACE_CAPABILITY_WASM_PATH",
     "GENTS_LENS_WORKSPACE_RECEIPT_CAPABILITY_WASM_PATH",
