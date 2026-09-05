@@ -133,6 +133,17 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
             );
             anyhow::bail!("{error:#}\n{guidance}");
         }
+        Err(error)
+            if target.provider_kind == BackendProviderKind::ClaudeCliSubscription
+                && discovery_error_is_auth(&error) =>
+        {
+            let guidance = gents::claude_oauth::classify_claude_auth_error(
+                oauth_agent_did.as_deref().unwrap_or(""),
+                gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+                &gents::oauth_credential::OAuthAuthProblem::Expired,
+            );
+            anyhow::bail!("{error:#}\n{guidance}");
+        }
         Err(error) => return Err(error),
     };
 
@@ -161,6 +172,10 @@ async fn load_oauth_credential_for_discovery(
         BackendProviderKind::XaiGrokOAuth => (
             gents::xai_grok_oauth::XAI_OAUTH_PROVIDER,
             "gents grok-login",
+        ),
+        BackendProviderKind::ClaudeCliSubscription => (
+            gents::claude_oauth::CLAUDE_OAUTH_PROVIDER,
+            "gents claude-login",
         ),
         _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
     };
