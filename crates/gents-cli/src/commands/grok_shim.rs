@@ -32,6 +32,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 pub(crate) mod acp;
+mod goals;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;

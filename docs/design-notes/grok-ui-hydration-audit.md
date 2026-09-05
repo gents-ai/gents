@@ -56,9 +56,61 @@ Additional native hydration gap identified during the capability inventory:
 stock `extensions/notification.rs::SessionUpdate::GoalUpdated` feeds the
 pager's goal panel (`app/acp_handler/session_notification.rs`). Gents already
 persists `Goal` objective/status/token budget/token usage/active time and has
-`goal::GoalDocument` helpers. The shim currently has no GoalUpdated producer.
-Audit the status mapping and authorization, then project that canonical state;
-do not confuse a durable goal with a todo list or add a second orchestrator.
+`goal::GoalDocument` helpers. The published checkpoint had no GoalUpdated
+producer; the local follow-up projects this canonical state without adding a
+todo list or second orchestrator.
+
+The follow-up now adds a read-only `goals.rs` projector to the attached session
+observer. It uses `goal::load_canonical_goal` and the runtime active-time helper,
+not a fresh goal query/selection policy or a usage mutation. Its delivery cursor
+commits after successful sends, suppresses unchanged observations, and emits
+native `cleared` when the last observed goal disappears. The stock parser
+explicitly renders unfamiliar statuses as paused, so `usage_limited` remains
+the real runtime status with an explanatory pause message, rather than claiming
+an infrastructure failure. Stock worker/verifier phases and round counters are
+not mapped from Gents continuation attempts.
+
+Both initial goal tests passed: numeric/status projection and DB-backed exact
+agent/session scoping, unchanged DB records, failed-send retry, no duplicate
+delivery, and deletion. The stock goal-detail view advertises
+`/goal status | pause | resume | clear`; those resolve in the stock shell's
+`slash_commands.rs`, not an `x.ai/goal/*` RPC. The shim does not yet implement
+that command path in the published checkpoint. The local follow-up now
+intercepts those exact single-text prompt commands after attached-session
+authorization. Status reads the canonical goal; pause/resume use runtime
+`set_goal`; clear uses `delete_goals_for_session`, including its replicated
+twins/creation-claim cleanup. No model request is submitted for these controls.
+The stock shell's command output uses `ContentChunk._meta.hostTurn`; the
+follow-up uses the same marker. Arbitrary `/goal <objective>` creation remains
+an explicit unsupported command, rather than pretending to submit an atomic
+goal-backed run; the runtime's configured create_goal tool remains available.
+
+All 324 shim regressions and the all-target workspace check passed before the
+final hostTurn marker adjustment. The targeted marker/empty-metadata regression,
+live binary build, and another workspace check subsequently passed too.
+
+Live fixture checks now passed on `grok-edge-7f5059b3e1804437`:
+
+- `grok_goal_probe.py` verified paused-goal updates plus status/pause/clear over
+  the real leader socket. It refuses to replace existing goals. A distinct
+  retained paused fixture was used for rendering, because Defra correctly
+  refuses to recreate an identically addressed deleted document.
+- Unchanged Grok 1.0.13 dashboard resume displayed **Goal: Paused**, 123/1k
+  tokens, 12%, and 7 seconds. Opening the native goal detail panel displayed
+  the same objective, status, budget bar, and command hints. `/goal status`
+  rendered the persisted values as host-command output.
+- `/goal resume` reached the runtime owner, which refreshed the fixture's
+  synthetic usage to the session's real 14,315 tokens and marked its 1,000-token
+  budget exhausted. The native panel updated to **Budget**. No new inference
+  request ran. `/goal clear` removed the fixture goal and the visible panel.
+- Trying to pause that budget-limited goal exposed an undesirable retry-style
+  RPC error. The final follow-up now asks the runtime's existing
+  `apply_operator_status_transition` whether the action is legal and returns
+  an explanatory host-command response when it is not; it does not change
+  the transition rules or write an illegal state. A DB-backed regression
+  asserts the goal remains budget-limited. All 324 shim tests and the workspace
+  all-target check passed for this last adjustment. The focused Claude review
+  and publication remain pending.
 
 The legacy-accounting recommendation needs more than omitting numeric fields:
 stock `acp_types.rs::ContextInfo` defaults missing fields to zero, and
@@ -78,8 +130,56 @@ CI. The overall goal remains open.
 | History picker/search | Authorized search/pagination and stock F3 listing passed; native dashboard attach passed | CLI/F3 selection still has a stock local-file preflight for database-only sessions; use the native leader dashboard |
 | Context usage | Live capture-comparison probe and rendered counter/breakdowns passed; stale/decreasing context regressions pass | Final review pending; unsupported provider breakdowns remain explicitly partial |
 | Cumulative token accounting | Physical parent/child aggregation, retry deduplication, duration, native billing absence, and rendered usage verified | Reasoning/cache-creation/per-model pricing are not persisted and cannot be recovered as exact breakdowns; final review pending |
-| Other native controls/data | Broader inventory incomplete; interjection/manual compaction are shaped stubs, model/mode capabilities need review | Inventory the stock client's requested session/info, usage, compaction, goal/todo, model/mode, replay and task surfaces; implement runtime-supported hydration/control paths and explicitly document genuine unsupported capabilities |
-| Final gate | Runtime: 2,711 passed, 3 ignored (unchanged by follow-up); shim: 320 passed; workspace passed; stock live checks passed on 76c022fa; independent reviews completed | Remaining review dispositions, new hydration work, and green CI on the final published tip remain required |
+| Other native controls/data | Goal panel/status/clear/resume-to-budget-limit verified in stock TUI; model/mode and unsupported-operation inventory below | Final goal-control review and publication gates remain; do not claim unsupported runtime operations exist |
+| Final gate | Runtime: 2,711 passed, 3 ignored (unchanged by follow-up); shim: 324 passed; workspace passed; stock live goal and earlier background/accounting checks passed | Focused goal review, remaining review dispositions, and green CI on the final published tip remain required |
+
+### Native capability boundaries
+
+- Background bash and subagents: runtime-owned output, lifecycle, cancellation,
+  and notifications feed native tool/pane updates; live checks are documented
+  in `grok-background-projection.md`. Data already discarded by the runtime's
+  output-retention limit cannot be reconstructed by the shim.
+- History/resume: native leader dashboard attachment and replay work. The stock
+  local-file history preflight is not a database session loader; no synthetic
+  local transcript files or client patches are created to bypass it.
+- Models: the catalog describes the behavior's bound model. `session/set_model`
+  accepts that model and rejects unsupported model/effort overrides. A visual
+  picker change must not pretend to reconfigure provider input.
+- Modes: `session/set_mode` round-trips the pager's client mode metadata; runtime
+  principal/tool permissions remain the enforcement owner.
+- Context/compaction: persisted inference accounting, captured breakdowns, and
+  compaction records are projected into context/session-info. Manual
+  `x.ai/compact_conversation` is explicitly unsupported; this shim does not own
+  an operator-triggered compaction transition. Automatic runtime compaction
+  remains visible through its persisted observations.
+- Interjection: `x.ai/interject` is explicitly unsupported. Existing queued
+  steering and background wakeups are delivered by their runtime owners;
+  writing a detached message would not implement in-turn provider injection.
+- Goals: project persisted goals and route the four management commands through
+  the existing runtime APIs. Goal creation via arbitrary `/goal <objective>`
+  is explicitly rejected; it must not masquerade as atomic goal-backed request
+  admission. There is no stock worker/verifier orchestrator in the shim.
+- Todos/workflows/schedules: do not fabricate corresponding stock UI state from
+  unrelated Goal records or generic tool names. Only persisted events with a
+  supported semantic mapping are eligible for projection.
+- Billing: native billing absence is returned. Dollar prices, per-model spend,
+  reasoning-token breakdowns, and cache-creation counters are not invented when
+  no corresponding persisted accounting exists.
+
+### Performance review disposition still to close
+
+History listing is now a single bounded-page scan retaining one summary per
+session; the roster no longer repeats that scan per picker page. It is still
+linear in history size. A persisted session-activity index belongs in the
+runtime and needs separate design, not a shim-side cache or silent history cap.
+Likewise, retiring terminal replay cursors without a durable late-event boundary
+would lose the background notices this work explicitly fixes. The current
+observer limits request delivery to 32 per sweep tick and retains send cursors;
+any optimization must preserve late append visibility. These are performance
+follow-ups, not permission to drop old sessions or terminal-request events.
+Repeated context-owner reads and the small duplicated occupancy expression are
+remaining cleanup findings; their exact-scope conservative behavior must remain
+intact when consolidated. Final review disposition is still required.
 
 ## Ownership and implementation constraints
 

@@ -628,6 +628,7 @@ impl TurnManager {
             tokio::spawn(async move {
                 let mut after = String::new();
                 let mut delivery_after = String::new();
+                let mut goal_cursor = super::goals::GoalCursor::default();
                 loop {
                     tokio::time::sleep(TERMINAL_POLL_INTERVAL).await;
                     let Some(manager) = manager.upgrade() else {
@@ -635,6 +636,19 @@ impl TurnManager {
                     };
                     if manager.state.lock().await.closed {
                         break;
+                    }
+                    if let Err(error) = goal_cursor
+                        .refresh(
+                            &manager.node,
+                            &manager.config.agent_did,
+                            &observed_session,
+                            &sender,
+                            &projections,
+                        )
+                        .await
+                    {
+                        tracing::warn!(%error, session_id = %observed_session,
+                            "Grok goal observation failed; retrying");
                     }
                     if let Err(error) = manager
                         .observe_session_tick(

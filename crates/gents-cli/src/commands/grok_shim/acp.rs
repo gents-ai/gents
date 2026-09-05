@@ -1228,6 +1228,57 @@ impl AcpService {
         // Turn-lifecycle failures after a well-formed prompt are operational
         // (submission/runtime/send) and stay internal `-32603`; the
         // caller-controlled shape validation happened in the parse above.
+        if let [block] = parsed.prompt.as_slice() {
+            if block.kind == "text"
+                && block
+                    .meta
+                    .as_ref()
+                    .is_none_or(|meta| meta.as_object().is_some_and(|meta| meta.is_empty()))
+            {
+                if let Some(command) = super::goals::GoalCommand::parse(&block.text)
+                    .map_err(|error| invalid_params(error.to_string()))?
+                {
+                    // A stock slash control is an operator action, not a
+                    // model prompt. Never ask inference to interpret pause.
+                    super::sessions::load(
+                        &self.config.node,
+                        &self.config.agent_did,
+                        &self.config.behavior_id,
+                        &parsed.session_id,
+                    )
+                    .await?;
+                    let reply = command
+                        .execute(
+                            &self.config.node,
+                            &self.config.agent_did,
+                            &parsed.session_id,
+                        )
+                        .await?;
+                    for (kind, text) in [
+                        ("user_message_chunk", block.text.as_str()),
+                        ("agent_message_chunk", reply.as_str()),
+                    ] {
+                        self.projections.session_updates().send(&parsed.session_id, |event_id, total_tokens| {
+                            Ok(super::projection::session_notification_for_method("session/update", &parsed.session_id,
+                                json!({"sessionUpdate":kind,"content":{"type":"text","text":text}, "_meta":{"hostTurn":true}}),
+                                super::projection::stamp_update_meta(event_id, total_tokens,
+                                    parsed.prompt_id.as_deref(), None, super::projection::UpdateTimestamps::default())))
+                        }, super::turn::PromptSenderLine(prompt_sender)).await?;
+                    }
+                    self.turns
+                        .observe_session(
+                            &parsed.session_id,
+                            prompt_sender.clone(),
+                            self.projections.clone(),
+                        )
+                        .await;
+                    return Ok(RequestOutcome {
+                        notifications: Vec::new(),
+                        result: json!({"stopReason":"end_turn"}),
+                    });
+                }
+            }
+        }
         let stop_reason = self
             .turns
             .handle_prompt(parsed, prompt_sender, &self.projections)
@@ -1749,6 +1800,71 @@ mod tests {
             ),
         ));
         (staging, AcpService::new(config, turns, projections))
+    }
+
+    #[tokio::test]
+    async fn goal_slash_controls_use_runtime_owner_without_submitting_inference() {
+        let (_dir, service) = test_service().await;
+        let new = service
+            .handle_acp_payload(&request_payload(
+                "session/new",
+                json!({"_meta":{"sessionId":"goal-controls"}}),
+            ))
+            .await;
+        assert!(parse_response(new.response.as_deref().unwrap())
+            .get("error")
+            .is_none());
+        let node = &service.config.node;
+        gents::goal::set_goal(
+            node,
+            &service.config.agent_did,
+            "goal-controls",
+            Some("Finish the feature"),
+            None,
+            Some(Some(1000)),
+        )
+        .await
+        .unwrap();
+        for (command, expected) in [
+            ("status", Some("active")),
+            ("pause", Some("paused")),
+            ("resume", Some("active")),
+            ("clear", None),
+        ] {
+            let dispatch = service.handle_acp_payload(&request_payload("session/prompt", json!({
+                "sessionId":"goal-controls", "prompt":[{"type":"text", "text":format!("/goal {command}"), "meta":{}}]
+            }))).await;
+            let response = parse_response(dispatch.response.as_deref().unwrap());
+            assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
+            assert!(dispatch.notifications.iter().any(|line| {
+                let update = parse_response(line);
+                update["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
+                    && update["params"]["update"]["_meta"]["hostTurn"] == true
+            }));
+            let goal =
+                gents::goal::load_canonical_goal(node, &service.config.agent_did, "goal-controls")
+                    .await
+                    .unwrap();
+            assert_eq!(goal.as_ref().map(|goal| goal.status.as_str()), expected);
+        }
+        let requests = node.execute("{AgentRequest {_docID}}").await;
+        ensure_no_errors(&requests, "goal controls do not infer").unwrap();
+        assert!(requests.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let denied = service
+            .handle_acp_payload(&request_payload(
+                "session/prompt",
+                json!({
+                    "sessionId":"not-attached", "prompt":[{"type":"text", "text":"/goal clear"}]
+                }),
+            ))
+            .await;
+        assert!(parse_response(denied.response.as_deref().unwrap())
+            .get("error")
+            .is_some());
+        service.turns.handle_disconnect().await.unwrap();
     }
 
     #[tokio::test]
