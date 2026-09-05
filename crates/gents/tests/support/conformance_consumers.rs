@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/graph_pipeline/publication_contract_tests.rs",
+            module_path: "graph_pipeline::run::publication_contract_tests",
+            function: "generated_graph_invocation_publication_traces_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection",
+            package: "gents",
+            source_path: "crates/gents/src/graph_pipeline/logical_invocation_contract_tests.rs",
+            module_path: "graph_pipeline::logical_invocation_contract_tests",
+            function: "generated_graph_logical_invocations_drive_persisted_run_projection",
+        },
+        ConformanceConsumer::RustTest {
             id: "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector",
             package: "gents",
             source_path: "crates/gents/src/goal/request_head_tests.rs",

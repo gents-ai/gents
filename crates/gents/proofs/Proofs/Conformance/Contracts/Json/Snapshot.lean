@@ -36,6 +36,7 @@ import Proofs.Conformance.GoalOperatorResume
 import Proofs.Conformance.GoalClaimedPublication
 import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GraphFailureAttribution
+import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 
@@ -54,6 +55,10 @@ def snapshotJson : String :=
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"goal_request_head_cases\":"
       ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"graph_logical_invocation_cases\":"
+      ++ Conformance.GraphLogicalInvocationContracts.casesJson ++ ","
+    ++ "\"graph_invocation_publication_cases\":"
+      ++ Conformance.GraphLogicalInvocationContracts.publicationCasesJson ++ ","
     ++ "\"goal_claimed_publication_cases\":"
       ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
     ++ "\"goal_operator_resume_cases\":"

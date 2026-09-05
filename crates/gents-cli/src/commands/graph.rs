@@ -499,6 +499,7 @@ fn progress(view: &GraphRunView) -> Value {
         "revision_digest": view.revision_digest,
         "deadline_at": view.deadline_at,
         "active_requests": view.active_request_count,
+        "outstanding_invocations": view.outstanding_invocation_count,
         "terminal_requests": view.terminal_request_count,
         "stages": view.stages,
         "groups": view.groups,

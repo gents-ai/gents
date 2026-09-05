@@ -83,18 +83,13 @@ async fn generated_graph_failure_attribution_traces_drive_real_transactions() {
             // A third live row allows the lower lexical failed sibling to be
             // observed while real active work still prevents terminal commit.
             for id in ["a-cause", "z-cause", "m-drain-sentinel"] {
-                execute_fixture(
+                super::super::runtime::seed_signed_graph_request(
                     &node,
-                    format!(
-                        r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "{id}", agent_did: "did:key:worker", requester_did: "did:key:owner",
-                    behavior_id: "worker-v1", lifecycle_state: "processing",
-                    caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                    created_at: "2026-08-25T00:00:00Z"
-                }}) {{ _docID }} }}"#,
-                        escape_graphql_string(&trigger),
-                        escape_graphql_string(&run.correlation)
-                    ),
+                    &run,
+                    &trigger,
+                    id,
+                    "processing",
+                    "",
                 )
                 .await;
             }
