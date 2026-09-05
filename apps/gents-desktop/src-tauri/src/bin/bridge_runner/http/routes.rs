@@ -6,6 +6,7 @@ use chrono::Utc;
 use gents::backend_registry::{derive_display_state, list_all_backends};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::subagent_tree::{build_local_subagent_tree, effective_subagent_tree_max_depth};
 use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::fetch_runtime_connection_payload;
 use serde::{Deserialize, Serialize};
@@ -29,11 +30,8 @@ use gents_desktop_bridge::commands::{
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use gents_desktop_bridge::snapshot::subagent_tree::{
-    build_local_subagent_tree, effective_subagent_tree_max_depth,
-};
 use gents_desktop_bridge::tauri_commands::operations::{
-    list_tool_call_holds_for_core, resolve_tool_call_hold_for_core,
+    list_tool_call_holds_for_core, resolve_tool_call_hold_for_core, subagent_tree_view_from_gents,
 };
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
@@ -783,14 +781,15 @@ async fn list_subagent_tree_response(
     {
         anyhow::bail!("no agent selected; pass agentDid explicitly");
     }
-    build_local_subagent_tree(
+    let tree = build_local_subagent_tree(
         core.node_arc(),
         root_request_id,
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )
     .await
-    .context("local subagent tree query failed")
+    .context("local subagent tree query failed")?;
+    Ok(subagent_tree_view_from_gents(tree))
 }
 
 async fn list_backends_with_health(core: Arc<ClientCore>) -> Result<Vec<BackendHealthView>> {

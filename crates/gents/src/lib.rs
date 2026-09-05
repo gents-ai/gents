@@ -119,6 +119,7 @@ pub mod self_config;
 pub mod session;
 pub mod skills;
 pub mod streaming;
+pub mod subagent_tree;
 pub mod template;
 pub mod tool_call_lifecycle;
 pub mod tool_control;

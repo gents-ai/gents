@@ -4,8 +4,12 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use gents::backend_registry::{derive_display_state, list_all_backends};
+use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::subagent_tree::{
+    build_subagent_tree, effective_subagent_tree_max_depth, SubagentTree, SubagentTreeAccess,
+};
 use gents_desktop_core::client::ClientCore;
 #[cfg(test)]
 use reqwest::Url;
@@ -15,9 +19,6 @@ use crate::commands::mcp_health::{load_mcp_services_with_health, probe_mcp_servi
 use crate::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use crate::snapshot::subagent_tree::{
-    build_subagent_tree, effective_subagent_tree_max_depth, SubagentTreeAccess, TreeQueryAccess,
-};
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest, DesktopListHoldsRequest,
@@ -25,7 +26,7 @@ use crate::types::{
     DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
     DesktopResolveHoldRequest, HeldToolCallView, InferenceCallSummaryView, InterruptRequestResult,
     MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, ResolveHoldResult,
-    RuntimeLivenessView, SubagentTreeView,
+    RuntimeLivenessView, SubagentEdgeView, SubagentNodeView, SubagentTreeView,
 };
 
 const BACKGROUND_TOOL_CALL_LIMIT: usize = 256;
@@ -232,7 +233,7 @@ pub async fn desktop_list_subagent_tree(
 
     let mut accesses = vec![SubagentTreeAccess {
         label: None,
-        access: TreeQueryAccess::Local(core.node_arc()),
+        access: ConfigAccess::Local(core.node_arc()),
     }];
     for record in core.peer_records().await {
         let Some(graphql) = record
@@ -245,18 +246,61 @@ pub async fn desktop_list_subagent_tree(
         };
         accesses.push(SubagentTreeAccess {
             label: Some(record.label.clone()),
-            access: TreeQueryAccess::Graphql(graphql.to_string()),
+            access: ConfigAccess::Graphql(graphql.to_string()),
         });
     }
 
-    build_subagent_tree(
+    let tree = build_subagent_tree(
         &accesses,
         root_request_id,
         request.include_terminal.unwrap_or(false),
         effective_subagent_tree_max_depth(request.max_depth),
     )
     .await
-    .map_err(|error| BridgeError::untyped(format!("subagent tree query failed: {error:#}")))
+    .map_err(|error| BridgeError::untyped(format!("subagent tree query failed: {error:#}")))?;
+
+    Ok(subagent_tree_view_from_gents(tree))
+}
+
+/// The bridge's TS-bound presentation shape, built from the owned
+/// `gents::subagent_tree` projection (#1334). `pub` so the fixture-host's
+/// bridge_runner HTTP shim (a separate crate wrapping the same local-node
+/// query) shares the conversion rather than duplicating it.
+pub fn subagent_tree_view_from_gents(tree: SubagentTree) -> SubagentTreeView {
+    SubagentTreeView {
+        root_request_id: tree.root_request_id,
+        nodes: tree
+            .nodes
+            .into_iter()
+            .map(|node| SubagentNodeView {
+                request_id: node.request_id,
+                resolved_via: node.resolved_via,
+                session_id: node.session_id,
+                agent_did: node.agent_did,
+                behavior_id: node.behavior_id,
+                lifecycle_state: node.lifecycle_state,
+                subagent_depth: node.subagent_depth,
+                caused_by_parent_request_id: node.caused_by_parent_request_id,
+                caused_by_parent_tool_call_id: node.caused_by_parent_tool_call_id,
+                backend_id: node.backend_id,
+            })
+            .collect(),
+        edges: tree
+            .edges
+            .into_iter()
+            .map(|edge| SubagentEdgeView {
+                parent_request_id: edge.parent_request_id,
+                child_request_id: edge.child_request_id,
+                parent_tool_call_id: edge.parent_tool_call_id,
+                tool_name: edge.tool_name,
+                await_mode: edge.await_mode,
+                cancel_policy: edge.cancel_policy,
+                lifecycle_state: edge.lifecycle_state,
+            })
+            .collect(),
+        truncated: tree.truncated,
+        partial_errors: tree.partial_errors,
+    }
 }
 
 #[cfg(test)]
