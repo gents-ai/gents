@@ -169,6 +169,7 @@ pub(crate) struct ToolWorkspaceScope {
     pub workspace_cwd: Option<PathBuf>,
     pub workspace_root: Option<PathBuf>,
     pub workspace_authority: Option<WorkspaceAuthority>,
+    pub workspace_artifact: Option<crate::workspace::ArtifactGrant>,
 }
 
 impl ToolWorkspaceScope {
@@ -177,6 +178,7 @@ impl ToolWorkspaceScope {
             workspace_cwd,
             workspace_root: None,
             workspace_authority: None,
+            workspace_artifact: None,
         }
     }
 }
@@ -207,6 +209,7 @@ pub(crate) struct CurrentToolRuntimeContext {
     pub(crate) workspace_cwd: Option<PathBuf>,
     pub(crate) workspace_root: Option<PathBuf>,
     pub(crate) workspace_authority: Option<WorkspaceAuthority>,
+    pub(crate) workspace_artifact: Option<crate::workspace::ArtifactGrant>,
     pub(crate) session_id: Option<String>,
     pub(crate) live_output: Option<LiveToolOutputWriter>,
     pub(crate) background: bool,
@@ -490,6 +493,9 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
             workspace_authority: overlay
                 .as_ref()
                 .and_then(|overlay| overlay.workspace_authority),
+            workspace_artifact: overlay
+                .as_ref()
+                .and_then(|overlay| overlay.workspace_artifact.clone()),
             session_id: scope.session_id,
             live_output: scope.live_output,
             background: scope.background,

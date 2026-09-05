@@ -7,6 +7,8 @@ pub(crate) use command::apply_workspace_authority;
 pub(crate) use command::is_secret_env_name;
 pub(crate) use command::parse_argv_prefixes;
 pub(super) use command::run_command;
+#[cfg(test)]
+pub(crate) use command::select_sandbox_for_policy;
 pub(crate) use command::validate_command_policy;
 pub(crate) use command::{
     admit_host_executable, default_lsp_network_mode, effective_command_policy,
@@ -14,9 +16,7 @@ pub(crate) use command::{
     workspace_write_sandbox_enforced,
 };
 #[cfg(test)]
-pub(super) use command::{
-    build_shell_env_from_vars, select_sandbox_for_policy, validate_read_only_command,
-};
+pub(super) use command::{build_shell_env_from_vars, validate_read_only_command};
 pub use command::{
     CommandConstraints, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode,
     WorkspaceAuthority,

@@ -103,11 +103,16 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         .await
         .unwrap();
     let parent = owner.request().clone();
-    let parent_overlay =
-        crate::workspace::resolve_request_workspace_overlay(&node, &parent, Some(dir.path()))
-            .await
-            .unwrap()
-            .unwrap();
+    let parent_overlay = crate::workspace::resolve_request_workspace_overlay(
+        &node,
+        &parent,
+        owner.execution_generation().unwrap(),
+        false,
+        Some(dir.path()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(
         std::fs::read_to_string(parent_overlay.cwd.join("unfinished.txt")).unwrap(),
         "existing durable work\n"
@@ -192,11 +197,16 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         child.caused_by_parent_request_doc_id.as_deref(),
         Some(parent.doc_id.as_str())
     );
-    let overlay =
-        crate::workspace::resolve_request_workspace_overlay(&node, child, Some(dir.path()))
-            .await
-            .unwrap()
-            .unwrap();
+    let overlay = crate::workspace::resolve_request_workspace_overlay(
+        &node,
+        child,
+        "",
+        false,
+        Some(dir.path()),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(overlay.root, parent_overlay.root);
     assert_eq!(
         std::fs::read_to_string(overlay.cwd.join("unfinished.txt")).unwrap(),

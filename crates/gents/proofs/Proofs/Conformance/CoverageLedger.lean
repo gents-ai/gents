@@ -842,6 +842,29 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "artifact_mode_meet_cases"
+      "ArtifactModeMeetCases"
+      "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  -- Admission uses real signed requests/bindings and managed-launch policy.
+  -- Unsupported-platform coverage supplies the unavailable-host observation to
+  -- the production selector; kernel enforcement remains an external boundary.
+  , tagged (boundaryCoverage
+      "artifact_admission_cases"
+      "ArtifactAdmissionCases"
+      boundaryCommandPolicyHostExecutionAssumptionsId
+      "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy")
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  -- One consumer covers all five cases: real foreground/background launches
+  -- carrying the same grant, plus persistent LSP denial before pool dispatch.
+  -- The spawned-task witness does not claim durable background-bridge coverage.
+  , tagged (boundaryCoverage
+      "artifact_spawn_cases"
+      "ArtifactSpawnCases"
+      boundaryCommandPolicyHostExecutionAssumptionsId
+      "toolset::tests::generated_artifact_spawn_cases_drive_live_foreground_and_background_launches")
+      "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "workspace_path_capability_cases"
       "WorkspacePathCapabilityCases"
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")

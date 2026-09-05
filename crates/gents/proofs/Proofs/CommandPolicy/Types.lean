@@ -5,6 +5,7 @@ namespace CommandPolicy
 inductive ExecutionMode where
   | readOnly
   | workspaceWrite
+  | artifactWrite
   | unrestricted
   deriving DecidableEq, Repr
 
@@ -13,6 +14,7 @@ namespace ExecutionMode
 def toDefraDB : ExecutionMode → String
   | .readOnly => "read_only"
   | .workspaceWrite => "workspace_write"
+  | .artifactWrite => "artifact_write"
   | .unrestricted => "unrestricted"
 
 end ExecutionMode
@@ -56,6 +58,7 @@ inductive DenialReason where
   | disabledNetworkUnenforceable
   | disabledNetworkCommand (command : String)
   | workspaceWriteSandboxUnavailable
+  | artifactWriteSandboxUnavailable
   | workspaceExecutable
   deriving DecidableEq, Repr
 
@@ -72,6 +75,7 @@ def toContract : DenialReason → String
   | .disabledNetworkUnenforceable => "disabledNetworkUnenforceable"
   | .disabledNetworkCommand _ => "disabledNetworkCommand"
   | .workspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable"
+  | .artifactWriteSandboxUnavailable => "artifactWriteSandboxUnavailable"
   | .workspaceExecutable => "workspaceExecutable"
 
 def matchedPrefix? : DenialReason → Option (List String)

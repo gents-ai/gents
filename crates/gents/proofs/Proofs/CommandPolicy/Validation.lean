@@ -302,7 +302,7 @@ def validateNetworkMode
   | .enabled => .allow
   | .disabled =>
       match mode with
-      | .workspaceWrite => .allow
+      | .workspaceWrite | .artifactWrite => .allow
       | .unrestricted => .deny .disabledNetworkUnenforceable
       | .readOnly =>
           if readOnlyNetworkDenied request then
@@ -323,7 +323,7 @@ def validateAfterPrefixes
             policy.readOnlyAllowlist
             allowedPrefixMatched
             request
-      | .workspaceWrite => .allow
+      | .workspaceWrite | .artifactWrite => .allow
       | .unrestricted => .allow
 
 def validatePolicy (policy : Policy) (request : CommandRequest) : Decision :=

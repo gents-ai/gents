@@ -652,3 +652,6 @@ fn default_read_only_commands() -> Vec<String> {
     .map(str::to_string)
     .collect()
 }
+
+#[cfg(test)]
+pub(crate) use shared::select_sandbox_for_policy;

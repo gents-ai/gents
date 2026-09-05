@@ -15,6 +15,7 @@ pub(crate) enum DenialReason {
     DisabledNetworkUnenforceable,
     DisabledNetworkCommand { command: String },
     WorkspaceWriteSandboxUnavailable,
+    ArtifactWriteSandboxUnavailable,
     WorkspaceExecutable,
     GitMetadataWriteDenied { command: String, subcommand: String },
 }
@@ -32,6 +33,7 @@ impl DenialReason {
             Self::DisabledNetworkUnenforceable => "disabledNetworkUnenforceable",
             Self::DisabledNetworkCommand { .. } => "disabledNetworkCommand",
             Self::WorkspaceWriteSandboxUnavailable => "workspaceWriteSandboxUnavailable",
+            Self::ArtifactWriteSandboxUnavailable => "artifactWriteSandboxUnavailable",
             Self::WorkspaceExecutable => "workspaceExecutable",
             Self::GitMetadataWriteDenied { .. } => "gitMetadataWriteDenied",
         }
@@ -168,6 +170,7 @@ impl DenialReason {
                 }
                 _ => format!("{command} is not allowed when command_network_mode=disabled"),
             },
+            Self::ArtifactWriteSandboxUnavailable => "artifact_write requires macOS Seatbelt sandbox enforcement".into(),
             Self::WorkspaceWriteSandboxUnavailable => {
                 if cfg!(target_os = "macos") {
                     "macOS sandbox-exec is required for workspace_write bash but was not found"
@@ -224,6 +227,7 @@ impl DenialReason {
                 command: denied_command?,
             }),
             "workspaceWriteSandboxUnavailable" => Some(Self::WorkspaceWriteSandboxUnavailable),
+            "artifactWriteSandboxUnavailable" => Some(Self::ArtifactWriteSandboxUnavailable),
             "workspaceExecutable" => Some(Self::WorkspaceExecutable),
             "gitMetadataWriteDenied" => Some(Self::GitMetadataWriteDenied {
                 command: denied_command?,

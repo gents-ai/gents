@@ -56,6 +56,27 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/tests.rs",
+            module_path: "toolset::tests",
+            function: "generated_artifact_mode_meet_cases_drive_command_effect_intersection",
+        },
+        ConformanceConsumer::RustTest {
+            id: "workspace::overlay::overlay_tests::generated_artifact_admission_cases_drive_live_binding_and_launch_policy",
+            package: "gents",
+            source_path: "crates/gents/src/workspace/overlay_tests.rs",
+            module_path: "workspace::overlay::overlay_tests",
+            function: "generated_artifact_admission_cases_drive_live_binding_and_launch_policy",
+        },
+        ConformanceConsumer::RustTest {
+            id: "toolset::tests::generated_artifact_spawn_cases_drive_live_foreground_and_background_launches",
+            package: "gents",
+            source_path: "crates/gents/src/toolset/tests.rs",
+            module_path: "toolset::tests",
+            function: "generated_artifact_spawn_cases_drive_live_foreground_and_background_launches",
+        },
+        ConformanceConsumer::RustTest {
             id: "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor",
             package: "gents",
             source_path: "crates/gents/src/workspace/tests.rs",

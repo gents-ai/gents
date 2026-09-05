@@ -148,11 +148,6 @@ def unitVM : ValueMeet Unit :=
   , vmeet_le_left := by intro _ _; trivial
   , vmeet_le_right := by intro _ _; trivial }
 
-def ExecMode.rank : ExecMode → Nat
-  | .readOnly => 0
-  | .workspaceWrite => 1
-  | .unrestricted => 2
-
 def NetMode.rank : NetMode → Nat
   | .disabled => 0
   | .inherit => 1
@@ -162,7 +157,8 @@ structure CmdReq where
   argv : List String
   cmdHead : String
   wantsNetwork : Bool
-  wantsWrite : Bool
+  wantsSourceWrite : Bool
+  wantsArtifactWrite : Bool
 
 def prefixOf (needle haystack : List String) : Prop :=
   ∃ suffix, haystack = needle ++ suffix
@@ -180,11 +176,9 @@ def BashPolicy.allowedGate (p : BashPolicy) (req : CmdReq) : Prop :=
   | .only keys _ => ∃ pre ∈ keys, prefixOf pre req.argv
 
 def BashPolicy.modeGate (p : BashPolicy) (req : CmdReq) : Prop :=
-  match p.mode with
-  | .readOnly =>
-      ¬ req.wantsWrite ∧ (p.readOnly.permits req.cmdHead ∨ p.allowedPrefixMatched req)
-  | .workspaceWrite => True
-  | .unrestricted => True
+  (req.wantsSourceWrite = true → p.mode.toCommand.sourceWrites = true) ∧
+  (req.wantsArtifactWrite = true → p.mode.toCommand.artifactWrites = true) ∧
+  (p.mode = .readOnly → p.readOnly.permits req.cmdHead ∨ p.allowedPrefixMatched req)
 
 def BashPolicy.permits (p : BashPolicy) (req : CmdReq) : Prop :=
   p.sandbox = true
@@ -194,7 +188,7 @@ def BashPolicy.permits (p : BashPolicy) (req : CmdReq) : Prop :=
   ∧ p.modeGate req
 
 def BashPolicy.meet (a b : BashPolicy) : BashPolicy :=
-  { mode := if a.mode.rank ≤ b.mode.rank then a.mode else b.mode
+  { mode := a.mode.meet b.mode
   , network := if a.network.rank ≤ b.network.rank then a.network else b.network
   , forbidden := a.forbidden ∪ b.forbidden
   , allowed := a.allowed.meet unitVM b.allowed

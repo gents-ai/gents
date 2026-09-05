@@ -165,6 +165,9 @@ impl DefraSessionHook {
             workspace_authority: runtime_context
                 .as_ref()
                 .and_then(|runtime| runtime.workspace_authority),
+            workspace_artifact: runtime_context
+                .as_ref()
+                .and_then(|runtime| runtime.workspace_artifact.clone()),
         };
         let correlation = runtime_context
             .as_ref()
