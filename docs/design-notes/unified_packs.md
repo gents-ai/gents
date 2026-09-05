@@ -50,3 +50,9 @@ The full CLI gate also exposed two stale baseline fixtures: the Grok apply-root
 server test omitted `--inference-url`, and the negative interop envelope omitted
 the required `source_version_status`. Both fixtures are corrected; their runtime
 contracts remain unchanged.
+
+An intermittent init/restart readiness timeout found by the full CLI gate is
+tracked separately in #1402. The fixture now retains server output, identifies
+the boot phase, and includes its last authoritative readiness observation.
+These are diagnostic improvements, not a claim that the underlying timeout is
+fixed; a passing repetition must not close that issue without a causal fix.

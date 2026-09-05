@@ -82,7 +82,14 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await
+        .context("initial boot readiness")?;
 
     assert_runtime_init_state(
         &graphql,
@@ -115,7 +122,14 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await
+        .context("restart readiness after idempotent init")?;
 
     assert_runtime_init_state(
         &graphql,
