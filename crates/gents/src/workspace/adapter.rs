@@ -36,7 +36,10 @@ pub(crate) struct DirtyBase {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct RecordedIdentity {
+    #[serde(default)]
+    path_capability: Option<super::WorkspacePathCapability>,
     workspace_id: String,
     work_unit_id: String,
     repository_id: String,
@@ -47,6 +50,7 @@ struct RecordedIdentity {
 impl From<&LogicalWorkspaceIdentity> for RecordedIdentity {
     fn from(identity: &LogicalWorkspaceIdentity) -> Self {
         Self {
+            path_capability: Some(identity.path_capability.clone()),
             workspace_id: identity.workspace_id.clone(),
             work_unit_id: identity.work_unit_id.clone(),
             repository_id: identity.repository_id.clone(),
@@ -84,6 +88,8 @@ pub(crate) fn observe_effect(
     identity: &LogicalWorkspaceIdentity,
     resolved_base: &str,
     artifacts: &[String],
+    allow_legacy_marker: bool,
+    allow_missing_marker: bool,
 ) -> Result<ObservedEffect> {
     let dirty_base = observe_dirty_base(source)?;
     if !dest.exists() {
@@ -97,7 +103,14 @@ pub(crate) fn observe_effect(
     observation.identity_recorded = identity_path(dest).ok().is_some_and(|path| path.is_file());
     observation.artifacts_cloned = artifacts_complete(source, dest, artifacts);
 
-    match match_existing(source, dest, identity, resolved_base) {
+    match match_existing(
+        source,
+        dest,
+        identity,
+        resolved_base,
+        allow_legacy_marker,
+        allow_missing_marker,
+    ) {
         Ok(tree_hash) => Ok(ObservedEffect::Match {
             observation,
             tree_hash,
@@ -118,9 +131,15 @@ pub(crate) fn provision(
     action: &CreateWorkspaceAction,
     resolved_base: &str,
 ) -> Result<ProvisioningObservation> {
+    if !action.path_capability.is_exact() {
+        bail!("fresh workspace provisioning requires an exact path capability");
+    }
+    action.path_capability.validate_paths_at(source)?;
     exclude_nested_workspace_dir(source)?;
     add_worktree(source, dest, &action.branch, resolved_base)?;
-    write_identity(dest, &action.identity())?;
+    let mut identity = action.identity();
+    identity.base_sha = resolved_base.to_owned();
+    write_identity(dest, &identity)?;
     let mut observation = ProvisioningObservation {
         path_exists: dest.exists(),
         worktree_registered: true,
@@ -139,7 +158,12 @@ pub(crate) fn write_identity(dest: &Path, identity: &LogicalWorkspaceIdentity) -
     let path = identity_path(dest)?;
     let recorded = RecordedIdentity::from(identity);
     let json = serde_json::to_vec_pretty(&recorded).context("serializing workspace identity")?;
-    fs::write(&path, json)
+    let parent = path.parent().context("workspace identity has no parent")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&json)?;
+    temporary.as_file().sync_all()?;
+    temporary
+        .persist(&path)
         .with_context(|| format!("writing workspace identity {}", path.display()))?;
     Ok(())
 }
@@ -148,10 +172,23 @@ pub(crate) fn observed_tree_hash(dest: &Path) -> Result<String> {
     git_output(dest, &["rev-parse", "HEAD^{tree}"])
 }
 
-/// Working-tree identity for seal: temp-index `write-tree`, including
-/// uncommitted writer edits and excluding gitignored paths.
+/// Hash-only observation for read bindings. Authorization captures below also
+/// bind the immutable base and validate the actual Git tree delta.
 pub(crate) fn working_tree_hash(dest: &Path) -> Result<String> {
-    Ok(capture_seal_snapshot(dest)?.tree_hash)
+    capture_working_tree(dest)
+}
+
+fn capture_working_tree(dest: &Path) -> Result<String> {
+    let tmp = tempfile::Builder::new()
+        .prefix("gents-ws-index")
+        .tempdir()
+        .context("creating temporary git index for seal")?;
+    let index = tmp.path().join("index");
+    // Seed tracked entries before overlaying the working tree so ignored
+    // tracked files are preserved instead of becoming spurious deletions.
+    git_run_with_index(dest, &index, &["read-tree", "HEAD"])?;
+    git_run_with_index(dest, &index, &["add", "-A", "--"])?;
+    git_output_with_index(dest, &index, &["write-tree"])
 }
 
 pub(crate) struct SealSnapshot {
@@ -160,35 +197,120 @@ pub(crate) struct SealSnapshot {
     pub changed_files: Vec<String>,
 }
 
-pub(crate) fn capture_seal_snapshot(dest: &Path) -> Result<SealSnapshot> {
-    let tmp = tempfile::Builder::new()
-        .prefix("gents-ws-index")
-        .tempdir()
-        .context("creating temporary git index for seal")?;
-    let index = tmp.path().join("index");
-    // Seed the temporary index from HEAD before overlaying the working tree.
-    // Starting from an empty index makes tracked files that are also ignored
-    // look deleted: `git add -A` honors ignore rules when it has no tracked
-    // entry to update. Every workspace would then carry the same spurious
-    // deletion, so the first integration succeeds and later disjoint diffs
-    // conflict while trying to delete the already-removed path.
-    git_run_with_index(dest, &index, &["read-tree", "HEAD"])?;
-    git_run_with_index(dest, &index, &["add", "-A", "--"])?;
-    let tree_hash = git_output_with_index(dest, &index, &["write-tree"])?;
-    let diff =
-        git_output_bytes_with_index(dest, &index, &["diff", "--binary", "--cached", "HEAD"])?;
-    let names = git_output_with_index(dest, &index, &["diff", "--name-only", "--cached", "HEAD"])?;
-    let changed_files = names
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect();
+/// Capture once, then use only immutable Git objects for names and bytes.
+/// In particular, worker commits cannot redefine the admitted base.
+pub(crate) fn capture_seal_snapshot(
+    dest: &Path,
+    identity: &LogicalWorkspaceIdentity,
+) -> Result<SealSnapshot> {
+    identity.path_capability.validate()?;
+    identity.path_capability.validate_paths_at(dest)?;
+    let tree_hash = capture_working_tree(dest)?;
+    validate_tree_delta(
+        dest,
+        &identity.base_sha,
+        &tree_hash,
+        &identity.path_capability,
+    )?;
+    let args = [
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        &identity.base_sha,
+        &tree_hash,
+        "--",
+    ];
+    let diff = git_output_bytes_inner(git_command(dest, &args), dest, &args)?;
+    let args = [
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        &identity.base_sha,
+        &tree_hash,
+        "--",
+    ];
+    let names = git_output_bytes_inner(git_command(dest, &args), dest, &args)?;
+    let changed_files = nul_paths(&names)?;
     Ok(SealSnapshot {
         tree_hash,
         diff,
         changed_files,
     })
+}
+
+fn nul_paths(bytes: &[u8]) -> Result<Vec<String>> {
+    if !bytes.is_empty() && bytes.last() != Some(&0) {
+        bail!("unterminated Git path output");
+    }
+    if bytes.is_empty() {
+        return Ok(Vec::new());
+    }
+    bytes[..bytes.len() - 1]
+        .split(|byte| *byte == 0)
+        .map(|path| {
+            Ok(std::str::from_utf8(path)
+                .context("non-UTF-8 Git path")?
+                .to_owned())
+        })
+        .collect()
+}
+
+pub(crate) fn validate_tree_delta(
+    repo: &Path,
+    base: &str,
+    tree: &str,
+    capability: &super::WorkspacePathCapability,
+) -> Result<()> {
+    capability.validate()?;
+    if !capability.is_exact() {
+        return Ok(());
+    }
+    // Check component aliases in both trees, including unchanged entries. A new
+    // spelling must not acquire authority over an existing filesystem alias.
+    for revision in [base, tree] {
+        let args = ["ls-tree", "-r", "-z", "--name-only", revision];
+        let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
+        super::WorkspacePathCapability::exact_paths(nul_paths(&bytes)?)?;
+    }
+    let args = [
+        "diff",
+        "--raw",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        base,
+        tree,
+        "--",
+    ];
+    let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
+    let fields = nul_paths(&bytes)?;
+    if fields.len() % 2 != 0 {
+        bail!("malformed Git raw delta");
+    }
+    for pair in fields.chunks_exact(2) {
+        let header: Vec<_> = pair[0].split_ascii_whitespace().collect();
+        if header.len() != 5 {
+            bail!("malformed Git raw delta header");
+        }
+        let path = &pair[1];
+        super::path_capability::validate_relative_path(path)?;
+        if !capability.authorizes(path) {
+            bail!("workspace path capability denies changed path {path:?}");
+        }
+        let old_mode = header[0]
+            .strip_prefix(':')
+            .context("missing Git raw mode prefix")?;
+        for mode in [old_mode, header[1]] {
+            if !matches!(mode, "000000" | "100644" | "100755") {
+                bail!("workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}");
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read instruction files from `base_sha` blobs. Never reads the live worktree.
@@ -251,6 +373,7 @@ pub(crate) fn prepare_integrate_commit(
     worktree: &Path,
     seal_hash: &str,
     base_sha: &str,
+    snapshot: SealSnapshot,
 ) -> Result<IntegrateEffect> {
     let trunk = fs::canonicalize(trunk)
         .with_context(|| format!("canonicalizing trunk {}", trunk.display()))?;
@@ -266,7 +389,6 @@ pub(crate) fn prepare_integrate_commit(
         );
     }
     if let Some(existing) = observe_integrate_commit(&trunk, seal_hash)? {
-        let snapshot = capture_seal_snapshot(&worktree)?;
         if snapshot.tree_hash != seal_hash {
             bail!(
                 "live tree hash {} does not match workspace seal_hash {seal_hash}",
@@ -281,7 +403,6 @@ pub(crate) fn prepare_integrate_commit(
             diff: snapshot.diff,
         });
     }
-    let snapshot = capture_seal_snapshot(&worktree)?;
     if snapshot.tree_hash != seal_hash {
         bail!(
             "live tree hash {} does not match workspace seal_hash {seal_hash}",
@@ -299,6 +420,58 @@ pub(crate) fn prepare_integrate_commit(
         diff: snapshot.diff,
         pending_head: true,
     })
+}
+
+/// Recovery can verify immutable objects without the old checkout. Reconstruct
+/// the expected result on the recorded parent and compare the commit tree.
+pub(crate) fn verify_integrate_commit(
+    trunk: &Path,
+    commit: &str,
+    identity: &LogicalWorkspaceIdentity,
+    seal_hash: &str,
+) -> Result<bool> {
+    validate_tree_delta(
+        trunk,
+        &identity.base_sha,
+        seal_hash,
+        &identity.path_capability,
+    )?;
+    let args = [
+        "diff",
+        "--binary",
+        "--full-index",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-renames",
+        &identity.base_sha,
+        seal_hash,
+        "--",
+    ];
+    let diff = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
+    if diff.is_empty() {
+        // Empty integration never owns a ref or checkout mutation. Its receipt
+        // acknowledges a commit already in trunk, not an arbitrary candidate.
+        if !commit_is_in_trunk(trunk, commit) {
+            bail!("empty integration receipt does not name an existing trunk commit");
+        }
+        return Ok(false);
+    }
+    let parent = git_output(trunk, &["rev-parse", &format!("{commit}^")])?;
+    let tmp = tempfile::tempdir()?;
+    let index = tmp.path().join("index");
+    git_run_with_index(trunk, &index, &["read-tree", &parent])?;
+    git_apply_cached(trunk, &index, &diff)?;
+    let expected = git_output_with_index(trunk, &index, &["write-tree"])?;
+    let actual = git_output(trunk, &["rev-parse", &format!("{commit}^{{tree}}")])?;
+    if actual != expected {
+        bail!("integration commit differs from the immutable sealed delta");
+    }
+    validate_tree_delta(trunk, &parent, commit, &identity.path_capability)?;
+    Ok(true)
+}
+
+pub(crate) fn commit_is_in_trunk(trunk: &Path, commit: &str) -> bool {
+    git_ok(trunk, &["merge-base", "--is-ancestor", commit, "HEAD"])
 }
 
 fn empty_diff_effect(
@@ -325,9 +498,7 @@ fn empty_diff_effect(
 }
 
 fn diff_is_empty(diff: &[u8]) -> bool {
-    std::str::from_utf8(diff)
-        .map(|text| text.trim().is_empty())
-        .unwrap_or(false)
+    diff.is_empty()
 }
 
 /// Point trunk `HEAD` at a commit created by [`prepare_integrate_commit`]
@@ -368,36 +539,25 @@ pub(crate) fn advance_trunk_to_integrate_commit(trunk: &Path, commit: &str) -> R
 
 fn apply_integrate_commit_paths(trunk: &Path, commit: &str) -> Result<()> {
     let parent = git_output(trunk, &["rev-parse", &format!("{commit}^")])?;
-    let name_status = git_output(
-        trunk,
-        &["diff", "--name-status", "--no-renames", &parent, commit],
-    )?;
-    apply_integrate_name_status(trunk, commit, &name_status)
-}
-
-fn apply_integrate_name_status(trunk: &Path, commit: &str, name_status: &str) -> Result<()> {
-    for line in name_status
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        let Some((status, rest)) = line.split_once('\t') else {
-            bail!("unrecognized git name-status line: {line}");
-        };
-        let code = status.chars().next().unwrap_or('\0');
-        match code {
-            'A' | 'M' | 'T' => checkout_from_commit(trunk, commit, rest)?,
-            'D' => remove_from_trunk(trunk, rest)?,
-            'R' | 'C' => {
-                let Some((old, new)) = rest.split_once('\t') else {
-                    bail!("rename/copy name-status missing dest: {line}");
-                };
-                if code == 'R' {
-                    remove_from_trunk(trunk, old)?;
-                }
-                checkout_from_commit(trunk, commit, new)?;
-            }
-            _ => bail!("unsupported git name-status {status} in {line}"),
+    let args = [
+        "diff",
+        "--name-status",
+        "-z",
+        "--no-renames",
+        &parent,
+        commit,
+        "--",
+    ];
+    let bytes = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
+    let fields = nul_paths(&bytes)?;
+    if fields.len() % 2 != 0 {
+        bail!("malformed Git name-status output");
+    }
+    for pair in fields.chunks_exact(2) {
+        match pair[0].as_str() {
+            "A" | "M" | "T" => checkout_from_commit(trunk, commit, &pair[1])?,
+            "D" => remove_from_trunk(trunk, &pair[1])?,
+            other => bail!("unsupported Git name-status {other}"),
         }
     }
     Ok(())
@@ -436,42 +596,27 @@ pub(crate) fn commit_exists(repo: &Path, sha: &str) -> bool {
 }
 
 fn refuse_overlapping_dirty_trunk(trunk: &Path, changed_files: &[String]) -> Result<()> {
-    let porcelain = git_output(trunk, &["status", "--porcelain=v1"])?;
-    if porcelain.trim().is_empty() {
-        return Ok(());
-    }
-    for path in porcelain_paths(&porcelain) {
-        for part in path.split(" -> ") {
-            if changed_files.iter().any(|file| file == part) {
-                bail!(
-                    "refusing to integrate: trunk has uncommitted changes overlapping sealed path {part}"
-                );
+    let args = ["status", "--porcelain=v1", "-z", "--untracked-files=all"];
+    let bytes = git_output_bytes_inner(git_command(trunk, &args), trunk, &args)?;
+    let fields = nul_paths(&bytes)?;
+    let mut fields = fields.iter();
+    while let Some(record) = fields.next() {
+        let raw = record.as_bytes();
+        if raw.len() < 4 || raw[2] != b' ' {
+            bail!("malformed Git porcelain status");
+        }
+        let path = &record[3..];
+        let mut paths = vec![path];
+        if raw[..2].iter().any(|status| matches!(status, b'R' | b'C')) {
+            paths.push(fields.next().context("missing Git rename source")?.as_str());
+        }
+        for path in paths {
+            if changed_files.iter().any(|changed| changed == path) {
+                bail!("refusing to integrate: trunk has uncommitted changes overlapping sealed path {path}");
             }
         }
     }
     Ok(())
-}
-
-/// `git_output` trims the buffer, so an unstaged line ` M path` becomes `M path`.
-fn porcelain_paths(porcelain: &str) -> impl Iterator<Item = &str> {
-    porcelain.lines().filter_map(|line| {
-        let line = line.trim_end();
-        if line.is_empty() {
-            return None;
-        }
-        let path = if line.len() >= 3 && line.as_bytes()[2] == b' ' {
-            line[3..].trim()
-        } else if line.len() >= 2 && line.as_bytes()[1] == b' ' {
-            line[2..].trim()
-        } else {
-            return None;
-        };
-        if path.is_empty() {
-            None
-        } else {
-            Some(path)
-        }
-    })
 }
 
 fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -> Result<String> {
@@ -480,7 +625,8 @@ fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -
         .tempdir()
         .context("creating temporary git index for integrate")?;
     let index = tmp.path().join("index");
-    git_run_with_index(trunk, &index, &["read-tree", "HEAD"])?;
+    let parent = git_output(trunk, &["rev-parse", "HEAD"])?;
+    git_run_with_index(trunk, &index, &["read-tree", &parent])?;
     git_apply_cached(trunk, &index, diff).with_context(|| {
         format!(
             "git apply --cached on isolated index in {}",
@@ -488,7 +634,6 @@ fn commit_tree_from_isolated_index(trunk: &Path, diff: &[u8], seal_hash: &str) -
         )
     })?;
     let tree = git_output_with_index(trunk, &index, &["write-tree"])?;
-    let parent = git_output(trunk, &["rev-parse", "HEAD"])?;
     let message = integrate_commit_message(seal_hash);
     let mut cmd = git_command_with_index(
         trunk,
@@ -651,33 +796,66 @@ fn match_existing(
     dest: &Path,
     identity: &LogicalWorkspaceIdentity,
     resolved_base: &str,
+    allow_legacy_marker: bool,
+    allow_missing_marker: bool,
 ) -> Result<String, String> {
-    if let Some(recorded) = read_identity(dest).map_err(|err| err.to_string())? {
-        if recorded != RecordedIdentity::from(identity) {
-            return Err(format!(
-                "existing target identity mismatch at {}",
-                dest.display()
-            ));
+    if !is_worktree_of(source, dest).map_err(|err| err.to_string())? {
+        return Err(format!(
+            "existing path {} is not a worktree of the source repository",
+            dest.display()
+        ));
+    }
+    let branch =
+        git_output(dest, &["rev-parse", "--abbrev-ref", "HEAD"]).map_err(|err| err.to_string())?;
+    if branch != identity.branch {
+        return Err("existing worktree branch mismatch".into());
+    }
+    let expected = RecordedIdentity::from(identity);
+    match read_identity(dest).map_err(|err| err.to_string())? {
+        Some(mut recorded) => {
+            let legacy = recorded.path_capability.is_none();
+            if legacy && allow_legacy_marker && !identity.path_capability.is_exact() {
+                recorded.path_capability = Some(identity.path_capability.clone());
+            }
+            if recorded != expected {
+                return Err(format!(
+                    "existing target identity mismatch at {}",
+                    dest.display()
+                ));
+            }
+            if legacy {
+                write_identity(dest, identity).map_err(|err| err.to_string())?;
+            }
         }
-    } else {
-        if !is_worktree_of(source, dest).map_err(|err| err.to_string())? {
-            return Err(format!(
-                "existing path {} is not a worktree of the source repository",
-                dest.display()
-            ));
+        None => {
+            if !allow_missing_marker {
+                return Err("existing target lacks an admitted identity marker".into());
+            }
+            let head = git_output(dest, &["rev-parse", "HEAD"]).map_err(|err| err.to_string())?;
+            if head != resolved_base {
+                return Err("existing worktree base_sha mismatch without identity marker".into());
+            }
+            write_identity(dest, identity).map_err(|err| err.to_string())?;
         }
-        let head = git_output(dest, &["rev-parse", "HEAD"]).map_err(|err| err.to_string())?;
-        let branch = git_output(dest, &["rev-parse", "--abbrev-ref", "HEAD"])
-            .map_err(|err| err.to_string())?;
-        if head != resolved_base || branch != identity.branch {
-            return Err(format!(
-                "existing worktree at {} does not match base_sha/branch",
-                dest.display()
-            ));
-        }
-        write_identity(dest, identity).map_err(|err| err.to_string())?;
     }
     observed_tree_hash(dest).map_err(|err| err.to_string())
+}
+
+pub(crate) fn verify_workspace_identity(
+    source: &Path,
+    dest: &Path,
+    identity: &LogicalWorkspaceIdentity,
+) -> Result<()> {
+    match_existing(
+        source,
+        dest,
+        identity,
+        &identity.base_sha,
+        !identity.path_capability.is_exact(),
+        false,
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(())
 }
 
 fn read_identity(dest: &Path) -> Result<Option<RecordedIdentity>> {
@@ -901,10 +1079,6 @@ fn git_output_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<Stri
     git_output_inner(git_command_with_index(cwd, index, args), cwd, args)
 }
 
-fn git_output_bytes_with_index(cwd: &Path, index: &Path, args: &[&str]) -> Result<Vec<u8>> {
-    git_output_bytes_inner(git_command_with_index(cwd, index, args), cwd, args)
-}
-
 fn git_output_inner(cmd: Command, cwd: &Path, args: &[&str]) -> Result<String> {
     let bytes = git_output_bytes_inner(cmd, cwd, args)?;
     Ok(String::from_utf8_lossy(&bytes).trim().to_string())
@@ -932,6 +1106,8 @@ fn git_command(cwd: &Path, args: &[&str]) -> Command {
     cmd.env_remove("GIT_COMMON_DIR");
     cmd.env_remove("GIT_INDEX_FILE");
     cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GIT_LITERAL_PATHSPECS", "1");
+    cmd.env("GIT_NO_REPLACE_OBJECTS", "1");
     cmd
 }
 

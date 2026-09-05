@@ -72,6 +72,7 @@
         {"name": "status", "required": true},
         {"name": "work_unit_id", "required": false, "fill": "correlation"},
         {"name": "repository_id", "required": true},
+        {"name": "owned_files", "required": true},
         {"name": "base_sha", "required": false, "fill": {"source_field": "base_ref"}},
         {"name": "branch", "required": false, "fill": {"source_field": "suggested_branch"}},
         {"name": "high_priority_count", "required": true},

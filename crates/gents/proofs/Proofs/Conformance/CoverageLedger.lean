@@ -842,6 +842,16 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "workspace_path_capability_cases"
+      "WorkspacePathCapabilityCases"
+      "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "workspace_capability_migration_cases"
+      "WorkspaceCapabilityMigrationCases"
+      "gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows")
+      "isolated-workspaces" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "graph_logical_invocation_cases"
       "GraphLogicalInvocationCases"
       "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection")

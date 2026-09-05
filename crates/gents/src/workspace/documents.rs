@@ -22,6 +22,8 @@ pub(crate) const RECEIPT_KIND_INTEGRATOR: &str = "integrator";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IsolatedWorkspaceDoc {
+    #[serde(with = "capability_string")]
+    pub path_capability: super::WorkspacePathCapability,
     pub workspace_id: String,
     pub work_unit_id: String,
     pub repository_id: String,
@@ -49,6 +51,7 @@ impl IsolatedWorkspaceDoc {
             repository_id: self.repository_id.clone(),
             base_sha: self.base_sha.clone(),
             branch: self.branch.clone(),
+            path_capability: self.path_capability.clone(),
         }
     }
 }
@@ -109,6 +112,7 @@ impl WorkspaceBindingDoc {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceReceiptDoc {
+    pub path_capability_digest: String,
     pub receipt_id: String,
     pub workspace_id: String,
     pub produced_by_request_id: String,
@@ -209,6 +213,7 @@ pub(crate) fn new_isolated_workspace(
     seal_hash: Option<String>,
 ) -> IsolatedWorkspaceDoc {
     IsolatedWorkspaceDoc {
+        path_capability: identity.path_capability.clone(),
         workspace_id: identity.workspace_id.clone(),
         work_unit_id: identity.work_unit_id.clone(),
         repository_id: identity.repository_id.clone(),
@@ -230,56 +235,9 @@ pub(crate) fn new_isolated_workspace(
 /// Upsert IsolatedWorkspace. Identity fields are add-only; retries may only
 /// update mutable `lifecycle_state` / `seal_hash`.
 pub fn isolated_workspace_upsert_mutation(doc: &IsolatedWorkspaceDoc) -> String {
-    let seal_hash = match doc
-        .seal_hash
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-    {
-        Some(value) => format!(r#""{}""#, escape_graphql_string(value)),
-        None => "null".to_string(),
-    };
     format!(
-        r#"mutation {{
-            upsert_IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{workspace_id}" }} }},
-                add: {{
-                    workspace_id: "{workspace_id}",
-                    work_unit_id: "{work_unit_id}",
-                    repository_id: "{repository_id}",
-                    base_sha: "{base_sha}",
-                    branch: "{branch}",
-                    creation_policy: "{creation_policy}",
-                    adapter: "{adapter}",
-                    owner_deployment_id: "{owner_deployment_id}",
-                    writer_principal: "{writer_principal}",
-                    integrator_principal: "{integrator_principal}",
-                    instruction_manifest: "{instruction_manifest}",
-                    seal_hash: {seal_hash},
-                    lifecycle_state: "{lifecycle_state}",
-                    caused_by_invocation_id: "{caused_by_invocation_id}",
-                    caused_by_correlation: "{caused_by_correlation}"
-                }},
-                update: {{
-                    lifecycle_state: "{lifecycle_state}",
-                    seal_hash: {seal_hash}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        workspace_id = escape_graphql_string(&doc.workspace_id),
-        work_unit_id = escape_graphql_string(&doc.work_unit_id),
-        repository_id = escape_graphql_string(&doc.repository_id),
-        base_sha = escape_graphql_string(&doc.base_sha),
-        branch = escape_graphql_string(&doc.branch),
-        creation_policy = escape_graphql_string(&doc.creation_policy),
-        adapter = escape_graphql_string(&doc.adapter),
-        owner_deployment_id = escape_graphql_string(&doc.owner_deployment_id),
-        writer_principal = escape_graphql_string(&doc.writer_principal),
-        integrator_principal = escape_graphql_string(&doc.integrator_principal),
-        instruction_manifest = escape_graphql_string(&doc.instruction_manifest),
-        lifecycle_state = escape_graphql_string(&doc.lifecycle_state),
-        caused_by_invocation_id = escape_graphql_string(&doc.caused_by_invocation_id),
-        caused_by_correlation = escape_graphql_string(&doc.caused_by_correlation),
+        "mutation {{ {} }}",
+        isolated_workspace_upsert_field("upsert_IsolatedWorkspace", doc)
     )
 }
 
@@ -447,6 +405,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
                     repository_id: "{repository_id}",
                     base_sha: "{base_sha}",
                     branch: "{branch}",
+                    path_capability: "{path_capability}",
                     creation_policy: "{creation_policy}",
                     adapter: "{adapter}",
                     owner_deployment_id: "{owner_deployment_id}",
@@ -468,6 +427,7 @@ fn isolated_workspace_upsert_field(alias: &str, doc: &IsolatedWorkspaceDoc) -> S
         repository_id = escape_graphql_string(&doc.repository_id),
         base_sha = escape_graphql_string(&doc.base_sha),
         branch = escape_graphql_string(&doc.branch),
+        path_capability = escape_graphql_string(&doc.path_capability.canonical_json()),
         creation_policy = escape_graphql_string(&doc.creation_policy),
         adapter = escape_graphql_string(&doc.adapter),
         owner_deployment_id = escape_graphql_string(&doc.owner_deployment_id),
@@ -565,6 +525,7 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
                     produced_by_request_id: "{produced_by_request_id}",
                     produced_by_request_doc_id: "{produced_by_request_doc_id}",
                     kind: "{kind}",
+                    path_capability_digest: "{path_capability_digest}",
                     base_sha: "{base_sha}",
                     seal_hash: "{seal_hash}",
                     work_unit_id: {work_unit_id},
@@ -590,6 +551,7 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
         produced_by_request_id = escape_graphql_string(&doc.produced_by_request_id),
         produced_by_request_doc_id = escape_graphql_string(&doc.produced_by_request_doc_id),
         kind = escape_graphql_string(&doc.kind),
+        path_capability_digest = escape_graphql_string(&doc.path_capability_digest),
         base_sha = escape_graphql_string(&doc.base_sha),
         seal_hash = escape_graphql_string(&doc.seal_hash),
         work_unit_id = graphql_nullable_string(doc.work_unit_id.as_deref()),
@@ -605,51 +567,8 @@ fn workspace_receipt_upsert_field(alias: &str, doc: &WorkspaceReceiptDoc) -> Str
 
 pub fn workspace_receipt_create_mutation(doc: &WorkspaceReceiptDoc) -> String {
     format!(
-        r#"mutation {{
-            upsert_WorkspaceReceipt(
-                filter: {{ receipt_id: {{ _eq: "{receipt_id}" }} }},
-                add: {{
-                    receipt_id: "{receipt_id}",
-                    workspace_id: "{workspace_id}",
-                    produced_by_request_id: "{produced_by_request_id}",
-                    produced_by_request_doc_id: "{produced_by_request_doc_id}",
-                    kind: "{kind}",
-                    base_sha: "{base_sha}",
-                    seal_hash: "{seal_hash}",
-                    work_unit_id: {work_unit_id},
-                    caused_by_correlation: {caused_by_correlation},
-                    head_sha: {head_sha},
-                    changed_files: {changed_files},
-                    diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
-                    unresolved_conflicts: {unresolved_conflicts},
-                    integration_instructions: {integration_instructions}
-                }},
-                update: {{
-                    head_sha: {head_sha},
-                    changed_files: {changed_files},
-                    diff_artifact: {diff_artifact},
-                    checks_run: {checks_run},
-                    unresolved_conflicts: {unresolved_conflicts},
-                    integration_instructions: {integration_instructions}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        receipt_id = escape_graphql_string(&doc.receipt_id),
-        workspace_id = escape_graphql_string(&doc.workspace_id),
-        produced_by_request_id = escape_graphql_string(&doc.produced_by_request_id),
-        produced_by_request_doc_id = escape_graphql_string(&doc.produced_by_request_doc_id),
-        kind = escape_graphql_string(&doc.kind),
-        base_sha = escape_graphql_string(&doc.base_sha),
-        seal_hash = escape_graphql_string(&doc.seal_hash),
-        work_unit_id = graphql_nullable_string(doc.work_unit_id.as_deref()),
-        caused_by_correlation = graphql_nullable_string(doc.caused_by_correlation.as_deref()),
-        head_sha = graphql_nullable_string(doc.head_sha.as_deref()),
-        changed_files = graphql_nullable_string(doc.changed_files.as_deref()),
-        diff_artifact = graphql_nullable_string(doc.diff_artifact.as_deref()),
-        checks_run = graphql_nullable_string(doc.checks_run.as_deref()),
-        unresolved_conflicts = graphql_nullable_string(doc.unresolved_conflicts.as_deref()),
-        integration_instructions = graphql_nullable_string(doc.integration_instructions.as_deref()),
+        "mutation {{ {} }}",
+        workspace_receipt_upsert_field("upsert_WorkspaceReceipt", doc)
     )
 }
 
@@ -709,4 +628,29 @@ pub fn workspace_cleanup_docs_mutation(
         ));
     }
     format!("mutation {{\n{}\n}}", fields.join("\n"))
+}
+
+// DefraDB stores this immutable tagged value in a String field. Missing/null
+// current-version values are invalid; only the source-version lens supplies
+// explicit compatibility for legacy documents.
+mod capability_string {
+    use super::super::WorkspacePathCapability;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(
+        value: &WorkspacePathCapability,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&value.canonical_json())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<WorkspacePathCapability, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        let value: WorkspacePathCapability =
+            serde_json::from_str(&encoded).map_err(serde::de::Error::custom)?;
+        value.validate().map_err(serde::de::Error::custom)?;
+        Ok(value)
+    }
 }

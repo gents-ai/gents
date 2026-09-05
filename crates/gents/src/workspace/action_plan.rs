@@ -72,6 +72,7 @@ impl WorkspaceAdapterKind {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CreateWorkspaceAction {
+    pub path_capability: super::WorkspacePathCapability,
     pub workspace_id: String,
     pub work_unit_id: String,
     pub repository_id: String,
@@ -314,6 +315,7 @@ impl HostAction {
 
 impl CreateWorkspaceAction {
     pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
+        self.path_capability.validate()?;
         require_non_empty("workspace_id", &self.workspace_id)?;
         require_non_empty("work_unit_id", &self.work_unit_id)?;
         require_non_empty("repository_id", &self.repository_id)?;
@@ -363,6 +365,7 @@ impl CreateWorkspaceAction {
             repository_id: self.repository_id.clone(),
             base_sha: self.base_sha.clone(),
             branch: self.branch.clone(),
+            path_capability: self.path_capability.clone(),
         }
     }
 }
