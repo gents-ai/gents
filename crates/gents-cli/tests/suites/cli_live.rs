@@ -51,6 +51,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         "2".to_string(),
         "--max-queue-depth".to_string(),
         "4".to_string(),
+        "--inference-url".to_string(),
         model_endpoint,
     ];
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
@@ -111,7 +112,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some("local-standard")
     );
     assert_eq!(
-        desktop_init.get("agent_did").and_then(Value::as_str),
+        desktop_init.get("agentDid").and_then(Value::as_str),
         Some(agent_did.as_str())
     );
     assert_eq!(
@@ -119,13 +120,13 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some(graphql.as_str())
     );
     assert_eq!(
-        desktop_init.get("p2p_transport").and_then(Value::as_str),
+        desktop_init.get("p2pTransport").and_then(Value::as_str),
         Some("iroh")
     );
     let desktop_next_steps = desktop_init
-        .get("next_steps")
+        .get("nextSteps")
         .and_then(Value::as_array)
-        .ok_or_else(|| anyhow!("desktop init output missing next_steps: {desktop_init}"))?;
+        .ok_or_else(|| anyhow!("desktop init output missing nextSteps: {desktop_init}"))?;
     assert!(
         desktop_next_steps.iter().any(|step| step
             .as_str()
@@ -241,7 +242,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             home_arg,
             "--session-id",
             &session_id,
-            "--output-format",
+            "--output",
             "json",
             "--timeout-secs",
             "240",
@@ -272,7 +273,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
             home_arg,
             "--session-id",
             &session_id,
-            "--output-format",
+            "--output",
             "json",
             "--timeout-secs",
             "240",
@@ -349,6 +350,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         init_args.push("--api-key-env-var".to_string());
         init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
     }
+    init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint);
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;
@@ -733,6 +735,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         init_args.push("--api-key-env-var".to_string());
         init_args.push("GENTS_CLI_E2E_API_KEY".to_string());
     }
+    init_args.push("--inference-url".to_string());
     init_args.push(model_endpoint.clone());
     let init_arg_refs = init_args.iter().map(String::as_str).collect::<Vec<_>>();
     let init = run_init_json(&home_dir, &init_arg_refs)?;

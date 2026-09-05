@@ -330,7 +330,8 @@
       "required": [
         "runtime",
         "source_projection_id",
-        "source_projection_version"
+        "source_projection_version",
+        "source_version_status"
       ],
       "type": "object"
     },

@@ -960,15 +960,14 @@ fn projection_terminal_status(envelope: &AdapterProjectionEnvelope) -> Option<St
             .final_metrics
             .as_ref()
             .and_then(|metrics| metrics.extra.as_ref())
-            .and_then(|extra| extra.get("lifecycle_state").or_else(|| extra.get("status")))
+            .and_then(|extra| extra.get("lifecycle_state"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         AdapterProjection::OpenAiCodexRunTrace(projection) => projection.status.clone(),
         AdapterProjection::LangGraphStateHistory(projection) => projection
             .values
-            .get("lifecycle_state")
+            .get("status")
             .and_then(Value::as_str)
-            .or_else(|| projection.values.get("status").and_then(Value::as_str))
             .map(ToOwned::to_owned),
         AdapterProjection::MultiAgentTask(projection) => projection.status.clone(),
     }

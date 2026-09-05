@@ -5,6 +5,7 @@ use crate::llm::tool::ToolDefinition;
 use crate::llm::tool::{Tool, ToolDyn};
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -40,12 +41,12 @@ pub struct SessionHistoryRow {
     pub session_id: String,
     pub agent_name: Option<String>,
     pub behavior_id: Option<String>,
-    pub status: Option<String>,
+    pub session_status: Option<String>,
     pub created_at: Option<String>,
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub latest_request_id: Option<String>,
-    pub latest_request_lifecycle_state: Option<String>,
+    pub latest_request_lifecycle_state: Option<RequestLifecycleState>,
     pub latest_request_created_at: Option<String>,
     pub request_count: i64,
     pub message_count: i64,
@@ -904,13 +905,7 @@ fn build_session_rows(
                 behavior_id: session
                     .and_then(|row| clean(row.behavior_id.as_ref()))
                     .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_ref()))),
-                status: session
-                    .and_then(|row| clean(row.status.as_ref()))
-                    .or_else(|| {
-                        latest_request
-                            .and_then(|row| row.lifecycle_state)
-                            .map(|state| state.as_str().to_string())
-                    }),
+                session_status: session.and_then(|row| clean(row.status.as_ref())),
                 created_at: started_at
                     .clone()
                     .or_else(|| latest_request_created_at.clone()),
@@ -919,9 +914,7 @@ fn build_session_rows(
                 latest_request_id: latest_request
                     .map(|row| row.request_id.trim().to_string())
                     .filter(|request_id| !request_id.is_empty()),
-                latest_request_lifecycle_state: latest_request
-                    .and_then(|row| row.lifecycle_state)
-                    .map(|state| state.as_str().to_string()),
+                latest_request_lifecycle_state: latest_request.and_then(|row| row.lifecycle_state),
                 latest_request_created_at,
                 request_count: aggregate
                     .map(|aggregate| aggregate.request_count)
@@ -1304,7 +1297,7 @@ mod tests {
             .unwrap();
         assert_eq!(session_a.agent_name.as_deref(), Some("OpenAI Agent"));
         assert_eq!(session_a.behavior_id.as_deref(), Some("behavior-a"));
-        assert_eq!(session_a.status.as_deref(), Some("open"));
+        assert_eq!(session_a.session_status.as_deref(), Some("open"));
         assert_eq!(
             session_a.created_at.as_deref(),
             Some("2026-06-03T09:55:00Z")
@@ -1314,8 +1307,8 @@ mod tests {
             Some("request-a-new")
         );
         assert_eq!(
-            session_a.latest_request_lifecycle_state.as_deref(),
-            Some("processing")
+            session_a.latest_request_lifecycle_state,
+            Some(RequestLifecycleState::Processing)
         );
         assert_eq!(session_a.request_count, 2);
         assert_eq!(session_a.message_count, 2);
@@ -1350,6 +1343,11 @@ mod tests {
         assert_eq!(parsed.limit, 1);
         assert_eq!(parsed.sessions.len(), 1);
         assert_eq!(parsed.sessions[0].session_id, "session-b");
+
+        let row = serde_json::to_value(&parsed.sessions[0]).unwrap();
+        assert_eq!(row["session_status"], "open");
+        assert_eq!(row["latest_request_lifecycle_state"], "completed");
+        assert!(row.get("status").is_none());
     }
 
     #[tokio::test]

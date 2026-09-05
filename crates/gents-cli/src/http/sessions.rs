@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,11 +28,11 @@ pub(crate) struct SessionHistoryRow {
     pub(crate) session_id: String,
     pub(crate) agent_name: Option<String>,
     pub(crate) behavior_id: Option<String>,
-    pub(crate) status: Option<String>,
+    pub(crate) session_status: Option<String>,
     pub(crate) started_at: Option<String>,
     pub(crate) ended_at: Option<String>,
     pub(crate) latest_request_id: Option<String>,
-    pub(crate) latest_request_lifecycle_state: Option<String>,
+    pub(crate) latest_request_lifecycle_state: Option<RequestLifecycleState>,
     pub(crate) latest_request_created_at: Option<String>,
     pub(crate) request_count: i64,
     pub(crate) message_count: i64,
@@ -259,13 +260,11 @@ fn build_session_history_snapshot(
                 behavior_id: session
                     .and_then(|row| clean(row.behavior_id.as_deref()))
                     .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_deref()))),
-                status: session.and_then(|row| clean(row.status.as_deref())),
+                session_status: session.and_then(|row| clean(row.status.as_deref())),
                 started_at: session.and_then(|row| clean(row.started.as_deref())),
                 ended_at: session.and_then(|row| clean(row.ended.as_deref())),
                 latest_request_id: latest_request.and_then(|row| clean(Some(&row.request_id))),
-                latest_request_lifecycle_state: latest_request
-                    .and_then(|row| row.lifecycle_state)
-                    .map(|state| state.as_str().to_string()),
+                latest_request_lifecycle_state: latest_request.and_then(|row| row.lifecycle_state),
                 latest_request_created_at: latest_request
                     .and_then(|row| clean(row.created_at.as_deref())),
                 request_count: requests.len() as i64,
@@ -409,8 +408,16 @@ mod tests {
         assert_eq!(snapshot.sessions.len(), 2);
         assert_eq!(snapshot.sessions[0].session_id, "session-a");
         assert_eq!(
+            snapshot.sessions[0].session_status.as_deref(),
+            Some("active")
+        );
+        assert_eq!(
             snapshot.sessions[0].latest_request_id.as_deref(),
             Some("req-newer")
+        );
+        assert_eq!(
+            snapshot.sessions[0].latest_request_lifecycle_state,
+            Some(RequestLifecycleState::Completed)
         );
         assert_eq!(snapshot.sessions[0].request_count, 2);
         assert_eq!(snapshot.sessions[0].message_count, 2);

@@ -247,11 +247,9 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         deadline.get("request_status").and_then(Value::as_str),
         Some("failed")
     );
-    assert_eq!(
-        deadline
-            .get("request_lifecycle_state")
-            .and_then(Value::as_str),
-        Some("failed")
+    assert!(
+        deadline.get("request_lifecycle_state").is_none(),
+        "Amy trace records must expose request state only as request_status: {deadline:#}"
     );
     assert_eq!(
         deadline.get("response_status").and_then(Value::as_str),
@@ -745,7 +743,6 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
             .is_some(),
         "ATIF projection should identify the Gents behavior: {atif:#}"
     );
-
     let openai = trace_project_json(tempdir.path(), home, "openai-codex", "public")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai)?;
     assert_eq!(

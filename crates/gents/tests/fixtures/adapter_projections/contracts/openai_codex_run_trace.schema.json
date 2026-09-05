@@ -57,16 +57,6 @@
                           }
                         ]
                       },
-                      "lifecycle_state": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
                       "parent_request_id": {
                         "anyOf": [
                           {
@@ -409,7 +399,8 @@
       "required": [
         "runtime",
         "source_projection_id",
-        "source_projection_version"
+        "source_projection_version",
+        "source_version_status"
       ],
       "type": "object"
     },
