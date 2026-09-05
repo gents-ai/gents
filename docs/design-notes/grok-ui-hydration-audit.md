@@ -14,6 +14,64 @@ See grok-background-projection.md and PR verification comments for evidence.
 
 ## Remaining requirements and evidence needed
 
+### Latest review checkpoint
+
+Published commit `76c022fa` passed all 11 CI checks (run `33948163091`).
+The chronological implementation notes below retain intermediate test states;
+those are not the current status of that published commit.
+
+The independent Claude read-only review completed against the stock 1.0.13
+source and found live user-echo `promptIndex`/`hideFromScrollback` in the wrong
+wire location. They belong in `ContentChunk._meta`, beside `content`, as replay
+already emits them. The follow-up changes that shape and its regression test.
+
+Gents code-review run `e40f1888-272a-4d4b-8356-0f201e8c24ff` completed all graph
+stages with 12 confirmed records, including duplicate reports of the same
+issues. Its "pending gates" finding describes an earlier audit checkpoint;
+the actual published-tip checks above supersede it. Its code findings still
+require individual disposition, not dismissal based on green CI.
+
+Follow-up work in progress:
+
+- Replay no longer holds the connection registry during DB reads or outbound
+  delivery. An abort-safe, connection-local reservation rejects concurrent
+  loads of the same session. The stalled-output/abort regression and all 318
+  shim tests passed before the subsequent echo/history changes.
+- History discovery folds bounded request pages into one summary per session.
+  The non-paginated stock roster scans once, rather than repeating the full
+  history scan for every picker page. Search, first-prompt attribution, actual
+  activity ordering, and complete history remain intact. This reduces memory
+  and repeated scans; it does **not** make the remaining full-history DB scan
+  constant-cost. A persisted activity index would belong to the runtime, not
+  a shim-owned cache.
+- Remaining review triage includes late-event polling, repeated context-owner
+  reads, legacy partial session-info behavior,
+  and visibility of human turns submitted through another attached client.
+- Descendant accounting now resolves readable child identities in batches of
+  128, preserving exact requester identity and rejecting ambiguous aliases.
+  All 320 shim tests and the workspace all-target check passed. The final
+  duplicate-alias extension also passed its separate targeted rerun.
+
+Additional native hydration gap identified during the capability inventory:
+stock `extensions/notification.rs::SessionUpdate::GoalUpdated` feeds the
+pager's goal panel (`app/acp_handler/session_notification.rs`). Gents already
+persists `Goal` objective/status/token budget/token usage/active time and has
+`goal::GoalDocument` helpers. The shim currently has no GoalUpdated producer.
+Audit the status mapping and authorization, then project that canonical state;
+do not confuse a durable goal with a todo list or add a second orchestrator.
+
+The legacy-accounting recommendation needs more than omitting numeric fields:
+stock `acp_types.rs::ContextInfo` defaults missing fields to zero, and
+`SessionInfoData` requires numeric `turns` plus a non-optional context object.
+The context renderer prints those numbers directly. It does not interpret the
+shim's `gents/partialContext` metadata as "unknown." Do not turn missing
+accounting into a successful zero-usage/zero-turn display just to satisfy a
+review suggestion. Known component estimates can still be partial; completely
+missing observations need an honest unavailable path or canonical recovery.
+
+These follow-up changes still require their own verification and published-tip
+CI. The overall goal remains open.
+
 | Surface | Current evidence | Completion evidence required |
 | --- | --- | --- |
 | Session resume | Stock dashboard replay/continuation passed; expanded cancelled child bash and its result now render | Maintain regression coverage for read-only replay and active handoff; final review pending |
@@ -21,7 +79,7 @@ See grok-background-projection.md and PR verification comments for evidence.
 | Context usage | Live capture-comparison probe and rendered counter/breakdowns passed; stale/decreasing context regressions pass | Final review pending; unsupported provider breakdowns remain explicitly partial |
 | Cumulative token accounting | Physical parent/child aggregation, retry deduplication, duration, native billing absence, and rendered usage verified | Reasoning/cache-creation/per-model pricing are not persisted and cannot be recovered as exact breakdowns; final review pending |
 | Other native controls/data | Broader inventory incomplete; interjection/manual compaction are shaped stubs, model/mode capabilities need review | Inventory the stock client's requested session/info, usage, compaction, goal/todo, model/mode, replay and task surfaces; implement runtime-supported hydration/control paths and explicitly document genuine unsupported capabilities |
-| Final gate | Current local runtime: 2,711 passed, 3 ignored; shim: 317 passed; workspace passed; stock live checks passed | Independent review and green CI on the final published tip remain required |
+| Final gate | Runtime: 2,711 passed, 3 ignored (unchanged by follow-up); shim: 320 passed; workspace passed; stock live checks passed on 76c022fa; independent reviews completed | Remaining review dispositions, new hydration work, and green CI on the final published tip remain required |
 
 ## Ownership and implementation constraints
 

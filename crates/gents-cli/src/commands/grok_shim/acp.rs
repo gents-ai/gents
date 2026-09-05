@@ -54,7 +54,7 @@
 //! and every query runs in-process on the embedded node via
 //! `EmbeddedNode::execute`; no HTTP GraphQL helper is used.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -259,6 +259,40 @@ impl AcpSessionState {
     }
 }
 
+/// Connection-local reservation only. No mutex is held across replay I/O;
+/// cancellation releases the reservation synchronously through Drop.
+struct SessionLoadReservation<'a> {
+    loading: &'a std::sync::Mutex<BTreeSet<String>>,
+    session_id: String,
+}
+
+impl<'a> SessionLoadReservation<'a> {
+    fn reserve(loading: &'a std::sync::Mutex<BTreeSet<String>>, session_id: &str) -> Result<Self> {
+        if !loading
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(session_id.to_owned())
+        {
+            return Err(invalid_params(
+                "session is already loading on this connection",
+            ));
+        }
+        Ok(Self {
+            loading,
+            session_id: session_id.to_owned(),
+        })
+    }
+}
+
+impl Drop for SessionLoadReservation<'_> {
+    fn drop(&mut self) {
+        self.loading
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&self.session_id);
+    }
+}
+
 /// The `session/set_mode` state commit: record the new mode in the session
 /// registry exactly when the `current_mode_update` notification was
 /// successfully enqueued, inside the common send path's per-session critical
@@ -417,6 +451,7 @@ pub(crate) struct AcpService {
     projections: Arc<ProjectionEngine>,
     /// Connection-local session registry.
     sessions: tokio::sync::Mutex<BTreeMap<String, AcpSessionState>>,
+    loading_sessions: std::sync::Mutex<BTreeSet<String>>,
     /// The connection's assigned leader client id, set when the factory binds
     /// the registering client's identity to this service.
     client_id: Option<u64>,
@@ -444,6 +479,7 @@ impl AcpService {
             turns,
             projections,
             sessions: tokio::sync::Mutex::new(BTreeMap::new()),
+            loading_sessions: std::sync::Mutex::new(BTreeSet::new()),
             client_id: None,
             registered_mode: None,
             registered_capabilities: None,
@@ -876,10 +912,18 @@ impl AcpService {
         let session_id = preferred.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         ensure_session_document(&self.config, &session_id).await?;
 
-        self.sessions
-            .lock()
-            .await
-            .insert(session_id.clone(), AcpSessionState::new());
+        {
+            let mut sessions = self.sessions.lock().await;
+            if self
+                .loading_sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .contains(&session_id)
+            {
+                return Err(invalid_params("session is loading on this connection"));
+            }
+            sessions.insert(session_id.clone(), AcpSessionState::new());
+        }
         tracing::info!(%session_id, "grok shim session/new");
 
         // Audited result shape: sessionId + nested models + _meta. The
@@ -921,8 +965,8 @@ impl AcpService {
         sender: &PromptSender,
     ) -> Result<RequestOutcome> {
         let session_id = required_session_id(&request.params)?;
-        let mut sessions = self.sessions.lock().await;
-        if sessions.contains_key(&session_id) {
+        let _reservation = SessionLoadReservation::reserve(&self.loading_sessions, &session_id)?;
+        if self.sessions.lock().await.contains_key(&session_id) {
             return Err(invalid_params(
                 "session is already attached on this connection",
             ));
@@ -941,7 +985,7 @@ impl AcpService {
             .await?;
         let mut state = AcpSessionState::new();
         state.resume_from = Some(attached_at);
-        sessions.insert(session_id.clone(), state);
+        self.sessions.lock().await.insert(session_id.clone(), state);
         Ok(RequestOutcome {
             notifications: vec![
                 json!({"__method":MCP_INITIALIZED_METHOD, "sessionId":session_id, "mcpToolCount":0, "elapsedMs":0}),
@@ -1705,6 +1749,85 @@ mod tests {
             ),
         ));
         (staging, AcpService::new(config, turns, projections))
+    }
+
+    #[tokio::test]
+    async fn stalled_replay_reserves_only_its_session_and_abort_releases_it() {
+        let (_dir, service) = test_service().await;
+        let service = Arc::new(service);
+        ensure_session_document(&service.config, "stalled-history")
+            .await
+            .unwrap();
+        let seeded = service.config.node.execute(r#"mutation {create_AgentRequest(input:{
+            request_id:"stalled-request", session_id:"stalled-history", agent_did:"did:test:grok-shim",
+            requester_did:"did:test:grok-shim", content:"Original prompt", lifecycle_state:"completed",
+            created_at:"2026-09-01T12:00:00Z"
+        }) {_docID}}"#).await;
+        ensure_no_errors(&seeded, "seed stalled replay").unwrap();
+        let buffer = Arc::new(Mutex::new(Vec::new()));
+        let hold_output = buffer.lock().await;
+        let sender = PromptSender::Buffer {
+            buffer: buffer.clone(),
+        };
+        let request = AcpRequest::from_payload(&request_payload(
+            "session/load",
+            json!({"sessionId":"stalled-history"}),
+        ))
+        .unwrap();
+        let task = tokio::spawn({
+            let service = service.clone();
+            let sender = sender.clone();
+            let request = request.clone();
+            async move { service.handle_session_load(&request, &sender).await }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !service
+                .loading_sessions
+                .lock()
+                .unwrap()
+                .contains("stalled-history")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("load reservation");
+        let unrelated = AcpRequest::from_payload(&request_payload(
+            "session/new",
+            json!({"_meta":{"sessionId":"unrelated"}}),
+        ))
+        .unwrap();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            service.handle_session_new(&unrelated),
+        )
+        .await
+        .expect("stalled replay must not block another session")
+        .unwrap();
+        assert!(service
+            .handle_session_load(&request, &sender)
+            .await
+            .is_err());
+        let conflict = AcpRequest::from_payload(&request_payload(
+            "session/new",
+            json!({"_meta":{"sessionId":"stalled-history"}}),
+        ))
+        .unwrap();
+        assert!(service.handle_session_new(&conflict).await.is_err());
+        task.abort();
+        assert!(matches!(task.await, Err(error) if error.is_cancelled()));
+        assert!(service.loading_sessions.lock().unwrap().is_empty());
+        drop(hold_output);
+        service
+            .handle_session_load(&request, &sender)
+            .await
+            .unwrap();
+        assert!(service.loading_sessions.lock().unwrap().is_empty());
+        assert!(service
+            .sessions
+            .lock()
+            .await
+            .contains_key("stalled-history"));
     }
 
     #[tokio::test]

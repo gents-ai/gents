@@ -290,10 +290,10 @@ impl PromptSender {
                             "content": {
                                 "type": "text",
                                 "text": block.text,
-                                "meta": {
-                                    "promptIndex": prompt_index,
-                                    "hideFromScrollback": false,
-                                },
+                            },
+                            "_meta": {
+                                "promptIndex": prompt_index,
+                                "hideFromScrollback": false,
                             },
                         },
                         "_meta": meta,
@@ -2746,14 +2746,12 @@ mod tests {
         // The Grok decoder expects the chunk field name `content`.
         assert_eq!(value["params"]["update"]["content"]["type"], json!("text"));
         assert_eq!(value["params"]["update"]["content"]["text"], json!("hello"));
+        assert_eq!(value["params"]["update"]["_meta"]["promptIndex"], json!(0));
         assert_eq!(
-            value["params"]["update"]["content"]["meta"]["promptIndex"],
-            json!(0)
-        );
-        assert_eq!(
-            value["params"]["update"]["content"]["meta"]["hideFromScrollback"],
+            value["params"]["update"]["_meta"]["hideFromScrollback"],
             json!(false)
         );
+        assert!(value["params"]["update"]["content"].get("meta").is_none());
         assert_eq!(value["params"]["_meta"]["promptId"], json!("prompt-1"));
         assert_eq!(value["params"]["_meta"]["isReplay"], json!(false));
         // The echo reports the last observed context (zero on the first

@@ -1,5 +1,5 @@
 //! Stock usage projection from the runtime's persisted accounting owner.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
@@ -192,6 +192,46 @@ impl Totals {
     }
 }
 
+/// Resolve logical child identities once per bounded page. Ambiguous aliases
+/// remain unreadable, exactly as in the former per-edge lookup.
+async fn descendant_owners(
+    node: &EmbeddedNode,
+    ids: BTreeSet<String>,
+) -> Result<BTreeMap<String, Option<AgentRequestRow>>> {
+    let ids: Vec<_> = ids.into_iter().collect();
+    let mut owners = BTreeMap::new();
+    for page in ids.chunks(128) {
+        let ids = page
+            .iter()
+            .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+            .collect::<Vec<_>>()
+            .join(",");
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{request_id: {{_in: [{ids}]}}}}) {{
+            request_id agent_did requester_did session_id
+        }} }}"#
+            ))
+            .await;
+        ensure_no_errors(&response, "Grok descendant usage owners")?;
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(
+            response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentRequest"))
+                .cloned()
+                .context("missing descendant usage owners")?,
+        )?;
+        for row in rows {
+            owners
+                .entry(row.request_id.clone())
+                .and_modify(|owner| *owner = None)
+                .or_insert(Some(row));
+        }
+    }
+    Ok(owners)
+}
+
 pub(super) async fn session_usage(
     node: &EmbeddedNode,
     principal: &str,
@@ -216,30 +256,22 @@ pub(super) async fn session_usage(
             let page =
                 gents::resolve_descendant_graph(gents::DescendantGraphAccess::Local(node), &query)
                     .await?;
+            let owners = descendant_owners(
+                node,
+                page.edges
+                    .iter()
+                    .filter(|edge| edge.readable())
+                    .map(|edge| edge.child_request_id.clone())
+                    .collect(),
+            )
+            .await?;
             for edge in page.edges {
                 totals.incomplete |= !edge.is_terminal();
                 if !edge.readable() {
                     totals.incomplete = true;
                     continue;
                 }
-                let response = node
-                    .execute(&format!(
-                        r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{
-                    request_id agent_did requester_did session_id
-                }} }}"#,
-                        escape_graphql_string(&edge.child_request_id)
-                    ))
-                    .await;
-                ensure_no_errors(&response, "Grok descendant usage owner")?;
-                let owners: Vec<AgentRequestRow> = serde_json::from_value(
-                    response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("AgentRequest"))
-                        .cloned()
-                        .context("missing descendant usage owner")?,
-                )?;
-                let [owner] = owners.as_slice() else {
+                let Some(Some(owner)) = owners.get(&edge.child_request_id) else {
                     totals.incomplete = true;
                     continue;
                 };
@@ -282,6 +314,70 @@ pub(super) async fn session_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn descendant_owner_batches_cover_all_pages_and_preserve_requesters() {
+        let directory = tempfile::tempdir().unwrap();
+        let node = EmbeddedNode::builder()
+            .data_path(directory.path().join("node"))
+            .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
+            .build()
+            .await
+            .unwrap();
+        gents::schema::ensure_runtime_schemas(&node).await.unwrap();
+        assert!(descendant_owners(&node, BTreeSet::new())
+            .await
+            .unwrap()
+            .is_empty());
+        let mut ids = BTreeSet::new();
+        for index in 0..129 {
+            let id = format!("child-{index:03}");
+            let requester = if index % 2 == 0 {
+                "null"
+            } else {
+                "\"did:test:requester\""
+            };
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{create_AgentRequest(input: {{
+                request_id:"{id}", agent_did:"did:test:child", requester_did:{requester},
+                session_id:"child-session"
+            }}) {{_docID}}}}"#
+                ))
+                .await;
+            ensure_no_errors(&response, "seed batched owner").unwrap();
+            ids.insert(id);
+        }
+        ids.insert("missing-child".into());
+        for principal in ["did:test:first", "did:test:second", "did:test:third"] {
+            let response = node
+                .execute(&format!(
+                    r#"mutation {{create_AgentRequest(input: {{
+                request_id:"ambiguous-child", agent_did:"{principal}", session_id:"other-session"
+            }}) {{_docID}}}}"#
+                ))
+                .await;
+            ensure_no_errors(&response, "seed ambiguous owner").unwrap();
+        }
+        ids.insert("ambiguous-child".into());
+        let owners = descendant_owners(&node, ids).await.unwrap();
+        assert_eq!(owners.len(), 130);
+        assert!(!owners.contains_key("missing-child"));
+        assert!(owners["ambiguous-child"].is_none());
+        assert_eq!(
+            owners["child-001"]
+                .as_ref()
+                .unwrap()
+                .requester_did
+                .as_deref(),
+            Some("did:test:requester")
+        );
+        assert_eq!(owners["child-128"].as_ref().unwrap().requester_did, None);
+        assert_eq!(
+            owners["child-128"].as_ref().unwrap().agent_did.as_deref(),
+            Some("did:test:child")
+        );
+    }
 
     #[test]
     fn context_info_uses_runtime_groups_and_distinguishes_missing_accounting() {

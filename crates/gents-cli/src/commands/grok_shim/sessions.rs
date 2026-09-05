@@ -109,6 +109,23 @@ pub(super) async fn requests(
     principal: &str,
     session: Option<&str>,
 ) -> Result<Vec<AgentRequestRow>> {
+    let mut result = Vec::new();
+    scan_requests(node, principal, session, |row| result.push(row)).await?;
+    result.sort_by(|a, b| {
+        (timestamp(a.created_at.as_deref()), &a.request_id)
+            .cmp(&(timestamp(b.created_at.as_deref()), &b.request_id))
+    });
+    Ok(result)
+}
+
+/// Keep discovery's memory proportional to sessions, not transcript size.
+/// Replay explicitly collects rows above; listing folds each bounded page.
+async fn scan_requests(
+    node: &EmbeddedNode,
+    principal: &str,
+    session: Option<&str>,
+    mut visit: impl FnMut(AgentRequestRow),
+) -> Result<()> {
     ensure!(
         !principal.trim().is_empty(),
         "session history requires a principal"
@@ -118,7 +135,6 @@ pub(super) async fn requests(
         .map(|id| format!(r#"session_id: {{_eq: "{}"}},"#, escape_graphql_string(id)))
         .unwrap_or_default();
     let mut after = String::new();
-    let mut result = Vec::new();
     loop {
         let response = node
             .execute(&format!(
@@ -155,16 +171,14 @@ pub(super) async fn requests(
                 .all(|row| row.doc_id.as_deref().is_some_and(|id| !id.is_empty())),
             "history request lacks physical identity"
         );
-        result.extend(page);
+        for row in page {
+            visit(row);
+        }
         if done {
             break;
         }
     }
-    result.sort_by(|a, b| {
-        (timestamp(a.created_at.as_deref()), &a.request_id)
-            .cmp(&(timestamp(b.created_at.as_deref()), &b.request_id))
-    });
-    Ok(result)
+    Ok(())
 }
 
 /// Legacy shim sessions omitted requester_did. Only the exact request scope
@@ -219,22 +233,56 @@ fn timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|time| time.with_timezone(&Utc))
 }
 
-pub(super) async fn list(
+#[derive(Default)]
+struct SessionSummary {
+    first: Option<AgentRequestRow>,
+    updated: Option<DateTime<Utc>>,
+    matches_query: bool,
+    working: bool,
+}
+
+impl SessionSummary {
+    fn observe(&mut self, row: AgentRequestRow, query: &str) {
+        self.updated = self
+            .updated
+            .max(timestamp(row.created_at.as_deref()))
+            .max(timestamp(row.terminalized_at.as_deref()));
+        self.matches_query |= query.is_empty()
+            || row
+                .content
+                .as_deref()
+                .is_some_and(|content| content.to_lowercase().contains(query));
+        self.working |= row
+            .lifecycle_state
+            .is_some_and(|state| !state.is_terminal());
+        if self.first.as_ref().is_none_or(|first| {
+            (timestamp(row.created_at.as_deref()), &row.request_id)
+                < (timestamp(first.created_at.as_deref()), &first.request_id)
+        }) {
+            self.first = Some(row);
+        }
+    }
+}
+
+type SessionEntry = (DateTime<Utc>, String, Value);
+
+async fn list_entries(
     node: &EmbeddedNode,
     principal: &str,
     behavior: &str,
-    params: ListParams,
-) -> Result<Value> {
-    let mut grouped: BTreeMap<String, Vec<AgentRequestRow>> = BTreeMap::new();
-    if !params.excludes_build() && params.headless.as_deref() != Some("only") {
-        for row in requests(node, principal, None).await? {
-            if let Some(session) = row.session_id.clone().filter(|id| !id.is_empty()) {
-                grouped.entry(session).or_default().push(row);
-            }
-        }
-    }
+    params: &ListParams,
+) -> Result<Vec<SessionEntry>> {
     let query = params.query();
     let boundary = params.boundary()?;
+    let mut grouped: BTreeMap<String, SessionSummary> = BTreeMap::new();
+    if !params.excludes_build() && params.headless.as_deref() != Some("only") {
+        scan_requests(node, principal, None, |row| {
+            if let Some(session) = row.session_id.clone().filter(|id| !id.is_empty()) {
+                grouped.entry(session).or_default().observe(row, &query);
+            }
+        })
+        .await?;
+    }
     let mut entries = Vec::new();
     // Batch owner validation: no N+1 per-request or per-session DB query.
     let ids: Vec<_> = grouped.keys().cloned().collect();
@@ -265,10 +313,12 @@ pub(super) async fn list(
             let Some(id) = owner.get("session_id").and_then(Value::as_str) else {
                 continue;
             };
-            let Some(rows) = grouped.remove(id) else {
+            let Some(summary) = grouped.remove(id) else {
                 continue;
             };
-            let first = &rows[0];
+            let Some(first) = summary.first.as_ref() else {
+                continue;
+            };
             // Children are hydrated under their parent, not offered as roots.
             if first.caused_by_parent_request_id.is_some()
                 || first.caused_by_parent_request_doc_id.is_some()
@@ -279,30 +329,11 @@ pub(super) async fn list(
             if first_prompt.is_empty() {
                 continue;
             }
-            if !query.is_empty()
-                && !id.to_lowercase().contains(&query)
-                && !rows.iter().any(|row| {
-                    row.content
-                        .as_deref()
-                        .unwrap_or_default()
-                        .to_lowercase()
-                        .contains(&query)
-                })
-            {
+            if !query.is_empty() && !id.to_lowercase().contains(&query) && !summary.matches_query {
                 continue;
             }
             let created = timestamp(first.created_at.as_deref());
-            let Some(updated) = rows
-                .iter()
-                .flat_map(|row| {
-                    [
-                        timestamp(row.created_at.as_deref()),
-                        timestamp(row.terminalized_at.as_deref()),
-                    ]
-                })
-                .flatten()
-                .max()
-            else {
+            let Some(updated) = summary.updated else {
                 continue;
             };
             if boundary.as_ref().is_some_and(|boundary| {
@@ -310,7 +341,7 @@ pub(super) async fn list(
             }) {
                 continue;
             }
-            let summary: String = first_prompt
+            let title: String = first_prompt
                 .lines()
                 .next()
                 .unwrap_or_default()
@@ -321,15 +352,26 @@ pub(super) async fn list(
                 updated,
                 id.to_owned(),
                 json!({
-                    "sessionId": id, "summary": summary, "firstPrompt": first_prompt,
+                    "sessionId": id, "summary": title, "firstPrompt": first_prompt,
                 "createdAt": created, "updatedAt": updated, "lastActiveAt": updated,
                 "source": "gents", "_meta": {"x.ai/session": {"kind": "build", "facets": {}},
-                    "gents/activity": if rows.iter().any(|row| row.lifecycle_state.is_some_and(|state| !state.is_terminal())) {"working"} else {"idle"}}
+                    "gents/activity": if summary.working {"working"} else {"idle"}}
                 }),
             ));
         }
     }
     entries.sort_by(|a, b| (&b.0, &b.1).cmp(&(&a.0, &a.1)));
+    Ok(entries)
+}
+
+pub(super) async fn list(
+    node: &EmbeddedNode,
+    principal: &str,
+    behavior: &str,
+    params: ListParams,
+) -> Result<Value> {
+    let mut entries = list_entries(node, principal, behavior, &params).await?;
+    let query = params.query();
     let limit = params.limit.unwrap_or(30).min(1000);
     let more = entries.len() > limit;
     entries.truncate(limit);
@@ -361,33 +403,14 @@ pub(super) async fn list(
 /// Unlike its local-filesystem history picker, selecting a roster entry
 /// directly sends session/load without requiring a local JSONL file.
 pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str) -> Result<Value> {
-    let mut cursor = None;
     let mut sessions = Vec::new();
-    loop {
-        let page = list(
-            node,
-            principal,
-            behavior,
-            ListParams {
-                limit: Some(1000),
-                cursor,
-                ..Default::default()
-            },
-        )
-        .await?;
-        for row in page["sessions"]
-            .as_array()
-            .context("missing roster source rows")?
-        {
-            sessions.push(json!({"sessionId":row["sessionId"], "title":row["summary"],
+    // The roster has no pagination on the wire. Fold history once, rather
+    // than re-scanning all requests for each 1,000-session picker page.
+    for (_, _, row) in list_entries(node, principal, behavior, &ListParams::default()).await? {
+        sessions.push(json!({"sessionId":row["sessionId"], "title":row["summary"],
                 "cwd":"", "activity":row["_meta"]["gents/activity"],
                 "lastChangeUnixMs":timestamp(row["updatedAt"].as_str()).map(|time| time.timestamp_millis()),
                 "origin":{"kind":"local"}}));
-        }
-        cursor = page["nextCursor"].as_str().map(str::to_owned);
-        if cursor.is_none() {
-            break;
-        }
     }
     Ok(json!({"sessions":sessions}))
 }
@@ -395,6 +418,34 @@ pub(super) async fn roster(node: &EmbeddedNode, principal: &str, behavior: &str)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_fold_preserves_first_prompt_search_and_activity_in_any_scan_order() {
+        // Scan keys are UUIDs, not chronological coordinates. A later turn
+        // must contribute search/activity without replacing the first prompt.
+        let rows: Vec<AgentRequestRow> = serde_json::from_value(json!([
+            {"request_id":"z", "content":"original prompt", "created_at":"2026-09-01T00:00:00Z",
+                "terminalized_at":"2026-09-01T00:01:00Z", "lifecycle_state":"completed"},
+            {"request_id":"a", "content":"later NEEDLE", "created_at":"2026-09-02T00:00:00Z",
+                "terminalized_at":"2026-09-04T00:00:00Z", "lifecycle_state":"completed"},
+            {"request_id":"m", "content":"still working", "created_at":"2026-09-03T00:00:00Z",
+                "lifecycle_state":"processing"}
+        ]))
+        .unwrap();
+        for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let mut summary = SessionSummary::default();
+            for index in order {
+                summary.observe(rows[index].clone(), "needle");
+            }
+            assert_eq!(
+                summary.first.unwrap().content.as_deref(),
+                Some("original prompt")
+            );
+            assert!(summary.matches_query);
+            assert!(summary.working);
+            assert_eq!(summary.updated, timestamp(Some("2026-09-04T00:00:00Z")));
+        }
+    }
 
     #[test]
     fn picker_filters_validate_and_cursor_is_bound_to_search() {
