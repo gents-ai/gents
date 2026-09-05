@@ -168,6 +168,27 @@ completed goal continuation displays **Thought for 13m5s** when resumed about
 fallback in `send_projection_event`/`RequestUpdateTiming`; do not treat this
 as verified replay fidelity or a model that actually reasoned for 13 minutes.
 
+The replay follow-up carries the response's persisted terminal timestamp into
+retained-tail projection, rather than substituting reconnect time. Wire
+inspection also reproduced a duplicate `GOAL_RESUME_OK`: locally ambiguous
+prefix matches discarded an otherwise unique ordered assignment across the
+complete transcript. The matcher now compares earliest/latest feasible
+strictly increasing assignments; it binds only when they coincide. Exhaustive
+three-segment/four-row cases fence ambiguity and inversion behavior.
+All 327 shim tests passed for these changes; workspace/build/live checks remain
+pending. `scripts/grok_replay_probe.py` is a read-only regression that compares
+replayed assistant text with persisted rows and rejects timestamps after the
+request's durable completion. It reproduces the old server's timestamp failure.
+
+The workspace check and build subsequently passed. The replay probe now passes
+against the rebuilt server for the same goal continuation: 279 assistant
+characters exactly match its persisted messages, and every historical chunk
+timestamp is at or before `2026-09-05T07:05:01.547144+00:00`. Unchanged Grok
+1.0.13 dashboard resume shows **Thought for 1.1s** before `get_goal`, followed
+by the two actual model text segments (before and after `update_goal`), not
+the extra retained-history copy. Goal usage remains 37.1k/100k. The two real
+segments both begin `GOAL_RESUME_OK`; suppressing either would lose model text.
+
 Commits `676ef953` and `f5c4c65a` are now published on PR #1363. CI run
 `33951867228` is checking that tip; the accounting correction above is not yet
 included in it.

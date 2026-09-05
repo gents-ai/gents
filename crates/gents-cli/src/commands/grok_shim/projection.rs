@@ -1712,11 +1712,12 @@ fn infer_history_row_bindings(
         }
     }
 
-    let mut singleton_rows = Vec::new();
+    let mut candidate_rows = Vec::new();
     for segment in &segments {
         let candidates: Vec<_> = rows
             .iter()
-            .filter(|row| {
+            .enumerate()
+            .filter(|(_, row)| {
                 let content_matches = segment
                     .content
                     .as_deref()
@@ -1737,22 +1738,49 @@ fn infer_history_row_bindings(
                         .is_some_and(|value| !value.is_empty());
                 has_evidence && content_matches && reasoning_matches
             })
+            .map(|(index, _)| index)
             .collect();
-        let [row] = candidates.as_slice() else {
-            return BTreeMap::new();
-        };
-        singleton_rows.push((*row).identity.clone());
+        candidate_rows.push(candidates);
     }
-    if singleton_rows.windows(2).any(|pair| pair[0] >= pair[1]) {
+    let Some(assignment) = unique_increasing_assignment(&candidate_rows) else {
         return BTreeMap::new();
-    }
+    };
     let mut bindings = BTreeMap::new();
-    for (segment, row) in segments.iter().zip(singleton_rows) {
+    for (segment, row_index) in segments.iter().zip(assignment) {
         for index in &segment.snapshot_indices {
-            bindings.insert(*index, row.clone());
+            bindings.insert(*index, rows[row_index].identity.clone());
         }
     }
     bindings
+}
+
+/// Sorted candidate indices admit a unique ordered assignment exactly when
+/// the earliest and latest feasible assignments coincide. A repeated prefix
+/// can be ambiguous locally but unambiguous in the complete transcript.
+fn unique_increasing_assignment(candidates: &[Vec<usize>]) -> Option<Vec<usize>> {
+    let mut earliest = Vec::with_capacity(candidates.len());
+    let mut previous = None;
+    for choices in candidates {
+        let next = choices
+            .iter()
+            .copied()
+            .find(|index| previous.is_none_or(|p| *index > p))?;
+        earliest.push(next);
+        previous = Some(next);
+    }
+    let mut following = None;
+    for (choices, earliest) in candidates.iter().zip(&earliest).rev() {
+        let latest = choices
+            .iter()
+            .rev()
+            .copied()
+            .find(|index| following.is_none_or(|p| *index < p))?;
+        if latest != *earliest {
+            return None;
+        }
+        following = Some(latest);
+    }
+    Some(earliest)
 }
 
 fn upsert_bound_evidence(
@@ -2424,6 +2452,7 @@ pub(crate) struct RequestCursor {
     /// the same start derived from its preceding tool-result/input row.
     timing_response_doc: Option<String>,
     response_started_at_ms: Option<i64>,
+    response_ended_at_ms: Option<i64>,
     message_timestamps: BTreeMap<i64, (String, Option<i64>)>,
 }
 
@@ -2440,6 +2469,7 @@ impl RequestCursor {
     }
 
     fn observe_timestamps(&mut self, messages: &messages::MessageProjection) {
+        self.response_ended_at_ms = messages.response_ended_at_ms;
         if self.timing_response_doc != messages.response_doc_id {
             self.timing_response_doc = messages.response_doc_id.clone();
             self.response_started_at_ms = messages.response_started_at_ms;
@@ -2485,11 +2515,13 @@ impl RequestCursor {
                     .flatten()
             })
             .or(self.response_started_at_ms);
-        let agent_timestamp_candidate_ms = chronology.and_then(|sequence| {
-            self.message_timestamps
-                .get(&sequence)
-                .and_then(|(_, timestamp)| *timestamp)
-        });
+        let agent_timestamp_candidate_ms = chronology
+            .and_then(|sequence| {
+                self.message_timestamps
+                    .get(&sequence)
+                    .and_then(|(_, timestamp)| *timestamp)
+            })
+            .or(self.response_ended_at_ms);
         ProjectionEventTiming {
             segment_key,
             stream_start_candidate_ms,
@@ -2831,6 +2863,73 @@ mod tests {
     use gents::graphql::ensure_no_errors;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn repeated_prefixes_bind_only_when_transcript_order_proves_identity() {
+        assert_eq!(
+            unique_increasing_assignment(&[vec![0], vec![1, 2], vec![2]]),
+            Some(vec![0, 1, 2])
+        );
+        assert_eq!(
+            unique_increasing_assignment(&[vec![0, 1], vec![0, 1]]),
+            Some(vec![0, 1])
+        );
+        assert_eq!(unique_increasing_assignment(&[vec![0, 1], vec![2]]), None);
+        assert_eq!(unique_increasing_assignment(&[vec![1], vec![0]]), None);
+        assert_eq!(unique_increasing_assignment(&[vec![]]), None);
+    }
+
+    #[test]
+    fn ordered_assignment_matches_exhaustive_small_transcripts() {
+        for first in 0u8..16 {
+            for second in 0u8..16 {
+                for third in 0u8..16 {
+                    let candidates: Vec<Vec<usize>> = [first, second, third]
+                        .iter()
+                        .map(|mask| (0..4).filter(|index| mask & (1 << index) != 0).collect())
+                        .collect();
+                    let mut solutions = Vec::new();
+                    for &a in &candidates[0] {
+                        for &b in &candidates[1] {
+                            for &c in &candidates[2] {
+                                if a < b && b < c {
+                                    solutions.push(vec![a, b, c]);
+                                }
+                            }
+                        }
+                    }
+                    let expected = (solutions.len() == 1).then(|| solutions[0].clone());
+                    assert_eq!(
+                        unique_increasing_assignment(&candidates),
+                        expected,
+                        "{candidates:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_tail_uses_persisted_end_not_replay_arrival() {
+        let mut cursor = RequestCursor::default();
+        cursor.response_started_at_ms = Some(1000);
+        cursor.response_ended_at_ms = Some(2500);
+        let tail = cursor.timing_for_segment("tail".into(), None);
+        assert_eq!(tail.stream_start_candidate_ms, Some(1000));
+        assert_eq!(tail.agent_timestamp_candidate_ms, Some(2500));
+        cursor
+            .message_timestamps
+            .insert(1, ("message".into(), Some(1500)));
+        let durable = cursor.timing_for_segment("durable".into(), Some(1));
+        assert_eq!(durable.agent_timestamp_candidate_ms, Some(1500));
+        cursor.response_ended_at_ms = None;
+        assert_eq!(
+            cursor
+                .timing_for_segment("live".into(), None)
+                .agent_timestamp_candidate_ms,
+            None
+        );
+    }
 
     #[test]
     fn background_task_receipts_advance_only_after_delivery() {

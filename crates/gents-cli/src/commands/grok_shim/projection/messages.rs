@@ -204,6 +204,9 @@ pub(super) struct MessageProjection {
     /// `AgentResponse` immediately before entering inference, so this is the
     /// best durable start for the first model generation.
     pub response_started_at_ms: Option<i64>,
+    /// Durable terminal timestamp bounds the retained streaming tail during
+    /// replay. Arrival time is not historical generation time.
+    pub response_ended_at_ms: Option<i64>,
     /// Request-local transcript timestamps observed by this bounded read.
     /// Projection retains these across polls to derive the start of later
     /// tool-loop generations from the preceding durable input row.
@@ -580,6 +583,15 @@ async fn project_messages_with_sink<S: QuerySink>(
         .as_ref()
         .and_then(|row| row.created_at.as_deref())
         .and_then(rfc3339_millis);
+    let response_ended_at_ms = authoritative_row
+        .as_ref()
+        .filter(|row| row.is_terminal())
+        .and_then(|row| {
+            row.completed_at
+                .as_deref()
+                .and_then(rfc3339_millis)
+                .or_else(|| row.interrupted_at.as_deref().and_then(rfc3339_millis))
+        });
     let timeline = rows
         .iter()
         .filter_map(|row| {
@@ -604,6 +616,7 @@ async fn project_messages_with_sink<S: QuerySink>(
         response_doc_id,
         message_sequence_high_water,
         response_started_at_ms,
+        response_ended_at_ms,
         timeline,
     })
 }
