@@ -295,6 +295,20 @@ jobs:
             -p gents-fs-runner \
             -p gents-lean-contract
 
+      - name: Collect migration lens diagnostics on support failure
+        if: failure() && matrix.suite == 'support'
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure() && matrix.suite == 'support'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Run PR runtime smoke tests
         if: matrix.suite == 'runtime' && github.event_name == 'pull_request'
         run: |
