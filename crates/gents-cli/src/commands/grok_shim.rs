@@ -32,6 +32,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 pub(crate) mod acp;
+mod binding;
 mod goals;
 pub(crate) mod projection;
 pub(crate) mod protocol;
@@ -104,13 +105,10 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
         socket = %args.socket_path.display(),
         "grok shim leader binding"
     );
-    // Immutable per-connection construction inputs: the bound model/context
-    // configuration is resolved once above, and everything else the factory
-    // clones (identity strings, the GraphQL endpoint, the embedded node) is
-    // shared configuration. All mutable ACP state — the AcpService, its
-    // TurnManager, its ProjectionEngine, the session registry, and the
-    // per-session event counters — is constructed fresh inside the factory,
-    // once per registered connection.
+    // These are the default binding and shared construction inputs. Each
+    // connection can select a different same-principal behavior via stock
+    // --agent metadata before creating/loading its first session. Mutable
+    // service/turn/projection state remains connection-local.
     let factory_inputs = AcpDelegateFactoryInputs {
         background_executions: args.background_executions.clone(),
         node: args.node.clone(),
@@ -139,10 +137,9 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 
 /// Immutable inputs a per-connection delegate factory clones from.
 ///
-/// Every field is resolved once at bind time (bound behavior/model/context,
-/// identity, the GraphQL endpoint, and the embedded node). The factory never
-/// clones mutable ACP state across connections: each [`Registration`] gets a
-/// fresh `AcpService`, `TurnManager`, and `ProjectionEngine`.
+/// The default is resolved at listener bind time. A connection selecting
+/// another behavior resolves that behavior's model/context before constructing
+/// its service. Mutable ACP state is never shared across registrations.
 #[derive(Clone)]
 struct AcpDelegateFactoryInputs {
     background_executions: gents::hook::BackgroundExecutionRegistry,
@@ -168,6 +165,17 @@ fn production_acp_delegate_factory(
     inputs: AcpDelegateFactoryInputs,
 ) -> impl Fn(u64, &Registration) -> Result<Arc<dyn AcpDelegate>> {
     move |client_id, registration: &Registration| {
+        Ok(Arc::new(binding::BehaviorConnection::new(
+            inputs.clone(),
+            client_id,
+            registration.clone(),
+        )) as Arc<dyn AcpDelegate>)
+    }
+}
+
+impl AcpDelegateFactoryInputs {
+    fn service(&self, client_id: u64, registration: &Registration) -> Arc<acp::AcpService> {
+        let inputs = self;
         let turns = Arc::new(crate::commands::grok_shim::turn::TurnManager::new(
             inputs.node.clone(),
             crate::commands::grok_shim::turn::TurnManagerConfig {
@@ -199,7 +207,7 @@ fn production_acp_delegate_factory(
             projections,
         );
         service.register_client_identity(client_id, registration);
-        Ok(Arc::new(service) as Arc<dyn AcpDelegate>)
+        Arc::new(service)
     }
 }
 
@@ -353,6 +361,135 @@ mod tests {
             ),
         };
         (tempdir, node, inputs)
+    }
+
+    #[tokio::test]
+    async fn stock_agent_profile_selects_one_behavior_and_scopes_history() {
+        use serde_json::{json, Value};
+        async fn send(delegate: &Arc<dyn AcpDelegate>, request: Value) -> Value {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            delegate
+                .handle_acp(&request.to_string(), server::AcpOutbound::for_frames(tx))
+                .await
+                .unwrap();
+            split_response(drain_outbound(&mut rx).await).1
+        }
+        let (_dir, node, inputs) = factory_fixture().await;
+        let did = &inputs.agent_did;
+        let seeded = node.execute(&format!(r#"mutation {{
+            create_AgentBehavior(input:{{behavior_id:"reviewer",agent_did:"{did}",enabled:true,
+                model_name:"review-model",backend_id:"review-backend"}}){{_docID}}
+            create_AgentBehavior(input:{{behavior_id:"disabled",agent_did:"{did}",enabled:false}}){{_docID}}
+            create_AgentBehavior(input:{{behavior_id:"foreign",agent_did:"did:key:foreign",enabled:true}}){{_docID}}
+        }}"#)).await;
+        gents::graphql::ensure_no_errors(&seeded, "seed behavior choices").unwrap();
+        let factory = production_acp_delegate_factory(inputs.clone());
+        let registration = production_registration();
+        let selected = factory(1, &registration).unwrap();
+        let default = factory(2, &registration).unwrap();
+        let early = send(
+            &selected,
+            json!({"jsonrpc":"2.0","id":1,"method":"_x.ai/session/list","params":{}}),
+        )
+        .await;
+        assert_eq!(early["result"]["sessions"], json!([]));
+        assert_eq!(
+            early["result"]["_meta"]["gents/behaviorSelectionRequired"],
+            true
+        );
+        for invalid in [
+            json!("missing"),
+            json!("disabled"),
+            json!("foreign"),
+            json!({"name":"reviewer"}),
+            json!(""),
+        ] {
+            let denied = send(
+                &selected,
+                json!({"jsonrpc":"2.0","id":2,"method":"session/new",
+                "params":{"_meta":{"sessionId":"bad-session","agentProfile":invalid}}}),
+            )
+            .await;
+            assert!(denied.get("error").is_some(), "{denied}");
+        }
+        let reviewer = send(
+            &selected,
+            json!({"jsonrpc":"2.0","id":3,"method":"session/new",
+            "params":{"_meta":{"sessionId":"review-history","agentProfile":"reviewer"}}}),
+        )
+        .await;
+        assert!(reviewer.get("error").is_none(), "{reviewer}");
+        assert_eq!(
+            reviewer["result"]["models"]["currentModelId"],
+            "review-model"
+        );
+        let main = send(
+            &default,
+            session_new_request("default-history", "GLM-5.3-NVFP4"),
+        )
+        .await;
+        assert!(main.get("error").is_none(), "{main}");
+        for (session, behavior) in [
+            ("review-history", "reviewer"),
+            ("default-history", inputs.behavior_id.as_str()),
+        ] {
+            crate::create_agent_request(
+                &inputs.graphql,
+                did,
+                "A history entry",
+                Some(session),
+                Some(behavior),
+                crate::RequestSubmitOptions::default(),
+            )
+            .await
+            .unwrap();
+        }
+        for method in ["_x.ai/session/list", "_x.ai/sessions/list"] {
+            for (delegate, expected) in
+                [(&selected, "review-history"), (&default, "default-history")]
+            {
+                let list = send(
+                    delegate,
+                    json!({"jsonrpc":"2.0","id":4,"method":method,"params":{}}),
+                )
+                .await;
+                let sessions = list["result"]["sessions"].as_array().unwrap();
+                assert_eq!(sessions.len(), 1, "{list}");
+                assert_eq!(sessions[0]["sessionId"], expected);
+            }
+        }
+        let switched = send(
+            &selected,
+            json!({"jsonrpc":"2.0","id":5,"method":"session/new",
+            "params":{"_meta":{"sessionId":"cannot-switch","agentProfile":"default"}}}),
+        )
+        .await;
+        assert!(switched.get("error").is_some());
+        let wrong_history = send(
+            &selected,
+            json!({"jsonrpc":"2.0","id":6,"method":"session/load",
+            "params":{"sessionId":"default-history"}}),
+        )
+        .await;
+        assert!(wrong_history.get("error").is_some());
+        let fresh = factory(3, &registration).unwrap();
+        let resumed = send(
+            &fresh,
+            json!({"jsonrpc":"2.0","id":7,"method":"session/load",
+            "params":{"sessionId":"review-history","_meta":{"agentProfile":"reviewer"}}}),
+        )
+        .await;
+        assert!(resumed.get("error").is_none(), "{resumed}");
+        selected.on_disconnect().await;
+        let closed = send(
+            &selected,
+            json!({"jsonrpc":"2.0","id":8,"method":"session/new",
+            "params":{"_meta":{"sessionId":"after-close","agentProfile":"reviewer"}}}),
+        )
+        .await;
+        assert!(closed.get("error").is_some());
+        default.on_disconnect().await;
+        fresh.on_disconnect().await;
     }
 
     /// Invoke the exact production factory with the given registration, then

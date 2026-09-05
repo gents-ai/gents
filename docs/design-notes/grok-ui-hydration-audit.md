@@ -14,6 +14,47 @@ See grok-background-projection.md and PR verification comments for evidence.
 
 ## Verification chronology
 
+### Behavior selection from stock terminal startup
+
+Stock interactive `--agent NAME` sends a string `_meta.agentProfile` on
+`session/new` and `session/load`. The connection now resolves that exact
+registered behavior under the serving principal and pins its service before
+dispatch. `default` and `grok-build` select the configured listener default.
+Unknown, disabled, foreign-principal and inline-definition profiles fail
+closed; an established connection cannot rebind to another behavior.
+Each connection retains its own model catalog, session registry, projection
+and cancellation manager. No runtime behavior configuration is mutated.
+
+Both history APIs continue using the existing principal/behavior filter and
+excluding child sessions as roots. Before first new/load establishes the
+scope, history is empty with `gents/behaviorSelectionRequired` metadata:
+history requests themselves do not carry `--agent`. A dashboard-only client
+must create/load a session to establish the scope first. This prevents an
+early list request from leaking default-behavior history into a different
+behavior's connection. This also means the initial welcome-screen history
+picker is empty until the first session is established.
+
+All 332 shim tests, workspace all-target check and binary build passed
+(`/tmp/grok-behavior-{suite2,workspace2,build2}.log`). The two-connection live
+GLM probe passed both history filters and cross-behavior load rejection
+(`/tmp/grok-behavior-probe2.log`). Stock Grok 1.0.13, launched with
+`--agent control-worker`, rendered `STOCK_BEHAVIOR_OK` and showed only the
+control-worker history in `/resume`; its persisted request
+`ca8add35-0dc3-451b-879a-b3b727eb7c06` completed under that behavior.
+The initial probe submitted immediately after creating the behavior and was
+rejected before runtime reconciliation assigned it. Newly configured behaviors
+must be reconciled before inference probes; the subsequent probe passed.
+This routing change does not add a second runtime admission/readiness owner.
+
+Example after the updated server is loaded:
+
+```sh
+grok --leader --leader-socket /private/tmp/gents-background-final.sock --agent control-worker
+```
+
+Keep the same `--agent` when resuming on a new connection. Stock Grok's
+printed resume shortcut does not retain this Gents-specific behavior binding.
+
 ### User-test follow-up: goal creation
 
 The user found that `/goal <objective>` was rejected, while the suggested

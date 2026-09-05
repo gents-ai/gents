@@ -258,7 +258,7 @@ def self_test_mcp_initialized_validator() -> dict[str, int]:
 
 
 def initialize(
-    client: LeaderClient, cwd: str, context_window: int
+    client: LeaderClient, cwd: str, context_window: int, agent_profile: str | None = None
 ) -> tuple[str, dict[str, Any]]:
     registered = client.register()
     client.ping()
@@ -288,6 +288,7 @@ def initialize(
             "_meta": {
                 "sessionId": preferred,
                 "modelId": client.model,
+                **({"agentProfile": agent_profile} if agent_profile is not None else {}),
             },
         },
     )

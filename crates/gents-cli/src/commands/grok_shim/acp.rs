@@ -421,7 +421,7 @@ pub(super) fn wire_method(method: &str) -> std::borrow::Cow<'_, str> {
     }
 }
 
-fn internal_method(method: &str) -> &str {
+pub(super) fn internal_method(method: &str) -> &str {
     if method.starts_with("_x.ai/") {
         &method[1..]
     } else {
