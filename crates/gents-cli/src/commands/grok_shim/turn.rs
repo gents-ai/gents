@@ -1659,16 +1659,35 @@ impl TurnManager {
             metadata: Some(metadata.to_string()),
             ..Default::default()
         };
-        let submitted = crate::create_agent_request_retrying_transient(
-            self.config.graphql.as_ref(),
-            self.config.agent_did.as_str(),
-            &content,
-            Some(request.session_id.as_str()),
-            Some(self.config.behavior_id.as_str()),
-            stable_request_id.clone(),
-            options,
-        )
-        .await;
+        let submitted = if let Some(super::goals::GoalCommand::Create {
+            objective,
+            token_budget,
+        }) = super::goals::GoalCommand::from_prompt(request)?
+        {
+            crate::create_goal_backed_agent_request_local(
+                &self.node,
+                self.config.graphql.as_ref(),
+                &self.config.agent_did,
+                &objective,
+                token_budget,
+                &request.session_id,
+                &self.config.behavior_id,
+                stable_request_id.clone(),
+                options,
+            )
+            .await
+        } else {
+            crate::create_agent_request_retrying_transient(
+                self.config.graphql.as_ref(),
+                self.config.agent_did.as_str(),
+                &content,
+                Some(request.session_id.as_str()),
+                Some(self.config.behavior_id.as_str()),
+                stable_request_id.clone(),
+                options,
+            )
+            .await
+        };
         let submitted = match submitted {
             Ok(submitted) => submitted,
             Err(error) => {
@@ -3519,6 +3538,80 @@ mod tests {
         .expect("prompt should succeed");
         assert_eq!(result["stopReason"], json!("end_turn"));
         handle.await.expect("terminalize task");
+    }
+
+    #[tokio::test]
+    async fn goal_prompt_atomically_submits_scoped_goal_and_signed_request() {
+        let (_dir, node, principal) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &principal));
+        let mut prompt = parse_prompt_request(
+            &json!({
+                "sessionId":"goal-submit-session",
+                "prompt":[text_block("/goal Explain the architecture --budget 100000")],
+                "_meta":{"screenMode":"inline", "sendNow":true}
+            }),
+            None,
+        )
+        .unwrap();
+        let id = manager
+            .submit_request(&prompt, "goal-prompt-id")
+            .await
+            .unwrap();
+        let goal = gents::goal::load_canonical_goal(&node, &principal, &prompt.session_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(goal.objective, "Explain the architecture");
+        assert_eq!(goal.status, "active");
+        assert_eq!(goal.token_budget, Some(100000));
+        let response = node.execute(&format!(
+            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content metadata retry_key admission_signer_did}}}}"
+        )).await;
+        gents::graphql::ensure_no_errors(&response, "goal submission").unwrap();
+        let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+        assert_eq!(row["content"], "Explain the architecture");
+        assert_eq!(row["agent_did"], principal);
+        assert_eq!(row["admission_signer_did"], principal);
+        assert_eq!(row["session_id"], prompt.session_id);
+        assert_eq!(row["retry_key"], format!("goal-request:{id}"));
+        let metadata: Value = serde_json::from_str(row["metadata"].as_str().unwrap()).unwrap();
+        assert_eq!(metadata["promptId"], "goal-prompt-id");
+        assert_eq!(metadata["screenMode"], "inline");
+        assert_eq!(metadata["sendNow"], true);
+
+        prompt.prompt[0].text = "/goal Conflicting objective".into();
+        assert!(manager.submit_request(&prompt, "conflict").await.is_err());
+        let response = node
+            .execute("{AgentRequest{request_id} Goal{goal_id} GoalCreationClaim{creation_key}}")
+            .await;
+        gents::graphql::ensure_no_errors(&response, "atomic rejection").unwrap();
+        let data = response.data.as_ref().unwrap();
+        for collection in ["AgentRequest", "Goal", "GoalCreationClaim"] {
+            assert_eq!(
+                data[collection].as_array().unwrap().len(),
+                1,
+                "{collection}"
+            );
+        }
+        assert_eq!(
+            gents::goal::load_canonical_goal(&node, &principal, &prompt.session_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .objective,
+            "Explain the architecture"
+        );
+        // Clear/recreate must admit a genuinely new request, not recover the
+        // prior incarnation's request by a session-only retry key.
+        gents::goal::delete_goals_for_session(&node, &principal, &prompt.session_id)
+            .await
+            .unwrap();
+        let next = manager
+            .submit_request(&prompt, "new-incarnation")
+            .await
+            .unwrap();
+        assert_ne!(id, next);
     }
 
     /// Only one autonomous turn can own the pager's live cards. Notices and

@@ -550,6 +550,58 @@ pub(crate) async fn create_goal_backed_agent_request(
     Ok(prepared.submitted)
 }
 
+/// Embedded adapters keep their prompt identity and cancellation path while
+/// delegating the goal/claim/request transaction to the runtime owner.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn create_goal_backed_agent_request_local(
+    node: &defra_node::EmbeddedNode,
+    graphql: &str,
+    agent_did: &str,
+    objective: &str,
+    token_budget: Option<i64>,
+    session_id: &str,
+    behavior_id: &str,
+    request_id: String,
+    mut options: RequestSubmitOptions,
+) -> Result<SubmittedRequest> {
+    options.retry_key = Some(format!("goal-request:{request_id}"));
+    let (prepared, create) = prepare_agent_request(
+        graphql,
+        agent_did,
+        objective,
+        Some(session_id),
+        Some(behavior_id),
+        Some(request_id),
+        options,
+    )
+    .await?;
+    // Retry the SAME signed request, never mint a replacement after an
+    // ambiguous commit. The runtime verifies the full recovery fingerprint.
+    let mut retries = 0;
+    loop {
+        match gents::goal::submit_goal_backed_request_local(
+            node,
+            agent_did,
+            session_id,
+            objective,
+            token_budget,
+            &create,
+        )
+        .await
+        {
+            Ok(_) => return Ok(prepared.submitted),
+            Err(error)
+                if graphql_error_is_transient(&error)
+                    && retries < MAX_TRANSIENT_GRAPHQL_RETRIES =>
+            {
+                retries += 1;
+                tokio::time::sleep(transient_graphql_retry_delay(retries)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 async fn submit_prepared_agent_request(
     graphql: &str,
     prepared: &PreparedAgentRequest,

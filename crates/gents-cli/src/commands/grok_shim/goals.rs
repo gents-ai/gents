@@ -15,6 +15,10 @@ pub(super) enum GoalCommand {
     Pause,
     Resume,
     Clear,
+    Create {
+        objective: String,
+        token_budget: Option<i64>,
+    },
 }
 
 impl GoalCommand {
@@ -24,18 +28,54 @@ impl GoalCommand {
         if words.next() != Some("/goal") {
             return Ok(None);
         }
-        let command = match words.next().unwrap_or("status").to_ascii_lowercase().as_str() {
-            "status" => Self::Status,
+        let args = text.strip_prefix("/goal").unwrap().trim();
+        let command = match args.to_ascii_lowercase().as_str() {
+            "" | "status" => Self::Status,
             "pause" => Self::Pause,
             "resume" => Self::Resume,
             "clear" => Self::Clear,
-            _ => anyhow::bail!("This server supports /goal status, pause, resume, and clear. Create goals with the configured runtime create_goal tool."),
+            _ => {
+                // Match stock Grok: only a trailing standalone positive
+                // --budget value is syntax; other occurrences are prose.
+                let mut objective = args.to_string();
+                let mut token_budget = None;
+                if let Some((head, tail)) = args.rsplit_once("--budget") {
+                    let value = tail.trim();
+                    if head.ends_with(char::is_whitespace)
+                        && tail.starts_with(char::is_whitespace)
+                        && !head.trim().is_empty()
+                        && !value.is_empty()
+                        && value.bytes().all(|byte| byte.is_ascii_digit())
+                    {
+                        if let Ok(budget) = value.parse::<i64>() {
+                            if budget > 0 {
+                                objective = head.trim_end().to_string();
+                                token_budget = Some(budget);
+                            }
+                        }
+                    }
+                }
+                Self::Create {
+                    objective,
+                    token_budget,
+                }
+            }
         };
-        anyhow::ensure!(
-            words.next().is_none(),
-            "goal control does not accept extra arguments"
-        );
         Ok(Some(command))
+    }
+
+    pub(super) fn from_prompt(request: &super::turn::PromptRequest) -> Result<Option<Self>> {
+        if let [block] = request.prompt.as_slice() {
+            if block.kind == "text"
+                && block
+                    .meta
+                    .as_ref()
+                    .is_none_or(|meta| meta.as_object().is_some_and(|meta| meta.is_empty()))
+            {
+                return Self::parse(&block.text);
+            }
+        }
+        Ok(None)
     }
 
     /// Operator controls reuse the runtime transition/clear owners. The ACP
@@ -46,6 +86,10 @@ impl GoalCommand {
         principal: &str,
         session: &str,
     ) -> Result<String> {
+        anyhow::ensure!(
+            !matches!(self, Self::Create { .. }),
+            "goal creation must use atomic request admission"
+        );
         if *self == Self::Clear {
             let count = gents::goal::delete_goals_for_session(node, principal, session).await?;
             return Ok(if count == 0 {
@@ -238,8 +282,35 @@ mod tests {
         for text in ["Explain /goal pause", "/goals pause", "hello"] {
             assert_eq!(GoalCommand::parse(text).unwrap(), None);
         }
-        assert!(GoalCommand::parse("/goal pause extra").is_err());
-        assert!(GoalCommand::parse("/goal build something").is_err());
+        for (text, objective, token_budget) in [
+            ("/goal pause extra", "pause extra", None),
+            ("/goal build something", "build something", None),
+            (
+                "/goal read\nthen explain --budget 123",
+                "read\nthen explain",
+                Some(123),
+            ),
+            ("/goal explain --budget 0", "explain --budget 0", None),
+            (
+                "/goal explain --budget 12 later",
+                "explain --budget 12 later",
+                None,
+            ),
+            ("/goal explain--budget 12", "explain--budget 12", None),
+            (
+                "/goal explain --budget 999999999999999999999",
+                "explain --budget 999999999999999999999",
+                None,
+            ),
+        ] {
+            assert_eq!(
+                GoalCommand::parse(text).unwrap(),
+                Some(GoalCommand::Create {
+                    objective: objective.into(),
+                    token_budget,
+                })
+            );
+        }
     }
 
     #[tokio::test]

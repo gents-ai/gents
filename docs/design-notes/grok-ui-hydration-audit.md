@@ -14,6 +14,25 @@ See grok-background-projection.md and PR verification comments for evidence.
 
 ## Verification chronology
 
+### User-test follow-up: goal creation
+
+The user found that `/goal <objective>` was rejected, while the suggested
+`create_goal` workaround was disabled on the demo behavior. Goal management
+and rendering did not establish complete slash-command compatibility.
+The follow-up routes creation through the runtime's existing atomic
+`submit_goal_backed_request_local` owner (Goal + claim + signed first request),
+preserving the ordinary prompt/cancellation/delivery path and prompt metadata.
+It matches stock trailing `--budget <positive integer>` parsing. No runtime
+state machine or provider-input assembly rule changes are required; the
+existing `GoalAutomation.submissionSafe` contract remains the fence.
+All 331 shim tests, the workspace all-target check and binary build passed
+(`/tmp/grok-goal-create-{suite,check,build}.log`). The dedicated live probe
+`demo/grok-tui-port/scripts/grok_goal_create_probe.py` passed on an isolated
+GLM server: session `grok-edge-fcd34529fa274274`, initial signed request
+`6e617ff5-9034-4735-80cf-b24bc2734b0d`, budget 100,000, goal complete. It verified
+the native goal update, prompt identity, stripped objective, real inference and
+runtime completion. Existing operator demo sessions were not interrupted.
+
 The final review follow-ups passed all 330 shim tests, the full workspace
 all-target check, and the binary build. Both independent final reviewers
 (Claude and Grok) reported no blockers. The dated checkpoints below preserve
@@ -323,10 +342,10 @@ CI. The overall goal remains open.
 - Interjection: `x.ai/interject` is explicitly unsupported. Existing queued
   steering and background wakeups are delivered by their runtime owners;
   writing a detached message would not implement in-turn provider injection.
-- Goals: project persisted goals and route the four management commands through
-  the existing runtime APIs. Goal creation via arbitrary `/goal <objective>`
-  is explicitly rejected; it must not masquerade as atomic goal-backed request
-  admission. There is no stock worker/verifier orchestrator in the shim.
+- Goals: project persisted goals and route management commands through the
+  existing runtime APIs. The user-test follow-up also routes `/goal <objective>`
+  through atomic goal-backed request admission, with optional trailing
+  `--budget <tokens>`. There is no stock worker/verifier orchestrator in the shim.
 - Todos/workflows/schedules: do not fabricate corresponding stock UI state from
   unrelated Goal records or generic tool names. Only persisted events with a
   supported semantic mapping are eligible for projection.

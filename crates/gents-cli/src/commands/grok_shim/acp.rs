@@ -1237,6 +1237,7 @@ impl AcpService {
             {
                 if let Some(command) = super::goals::GoalCommand::parse(&block.text)
                     .map_err(|error| invalid_params(error.to_string()))?
+                    .filter(|command| !matches!(command, super::goals::GoalCommand::Create { .. }))
                 {
                     // A stock slash control is an operator action, not a
                     // model prompt. Never ask inference to interpret pause.
