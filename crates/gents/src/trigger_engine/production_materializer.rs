@@ -260,47 +260,51 @@ impl MaterializerHandle for ProductionMaterializer {
                 .map(String::as_str)
                 .map(str::trim)
                 .filter(|value| !value.is_empty());
-            if let Some(trigger_id) = trigger_id.as_deref() {
-                if let Some(reason) = crate::graph_pipeline::graph_materialization_denial(
-                    node.as_ref(),
-                    trigger_id,
-                    correlation.as_deref(),
-                )
-                .await?
-                {
-                    return Err(MaterializeSkip { reason }.into());
+            let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
+            let graph = match trigger_id.as_deref() {
+                Some(trigger) => {
+                    crate::graph_pipeline::derive_graph_workspace(
+                        node.as_ref(),
+                        trigger,
+                        correlation.as_deref(),
+                        &behavior_did,
+                        source_doc_id.as_deref(),
+                        &explicit,
+                    )
+                    .await?
                 }
-            }
-            let mut workspace = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
+                None => None,
+            };
+            let mut workspace = graph
+                .as_ref()
+                .map(|resolved| resolved.lineage.clone())
+                .unwrap_or(explicit);
             workspace.require_authority_if_workspace_id()?;
-            if workspace.owner_deployment_id().is_some()
-                && !workspace_bound_request_claimable(
-                    local_deployment_id.as_deref(),
-                    workspace.workspace_id.as_deref(),
-                    workspace.workspace_owner_deployment_id.as_deref(),
-                )
-            {
+            // Ordinary explicit lineage may omit owner; the workspace owner
+            // resolves it before the same single locality decision below.
+            let needs_owner_stamp = graph.is_none() && workspace.owner_deployment_id().is_none();
+            if needs_owner_stamp {
+                crate::workspace::stamp_workspace_lineage(node.as_ref(), &mut workspace).await?;
+            }
+            if !workspace_bound_request_claimable(
+                local_deployment_id.as_deref(),
+                workspace.workspace_id.as_deref(),
+                workspace.workspace_owner_deployment_id.as_deref(),
+            ) {
                 return Err(MaterializeSkip {
                     reason:
                         "workspace-bound request is owned by another deployment; not claimable here"
-                            .to_string(),
+                            .into(),
                 }
                 .into());
             }
-            crate::workspace::stamp_workspace_lineage(node.as_ref(), &mut workspace).await?;
-            if workspace.is_bound()
-                && !workspace_bound_request_claimable(
-                    local_deployment_id.as_deref(),
-                    workspace.workspace_id.as_deref(),
-                    workspace.workspace_owner_deployment_id.as_deref(),
-                )
-            {
-                return Err(MaterializeSkip {
-                    reason:
-                        "workspace-bound request is owned by another deployment; not claimable here"
-                            .to_string(),
-                }
-                .into());
+            if let Some(resolved) = graph {
+                workspace =
+                    crate::graph_pipeline::finalize_graph_workspace(node.as_ref(), resolved)
+                        .await?
+                        .lineage;
+            } else if !needs_owner_stamp {
+                crate::workspace::stamp_workspace_lineage(node.as_ref(), &mut workspace).await?;
             }
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),

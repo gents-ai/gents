@@ -1014,14 +1014,19 @@ async fn malformed_reserved_graph_trigger_cannot_publish() {
         .to_string()
         .contains("malformed reserved"));
     txn.discard().await.unwrap();
-    assert!(runtime::graph_materialization_denial(
-        &node,
+    assert!(derive_graph_workspace(
+        node.as_ref(),
         "graph-trigger-malformed",
-        Some(&run.correlation)
+        Some(&run.correlation),
+        graph_test_owner(),
+        Some(&run.seed_doc_id),
+        &crate::lifecycle::WorkspaceLineage::default(),
     )
     .await
-    .unwrap()
-    .is_some());
+    .err()
+    .expect("malformed reserved preflight must fail")
+    .to_string()
+    .contains("malformed reserved"));
 }
 
 #[tokio::test]

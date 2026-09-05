@@ -451,6 +451,14 @@ async fn execute_running_invocation(
         .clone()
     {
         HostAction::CreateWorkspace(action) => action,
+        HostAction::FreezeWorkspaceBase(_) => {
+            return deny(
+                node,
+                invocation,
+                "freeze_workspace_base is an explicit operator action, not a callback plan",
+            )
+            .await;
+        }
         HostAction::SealWorkspace(_) => {
             return deny(
                 node,

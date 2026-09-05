@@ -361,48 +361,12 @@ async fn verify_package_artifacts_in_txn(
     Ok(())
 }
 
-/// Guard the real trigger-to-AgentRequest materialization path for derived
-/// graph triggers. Ordinary operator triggers return `Ok(None)`. A graph
-/// trigger must carry a correlation resolving to a running, non-cancelled run
-/// pinned to the trigger's exact revision; otherwise the returned reason is a
-/// fail-closed skip.
-pub(crate) async fn graph_materialization_denial(
-    node: &EmbeddedNode,
-    trigger_id: &str,
-    correlation: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(trigger_digest) = graph_artifact_revision_digest(trigger_id) else {
-        return Ok(graph_artifact_is_reserved(trigger_id)
-            .then(|| "malformed reserved graph trigger ID".to_owned()));
-    };
-    let Some(correlation) = correlation.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(Some(
-            "graph trigger materialization is missing controller-authored correlation".to_owned(),
-        ));
-    };
-    let response = node
-        .execute(&format!(
-            r#"{{
-                GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    revision_digest status cancel_requested_at error
-                }}
-            }}"#,
-            escape_graphql_string(correlation),
-        ))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query graph correlation guard failed: {:?}",
-            response.errors
-        );
-    }
-    let data = json!({ "data": response.data.unwrap_or(Value::Null) });
-    Ok(graph_publication_denial(rows(&data, "GraphRun"), &trigger_digest).map(str::to_owned))
-}
-
 /// Preflight and transactional publication consume the same admission policy.
 /// Only the transaction's read plus generation write authorizes publication.
-fn graph_publication_denial(runs: &[Value], revision_digest: &str) -> Option<&'static str> {
+pub(super) fn graph_publication_denial(
+    runs: &[Value],
+    revision_digest: &str,
+) -> Option<&'static str> {
     let [run] = runs else {
         return Some("graph publication requires exactly one durable run");
     };
@@ -430,23 +394,7 @@ pub(crate) async fn fence_graph_root_request_in_txn(
     txn: &ConfigApplyTxn<'_>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<()> {
-    let Some(trigger_id) = request.caused_by_trigger_id.as_deref() else {
-        return Ok(());
-    };
-    let Some(digest) = graph_artifact_revision_digest(trigger_id) else {
-        anyhow::ensure!(
-            !graph_artifact_is_reserved(trigger_id),
-            "malformed reserved graph trigger ID"
-        );
-        return Ok(());
-    };
-    let run_id = request
-        .caused_by_correlation
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .context("graph root publication requires a durable run correlation")?;
-    super::run::validate_graph_root_owner_in_txn(txn, request, run_id, &digest).await?;
-    fence_graph_publication_in_txn(txn, run_id, &digest).await
+    super::run::fence_root_workspace_in_txn(txn, request).await
 }
 
 /// Serialize publication with the existing GraphRun completion owner. The caller
@@ -465,11 +413,33 @@ pub(crate) async fn fence_graph_publication_in_txn(
             escape_graphql_string(run_id),
         ))
         .await?;
-    let found = rows(&response, "GraphRun");
-    if let Some(reason) = graph_publication_denial(found, revision_digest) {
+    let [run] = rows(&response, "GraphRun") else {
+        anyhow::bail!("graph publication requires exactly one durable run");
+    };
+    fence_observed_graph_publication_in_txn(txn, run, revision_digest).await
+}
+
+/// The single existing generation mutation, shared by newly loaded and
+/// resolver-validated observations within the same ConfigApplyTxn.
+pub(super) async fn fence_observed_graph_publication_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    run: &Value,
+    revision_digest: &str,
+) -> Result<()> {
+    txn.execute(&graph_publication_generation_update(run, revision_digest)?)
+        .await?;
+    Ok(())
+}
+
+/// Exact mutation emitted by the existing transaction owner. Exposed within
+/// GraphPipeline so native conflict tests consume the production fence query.
+pub(super) fn graph_publication_generation_update(
+    run: &Value,
+    revision_digest: &str,
+) -> Result<String> {
+    if let Some(reason) = graph_publication_denial(std::slice::from_ref(run), revision_digest) {
         anyhow::bail!(reason);
     }
-    let run = &found[0];
     let generation = run
         .get("update_generation")
         .and_then(Value::as_i64)
@@ -481,20 +451,18 @@ pub(crate) async fn fence_graph_publication_in_txn(
         .get("_docID")
         .and_then(Value::as_str)
         .context("graph run is missing its document ID")?;
-    txn.execute(&format!(
+    Ok(format!(
         "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
         escape_graphql_string(doc_id),
         graphql_input_literal(&json!({ "update_generation": next }))?,
     ))
-    .await?;
-    Ok(())
 }
 
 fn revision_id(plan: &GraphPlan) -> String {
     format!("{}:{}", plan.graph_id, plan.digest)
 }
 
-fn planned_workspace_authority(plan: &GraphPlan, node_id: &str) -> Option<&'static str> {
+pub(super) fn planned_workspace_authority(plan: &GraphPlan, node_id: &str) -> Option<&'static str> {
     let node = plan.nodes.iter().find(|node| node.node_id == node_id)?;
     let ceiling = plan
         .package
@@ -2034,28 +2002,38 @@ mod tests {
         .unwrap();
         assert_eq!(run.revision_digest, first.digest);
         assert_eq!(run.correlation, run.run_id);
-        assert!(graph_materialization_denial(
+        assert!(super::super::derive_graph_workspace(
             &node,
             &materialized.trigger_ids[0],
             Some(&run.correlation),
-        )
-        .await
-        .unwrap()
-        .is_none());
-        assert!(
-            graph_materialization_denial(&node, "operator-trigger", None)
-                .await
-                .unwrap()
-                .is_none()
-        );
-        assert!(graph_materialization_denial(
-            &node,
-            &materialized.trigger_ids[0],
-            Some("unknown-run"),
+            graph_test_owner(),
+            Some(&run.seed_doc_id),
+            &crate::lifecycle::WorkspaceLineage::default(),
         )
         .await
         .unwrap()
         .is_some());
+        assert!(super::super::derive_graph_workspace(
+            &node,
+            "operator-trigger",
+            None,
+            graph_test_owner(),
+            None,
+            &crate::lifecycle::WorkspaceLineage::default(),
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(super::super::derive_graph_workspace(
+            &node,
+            &materialized.trigger_ids[0],
+            Some("unknown-run"),
+            graph_test_owner(),
+            Some(&run.seed_doc_id),
+            &crate::lifecycle::WorkspaceLineage::default(),
+        )
+        .await
+        .is_err());
 
         let persisted = node
             .execute("{ GraphRun { run_id revision_digest status input_json } PipelineInput { graph_run_id payload } }")
@@ -2179,14 +2157,16 @@ mod tests {
             cancelled.cancellation_reason.as_deref(),
             Some("operator stopped the run")
         );
-        assert!(graph_materialization_denial(
+        assert!(super::super::derive_graph_workspace(
             &node,
             &materialized.trigger_ids[0],
             Some(&run.correlation),
+            graph_test_owner(),
+            Some(&run.seed_doc_id),
+            &crate::lifecycle::WorkspaceLineage::default(),
         )
         .await
-        .unwrap()
-        .is_some());
+        .is_err());
 
         node.shutdown().await;
     }

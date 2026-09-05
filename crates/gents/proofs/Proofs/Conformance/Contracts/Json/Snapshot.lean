@@ -1,3 +1,5 @@
+import Proofs.Conformance.GraphWorkspaceLineage
+import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.ArtifactAuthority
@@ -195,6 +197,7 @@ def snapshotJson : String :=
       ++ boundariesJson ++ ","
     ++ "\"deviations\":"
       ++ deviationsJson ++ ","
+    ++ "\"graph_workspace_lineage_cases\":" ++ Conformance.GraphWorkspaceLineageContracts.casesJson ++ ","
     ++ "\"artifact_mode_meet_cases\":" ++ artifactModeMeetCasesJson ++ ","
     ++ "\"artifact_admission_cases\":" ++ artifactAdmissionCasesJson ++ ","
     ++ "\"artifact_spawn_cases\":" ++ artifactSpawnCasesJson ++ ","
@@ -278,6 +281,8 @@ def snapshotJson : String :=
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
+    ++ "\"operator_base_freeze_cases\":"
+      ++ Conformance.OperatorBaseFreezeContracts.casesJson ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"

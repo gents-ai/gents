@@ -1306,3 +1306,57 @@ a hook regression also checks actual model Goal completion. Existing expected
 count parsing supplies count-validity evidence. Distinct calls writing the same
 output document still count separately: document uniqueness is not established.
 No atomic scan/phantom or immutable configuration claim is made.
+
+### Operator base freeze
+
+`Workspace.OperatorBaseFreeze` refines an operation in the existing workspace
+ActionPlan/executor/journal owner. It requires the existing seal capability and
+operator ceiling, exactPaths([]), verified owner/identity/placement, no active
+writer, and an unchanged observed base tree. It sets Ready to Sealed without
+inventing a producing request or changing writer/integrator receipts. Existing
+writer sealing and integration retain their existing owners. New integration
+now checks the writer receipt required by the model; an existing integrator
+receipt still governs replay.
+
+Sixteen `operator_base_freeze_cases` describe real executor/Git admission and
+replay boundaries through the real Git executor consumer. Native quickstart
+coverage additionally checks sealed persistence with no fabricated request,
+binding, response, or receipt. A fault-injection test checks placement repair
+after partial result persistence with a fresh journal. Exact persisted
+sealed replay has no new host effects and need not retain a live checkout; a
+cleaning/cleaned lifecycle cannot replay. The model proves receipt/capability
+preservation and denial of dirty or actively written ready workspaces. Git
+commit-to-tree resolution, filesystem identity, operator capability/placement
+checks and active-binding observation are adapter facts, not cryptographic,
+filesystem or native predicate-lock proofs. Existing graph workspace lineage
+only transports the seal produced by this owner; Ready creation is not sealing.
+
+### Pinned graph entry workspace lineage
+
+`GraphPipeline/WorkspaceLineage.lean` derives one entry-root workspace tuple using
+verified run/plan/route and authenticated immutable physical request evidence.
+Destination authority comes from the pinned plan. Explicit conflicting identity,
+owner, seal or authority denies; absent/untrusted/ambiguous roots cannot grant.
+Bootstrap is separate: workspace ID/owner must already occur in controller-stored
+input, while the existing workspace owner may stamp an omitted seal. The helper
+never changes workspace state: ordinary creation is Ready, while operator quickstart freezes its unchanged base
+through that owner before ArtifactWrite admission.
+
+Twenty-five generated `graph_workspace_lineage_cases` drive the production
+resolver with installed plans, real signatures, persisted workspace rows, and
+native publication transactions. The stale-publication case overlaps two native
+transactions and checks rollback of the losing child. A separate materializer
+consumer exercises the actual bounded Area write and event handoff to a scanner. Publication
+composes the existing GraphRun generation/cancel/first-cause fence and adds no
+transaction, registry or status owner. Authentication and physical seed uniqueness
+are observed adapter facts, not proofs of cryptography or native phantom locking.
+Only single selected-entry runs are covered; arbitrary multiple independent entry
+roots fail closed. A successful lineage projection is distinct from successful
+publication if the run changes before commit.
+
+A pinned destination with no workspace authority (code-review triage or an
+unbound generic graph) receives no workspace binding. Root provenance and
+explicit conflicts are checked before this attenuation; no ReadOnly fallback
+is invented. Exact root identity inheritance applies only to destinations with
+a workspace authority. Matching identity hints are discarded for a no-authority
+destination; an explicit nonempty authority conflicts and is denied.

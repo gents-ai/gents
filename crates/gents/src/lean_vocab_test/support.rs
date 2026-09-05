@@ -39,6 +39,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
     pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
     pub(crate) graph_logical_invocation_cases: Vec<serde_json::Value>,
+    pub(crate) graph_workspace_lineage_cases: Vec<serde_json::Value>,
+    pub(crate) operator_base_freeze_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_capability_cases: Vec<serde_json::Value>,
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,

@@ -74,3 +74,7 @@ import Proofs.PeerRegistryDiscovery.PersonaRequest
 import Proofs.Conformance.InvalidToolProgress
 
 import Proofs.Conformance.LogicalOutputObligation
+
+import Proofs.Conformance.OperatorBaseFreeze
+
+import Proofs.GraphPipeline.WorkspaceLineage
