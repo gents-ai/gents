@@ -198,7 +198,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, and in-memory controller bookkeeping (#1001) |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and serial registry handoff |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -248,7 +248,7 @@ Semantic submodules:
 |--------|------------|
 | `Proofs.Request` | `State`, `Transition`, `Executable`, `Properties` |
 | `Proofs.RequestExecutionLease` | `State`, `Transition`, `Properties` |
-| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping` |
+| `Proofs.InferenceCall` | `State`, `Transition`, `Executable`, `Properties`, `SlotAccounting`, `ControllerBookkeeping`, `Registry`, `Persistence` |
 | `Proofs.RuntimeReconcile` | `State`, `Transition`, `Executable` |
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
@@ -1043,6 +1043,29 @@ model's "recompute diff after a prefix" retry step by rebuilding the live diff
 at the start of each `config apply` attempt and applying selected documents via
 unique-field upserts or equivalent override writers. The storage assumption is
 only that a reported successful mutation is durable before the next retry.
+
+### Backend Controller Handoff
+
+`Proofs/InferenceCall/Registry.lean` refines one backend's serial controller
+handoff. Metadata-only reconciliation retains the current controller; a
+resource change retires it until its real owners release. Final release
+installs only the latest available desired configuration. Removed or
+unavailable pending configurations cannot be resurrected by a drain callback.
+
+The model separates actual permits from in-flight ownership, which also
+includes queued admissions. It composes the existing ControllerBookkeeping
+drain invariant and proves capacity preservation and release stuttering on
+epoch mismatch. Rust releases through the originating controller `Arc`;
+rollback can reuse an epoch, and isolation between those distinct controller
+incarnations is fenced by a real permit test outside this numeric model.
+Its finite release trace is conditional progress, not scheduler
+fairness or a wall-clock bound. Already-issued permits during downsizing
+remain bounded by their original controller's capacity until retirement.
+
+Eight generated traces contain 55 step observations for the real registry
+and actual AdmissionPermits. Queued-waiter reachability remains covered by
+the existing controller bookkeeping tests. This registry refinement does
+not establish durable request waiting through backend outages.
 
 ### Interrupted Inference Calls
 
