@@ -831,55 +831,36 @@ fn normalize_trims_task_goal_objective() {
 }
 
 #[test]
-fn diff_marks_live_null_tool_service_storage_for_update() {
+fn diff_marks_live_null_tool_service_addresses_for_update() {
     let desired: DesiredToolServiceRegistry = serde_json::from_value(json!({
         "service_id": "observability-mcp",
         "hostname": "studio-1",
-        "mcp_port": 9201
+        "mcp_port": 9201,
+        "mcp_path": "/mcp"
     }))
     .expect("desired tool service should deserialize");
-    let live = tool_service_registry_from_live_value(&json!({
+
+    // Preserve null-versus-empty address coverage with a valid required path.
+    let null_addresses = tool_service_registry_from_live_value(&json!({
         "service_id": "observability-mcp",
         "hostname": "studio-1",
         "tailscale_ip": null,
         "lan_ip": null,
         "mcp_port": 9201,
-        "mcp_path": null
+        "mcp_path": "/mcp"
     }))
     .expect("live tool service should parse");
-
     let diff = diff_collection(
         vec![(desired.service_id.clone(), &desired)],
-        vec![(live.service_id.clone(), &live)],
+        vec![(null_addresses.service_id.clone(), &null_addresses)],
     );
-
     assert_eq!(diff.update, vec!["observability-mcp"]);
     assert!(diff.unchanged.is_empty());
 }
 
 #[test]
-fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {
-    let with_deprecated: DesiredInferenceBackend = serde_json::from_value(json!({
-        "backend_id": "local",
-        "name": "Local",
-        "provider_kind": "OpenAiCompatible",
-        "endpoint": "http://127.0.0.1:11434/v1",
-        "api_key": null,
-        "api_key_env_var": null,
-        "max_concurrent": 1,
-        "max_queue_depth": 100,
-        "enabled": true,
-        "supports_tool_calls": false,
-        "supports_streaming": false,
-        "supports_structured_outputs": true,
-        "supports_json_schema": true,
-        "context_window": 32768,
-        "max_output_tokens": 4096,
-        "models": ["test-model"]
-    }))
-    .expect("deprecated fields should deserialize");
-
-    let current: DesiredInferenceBackend = serde_json::from_value(json!({
+fn obsolete_backend_capability_fields_are_rejected() {
+    let base = json!({
         "backend_id": "local",
         "name": "Local",
         "provider_kind": "OpenAiCompatible",
@@ -890,14 +871,33 @@ fn deprecated_backend_capability_fields_are_ignored_for_diff_equality() {
         "max_queue_depth": 100,
         "enabled": true,
         "models": ["test-model"]
-    }))
-    .expect("current fields should deserialize");
+    });
+    let _: DesiredInferenceBackend =
+        serde_json::from_value(base.clone()).expect("current backend shape should deserialize");
 
-    assert_eq!(with_deprecated, current);
-    assert_eq!(
-        serde_json::to_value(with_deprecated).unwrap(),
-        serde_json::to_value(current).unwrap()
-    );
+    // The manifest boundary rejects each obsolete backend field individually.
+    for (field, value) in [
+        ("supports_tool_calls", json!(false)),
+        ("supports_streaming", json!(false)),
+        ("supports_structured_outputs", json!(true)),
+        ("supports_json_schema", json!(true)),
+        ("context_window", json!(32768)),
+        ("max_output_tokens", json!(4096)),
+    ] {
+        let mut payload = base.clone();
+        payload[field] = value;
+        let error = serde_json::from_value::<DesiredInferenceBackend>(payload)
+            .expect_err("obsolete backend capability field must be rejected");
+        let message = error.to_string();
+        assert!(
+            message.contains("unknown field"),
+            "unexpected error: {message}"
+        );
+        assert!(
+            message.contains(field),
+            "error must name {field}: {message}"
+        );
+    }
 }
 
 #[test]
