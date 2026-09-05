@@ -16,6 +16,44 @@ See grok-background-projection.md and PR verification comments for evidence.
 
 ### Latest review checkpoint
 
+Commit `38848104` passed all 11 CI checks (run `33952659240`), including the
+goal accounting and replay chronology fixes documented below. A focused
+read-only Claude review of those changes completed with no blockers
+(`/tmp/grok-final-projection-claude-review.log`). It independently checked
+ordered-assignment correctness, fail-closed binding, durable timing, and
+read-only usage accounting. Nonblocking findings still require disposition:
+an unmatched live tail can prevent binding a closed prefix during reconnect;
+unknown response identity can temporarily discard delivery/timing evidence;
+goal usage scans at the 200 ms observation cadence are costly for old sessions.
+
+The remaining multi-client finding has a local follow-up: discovered human
+turns re-read authorized submission metadata, echo the human prompt under its
+original identity, and reuse the stock `turn_completed` viewer finalizer. No
+parallel legacy `prompt_complete` rail is needed. Runtime
+wakes keep their hidden synthetic identity. Viewer cancellation matches the
+active observed request's persisted prompt identity and requests the runtime
+interrupt; only runtime acknowledgement terminalizes it. The new DB regression
+checks visible echo, wrong-target rejection, cancellation intent, acknowledgement,
+and completion identity. Existing wake fixtures now explicitly carry the
+runtime source kind instead of masquerading as human submissions. This slice
+still needs passing broad gates and a two-client stock/live check; it is not
+included in the green published tip.
+
+The viewer follow-up now passed all 328 shim tests, the workspace check, and
+the binary build (`/tmp/grok-viewer-canonical-*.log`). Two-client live checks
+used the unchanged Grok 1.0.13 viewer on `grok-edge-7f5059b3e1804437` and a
+separate leader-socket driver:
+
+- `peer-viewer-live-1` / request `af9c1bca-2e38-48c8-811d-34166841af34`:
+  human prompt visible, `PEER_VIEWER_OK` streamed, native Worked-for marker,
+  idle viewer and driver `end_turn`; runtime request completed without tools.
+- `peer-viewer-cancel-1` / request `8cee0be6-085d-4299-9e66-213b061a7fa1`:
+  viewer displayed foreground `sleep 120`; Escape in that viewer requested
+  cancellation. Driver returned `cancelled`, runtime request became interrupted,
+  and its bash tool became cancelled with `tool call cancelled`. Stock displayed
+  `Turn cancelled by user in 24s` and cleared the spinner. No client patches,
+  synthetic terminal writes, or duplicate legacy completion rail were needed.
+
 Published commit `76c022fa` passed all 11 CI checks (run `33948163091`).
 The chronological implementation notes below retain intermediate test states;
 those are not the current status of that published commit.

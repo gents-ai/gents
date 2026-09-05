@@ -470,6 +470,7 @@ struct ObservedRequest {
     cursor: Mutex<RequestCursor>,
     timing: RequestUpdateTiming,
     completion_sent: bool,
+    echo_sent: bool,
 }
 
 impl ObservedRequest {
@@ -479,6 +480,7 @@ impl ObservedRequest {
             cursor: Mutex::new(RequestCursor::new()),
             timing: RequestUpdateTiming::new(started_at),
             completion_sent: foreground,
+            echo_sent: true,
         }
     }
 }
@@ -831,11 +833,13 @@ impl TurnManager {
                 .await
                 .entry((session_id.to_owned(), request_id.to_owned()))
                 .or_insert_with(|| {
-                    Arc::new(Mutex::new(ObservedRequest::new(
+                    let mut progress = ObservedRequest::new(
                         format!("notifications-{request_id}"),
                         started_at,
                         false,
-                    )))
+                    );
+                    progress.echo_sent = false;
+                    Arc::new(Mutex::new(progress))
                 });
         }
         *after = if rows.len() == PAGE_SIZE {
@@ -963,6 +967,23 @@ impl TurnManager {
                 continue;
             }
             let continuing_autonomous = active.is_some();
+            if !progress.echo_sent {
+                if let Some((prompt_id, content)) =
+                    self.observed_human_prompt(session_id, &request_id).await?
+                {
+                    projections.session_updates().send(session_id, |event_id, total_tokens| {
+                        Ok(super::projection::session_notification_for_method(SESSION_UPDATE_METHOD, session_id,
+                            json!({"sessionUpdate":"user_message_chunk", "content":{"type":"text","text":content},
+                                "_meta":{"hideFromScrollback":false,"promptIndex":0}}),
+                            super::projection::stamp_update_meta(event_id, total_tokens, Some(&prompt_id), Some(false),
+                                UpdateTimestamps { agent_timestamp_ms:Some(progress.timing.turn_start_ms),
+                                    turn_start_ms:Some(progress.timing.turn_start_ms), ..Default::default() }),
+                        ))
+                    }, PromptSenderLine(sender)).await?;
+                    progress.prompt_id = Some(prompt_id);
+                }
+                progress.echo_sent = true;
+            }
             if progress.prompt_id.is_some() && !continuing_autonomous {
                 self.autonomous_delivery
                     .lock()
@@ -1266,6 +1287,51 @@ impl TurnManager {
         Ok(json!({"stopReason": outcome.wire_name()}))
     }
 
+    /// Re-read immutable submission data for an observed human turn. No
+    /// prompt/content cache or request ownership is created by the viewer.
+    async fn observed_human_prompt(
+        &self,
+        session: &str,
+        request: &str,
+    ) -> Result<Option<(String, String)>> {
+        let principal = escape_graphql_string(&self.config.agent_did);
+        let query = format!(
+            r#"{{AgentRequest(filter:{{request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},
+            agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}}})
+            {{metadata content runtime_source_kind}}}}"#,
+            escape_graphql_string(request),
+            escape_graphql_string(session)
+        );
+        let response = self.node.execute(&query).await;
+        ensure_no_errors(&response, "read observed human prompt")?;
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentRequest"].as_array())
+            .context("missing observed request rows")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "observed request ownership is missing or ambiguous"
+        );
+        let row = &rows[0];
+        if row["runtime_source_kind"].as_str().is_some() {
+            return Ok(None);
+        }
+        let metadata = row["metadata"]
+            .as_str()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+        let prompt_id = metadata
+            .as_ref()
+            .and_then(|meta| meta["promptId"].as_str())
+            .filter(|value| !value.is_empty())
+            .unwrap_or(request)
+            .to_owned();
+        Ok(Some((
+            prompt_id,
+            row["content"].as_str().unwrap_or_default().to_owned(),
+        )))
+    }
+
     /// Handle a `session/cancel` notification. Never sends a response.
     pub(super) async fn handle_cancel(&self, notification: CancelNotification) -> Result<()> {
         tracing::info!(
@@ -1310,7 +1376,28 @@ impl TurnManager {
             }
         }
         let autonomous_target = match target_prompt_id.as_deref() {
-            Some(id) => id.strip_prefix("notifications-").map(str::to_owned),
+            Some(id) if id.starts_with("notifications-") => {
+                id.strip_prefix("notifications-").map(str::to_owned)
+            }
+            Some(id) => {
+                let active = self
+                    .autonomous_delivery
+                    .lock()
+                    .await
+                    .get(&notification.session_id)
+                    .cloned();
+                match active {
+                    Some(request)
+                        if self
+                            .observed_human_prompt(&notification.session_id, &request)
+                            .await?
+                            .is_some_and(|(prompt, _)| prompt == id) =>
+                    {
+                        Some(request)
+                    }
+                    _ => None,
+                }
+            }
             None if !had_foreground_target => self
                 .autonomous_delivery
                 .lock()
@@ -3080,6 +3167,25 @@ mod tests {
         ))
     }
 
+    async fn seed_runtime_wake(node: &EmbeddedNode, principal: &str, content: &str) -> String {
+        // Source identity is immutable: seed a runtime-shaped request at
+        // creation, never relabel a human submission after admission.
+        let request = uuid::Uuid::new_v4().to_string();
+        let result = node
+            .execute(&format!(
+                r#"mutation {{create_AgentRequest(input:{{
+            request_id:"{request}",agent_did:"{principal}",requester_did:"{principal}",
+            session_id:"session-1",runtime_source_kind:"local-control",lifecycle_state:"pending",
+            content:"{}",created_at:"{}"}}) {{_docID}}}}"#,
+                escape_graphql_string(content),
+                chrono::Utc::now().to_rfc3339(),
+                principal = escape_graphql_string(principal)
+            ))
+            .await;
+        ensure_no_errors(&result, "seed runtime wake fixture").unwrap();
+        request
+    }
+
     fn buffer_sender() -> (Arc<Mutex<Vec<String>>>, PromptSender) {
         let buffer = Arc::new(Mutex::new(Vec::new()));
         (buffer.clone(), PromptSender::Buffer { buffer })
@@ -3530,6 +3636,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn observed_human_turn_keeps_prompt_identity_echo_and_cancel_target() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+        let prompt = parse_prompt_request(
+            &json!({"sessionId":"session-1", "prompt":[text_block("Human from another client")]}),
+            None,
+        )
+        .unwrap();
+        let request = manager.submit_request(&prompt, "peer-human").await.unwrap();
+        seed_assistant_message(&node, &request, 1, "Peer answer").await;
+        let mut after = String::new();
+        let mut delivery_after = String::new();
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        let events: Vec<Value> = buffer
+            .lock()
+            .await
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let echo = events
+            .iter()
+            .find(|event| event["params"]["update"]["sessionUpdate"] == "user_message_chunk")
+            .unwrap();
+        assert_eq!(echo["params"]["_meta"]["promptId"], "peer-human");
+        assert_eq!(
+            echo["params"]["update"]["_meta"]["hideFromScrollback"],
+            false
+        );
+        assert_eq!(
+            echo["params"]["update"]["content"]["text"],
+            "Human from another client"
+        );
+        for target in ["different-prompt", "peer-human"] {
+            manager
+                .handle_cancel(
+                    parse_cancel_notification(
+                        &json!({"sessionId":"session-1", "_meta":{"promptId":target}}),
+                    )
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let interrupted = node.execute(&format!(r#"{{AgentRequest(filter:{{request_id:{{_eq:"{}"}}}}){{interrupt_requested_at}}}}"#, escape_graphql_string(&request))).await;
+            ensure_no_errors(&interrupted, "read viewer cancel intent").unwrap();
+            assert_eq!(
+                interrupted.data.as_ref().unwrap()["AgentRequest"][0]["interrupt_requested_at"]
+                    .as_str()
+                    .is_some(),
+                target == "peer-human"
+            );
+        }
+        // The runtime, not the viewer, acknowledges cancellation.
+        terminalize_request(&node, &request, "interrupted").await;
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut after,
+                &mut delivery_after,
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        let events: Vec<Value> = buffer
+            .lock()
+            .await
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event["params"]["update"]["sessionUpdate"] == "user_message_chunk")
+                .count(),
+            1
+        );
+        let completed = events
+            .iter()
+            .find(|event| event["params"]["update"]["sessionUpdate"] == "turn_completed")
+            .unwrap();
+        assert_eq!(completed["params"]["update"]["prompt_id"], "peer-human");
+        assert_eq!(completed["params"]["update"]["stop_reason"], "cancelled");
+    }
+
+    #[tokio::test]
     async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
         let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
@@ -3548,7 +3753,7 @@ mod tests {
             ("session-1".into(), root.clone()),
             Arc::new(Mutex::new(ObservedRequest::new("root".into(), 0, true))),
         );
-        let first = manager.submit_request(&prompt, "wake-a").await.unwrap();
+        let first = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
         seed_assistant_message(&node, &first, 1, "Wake A is working.").await;
         seed_tool_call(&node, &first, "wake-a-tool", "bash", "running", "", None).await;
         let mut after = String::new();
@@ -3588,7 +3793,7 @@ mod tests {
                 .await;
             ensure_no_errors(&result, "seed delayed completion notice").unwrap();
         }
-        let second = manager.submit_request(&prompt, "wake-b").await.unwrap();
+        let second = seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
         seed_assistant_message(&node, &second, 4, "Wake B response.").await;
         terminalize_request(&node, &second, "completed").await;
         seed_assistant_message(&node, &first, 5, "Wake A continues.").await;
@@ -3943,13 +4148,7 @@ mod tests {
             )
             .await;
         ensure_no_errors(&update, "late tool finish").unwrap();
-        let wake_prompt = parse_prompt_request(&json!({
-            "sessionId": "session-1", "prompt": [text_block("internal notification instruction")],
-        }), None).unwrap();
-        let wake = manager
-            .submit_request(&wake_prompt, "durable-wake")
-            .await
-            .unwrap();
+        let wake = seed_runtime_wake(&node, &agent_did, "internal notification instruction").await;
         seed_assistant_message(&node, &wake, 2, "Background work finished.").await;
         terminalize_request(&node, &wake, "completed").await;
         let (pending_tx, _pending_rx) = oneshot::channel();
