@@ -7,6 +7,8 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
+// 6.1: additive — DesktopInitSummary is generated from the Rust struct
+//      (camelCase wire shape) instead of a hand-written TS mirror (#1340).
 // 6.0: breaking — exact-version matching, single-owner client state, and
 //      compatibility aliases removed; includes the 5.2 goal save fields.
 //      Also in 6.0: AgentRequest.status is removed; request state is carried
@@ -43,13 +45,13 @@ use crate::error::BridgeErrorCode;
 // grantable [[set]] entries + default (core/client-lifecycle).
 // 0.3: BridgeError on command Err paths; SnapshotGrants projection; native-e2e.
 // 0.2: desktop_bridge_contract, desktop_peer_probe_address; peer_status by id.
-pub const CONTRACT_VERSION: &str = "6.0";
+pub const CONTRACT_VERSION: &str = "6.1";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "fd48a0586b813346e3c25e0efc4af410d40e625701bd73cc792f842a7074fb9b";
+    "67594ec0a37b28e01076fc29b20bf04a87a76f51373c698a156bc0a7b9d90a02";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

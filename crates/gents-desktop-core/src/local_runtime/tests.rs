@@ -31,6 +31,30 @@ fn sample_summary() -> DesktopInitSummary {
 }
 
 #[test]
+fn init_summary_serializes_camel_case() {
+    let summary = DesktopInitSummary {
+        status: "ok",
+        source: "local",
+        agent_home: "/h".into(),
+        desktop_home: "/d".into(),
+        peer_directory: "/p".into(),
+        label: "L".into(),
+        agent_name: "n".into(),
+        agent_did: "did:key:z".into(),
+        graphql: "http://x".into(),
+        p2p_transport: "iroh".into(),
+        p2p_peer_id: "pid".into(),
+        p2p_listen_address: "addr".into(),
+        peer_record_id: "rec".into(),
+        next_steps: vec![],
+    };
+    let value = serde_json::to_value(&summary).unwrap();
+    assert_eq!(value["agentDid"], "did:key:z");
+    assert!(value.get("agent_did").is_none());
+    assert!(value.get("statusEndpoint").is_none());
+}
+
+#[test]
 fn default_agent_home_uses_fresh_gents_home() {
     let home = default_agent_home().expect("agent home");
 

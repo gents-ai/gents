@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
+use gents_desktop_core::local_runtime::DesktopInitSummary;
 use ts_rs::TS;
 
 use crate::contract::BridgeContract;
@@ -223,6 +224,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         BridgeErrorCode,
         BridgeError,
         DesktopClientSnapshot,
+        DesktopInitSummary,
         ManagedServerState,
         ManagedServerStatus,
         PeerRemoveResponse,
