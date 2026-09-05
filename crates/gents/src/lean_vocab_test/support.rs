@@ -34,6 +34,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) graph_pipeline_revision_gate_cases: Vec<LeanGraphPipelineRevisionGateCase>,
     #[serde(default)]
     pub(crate) graph_pipeline_run_terminal_cases: Vec<LeanGraphPipelineRunTerminalCase>,
+    pub(crate) goal_claimed_publication_cases: Vec<serde_json::Value>,
+    pub(crate) goal_request_head_cases: Vec<serde_json::Value>,
+    pub(crate) goal_operator_resume_cases: Vec<serde_json::Value>,
+    pub(crate) goal_config_reactivation_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
     pub(crate) process_transition_cases: Vec<LeanLifecycleTransitionCase>,

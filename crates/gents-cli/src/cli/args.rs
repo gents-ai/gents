@@ -3072,6 +3072,8 @@ pub(crate) enum GoalCommand {
     Show(GoalShowArgs),
     #[command(about = "Create or update the durable goal for a session")]
     Set(GoalSetArgs),
+    #[command(about = "Resume a goal and atomically enqueue its continuation")]
+    ResumeRequest(GoalResumeArgs),
     #[command(about = "Delete the durable goal for a session")]
     Clear(GoalShowArgs),
 }
@@ -3095,6 +3097,20 @@ pub(crate) struct GoalScopeArgs {
 pub(crate) struct GoalShowArgs {
     #[command(flatten)]
     pub(crate) scope: GoalScopeArgs,
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+    pub(crate) output: OutputFormat,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct GoalResumeArgs {
+    #[command(flatten)]
+    pub(crate) scope: GoalScopeArgs,
+    #[arg(
+        long,
+        value_name = "REQUEST_ID",
+        help = "Terminal predecessor; reuse this ID when retrying the same resume"
+    )]
+    pub(crate) from: String,
     #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
     pub(crate) output: OutputFormat,
 }

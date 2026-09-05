@@ -11,12 +11,12 @@ use std::time::Duration;
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::goal::publish_claimed_continuation;
 use crate::goal::{
     claim_continuation, claim_retry_continuation, decide_goal_continuation,
     goal_continuation_materialization_step, load_goal_by_id, load_goals_for_session,
@@ -25,7 +25,6 @@ use crate::goal::{
     GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::enqueue_goal_continuation;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
@@ -33,6 +32,15 @@ use crate::UpdateSubscriptionSource;
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
 const GOAL_RESCAN_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Request/claim evidence selected before a usage refresh belongs to this
+/// observed Goal epoch. Reloading must not relabel it with a resumed epoch.
+fn continuation_evidence_is_current(observed: &GoalDocument, current: &GoalDocument) -> bool {
+    observed.doc_id == current.doc_id
+        && observed.status == current.status
+        && observed.continuation_sequence() == current.continuation_sequence()
+        && observed.last_continued_from_request_id == current.last_continued_from_request_id
+}
 
 pub struct GoalSource {
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
@@ -303,9 +311,16 @@ impl GoalSource {
         let has_activity = terminal != GoalRequestTerminal::Completed
             || self.request_has_activity(&latest.request_id).await?;
         let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
-        goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
+        let refreshed_goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
             .await?
             .context("refreshed Goal row disappeared")?;
+        if !continuation_evidence_is_current(&goal, &refreshed_goal) {
+            // In particular, an operator may have resumed the Goal and
+            // published a child while usage was refreshing. Re-select the
+            // idle request and continuation phase on the next reconciliation.
+            return Ok(None);
+        }
+        goal = refreshed_goal;
         let budget_reached = goal
             .token_budget
             .is_some_and(|budget| tokens_used >= budget);
@@ -461,6 +476,14 @@ impl GoalSource {
             GoalContinuationAction::Materialize,
         );
 
+        // Carry the exact tuple installed by our successful claim. Reloading
+        // here could silently authorize a newer owner's claim after an await.
+        goal.continuation_sequence = Some(
+            goal.continuation_sequence()
+                .checked_add(1)
+                .context("claimed continuation sequence exhausted")?,
+        );
+        goal.last_continued_from_request_id = Some(latest.request_id.clone());
         self.materialize_claimed_continuation(
             goal,
             latest,
@@ -473,7 +496,7 @@ impl GoalSource {
 
     async fn materialize_claimed_continuation(
         &self,
-        mut goal: GoalDocument,
+        goal: GoalDocument,
         latest: AgentRequestRow,
         retry_prefix: Option<String>,
         wrapup: bool,
@@ -482,40 +505,15 @@ impl GoalSource {
         if authorized_phase != GoalContinuationPhase::ChildPresent {
             return Ok(None);
         }
-        let Some(still_latest) = self.latest_request_when_session_idle(&goal).await? else {
-            return Ok(None);
-        };
-        if still_latest.request_id != latest.request_id {
-            return Ok(None);
-        }
-
-        // The operator or model may have changed goal authority after the
-        // continuation decision. Re-read the claimed row before publication;
-        // the claim CAS itself also fences the expected status and sequence.
-        goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
-            .await?
-            .context("claimed Goal row disappeared")?;
-        if !matches!(
-            goal.parsed_status(),
-            Some(GoalStatus::Active | GoalStatus::BudgetLimited)
-        ) || goal.last_continued_from_request_id.as_deref() != Some(latest.request_id.as_str())
-        {
-            return Ok(None);
-        }
-
-        let sequence = goal.continuation_sequence();
         let prompt = continuation_prompt(&goal, retry_prefix.as_deref(), wrapup);
         let parent = AgentRequest::try_from(latest)
             .context("decode goal continuation parent AgentRequest")?;
-        let child = enqueue_goal_continuation(
-            &self.node,
-            &parent,
-            &goal.goal_id,
-            &prompt,
-            sequence,
-            wrapup,
-        )
-        .await?;
+        let Some(child) =
+            publish_claimed_continuation(&self.node, &goal, &parent.request_id, &prompt, wrapup)
+                .await?
+        else {
+            return Ok(None);
+        };
         let task = ResolvedTask {
             task_id: format!("goal:{}", goal.goal_id),
             name: Some("Durable goal continuation".to_string()),
@@ -584,16 +582,10 @@ impl GoalSource {
                     filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }},
                     order: [{{ created_at: DESC }}, {{ request_id: DESC }}]
                 ) {{
-                    _docID request_id agent_did requester_did behavior_id session_id content
-                    temperature top_p top_k seed max_tokens max_total_tokens metadata execution_origin
-                    lifecycle_state created_at deadline subagent_depth
-                    caused_by_parent_request_id caused_by_parent_request_doc_id
-                    caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-                    caused_by_correlation caused_by_trigger_context
-                    workspace_id workspace_authority
-                    workspace_owner_deployment_id workspace_seal_hash
+                    {signed_fields}
                 }}
-            }}"#
+            }}"#,
+            signed_fields = crate::request_admission::SIGNED_REQUEST_FIELDS,
         );
         let response = self.node.execute(&query).await;
         if response.has_errors() {
@@ -612,13 +604,10 @@ impl GoalSource {
                 .unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
         )
         .context("decoding goal session requests")?;
-        if rows.iter().any(|row| {
-            row.lifecycle_state
-                .is_some_and(RequestLifecycleState::is_active_runtime)
-        }) {
+        if !crate::goal::goal_session_is_idle(&rows) {
             return Ok(None);
         }
-        Ok(rows.into_iter().next())
+        Ok(crate::goal::latest_goal_request(goal, &rows).cloned())
     }
 
     async fn continuation_child_exists(
@@ -779,7 +768,11 @@ fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {
         })
 }
 
-fn continuation_prompt(goal: &GoalDocument, retry_prefix: Option<&str>, wrapup: bool) -> String {
+pub(crate) fn continuation_prompt(
+    goal: &GoalDocument,
+    retry_prefix: Option<&str>,
+    wrapup: bool,
+) -> String {
     let objective_json = serde_json::to_string(&goal.objective)
         .unwrap_or_else(|_| String::from(r#""<invalid objective>""#));
     let budget = goal
@@ -855,6 +848,44 @@ mod tests {
             "tokens_used": 250
         }))
         .expect("goal fixture")
+    }
+
+    #[test]
+    fn usage_refresh_cannot_relabel_stale_terminal_evidence_with_resumed_epoch() {
+        let mut observed = goal();
+        observed.continuation_sequence = Some(4);
+        observed.last_continued_from_request_id = Some("earlier-parent".to_owned());
+
+        // The same active status after pause/resume is an ABA: the old
+        // interrupted request must not be evaluated using the new sequence.
+        let mut resumed = observed.clone();
+        resumed.continuation_sequence = Some(5);
+        resumed.last_continued_from_request_id = Some("interrupted-parent".to_owned());
+        assert!(!continuation_evidence_is_current(&observed, &resumed));
+
+        let mut sequence_only = observed.clone();
+        sequence_only.continuation_sequence = Some(5);
+        assert!(!continuation_evidence_is_current(&observed, &sequence_only));
+
+        let mut watermark_only = observed.clone();
+        watermark_only.last_continued_from_request_id = Some("interrupted-parent".to_owned());
+        assert!(!continuation_evidence_is_current(
+            &observed,
+            &watermark_only
+        ));
+
+        let mut completed = observed.clone();
+        completed.status = "complete".to_owned();
+        assert!(!continuation_evidence_is_current(&observed, &completed));
+
+        // Ordinary accounting refresh is not a new continuation decision.
+        let mut accounting_only = observed.clone();
+        accounting_only.tokens_used = Some(300);
+        accounting_only.active_time_seconds = Some(10);
+        assert!(continuation_evidence_is_current(
+            &observed,
+            &accounting_only
+        ));
     }
 
     #[test]

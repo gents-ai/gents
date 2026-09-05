@@ -849,3 +849,91 @@ fn chain_query_command_parses() {
         _ => panic!("expected chain query"),
     }
 }
+
+#[test]
+fn goal_resume_request_requires_session_and_predecessor() {
+    for args in [
+        vec!["gents", "goal", "resume-request", "--session", "session-1"],
+        vec!["gents", "goal", "resume-request", "--from", "request-1"],
+        vec!["gents", "goal", "resume-request"],
+    ] {
+        let error = match Cli::try_parse_from(args) {
+            Ok(_) => panic!("resume requires both stable selectors"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+    }
+}
+
+#[test]
+fn goal_resume_request_preserves_stable_predecessor_selector() {
+    let cli = Cli::try_parse_from([
+        "gents",
+        "goal",
+        "resume-request",
+        "--home",
+        "/tmp/resume-client",
+        "--graphql",
+        "http://127.0.0.1:8000/api/v0/graphql",
+        "--session",
+        "session:workflow-1",
+        "--from",
+        "goal-cont-00000000000000000004-abcdef",
+    ])
+    .expect("typed resume command");
+    let Command::Goal {
+        command: GoalCommand::ResumeRequest(args),
+    } = cli.command
+    else {
+        panic!("expected typed goal resume-request");
+    };
+    assert_eq!(args.scope.session, "session:workflow-1");
+    assert_eq!(args.from, "goal-cont-00000000000000000004-abcdef");
+    assert_eq!(args.scope.home, Some(PathBuf::from("/tmp/resume-client")));
+    assert_eq!(
+        args.scope.graphql.as_deref(),
+        Some("http://127.0.0.1:8000/api/v0/graphql")
+    );
+    assert!(matches!(args.output, OutputFormat::Json));
+}
+
+#[test]
+fn goal_resume_request_rejects_caller_supplied_lineage_flags() {
+    for flag in [
+        "--correlation",
+        "--caused-by-correlation",
+        "--trigger-id",
+        "--trigger-context",
+        "--parent-request-id",
+        "--parent-request-doc-id",
+        "--workspace-id",
+        "--workspace-authority",
+        "--workspace-owner-deployment-id",
+        "--workspace-seal-hash",
+        "--execution-origin",
+        "--subagent-depth",
+    ] {
+        let error = match Cli::try_parse_from([
+            "gents",
+            "goal",
+            "resume-request",
+            "--session",
+            "session-1",
+            "--from",
+            "request-1",
+            flag,
+            "forged-lineage",
+        ]) {
+            Ok(_) => panic!("resume accepted authority override {flag}"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::UnknownArgument,
+            "{flag} must not become a lineage override"
+        );
+    }
+}

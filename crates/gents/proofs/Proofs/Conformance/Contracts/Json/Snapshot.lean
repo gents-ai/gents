@@ -32,6 +32,9 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.GraphPipeline
+import Proofs.Conformance.GoalOperatorResume
+import Proofs.Conformance.GoalClaimedPublication
+import Proofs.Conformance.GoalRequestHead
 import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
@@ -49,6 +52,14 @@ def snapshotJson : String :=
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
     ++ "\"graph_failure_attribution_traces\":"
       ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
+    ++ "\"goal_request_head_cases\":"
+      ++ Conformance.GoalRequestHeadContracts.casesJson ++ ","
+    ++ "\"goal_claimed_publication_cases\":"
+      ++ Conformance.GoalClaimedPublicationContracts.casesJson ++ ","
+    ++ "\"goal_operator_resume_cases\":"
+      ++ Conformance.GoalOperatorResumeContracts.resumeCasesJson ++ ","
+    ++ "\"goal_config_reactivation_cases\":"
+      ++ Conformance.GoalOperatorResumeContracts.configCasesJson ++ ","
     ++ "\"graph_pipeline_validation_cases\":"
       ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
     ++ "\"graph_pipeline_revision_gate_cases\":"

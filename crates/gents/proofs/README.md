@@ -1109,3 +1109,32 @@ These proofs do not establish:
 
 Those are handled through explicit assumptions, Rust integration tests,
 operational diagnostics, TLA+ specs, or platform-specific tests.
+
+### Goal resume and continuation publication
+
+`GoalAutomation/OperatorResume.lean` composes the existing Goal resume action
+with one signed child publication. Eleven generated cases exercise real
+transactions, including discard and recovery of an existing receipt after
+later Goal progress. Seven configuration cases prevent the ordinary setter
+from reactivating a Goal without its continuation. Usage and budget remain
+unchanged; status and sequence fence stale controller writes.
+
+`GoalAutomation/RequestHead.lean` preserves canonical request ordering among
+causal heads while excluding an authenticated continuation's physical parent.
+Fifteen generated cases drive the production selector with signed request
+rows, including coincident timestamps and historical optional-field omissions.
+This is an ordering boundary, not fresh request admission or a proof of database
+uniqueness. Candidate edges are authenticated lazily, and invalid edges cannot
+suppress a parent.
+
+`GoalAutomation/ClaimedPublication.lean` refines the existing continuation claim
+with transaction-boundary publication. The claim has already advanced its
+sequence: publication preserves Goal state, sequence, parent watermark, usage,
+and budget while atomically adding the signed child. A competing pause, newer
+resume epoch, or changed watermark prevents fresh publication; an exact
+authenticated receipt can recover without reactivating the Goal. Native commit
+conflict or discard publishes nothing. The implementation must write the Goal
+and child in the same existing transaction, even though the modeled Goal fields
+remain unchanged. Eight explicit conformance cases accompany the general laws.
+The older claimed-phase convergence theorem assumes publication remains
+authorized; a historical claim alone cannot override a later pause.
