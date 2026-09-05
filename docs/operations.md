@@ -3,6 +3,32 @@
 Operational reference beyond the [getting-started walkthrough](demo.md):
 desktop enrollment, multi-runtime bring-up, and the operations API.
 
+## Resume a durable goal
+
+Use the terminal request you intend to continue as the stable operation key:
+
+```bash
+gents goal resume-request --home /path/to/agent-home \
+  --graphql http://localhost:9191/api/v0/graphql \
+  --session SESSION_ID --from REQUEST_ID
+```
+
+The command requires the goal owner's local signing identity. It resumes a
+paused, blocked, or usage-limited goal and creates its signed continuation in
+one transaction, preserving the predecessor's session, behavior, graph
+correlation, physical parent, and workspace bindings. The session must have no
+unfinished requests, and the predecessor must be its current causal head.
+
+If the response is lost, repeat the same command with the same `--from` value.
+The JSON receipt returns the original child and `created: false`; it does not
+reactivate the goal again, even if that child has already finished. Token usage
+and the configured budget are preserved.
+
+`goal set` continues to create goals and edit their configuration, but cannot
+reactivate an existing inactive goal. The Codex `thread/goal/set` operation has
+the same restriction because it does not carry a predecessor request ID. Use
+`goal resume-request` for that action.
+
 ## Container image
 
 Each published release includes a multi-platform image for Linux amd64 and

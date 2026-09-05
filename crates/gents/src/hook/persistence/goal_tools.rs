@@ -3,7 +3,7 @@ use serde_json::json;
 
 use crate::goal::{
     create_goal_for_session, load_canonical_goal, next_blocked_audit, refresh_goal_usage,
-    update_goal_fields, CreateGoalForSessionError, GoalAction, GoalSnapshot, GoalStatus,
+    update_goal_fields_if_status, CreateGoalForSessionError, GoalAction, GoalSnapshot, GoalStatus,
     BLOCKED_AUDIT_THRESHOLD, CREATE_GOAL_TOOL_NAME, GET_GOAL_TOOL_NAME, UPDATE_GOAL_TOOL_NAME,
 };
 use crate::graphql::escape_graphql_string;
@@ -208,16 +208,21 @@ impl DefraSessionHook {
                     .as_deref()
                     .map(|reason| format!(r#"completion_evidence: "{reason}","#))
                     .unwrap_or_else(|| "completion_evidence: null,".to_string());
-                update_goal_fields(
+                let applied = update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    pre.status,
                     &format!(
                         r#"status: "{}", active_time_seconds: {active_time}, active_started_at: null, wrapup_completed: {}, last_failure: null, {evidence_field} updated_at: "{updated_at}""#,
                         post.status.as_str(), post.wrapup_completed
                     ),
                 )
                 .await?;
-                json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
+                if applied {
+                    json!({"accepted": true, "status": GoalStatus::Complete.as_str()})
+                } else {
+                    json!({"accepted": false, "error": "goal changed while applying completion; reload its durable state"})
+                }
             }
             "blocked" => {
                 if pre.status != GoalStatus::Active {
@@ -261,21 +266,26 @@ impl DefraSessionHook {
                 };
                 let reason = escape_graphql_string(reason);
                 let request_id = escape_graphql_string(&request_id);
-                update_goal_fields(
+                let applied = update_goal_fields_if_status(
                     &self.node,
                     &goal,
+                    pre.status,
                     &format!(
                         r#"status: "{}", consecutive_blocked_audits: {audits}, last_blocked_request_id: "{request_id}", last_blocked_reason: "{reason}", {active_fields} updated_at: "{updated_at}""#,
                         status.as_str()
                     ),
                 )
                 .await?;
-                json!({
-                    "accepted": accepted,
-                    "status": status.as_str(),
-                    "consecutive_blocked_audits": audits,
-                    "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
-                })
+                if applied {
+                    json!({
+                        "accepted": accepted,
+                        "status": status.as_str(),
+                        "consecutive_blocked_audits": audits,
+                        "required_blocked_audits": BLOCKED_AUDIT_THRESHOLD,
+                    })
+                } else {
+                    json!({"accepted": false, "error": "goal changed while applying blocked audit; reload its durable state"})
+                }
             }
             other => json!({
                 "error": format!("unsupported goal status {other:?}; expected complete or blocked")

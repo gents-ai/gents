@@ -247,18 +247,12 @@ mod background_completion;
 mod coalescing;
 mod metadata;
 
-/// Pins today's `AgentRequestCreate::graphql_input_fields()` output for the
-/// `lifecycle::queue` production writers (#1336 Task 1), before they are
-/// switched onto `build_signed_request` (#1336 Task 2). Both writers take
-/// `created_at` (and, for the session-mutation site, `request_id` and
-/// `retry_key`) as caller-supplied parameters, so — with a deterministic
-/// signing identity — their output is fully stable across runs; no
-/// normalization is needed here (contrast `lifecycle::materialize::pin_tests`,
-/// where `created_at` is generated internally).
+/// Pin signed GraphQL fields through the production preparation functions.
+/// Fixed timestamps and a deterministic signing identity keep these wire
+/// compatibility checks stable without duplicating request construction.
 mod pin_tests {
     use super::*;
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
-    use crate::lifecycle::{TriggerLineage, WorkspaceLineage};
 
     fn pin_parent_request() -> AgentRequest {
         let mut parent = parent_request(PIN_FIXED_DID, "sess-pin-parent");
@@ -305,19 +299,9 @@ mod pin_tests {
         );
     }
 
-    // --- Site 4: `lifecycle::queue::goal_continuation::enqueue_goal_continuation` ---
-    // This persists to a live node and returns only the doc/request/session
-    // ids, not the `AgentRequestCreate` it built, and its retry-key dedupe
-    // lookup also requires a node. The block below reproduces its
-    // DTO-construction statements verbatim (see the production function),
-    // substituting a fixed `now` for `Utc::now()` and inlining
-    // `parent_behavior_id`'s no-node-needed fast path (returning
-    // `parent.behavior_id` directly, since it is set here).
-
+    // Pin the production preparation seam; do not reconstruct its DTO here.
     #[tokio::test]
-    async fn pin_enqueue_goal_continuation_dto_construction() {
-        use sha2::{Digest, Sha256};
-
+    async fn pin_goal_continuation_preparation() {
         let tempdir = tempfile::tempdir().unwrap();
         let _identity = pin_fixed_signing_identity(tempdir.path());
 
@@ -332,78 +316,18 @@ mod pin_tests {
         let content = "continue the goal";
         let behavior_id = parent.behavior_id.clone().unwrap();
 
-        let digest = Sha256::digest(format!("{goal_id}\0{}", parent.request_id).as_bytes());
-        let digest_hex = digest[..16]
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let request_id = format!("goal-cont-{continuation_sequence:020}-{digest_hex}");
-        let retry_key = format!("goal-continuation:{digest_hex}");
-        let now = "2030-01-01T00:00:00Z".to_string();
-        let queue_hints = QueueHints {
-            source: QueueSource::Goal,
-            policy: QueuePolicy::Coalesce,
-            key: Some(format!("goal:{digest_hex}")),
-            queued_after_request_id: Some(parent.request_id.clone()),
-            interrupted_request_id: None,
-        };
-        let metadata = serde_json::json!({
-            "queue": queue_hints,
-            "goal": {
-                "goal_id": goal_id,
-                "parent_request_id": parent.request_id,
-                "continuation_sequence": continuation_sequence,
-                "wrapup": false,
-            }
-        })
-        .to_string();
-        let admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
-                &parent.agent_did,
-                &parent.request_id,
-            );
-        let spec = crate::lifecycle::materialize::RequestSpec {
-            identity: crate::lifecycle::materialize::RequestIdentity {
-                requester_did: None,
-                request_id: request_id.clone(),
-                agent_did: parent.agent_did.clone(),
-                behavior_id,
-                session_id: parent.session_id.clone(),
-                content: content.to_string(),
-                execution_origin: ExecutionOrigin::Scheduled,
-                created_at: now,
-            },
-            admission,
-            initial_lifecycle_state: RequestLifecycleState::Pending,
-            trigger_lineage: TriggerLineage {
-                trigger_id: Some(goal_id.to_string()),
-                trigger_kind: Some("goal".to_string()),
-                source_doc_id: None,
-                correlation: parent.caused_by_correlation.clone(),
-                trigger_context: parent.caused_by_trigger_context.clone(),
-            },
-            trigger_doc_id: None,
-            workspace: Some(WorkspaceLineage {
-                workspace_id: parent.workspace_id.clone(),
-                workspace_authority: parent.workspace_authority.clone(),
-                workspace_owner_deployment_id: parent.workspace_owner_deployment_id.clone(),
-                workspace_seal_hash: parent.workspace_seal_hash.clone(),
-            }),
-            subagent: Some(crate::lifecycle::materialize::ParentLink {
-                depth: parent.subagent_depth,
-                parent_request_id: parent.request_id.clone(),
-                parent_request_doc_id: parent.doc_id.clone(),
-                parent_tool_call_id: None,
-                parent_tool_call_doc_id: None,
-            }),
-            retry: None,
-            sampling: None,
-            metadata: Some(metadata),
-            retry_key: Some(retry_key.clone()),
-            valid_until: None,
-        };
-        let create = crate::lifecycle::materialize::build_signed_request(
-            spec,
+        let mut create = prepare_goal_continuation(
+            &parent,
+            behavior_id,
+            goal_id,
+            content,
+            continuation_sequence,
+            false,
+            "2030-01-01T00:00:00Z",
+        )
+        .expect("prepare goal continuation");
+        crate::lifecycle::materialize::sign_request(
+            &mut create,
             crate::lifecycle::materialize::RequestSigner::RegisteredTarget,
         )
         .await

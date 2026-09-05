@@ -40,7 +40,9 @@ use coalescing::{
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
 pub(crate) use enqueue::{enqueue_session_request, enqueue_steering_request_with_message};
-pub(crate) use goal_continuation::enqueue_goal_continuation;
+pub(crate) use goal_continuation::{
+    goal_continuation_behavior, goal_continuation_identity, prepare_goal_continuation,
+};
 pub use metadata::QueueSource;
 pub(crate) use metadata::{
     is_automated_wakeup, is_goal_queue, is_steering_input_message_key, is_subagent_owned_queue,

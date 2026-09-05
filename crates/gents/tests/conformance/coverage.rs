@@ -536,6 +536,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ProcessTransitions".to_string(),
         ));
     }
+    if !snapshot.goal_claimed_publication_cases.is_empty() {
+        emitted.insert((
+            "goal_claimed_publication_cases".to_string(),
+            "GoalClaimedPublicationCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_request_head_cases.is_empty() {
+        emitted.insert((
+            "goal_request_head_cases".to_string(),
+            "GoalRequestHeadCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_operator_resume_cases.is_empty() {
+        emitted.insert((
+            "goal_operator_resume_cases".to_string(),
+            "GoalOperatorResumeCases".to_string(),
+        ));
+    }
+    if !snapshot.goal_config_reactivation_cases.is_empty() {
+        emitted.insert((
+            "goal_config_reactivation_cases".to_string(),
+            "GoalConfigReactivationCases".to_string(),
+        ));
+    }
     if !snapshot.graph_failure_attribution_traces.is_empty() {
         emitted.insert((
             "graph_failure_attribution_traces".to_string(),
@@ -1279,6 +1303,10 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "task_goal_recovery_cases",
         "goal_submission_cases",
         "goal_continuation_materialization_cases",
+        "goal_claimed_publication_cases",
+        "goal_request_head_cases",
+        "goal_operator_resume_cases",
+        "goal_config_reactivation_cases",
         "graph_failure_attribution_traces",
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",
