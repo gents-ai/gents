@@ -175,12 +175,24 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             // daemon or database restart occurs between these eight requests.
             let process = daemon.process_request(request, shutdown_rx.clone());
             tokio::pin!(process);
-            loop {
-                tokio::select! {
-                    _ = &mut process => break,
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                        crate::RequestLifecycle::recover_all(&node, &agent_did).await.unwrap();
+            // Maintenance must stay independently pollable: `process` can hold
+            // the node write gate while a recovery pass waits on it, so
+            // awaiting `recover_all` inline in a select branch self-deadlocks.
+            // The scoped binding drops the pinned maintenance future the
+            // moment process completes, cancelling any in-flight recovery.
+            {
+                let maintenance = async {
+                    loop {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        crate::RequestLifecycle::recover_all(&node, &agent_did)
+                            .await
+                            .unwrap();
                     }
+                };
+                tokio::pin!(maintenance);
+                tokio::select! {
+                    _ = &mut process => {}
+                    _ = &mut maintenance => {}
                 }
             }
             loop {
