@@ -542,6 +542,22 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalClaimedPublicationCases".to_string(),
         ));
     }
+    for (category, domain, cases) in [
+        (
+            "workspace_path_capability_cases",
+            "WorkspacePathCapabilityCases",
+            &snapshot.workspace_path_capability_cases,
+        ),
+        (
+            "workspace_capability_migration_cases",
+            "WorkspaceCapabilityMigrationCases",
+            &snapshot.workspace_capability_migration_cases,
+        ),
+    ] {
+        if !cases.is_empty() {
+            emitted.insert((category.to_owned(), domain.to_owned()));
+        }
+    }
     if !snapshot.graph_logical_invocation_cases.is_empty() {
         emitted.insert((
             "graph_logical_invocation_cases".to_string(),
@@ -1325,6 +1341,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",
         "graph_pipeline_run_terminal_cases",
+        "workspace_path_capability_cases",
+        "workspace_capability_migration_cases",
         "workspace_cases",
         "workspace_binding_cases",
         "callback_cases",

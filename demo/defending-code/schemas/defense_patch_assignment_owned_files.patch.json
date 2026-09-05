@@ -1,0 +1,11 @@
+[
+  {
+    "op": "add",
+    "path": "/DefensePatchAssignment/Fields/-",
+    "value": {
+      "Name": "owned_files",
+      "Kind": "String",
+      "Immutable": true
+    }
+  }
+]

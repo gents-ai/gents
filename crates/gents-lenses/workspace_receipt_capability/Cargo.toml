@@ -1,0 +1,18 @@
+[package]
+name = "gents-lens-workspace-receipt-capability"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Source-version compatibility migration for workspace path capabilities."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["lens-entry"]
+lens-entry = []
+
+[dependencies]
+serde_json = "1.0"
+lens_sdk = "^0.8"

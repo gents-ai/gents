@@ -44,7 +44,9 @@ fn binding() -> CallbackBindingDoc {
         source_collection: "WorkUnit".into(),
         event_kind: "created".into(),
         filter: None,
-        source_fields: Some(r#"["work_unit_id","repository_id","base_sha","branch"]"#.into()),
+        source_fields: Some(
+            r#"["work_unit_id","repository_id","base_sha","branch","owned_files"]"#.into(),
+        ),
         module_id: None,
         builtin_emitter: Some(BUILTIN_CREATE_WORKSPACE.into()),
         principal_did: "did:key:zWriter".into(),
@@ -82,6 +84,8 @@ fn callback_result_requires_succeeded_complete_journal_and_docs() {
         ActionJournalState::ResultDocsWritten,
     )];
     let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+            .unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),
         repository_id: "repo-1".into(),
@@ -267,6 +271,7 @@ fn apply_rejects_builtin_and_module_together() {
 #[test]
 fn recovery_reuses_stored_action_plan() {
     let source = json!({
+        "owned_files": [],
         "work_unit_id": "unit-1",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -294,6 +299,7 @@ fn recovery_reuses_stored_action_plan() {
         created_at: None,
     };
     let mutated = json!({
+        "owned_files": ["other.md"],
         "work_unit_id": "unit-OTHER",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -304,6 +310,11 @@ fn recovery_reuses_stored_action_plan() {
     match &resolved.actions[0] {
         crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
+            assert_eq!(
+                action.path_capability,
+                crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                "recovery cannot expand the stored manifest from changed source content"
+            );
             assert_eq!(action.branch, "topic");
         }
         crate::workspace::HostAction::SealWorkspace(_)
@@ -320,6 +331,7 @@ fn recovery_reuses_stored_action_plan() {
 #[test]
 fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     let source = json!({
+        "owned_files": [],
         "work_unit_id": "unit-1",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -348,6 +360,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     wasm_binding.builtin_emitter = None;
     wasm_binding.module_id = Some("mod-gone".into());
     let mutated = json!({
+        "owned_files": ["other.md"],
         "work_unit_id": "unit-OTHER",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -359,6 +372,11 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
     match &resolved.actions[0] {
         crate::workspace::HostAction::CreateWorkspace(action) => {
             assert_eq!(action.workspace_id, "ws-stored");
+            assert_eq!(
+                action.path_capability,
+                crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+                "recovery cannot expand the stored manifest from changed source content"
+            );
         }
         crate::workspace::HostAction::SealWorkspace(_)
         | crate::workspace::HostAction::IntegrateWorkspace(_)
@@ -386,6 +404,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
 #[test]
 fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
     let source = json!({
+        "owned_files": [],
         "assignment_id": "cluster:patch",
         "repository_id": "defending-code",
         "base_revision": "abc123"
@@ -405,6 +424,7 @@ fn builtin_emitter_accepts_assignment_and_base_revision_aliases() {
 #[test]
 fn builtin_emitter_builds_create_workspace_plan() {
     let source = json!({
+        "owned_files": [],
         "work_unit_id": "unit-1",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -478,6 +498,8 @@ fn callback_result_only_after_workspace_docs_are_durable() {
     let fx = GitFixture::new();
     let mut docs = MemoryWorkspaceDocuments::default();
     let action = CreateWorkspaceAction {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(Vec::new())
+            .unwrap(),
         workspace_id: "ws-result".into(),
         work_unit_id: "unit-1".into(),
         repository_id: "repo-1".into(),
@@ -558,6 +580,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
         r#"
         type WorkUnit {
             work_unit_id: String
+            owned_files: String
             repository_id: String
             base_sha: String
             branch: String
@@ -575,7 +598,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
                 source_collection: "WorkUnit",
                 event_kind: "created",
                 filter: "",
-                source_fields: "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\"]",
+                source_fields: "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\",\"owned_files\"]",
                 module_id: "",
                 builtin_emitter: "create_workspace",
                 principal_did: "did:key:zWriter",
@@ -600,6 +623,7 @@ async fn first_seen_source_create_materializes_owner_invocation() {
     let create = r#"mutation {
         create_WorkUnit(input: {
             work_unit_id: "unit-scan",
+            owned_files: "[]",
             repository_id: "repo-1",
             base_sha: "abc",
             branch: "topic"
@@ -836,7 +860,7 @@ fn wasi_import_is_denied() {
 #[test]
 fn host_path_in_plan_is_denied() {
     let error = parse_action_plan_json(
-        r#"{"abi":1,"actions":[{"type":"create_workspace","workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"/tmp/evil"}]}"#,
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"/tmp/evil"}]}"#,
     )
     .unwrap_err();
     assert!(error.contains("host path"), "{error}");
@@ -853,6 +877,7 @@ fn host_path_in_plan_is_denied() {
             "abi": 1,
             "actions": [{
                 "type": "create_workspace",
+                "path_capability": {"mode": "exactPaths", "paths": []},
                 "workspace_id": "ws",
                 "work_unit_id": "u",
                 "repository_id": "r",
@@ -869,7 +894,7 @@ fn host_path_in_plan_is_denied() {
 #[test]
 fn extra_action_fields_deny_the_plan() {
     let error = parse_action_plan_json(
-        r#"{"abi":1,"actions":[{"type":"create_workspace","workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","path":"relative"}]}"#,
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","path":"relative"}]}"#,
     )
     .unwrap_err();
     assert!(
@@ -879,7 +904,7 @@ fn extra_action_fields_deny_the_plan() {
         "{error}"
     );
     let error = parse_action_plan_json(
-        r#"{"abi":1,"actions":[{"type":"create_workspace","workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","host_path":"/tmp/ws"}]}"#,
+        r#"{"abi":1,"actions":[{"type":"create_workspace","path_capability":{"mode":"exactPaths","paths":[]},"workspace_id":"ws","work_unit_id":"u","repository_id":"r","base_sha":"s","branch":"topic","host_path":"/tmp/ws"}]}"#,
     )
     .unwrap_err();
     assert!(error.contains("host_path"), "{error}");
@@ -914,6 +939,7 @@ fn capability_miss_denies_create_workspace_plan() {
         return;
     }
     let source = json!({
+        "owned_files": [],
         "work_unit_id": "unit-1",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -942,6 +968,7 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
         return;
     }
     let source = json!({
+        "owned_files": [],
         "work_unit_id": "unit-1",
         "repository_id": "repo-1",
         "base_sha": "abc",
@@ -1007,6 +1034,7 @@ fn canonical_action_plan_sorts_object_keys() {
     let plan = emit_plan_from_source(
         &binding(),
         &json!({
+            "owned_files": [],
             "work_unit_id": "unit-1",
             "repository_id": "repo-1",
             "base_sha": "abc",

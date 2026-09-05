@@ -43,6 +43,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     writer_principal
     integrator_principal
     instruction_manifest
+    path_capability
     seal_hash
     lifecycle_state
     caused_by_invocation_id
@@ -473,6 +474,7 @@ async fn load_receipts(
                 produced_by_request_id
                 produced_by_request_doc_id
                 kind
+                path_capability_digest
                 base_sha
                 seal_hash
                 head_sha
@@ -737,6 +739,9 @@ mod tests {
 
     fn writer_receipt(request_id: &str) -> WorkspaceReceiptDoc {
         WorkspaceReceiptDoc {
+            path_capability_digest: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
+                .unwrap()
+                .digest(),
             receipt_id: format!("receipt-writer-ws-1-{request_id}"),
             workspace_id: "ws-1".into(),
             produced_by_request_id: request_id.into(),

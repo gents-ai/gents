@@ -6,7 +6,6 @@ type IsolatedWorkspace @branchable {
     repository_id: String @index @immutable
     base_sha: String @immutable
     branch: String @immutable
-    path_capability: String @immutable
     creation_policy: String @immutable
     adapter: String @immutable
     owner_deployment_id: String @index @immutable

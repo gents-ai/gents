@@ -1,7 +1,7 @@
-//! Build fixture (and future production) lens wasm artifacts for `include_bytes!`.
+//! Build fixture and production lens WASM artifacts for `include_bytes!`.
 //!
 //! Isolated target dir under OUT_DIR avoids deadlocking the parent cargo flock.
-//! Set `GENTS_SKIP_LENS_BUILD=1` to emit a stub module (check-only / no wasm target).
+//! GENTS_SKIP_LENS_BUILD affects only the fixture; production lenses always build.
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,32 @@ fn main() {
         lens_dir.join("Cargo.toml").display()
     );
     println!("cargo:rerun-if-env-changed=GENTS_SKIP_LENS_BUILD");
+    println!("cargo:rerun-if-changed=../gents-lenses/source_version_field.rs");
+    for (directory, package, artifact, variable) in [
+        (
+            "workspace_capability",
+            "gents-lens-workspace-capability",
+            "gents_lens_workspace_capability.wasm",
+            "GENTS_LENS_WORKSPACE_CAPABILITY_WASM_PATH",
+        ),
+        (
+            "workspace_receipt_capability",
+            "gents-lens-workspace-receipt-capability",
+            "gents_lens_workspace_receipt_capability.wasm",
+            "GENTS_LENS_WORKSPACE_RECEIPT_CAPABILITY_WASM_PATH",
+        ),
+    ] {
+        let production = workspace_root.join("crates/gents-lenses").join(directory);
+        println!(
+            "cargo:rerun-if-changed={}",
+            production.join("src/lib.rs").display()
+        );
+        println!(
+            "cargo:rerun-if-changed={}",
+            production.join("Cargo.toml").display()
+        );
+        build_lens(&workspace_root, package, artifact, variable);
+    }
 
     if env::var("GENTS_SKIP_LENS_BUILD").is_ok() {
         emit_stub(FIXTURE_ENV, "fixture_add_label_stub.wasm");
@@ -47,7 +73,8 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
     // Match DefraDB's integration harness: lens_sdk 0.8 transport buffers are
     // corrupted by optimized WASM builds, producing null or invalid type IDs.
     // Tracked upstream: https://github.com/sourcenetwork/lens/issues/166
-    let status = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .args([
             "build",
             "-p",
@@ -57,15 +84,40 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
             "--target-dir",
         ])
         .arg(&lens_target_dir)
-        .current_dir(workspace_root)
-        .status();
+        .current_dir(workspace_root);
+    if pkg != FIXTURE_PACKAGE {
+        for (name, _) in env::vars_os() {
+            if name.to_string_lossy().starts_with("CARGO_PROFILE_") {
+                command.env_remove(name);
+            }
+        }
+        command.env_remove("CARGO_INCREMENTAL");
+        command.arg("--locked");
+        // Transform IDs hash the full WASM bytes. Host/check-out-specific debug
+        // paths and inherited outer build flags must not change production IDs.
+        // Keep the existing dev optimization profile: optimized lens SDK WASM
+        // has a known transport bug (see above).
+        let cargo_home = env::var_os("CARGO_HOME")
+            .map(PathBuf::from)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
+            .expect("Cargo home must be available for reproducible production lenses");
+        let cargo_home = cargo_home.canonicalize().unwrap_or(cargo_home);
+        let flags = [
+            "-Cdebuginfo=0".to_owned(),
+            "-Cstrip=symbols".to_owned(),
+            format!("--remap-path-prefix={}=/gents", workspace_root.display()),
+            format!("--remap-path-prefix={}=/cargo", cargo_home.display()),
+        ];
+        command.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"));
+    }
+    let status = command.status();
 
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => {
             panic!(
                 "lens wasm build for {pkg} failed with {s}; install wasm32-unknown-unknown \
-                 (`rustup target add wasm32-unknown-unknown`) or set GENTS_SKIP_LENS_BUILD=1"
+                 (`rustup target add wasm32-unknown-unknown`) (GENTS_SKIP_LENS_BUILD skips only the test fixture)"
             );
         }
         Err(e) => panic!("failed to spawn cargo for lens build: {e}"),

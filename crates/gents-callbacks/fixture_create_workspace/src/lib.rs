@@ -46,6 +46,11 @@ pub fn plan_create_workspace(
     };
 
     let mut action = Map::new();
+    // This signed fixture deliberately grants no repository writes.
+    action.insert(
+        "path_capability".into(),
+        json!({"mode": "exactPaths", "paths": []}),
+    );
     action.insert("adapter".into(), Value::String(adapter.to_string()));
     action.insert("base_sha".into(), Value::String(base_sha));
     action.insert("branch".into(), Value::String(branch));
@@ -204,6 +209,10 @@ mod tests {
         assert!(!encoded.contains("host_path"), "{encoded}");
         assert!(!encoded.contains("/tmp"), "{encoded}");
         assert_eq!(plan["abi"], 1);
+        assert_eq!(
+            plan["actions"][0]["path_capability"],
+            json!({"mode": "exactPaths", "paths": []})
+        );
         assert_eq!(plan["actions"][0]["type"], "create_workspace");
         assert_eq!(plan["actions"][0]["workspace_id"], "ws-1");
         assert_eq!(plan["actions"][0]["adapter"], "make_worktree");
