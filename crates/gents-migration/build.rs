@@ -13,6 +13,13 @@ const FIXTURE_ENV: &str = "GENTS_LENS_FIXTURE_ADD_LABEL_WASM_PATH";
 
 fn main() {
     let workspace_root = workspace_root();
+    for input in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
+        println!(
+            "cargo:rerun-if-changed={}",
+            workspace_root.join(input).display()
+        );
+    }
+    println!("cargo:rerun-if-env-changed=CARGO_HOME");
     let lens_dir = workspace_root
         .join("crates")
         .join("gents-lenses")
@@ -101,13 +108,56 @@ fn build_lens(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &s
             .map(PathBuf::from)
             .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")))
             .expect("Cargo home must be available for reproducible production lenses");
-        let cargo_home = cargo_home.canonicalize().unwrap_or(cargo_home);
-        let flags = [
+        let canonical_cargo_home = cargo_home
+            .canonicalize()
+            .unwrap_or_else(|_| cargo_home.clone());
+        let compiler = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let sysroot = Command::new(compiler)
+            .args(["--print", "sysroot"])
+            .output()
+            .expect("query compiler sysroot for production lenses");
+        assert!(sysroot.status.success(), "compiler sysroot query failed");
+        let sysroot = PathBuf::from(
+            String::from_utf8(sysroot.stdout)
+                .expect("compiler sysroot must be UTF-8")
+                .trim(),
+        );
+        let canonical_sysroot = sysroot.canonicalize().unwrap_or_else(|_| sysroot.clone());
+        let mut flags = vec![
             "-Cdebuginfo=0".to_owned(),
             "-Cstrip=symbols".to_owned(),
             format!("--remap-path-prefix={}=/gents", workspace_root.display()),
             format!("--remap-path-prefix={}=/cargo", cargo_home.display()),
+            format!(
+                "--remap-path-prefix={}=/cargo",
+                canonical_cargo_home.display()
+            ),
+            format!("--remap-path-prefix={}=/rust", sysroot.display()),
+            format!("--remap-path-prefix={}=/rust", canonical_sysroot.display()),
         ];
+        // Runner-local Cargo homes can symlink caches to a shared home.
+        // rustc embeds the resolved source paths, which lie outside that overlay.
+        // Map each actual source cache to the same logical location as a normal
+        // Cargo home. Keep the most specific mappings last.
+        for cache in ["registry", "git"] {
+            if let Ok(target) = std::fs::read_link(cargo_home.join(cache)) {
+                let source = if target.is_absolute() {
+                    target
+                } else {
+                    cargo_home.join(target)
+                };
+                flags.push(format!(
+                    "--remap-path-prefix={}=/cargo/{cache}",
+                    source.display()
+                ));
+            }
+            if let Ok(source) = cargo_home.join(cache).canonicalize() {
+                flags.push(format!(
+                    "--remap-path-prefix={}=/cargo/{cache}",
+                    source.display()
+                ));
+            }
+        }
         command.env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"));
     }
     let status = command.status();

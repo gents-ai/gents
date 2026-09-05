@@ -851,7 +851,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
             args_json: None,
         }),
         expected_version: Some("bafyreie5rouy5bdaidhrp3pf6oohfm3rhxva75lfwfbbncahgjotnavj5m"),
-        expected_transform: Some("baf452578cf43514c29b17bdb5d05037caa"),
+        expected_transform: Some("baf3ce596b81fd1d4d238306d7fe37cb669"),
         expected_state: CollectionExpectation::fields(&["path_capability"]),
     },
     MigrationStep::PatchVersioned {
@@ -863,7 +863,7 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
             args_json: None,
         }),
         expected_version: Some("bafyreigqpu3bfxaowmfc4h35a62shgmizjnbnhb3ednof2t3ypvd76b3jy"),
-        expected_transform: Some("baf1b909959ae8cbd66e3353944c3d0da2a"),
+        expected_transform: Some("baf1bc0014532c6ccdce492e37b453b017c"),
         expected_state: CollectionExpectation::fields(&["path_capability_digest"]),
     },
 ];
