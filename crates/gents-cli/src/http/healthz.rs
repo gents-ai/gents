@@ -1,4 +1,7 @@
-use gents_protocol::row::{project_behavior_readiness_summary, ProjectedBehaviorReadinessSummary};
+use gents_protocol::row::{
+    project_behavior_readiness_summary, BehaviorReadinessUnavailableReason,
+    ProjectedBehaviorReadinessSummary,
+};
 use serde_json::{json, Value};
 
 use crate::http::prometheus::MetricsQueryData;
@@ -47,10 +50,23 @@ fn render_healthz_payload_at(
                 }
                 ProjectedBehaviorReadinessSummary::Unknown(_) => true,
             };
-            let backend_degraded = data
-                .inference_backends
-                .iter()
-                .any(|backend| backend.enabled && backend.probe_status != "healthy");
+            // Measured backend health is never persisted to
+            // `InferenceBackend` (#640; see `backend_health.rs`), so this
+            // out-of-process reader can't compute degradation from that
+            // document's `enabled`/`probe_status` fields — only from the
+            // readiness projection this runtime already published above.
+            let backend_degraded = match &readiness {
+                ProjectedBehaviorReadinessSummary::Observed(summary) => {
+                    summary.unavailable_behaviors.values().any(|reason| {
+                        matches!(
+                            reason,
+                            BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
+                                | BehaviorReadinessUnavailableReason::BackendDisabled
+                        )
+                    })
+                }
+                ProjectedBehaviorReadinessSummary::Unknown(_) => false,
+            };
             let liveness_degraded = data.liveness.expired_processing_count > 0;
             let codex_shim = state
                 .codex_shim_health
@@ -298,6 +314,54 @@ mod tests {
                 .get("expired_processing_count")
                 .and_then(|v| v.as_i64()),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn healthz_reports_backend_degraded_from_readiness_not_backend_document() {
+        // The `InferenceBackend` row itself is healthy — this runtime's
+        // *measured* health (#640, never persisted to that document) is
+        // what vetoed the behavior, and only the readiness projection
+        // carries that signal.
+        let vetoed_readiness = AgentBehaviorReadinessRow {
+            agent_did: "did:test:test".to_string(),
+            snapshot_json: serde_json::to_string(&BehaviorReadinessSnapshot {
+                format_version: BEHAVIOR_READINESS_FORMAT_VERSION,
+                process_state: BehaviorReadinessProcessState::Ready,
+                active_generation: 1,
+                router_generation: 1,
+                default_behavior_id: "default".to_string(),
+                behaviors: vec![BehaviorReadinessEntry {
+                    behavior_id: "default".to_string(),
+                    state: BehaviorReadinessState::Unavailable,
+                    reason: Some(
+                        gents_protocol::row::BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                    ),
+                }],
+            })
+            .unwrap(),
+            updated_at: "2026-05-13T11:59:30Z".to_string(),
+        };
+        let data = MetricsQueryData {
+            agent_runtimes: vec![ready_runtime()],
+            behavior_readiness: vec![vetoed_readiness],
+            inference_backends: vec![healthy_backend()],
+            liveness: RuntimeLivenessSnapshot::default(),
+        };
+
+        let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
+
+        assert_eq!(
+            payload
+                .pointer("/checks/backends/status")
+                .and_then(Value::as_str),
+            Some("degraded"),
+            "a readiness-reported backend veto must degrade the backends check even though \
+             the InferenceBackend document itself reports healthy: {payload}"
+        );
+        assert_eq!(
+            payload.get("status").and_then(Value::as_str),
+            Some("degraded")
         );
     }
 

@@ -59,37 +59,6 @@ fn inference_backend_from_value_requires_provider_kind() {
 }
 
 #[test]
-fn is_available_requires_enabled_and_healthy() {
-    let healthy = InferenceBackend {
-        backend_id: "test".into(),
-        name: "Test".into(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: None,
-        endpoint: "http://localhost:8000/v1".into(),
-        api_key: None,
-        api_key_env_var: None,
-        max_concurrent: 1,
-        max_queue_depth: DEFAULT_MAX_QUEUE_DEPTH,
-        enabled: true,
-        models: Vec::new(),
-        probe_status: "healthy".into(),
-    };
-    assert!(healthy.is_available());
-
-    let disabled = InferenceBackend {
-        enabled: false,
-        ..healthy.clone()
-    };
-    assert!(!disabled.is_available());
-
-    let unhealthy = InferenceBackend {
-        probe_status: "unhealthy".into(),
-        ..healthy.clone()
-    };
-    assert!(!unhealthy.is_available());
-}
-
-#[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     let cases = lean_backend_health_admission_cases();
     assert_eq!(cases.len(), 7);
@@ -113,9 +82,12 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
             BackendAdmissionConfig::from_backend(&backend).expect("valid backend config");
 
         assert_eq!(
-            backend.is_available(),
+            crate::admission::document_configured_from_fields(
+                backend.enabled,
+                &backend.probe_status
+            ),
             case.expected_available,
-            "{} registry availability drifted from Lean case",
+            "{} document-configured availability drifted from Lean case",
             case.name
         );
         assert_eq!(

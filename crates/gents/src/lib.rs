@@ -150,8 +150,9 @@ pub use adapter_projection::{
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
     ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
 };
+pub use admission::call_state_holds_backend_slot;
 pub use admission::BackendAdmissionConfig;
-pub use admission::{InferenceCall, InferenceCallRecoveryReport};
+pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
 pub use agent::{
     BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,

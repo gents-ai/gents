@@ -56,10 +56,48 @@ impl BackendAdmissionConfig {
 
     /// Effective availability: operator/bootstrap intent from the shared
     /// document AND the local measurement not vetoing — mirrors
-    /// `Proofs.BackendHealth.effectiveAvailable` (B6).
-    pub(crate) fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS && !self.measured_unhealthy
+    /// `Proofs.BackendHealth.effectiveAvailable` (B6). Names the failing
+    /// term so callers can report *why* without recomputing the comparison
+    /// — this is the single owner of that comparison in the codebase.
+    pub(crate) fn availability(&self) -> BackendAvailability {
+        if !self.enabled {
+            BackendAvailability::Disabled
+        } else if self.probe_status != HEALTHY_PROBE_STATUS {
+            BackendAvailability::ProbeNotHealthy
+        } else if self.measured_unhealthy {
+            BackendAvailability::MeasuredUnhealthy
+        } else {
+            BackendAvailability::Available
+        }
     }
+
+    pub(crate) fn is_available(&self) -> bool {
+        self.availability() == BackendAvailability::Available
+    }
+}
+
+/// The term of [`BackendAdmissionConfig::availability`] that failed, so
+/// callers that need to explain *why* a backend is unavailable don't
+/// recompute `enabled`/`probe_status`/`measured_unhealthy` themselves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BackendAvailability {
+    Available,
+    Disabled,
+    ProbeNotHealthy,
+    MeasuredUnhealthy,
+}
+
+/// Whether the *document* declares this backend enabled and healthy —
+/// operator/bootstrap intent from raw `(enabled, probe_status)` fields, not
+/// a live availability verdict: it has no `measured_unhealthy` term, so it
+/// says nothing about this runtime's `BackendHealthMap` (#640). The one
+/// caller is `gents diagnose`, which uses it to gate whether to even attempt
+/// its own live reachability probe against an offline-exported config
+/// blob (not a full `InferenceBackend`). Named "configured", not
+/// "available", so it isn't mistaken for an admission decision; this file
+/// stays the single owner of the `enabled`/`probe_status` comparison.
+pub fn document_configured_from_fields(enabled: bool, probe_status: &str) -> bool {
+    enabled && probe_status == HEALTHY_PROBE_STATUS
 }
 
 pub(crate) fn backend_admission_configs_from_backends<'a>(
@@ -75,4 +113,59 @@ pub(crate) fn backend_admission_configs_from_backends<'a>(
         );
     }
     Ok(configs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(
+        enabled: bool,
+        probe_status: &str,
+        measured_unhealthy: bool,
+    ) -> BackendAdmissionConfig {
+        BackendAdmissionConfig {
+            backend_id: "test".to_string(),
+            max_concurrent: 1,
+            max_queue_depth: 0,
+            enabled,
+            probe_status: probe_status.to_string(),
+            measured_unhealthy,
+            config_fingerprint: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn availability_requires_enabled_healthy_and_unvetoed() {
+        assert_eq!(
+            config(true, HEALTHY_PROBE_STATUS, false).availability(),
+            BackendAvailability::Available
+        );
+        assert!(config(true, HEALTHY_PROBE_STATUS, false).is_available());
+
+        assert_eq!(
+            config(false, HEALTHY_PROBE_STATUS, false).availability(),
+            BackendAvailability::Disabled
+        );
+        assert!(!config(false, HEALTHY_PROBE_STATUS, false).is_available());
+
+        assert_eq!(
+            config(true, "unhealthy", false).availability(),
+            BackendAvailability::ProbeNotHealthy
+        );
+        assert!(!config(true, "unhealthy", false).is_available());
+
+        assert_eq!(
+            config(true, HEALTHY_PROBE_STATUS, true).availability(),
+            BackendAvailability::MeasuredUnhealthy
+        );
+        assert!(!config(true, HEALTHY_PROBE_STATUS, true).is_available());
+
+        // enabled=false wins over a bad probe_status: the disabled term is
+        // checked first.
+        assert_eq!(
+            config(false, "unhealthy", true).availability(),
+            BackendAvailability::Disabled
+        );
+    }
 }

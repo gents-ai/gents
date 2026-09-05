@@ -88,3 +88,44 @@ async fn builder_requires_resolvable_backend_documents() {
         .to_string()
         .contains("behavior 'policy-ops' references missing backend missing-backend"));
 }
+
+#[tokio::test]
+async fn builder_rejects_backend_vetoed_by_measured_health() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    insert_backend(
+        node.as_ref(),
+        "builder-vetoed-backend",
+        "http://127.0.0.1:8778/v1",
+    )
+    .await;
+    let identity = Arc::new(test_identity("builder-measured-unhealthy"));
+
+    let backend_health = crate::backend_health::BackendHealthMap::new();
+    backend_health
+        .set_for_test(
+            "builder-vetoed-backend",
+            crate::backend_health::BackendHealthState::Unhealthy,
+            3,
+        )
+        .await;
+
+    let error = match Gents::builder()
+        .node(node)
+        .identity(identity)
+        .backend_health(backend_health)
+        .behavior("policy-ops")
+        .backend_id("builder-vetoed-backend")
+        .done()
+        .build()
+        .await
+    {
+        Ok(_) => panic!("builder should reject a backend this runtime has measured unhealthy"),
+        Err(error) => error,
+    };
+
+    assert!(
+        error.to_string().contains("measured_unhealthy=true"),
+        "error should name the measured-health veto: {error}"
+    );
+}

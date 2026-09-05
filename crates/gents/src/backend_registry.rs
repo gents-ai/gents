@@ -96,10 +96,6 @@ impl InferenceBackend {
         })
     }
 
-    pub fn is_available(&self) -> bool {
-        self.enabled && self.probe_status == HEALTHY_PROBE_STATUS
-    }
-
     pub fn resolved_api_key(&self) -> Option<String> {
         if let Some(key) = self.api_key.as_ref() {
             return Some(key.clone());

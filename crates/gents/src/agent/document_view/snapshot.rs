@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::BehaviorReadinessUnavailableReason;
 
-use crate::admission::backend_admission_configs_from_backends;
+use crate::admission::{backend_admission_configs_from_backends, BackendAvailability};
 use crate::config::AgentBehavior;
 use crate::document_config::{
     default_behavior_id_for_agent, AgentBehavior as AgentBehaviorDocument,
@@ -69,6 +69,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     };
 
     let measured_vetoed = context.backend_health.vetoed_backend_ids().await;
+    let backend_admission_configs = backend_admission_configs_from_backends(
+        view.backends.values().map(|record| &record.value),
+        &measured_vetoed,
+    )?;
 
     let mut unavailable_behaviors = HashMap::new();
     let mut behavior_factories: Vec<
@@ -120,41 +124,61 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         ),
                     )
                 })?;
-            if !backend.enabled {
-                return Err(BehaviorResolutionError::new(
-                    BehaviorReadinessUnavailableReason::BackendDisabled,
-                    anyhow!(
-                        "behavior {} backend {} is unavailable (enabled={} probe_status={})",
-                        behavior.behavior_id,
-                        backend.backend_id,
-                        backend.enabled,
-                        backend.probe_status
-                    ),
-                ));
-            }
-            if !backend.is_available() {
-                return Err(BehaviorResolutionError::new(
-                    BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
-                    anyhow!(
-                        "behavior {} backend {} is not ready (probe_status={})",
-                        behavior.behavior_id,
-                        backend.backend_id,
-                        backend.probe_status
-                    ),
-                ));
-            }
-            if measured_vetoed.contains(&backend.backend_id) {
-                return Err(BehaviorResolutionError::new(
-                    BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
-                    anyhow!(
-                        "behavior {} backend {} is measured unhealthy by the local prober \
-                         (document probe_status={} is operator intent; routing resumes on \
-                         the next successful probe)",
-                        behavior.behavior_id,
-                        backend.backend_id,
-                        backend.probe_status
-                    ),
-                ));
+            // `BackendAdmissionConfig::availability` is the single owner of
+            // the enabled/probe_status/measured_unhealthy comparison; built
+            // once above for every backend and reused here and for the
+            // snapshot's admission configs below.
+            let admission_config = backend_admission_configs
+                .get(&backend.backend_id)
+                .cloned()
+                .ok_or_else(|| {
+                    BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendNotConfigured,
+                        anyhow!(
+                            "behavior {} references missing backend {}",
+                            behavior.behavior_id,
+                            backend.backend_id
+                        ),
+                    )
+                })?;
+            match admission_config.availability() {
+                BackendAvailability::Available => {}
+                BackendAvailability::Disabled => {
+                    return Err(BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendDisabled,
+                        anyhow!(
+                            "behavior {} backend {} is unavailable (enabled={} probe_status={})",
+                            behavior.behavior_id,
+                            backend.backend_id,
+                            backend.enabled,
+                            backend.probe_status
+                        ),
+                    ));
+                }
+                BackendAvailability::ProbeNotHealthy => {
+                    return Err(BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                        anyhow!(
+                            "behavior {} backend {} is not ready (probe_status={})",
+                            behavior.behavior_id,
+                            backend.backend_id,
+                            backend.probe_status
+                        ),
+                    ));
+                }
+                BackendAvailability::MeasuredUnhealthy => {
+                    return Err(BehaviorResolutionError::new(
+                        BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable,
+                        anyhow!(
+                            "behavior {} backend {} is measured unhealthy by the local prober \
+                             (document probe_status={} is operator intent; routing resumes on \
+                             the next successful probe)",
+                            behavior.behavior_id,
+                            backend.backend_id,
+                            backend.probe_status
+                        ),
+                    ));
+                }
             }
             if backend.provider_kind == crate::backend_provider::BackendProviderKind::ChatGptCodex
                 && !view.has_enabled_oauth_credential(crate::chatgpt_codex::CHATGPT_CODEX_PROVIDER)
@@ -394,11 +418,6 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
         behaviors.push(behavior);
     }
-
-    let backend_admission_configs = backend_admission_configs_from_backends(
-        view.backends.values().map(|record| &record.value),
-        &measured_vetoed,
-    )?;
 
     let (active_schedules, unavailable_schedules) = resolve_schedules(view, &unavailable_behaviors);
     let (active_event_triggers, unavailable_event_triggers) =

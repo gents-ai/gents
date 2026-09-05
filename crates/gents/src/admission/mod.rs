@@ -5,7 +5,6 @@ mod permit;
 mod persistence;
 mod recovery;
 mod registry;
-#[cfg(test)]
 mod slot_accounting;
 pub(crate) mod stream_guard;
 
@@ -15,9 +14,11 @@ pub(crate) use client::{
     terminal_failure_reason_observer, AdmissionCallContext, AdmittedCompletionClient, CallKind,
 };
 pub(crate) use config::backend_admission_configs_from_backends;
-pub use config::BackendAdmissionConfig;
+pub(crate) use config::BackendAvailability;
+pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;
+pub use slot_accounting::call_state_holds_backend_slot;
 
 #[cfg(test)]
 mod tests;
