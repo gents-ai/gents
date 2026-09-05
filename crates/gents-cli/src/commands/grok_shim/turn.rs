@@ -631,6 +631,7 @@ impl TurnManager {
                 let mut after = String::new();
                 let mut delivery_after = String::new();
                 let mut goal_cursor = super::goals::GoalCursor::default();
+                let mut goal_refresh_at = tokio::time::Instant::now();
                 loop {
                     tokio::time::sleep(TERMINAL_POLL_INTERVAL).await;
                     let Some(manager) = manager.upgrade() else {
@@ -639,18 +640,23 @@ impl TurnManager {
                     if manager.state.lock().await.closed {
                         break;
                     }
-                    if let Err(error) = goal_cursor
-                        .refresh(
-                            &manager.node,
-                            &manager.config.agent_did,
-                            &observed_session,
-                            &sender,
-                            &projections,
-                        )
-                        .await
-                    {
-                        tracing::warn!(%error, session_id = %observed_session,
+                    // Goal accounting scans the runtime ledger. Its panel
+                    // does not require token-stream polling frequency.
+                    if tokio::time::Instant::now() >= goal_refresh_at {
+                        goal_refresh_at = tokio::time::Instant::now() + Duration::from_secs(1);
+                        if let Err(error) = goal_cursor
+                            .refresh(
+                                &manager.node,
+                                &manager.config.agent_did,
+                                &observed_session,
+                                &sender,
+                                &projections,
+                            )
+                            .await
+                        {
+                            tracing::warn!(%error, session_id = %observed_session,
                             "Grok goal observation failed; retrying");
+                        }
                     }
                     if let Err(error) = manager
                         .observe_session_tick(

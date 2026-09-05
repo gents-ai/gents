@@ -26,6 +26,26 @@ an unmatched live tail can prevent binding a closed prefix during reconnect;
 unknown response identity can temporarily discard delivery/timing evidence;
 goal usage scans at the 200 ms observation cadence are costly for old sessions.
 
+Local review follow-ups now preserve delivery/timing evidence on an unknown
+response identity, distinguish a known replacement, and bind a uniquely
+identified closed prefix even while an unmatched, unstamped live tip remains
+open. The latter has an embedded reconnect regression with two identical
+closed segments plus a still-streaming third segment. Missing interior,
+divergent, stamped, or genuinely ambiguous segments are not relaxed.
+Goal accounting observation now runs once per second; token/tool streaming
+retains its existing cadence. All 330 shim tests, the workspace all-target
+check, and binary build passed (`/tmp/grok-review-final-{tests,check,build}.log`).
+On the rebuilt server, the persisted goal-continuation replay probe passed
+again (279 exact assistant characters, historical timestamps bounded by the
+durable completion), and the goal control/clear/recreate probe passed on
+`grok-edge-4f9bef9dfb204ea6` with the coarser observation cadence.
+
+The broader runtime indexing/materialization work is tracked in
+https://github.com/gents-ai/gents/issues/1386. It must preserve complete history,
+exact ownership, and late background events, not introduce a shim database or
+silently stop observing old sessions. This is a scaling follow-up, not a claim
+that the current read scans have constant cost.
+
 The remaining multi-client finding has a local follow-up: discovered human
 turns re-read authorized submission metadata, echo the human prompt under its
 original identity, and reuse the stock `turn_completed` viewer finalizer. No

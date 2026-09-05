@@ -686,8 +686,10 @@ impl ProjectionEngine {
         // 2. Replay every validated response snapshot after each rail's
         // send-success anchor. Observation may already be at the newest
         // durable head; delivery remains an independent sequential prefix.
-        let response_doc_changed =
-            messages.response_doc_id.as_deref() != cursor.delivered_response_doc.as_deref();
+        let response_doc_changed = known_response_changed(
+            messages.response_doc_id.as_deref(),
+            cursor.delivered_response_doc.as_deref(),
+        );
         let mut planned_live = if response_doc_changed {
             LiveCursorPair::default()
         } else {
@@ -1649,7 +1651,8 @@ struct HistorySegmentSketch {
 }
 
 /// Infer exact row identities for history segments only when the complete
-/// segment-to-row assignment is unique and strictly increasing. Any
+/// segment-to-row assignment is unique and strictly increasing (an unmatched,
+/// provably open tip may remain unbound). Any remaining
 /// ambiguity or inversion returns no inferred bindings; durable projection
 /// then remains authoritative and may duplicate rather than hide bytes.
 fn infer_history_row_bindings(
@@ -1742,7 +1745,19 @@ fn infer_history_row_bindings(
             .collect();
         candidate_rows.push(candidates);
     }
-    let Some(assignment) = unique_increasing_assignment(&candidate_rows) else {
+    // A provably open, not-yet-materialized tip has no durable candidate.
+    // Its absence must not invalidate a uniquely identified closed prefix.
+    // Do not relax any missing/interior, divergent, or stamped segment.
+    let open_unmaterialized_tip = current.is_some_and(|index| index + 1 == segments.len())
+        && candidate_rows.last().is_some_and(Vec::is_empty)
+        && segments
+            .last()
+            .is_some_and(|segment| segment.content.is_some() && segment.reasoning.is_some())
+        && history
+            .last()
+            .is_some_and(|snapshot| snapshot.materialized_message_sequence().is_none());
+    let bound_count = candidate_rows.len() - usize::from(open_unmaterialized_tip);
+    let Some(assignment) = unique_increasing_assignment(&candidate_rows[..bound_count]) else {
         return BTreeMap::new();
     };
     let mut bindings = BTreeMap::new();
@@ -2463,12 +2478,21 @@ enum EvidenceRail {
     Reasoning,
 }
 
+fn known_response_changed(observed: Option<&str>, delivered: Option<&str>) -> bool {
+    observed.is_some_and(|identity| Some(identity) != delivered)
+}
+
 impl RequestCursor {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
     fn observe_timestamps(&mut self, messages: &messages::MessageProjection) {
+        // Unprovable history is unknown, not evidence of a replacement.
+        // Keep timestamps whose rows the incremental high water has passed.
+        if messages.response_doc_id.is_none() {
+            return;
+        }
         self.response_ended_at_ms = messages.response_ended_at_ms;
         if self.timing_response_doc != messages.response_doc_id {
             self.timing_response_doc = messages.response_doc_id.clone();
@@ -2863,6 +2887,49 @@ mod tests {
     use gents::graphql::ensure_no_errors;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn unknown_response_identity_preserves_delivered_timing_evidence() {
+        assert!(!known_response_changed(None, Some("old")));
+        assert!(!known_response_changed(Some("old"), Some("old")));
+        assert!(known_response_changed(Some("new"), Some("old")));
+        assert!(known_response_changed(Some("first"), None));
+        let mut cursor = RequestCursor::default();
+        cursor.timing_response_doc = Some("old".into());
+        cursor.response_started_at_ms = Some(1000);
+        cursor.response_ended_at_ms = Some(2000);
+        cursor
+            .message_timestamps
+            .insert(1, ("row".into(), Some(1500)));
+        let mut observation = messages::MessageProjection {
+            updates: vec![],
+            chronology: vec![],
+            update_keys: vec![],
+            total_tokens: 0,
+            terminal: false,
+            stop_reason: None,
+            context_window_tokens: 1000,
+            live_tail: Default::default(),
+            history: None,
+            response_doc_id: None,
+            message_sequence_high_water: Some(1),
+            response_started_at_ms: None,
+            response_ended_at_ms: None,
+            timeline: vec![],
+        };
+        cursor.observe_timestamps(&observation);
+        assert_eq!(cursor.timing_response_doc.as_deref(), Some("old"));
+        assert_eq!(cursor.response_started_at_ms, Some(1000));
+        assert_eq!(cursor.response_ended_at_ms, Some(2000));
+        assert_eq!(cursor.message_timestamps[&1].1, Some(1500));
+        observation.response_doc_id = Some("new".into());
+        observation.response_started_at_ms = Some(3000);
+        cursor.observe_timestamps(&observation);
+        assert_eq!(cursor.timing_response_doc.as_deref(), Some("new"));
+        assert_eq!(cursor.response_started_at_ms, Some(3000));
+        assert_eq!(cursor.response_ended_at_ms, None);
+        assert!(cursor.message_timestamps.is_empty());
+    }
 
     #[test]
     fn repeated_prefixes_bind_only_when_transcript_order_proves_identity() {
@@ -4770,6 +4837,33 @@ mod tests {
     /// materialized into. Replaying two segments around a tool must therefore
     /// preserve text(3) -> tool(4) -> text(6), rather than assigning both
     /// segments the newest assistant sequence.
+    #[tokio::test]
+    async fn reconnect_with_open_tail_keeps_repeated_closed_segments_once() {
+        let (_dir, engine) = embedded_engine().await;
+        let session = "s-open-repeat";
+        let request = "req-open-repeat";
+        seed_response_row(&engine, session, request, "same", "", 1, 0, None).await;
+        update_response_tail(&engine, request, "", "", 1, 0).await;
+        update_response_tail(&engine, request, "same", "", 2, 0).await;
+        update_response_tail(&engine, request, "", "", 2, 0).await;
+        update_response_tail(&engine, request, "open", "", 3, 0).await;
+        seed_assistant_text_row(&engine, session, request, 3, "same").await;
+        seed_assistant_text_row(&engine, session, request, 6, "same").await;
+        let mut cursor = RequestCursor::new();
+        let events = deliver(&engine, session, request, &mut cursor).await;
+        assert_eq!(
+            chunk_texts(&events),
+            vec![
+                ("agent_message_chunk".into(), "same".into()),
+                ("agent_message_chunk".into(), "same".into()),
+                ("agent_message_chunk".into(), "open".into()),
+            ]
+        );
+        assert!(deliver(&engine, session, request, &mut cursor)
+            .await
+            .is_empty());
+    }
+
     #[tokio::test]
     async fn retained_segments_sort_around_an_intervening_tool() {
         let (_dir, engine) = embedded_engine().await;
