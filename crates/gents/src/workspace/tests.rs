@@ -108,6 +108,22 @@ impl Fixture {
         branch: &str,
     ) -> CreateWorkspaceAction {
         CreateWorkspaceAction {
+            path_capability: WorkspacePathCapability::exact_paths(
+                [
+                    "README.md",
+                    "patch.rs",
+                    "after-seal.txt",
+                    "AGENTS.md",
+                    "blob.bin",
+                    "gone.rs",
+                    "old.rs",
+                    "new.rs",
+                ]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+            )
+            .unwrap(),
             workspace_id: workspace_id.to_string(),
             work_unit_id: work_unit_id.to_string(),
             repository_id: "repo-1".to_string(),
@@ -159,6 +175,7 @@ fn git_worktree_diff_policy() -> CommandExecutionPolicy {
 #[test]
 fn builtin_emitter_omits_absolute_destination() {
     let action = CreateWorkspaceAction {
+        path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),
         repository_id: "repo-1".into(),
@@ -211,6 +228,7 @@ fn builtin_emitter_omits_absolute_destination() {
 #[test]
 fn isolated_workspace_mutation_has_no_host_path() {
     let doc = IsolatedWorkspaceDoc {
+        path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
         workspace_id: "ws-1".into(),
         work_unit_id: "unit-1".into(),
         repository_id: "repo-1".into(),
@@ -263,6 +281,9 @@ fn isolated_workspace_mutation_has_no_host_path() {
     assert!(repository_mutation.contains("/tmp/repo\\\"quoted"));
     assert!(!repository_mutation.contains("[]"));
     let receipt = WorkspaceReceiptDoc {
+        path_capability_digest: WorkspacePathCapability::exact_paths(Vec::new())
+            .unwrap()
+            .digest(),
         receipt_id: "receipt-writer-ws-1-req-1".into(),
         workspace_id: "ws-1".into(),
         produced_by_request_id: "req-1".into(),
@@ -1883,3 +1904,604 @@ fn integrate_and_cleanup_plans_omit_host_path() {
     }))
     .is_err());
 }
+
+/// Actual Git/executor consumers for the emitted seal subset. Other operation
+/// cases retain follow-up coverage until their recovery fixtures are wired.
+fn generated_workspace_path_capability_seal_cases_drive_real_git_executor() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["workspace_path_capability_cases"]
+        .as_array()
+        .unwrap();
+    let mut exercised = BTreeSet::new();
+    for case in cases.iter().filter(|case| case["operation"] == "seal") {
+        let name = case["name"].as_str().unwrap();
+        // Path parser rejection is exercised separately against real admission;
+        // it must not be represented by a fabricated Git path outside the root.
+        if name == "noncanonical_delta_rejected" {
+            continue;
+        }
+        exercised.insert(name.to_owned());
+        let mut fx = Fixture::new();
+        fs::create_dir(fx.repo.join("src")).unwrap();
+        fx.commit("src/main.rs", "base\n");
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let mut action = fx.action("ws-cap", "unit-cap", "topic-cap");
+        action.path_capability =
+            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        )
+        .unwrap();
+        let dest = PathBuf::from(&created.placement.host_path);
+        if case["before"]["state"] == "sealed" {
+            fs::write(dest.join("src/main.rs"), "authorized\n").unwrap();
+            seal_writer(&fx, &mut docs, "ws-cap", "req-writer");
+        }
+        match name {
+            "owned_tracked_edit_seals" | "empty_exact_rejects_changes" => {
+                fs::write(dest.join("src/main.rs"), "owned change\n").unwrap();
+            }
+            "owned_untracked_addition_seals" => {
+                fs::write(dest.join("src/new.rs"), "new file\n").unwrap();
+            }
+            "empty_exact_empty_delta_seals" => {}
+            "unowned_build_log_rejected" => {
+                fs::create_dir(dest.join(".tmp-build")).unwrap();
+                fs::write(dest.join(".tmp-build/test-build.log"), "build noise\n").unwrap();
+            }
+            "rename_unowned_destination_rejected" => {
+                fs::rename(dest.join("src/main.rs"), dest.join("outside.rs")).unwrap();
+            }
+            "rename_both_owned_accepted" => {
+                fs::rename(dest.join("src/main.rs"), dest.join("src/new.rs")).unwrap();
+            }
+            "changed_symlink_rejected" => {
+                fs::remove_file(dest.join("src/main.rs")).unwrap();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink("../README.md", dest.join("src/main.rs")).unwrap();
+                #[cfg(not(unix))]
+                panic!("symlink conformance requires a supported filesystem fixture");
+            }
+            "changed_gitlink_rejected" => {
+                fs::remove_file(dest.join("src/main.rs")).unwrap();
+                fs::create_dir(dest.join("src/main.rs")).unwrap();
+                git(&dest.join("src/main.rs"), &["init", "-b", "main"]);
+                git(
+                    &dest.join("src/main.rs"),
+                    &["config", "user.email", "ws@example.com"],
+                );
+                git(
+                    &dest.join("src/main.rs"),
+                    &["config", "user.name", "Workspace Test"],
+                );
+                fs::write(dest.join("src/main.rs/nested"), "nested\n").unwrap();
+                git(&dest.join("src/main.rs"), &["add", "nested"]);
+                git(&dest.join("src/main.rs"), &["commit", "-m", "nested"]);
+            }
+            "mutable_head_cannot_replace_immutable_base" => {
+                fs::write(dest.join("outside.rs"), "hidden in worker commit\n").unwrap();
+                git(&dest, &["add", "outside.rs"]);
+                git(&dest, &["commit", "-m", "worker advances HEAD"]);
+                assert_ne!(git(&dest, &["rev-parse", "HEAD"]), fx.base_sha);
+            }
+            "sealed_repair_rechecks_actual_delta" => {
+                fs::write(dest.join("outside.rs"), "unauthorized repair\n").unwrap();
+            }
+            other => panic!("unmapped generated seal case {other}"),
+        }
+        let old_workspace = docs.workspaces["ws-cap"].clone();
+        let old_receipts = docs.receipts.clone();
+        let trunk = git(&fx.repo, &["rev-parse", "HEAD"]);
+        let result = execute_seal_workspace_plan(
+            &emit_seal_workspace_plan(SealWorkspaceAction {
+                workspace_id: "ws-cap".into(),
+                produced_by_request_id: "req-writer".into(),
+                produced_by_request_doc_id: "req-writer-doc".into(),
+            }),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, seal_caps()),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case["disposition"] == "accepted",
+            "{name}: {result:?}"
+        );
+        if case["disposition"] == "denied" {
+            assert_eq!(
+                docs.workspaces["ws-cap"], old_workspace,
+                "{name}: workspace changed"
+            );
+            assert_eq!(
+                docs.receipts, old_receipts,
+                "{name}: success receipt changed"
+            );
+        } else {
+            assert_eq!(docs.workspaces["ws-cap"].lifecycle_state, "sealed");
+            assert_eq!(
+                docs.receipts
+                    .values()
+                    .filter(|r| r.kind == "writer")
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(
+            git(&fx.repo, &["rev-parse", "HEAD"]),
+            trunk,
+            "{name}: seal changed trunk"
+        );
+    }
+    assert_eq!(
+        exercised.len(),
+        11,
+        "generated seal coverage changed: {exercised:?}"
+    );
+}
+
+#[test]
+fn workspace_capability_admission_rejects_missing_and_invalid_manifest() {
+    let fx = Fixture::new();
+    let valid = fx.action("ws-path-admission", "unit", "topic");
+    let mut encoded = serde_json::to_value(&valid).unwrap();
+    encoded.as_object_mut().unwrap().remove("path_capability");
+    assert!(serde_json::from_value::<CreateWorkspaceAction>(encoded).is_err());
+    for path in [
+        "../outside",
+        "/tmp/outside",
+        ".git/config",
+        "src\\file",
+        "src/*.rs",
+        "src/file\n",
+    ] {
+        let mut action = valid.clone();
+        action.path_capability = WorkspacePathCapability::ExactPaths {
+            paths: vec![path.into()],
+        };
+        let mut docs = MemoryWorkspaceDocuments::default();
+        assert!(
+            execute_create_workspace_plan(
+                &emit_create_workspace_plan(action),
+                &mut Vec::new(),
+                &mut fx.ctx(&mut docs, git_worktree_caps())
+            )
+            .is_err(),
+            "accepted {path:?}"
+        );
+        assert!(docs.workspaces.is_empty());
+        assert!(docs.receipts.is_empty());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn exact_owned_executable_bit_change_seals_and_integrates() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx = Fixture::new();
+    let mut docs = MemoryWorkspaceDocuments::default();
+    let created = execute_create_workspace_plan(
+        &emit_create_workspace_plan(fx.action("ws-mode", "unit", "topic-mode")),
+        &mut Vec::new(),
+        &mut fx.ctx(&mut docs, git_worktree_caps()),
+    )
+    .unwrap();
+    let dest = PathBuf::from(&created.placement.host_path);
+    fs::set_permissions(dest.join("README.md"), fs::Permissions::from_mode(0o755)).unwrap();
+    let sealed = seal_writer(&fx, &mut docs, "ws-mode", "req-writer");
+    bind_integrate(
+        &mut docs,
+        "ws-mode",
+        "req-int",
+        sealed.workspace.seal_hash.as_deref().unwrap(),
+    );
+    integrate_writer(&fx, &mut docs, "ws-mode", "req-int");
+    assert_eq!(
+        git(&fx.repo, &["ls-tree", "HEAD", "README.md"])
+            .split_whitespace()
+            .next(),
+        Some("100755")
+    );
+}
+
+fn generated_workspace_receipt_cases_recover_without_checkout_or_reapplying() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["workspace_path_capability_cases"]
+        .as_array()
+        .unwrap();
+    let mut exercised = 0;
+    for case in cases.iter().filter(|case| {
+        matches!(
+            case["operation"].as_str(),
+            Some("replay_seal" | "replay_integrate")
+        )
+    }) {
+        exercised += 1;
+        let name = case["name"].as_str().unwrap();
+        let fx = Fixture::new();
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(fx.action("ws-replay-cap", "unit", "topic-replay-cap")),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        )
+        .unwrap();
+        let dest = PathBuf::from(&created.placement.host_path);
+        fs::write(dest.join("patch.rs"), "owned\n").unwrap();
+        let sealed = seal_writer(&fx, &mut docs, "ws-replay-cap", "req-writer");
+        if case["operation"] == "replay_integrate" {
+            bind_integrate(
+                &mut docs,
+                "ws-replay-cap",
+                "req-int",
+                sealed.workspace.seal_hash.as_deref().unwrap(),
+            );
+            integrate_writer(&fx, &mut docs, "ws-replay-cap", "req-int");
+        }
+        if name == "changed_capability_cannot_replay_receipt" {
+            // Mutable test storage deliberately violates immutable row identity;
+            // the existing receipt must not authenticate this widened binding.
+            docs.workspaces
+                .get_mut("ws-replay-cap")
+                .unwrap()
+                .path_capability = WorkspacePathCapability::UnrestrictedCompatibility;
+        }
+        fs::remove_dir_all(&dest).unwrap();
+        let before_receipts = docs.receipts.clone();
+        let before_workspace = docs.workspaces["ws-replay-cap"].clone();
+        let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
+        let mut journal = vec![ActionJournalEntry::new(
+            0,
+            ActionJournalState::ResultDocsWritten,
+        )];
+        let succeeded = if case["operation"] == "replay_seal" {
+            execute_seal_workspace_plan(
+                &emit_seal_workspace_plan(SealWorkspaceAction {
+                    workspace_id: "ws-replay-cap".into(),
+                    produced_by_request_id: "req-writer".into(),
+                    produced_by_request_doc_id: "req-writer-doc".into(),
+                }),
+                &mut journal,
+                &mut fx.ctx(&mut docs, seal_caps()),
+            )
+            .is_ok()
+        } else {
+            execute_integrate_workspace_plan(
+                &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
+                    workspace_id: "ws-replay-cap".into(),
+                    produced_by_request_id: "req-int".into(),
+                    produced_by_request_doc_id: "req-int-doc".into(),
+                    mode: IntegrateMode::ApplyDiff,
+                }),
+                &mut journal,
+                &mut fx.ctx(&mut docs, integrate_caps()),
+            )
+            .map(|outcome| {
+                assert!(
+                    outcome.pending_head_sha.is_none(),
+                    "{name}: completed receipt must not request another trunk effect"
+                );
+            })
+            .is_ok()
+        };
+        assert_eq!(succeeded, case["disposition"] == "recovered", "{name}");
+        assert!(
+            !dest.exists(),
+            "receipt replay must not recreate a checkout"
+        );
+        assert_eq!(
+            git(&fx.repo, &["rev-parse", "HEAD"]),
+            before_head,
+            "{name}: replay applied again"
+        );
+        assert_eq!(docs.receipts, before_receipts, "{name}: receipt changed");
+        assert_eq!(docs.workspaces["ws-replay-cap"], before_workspace);
+    }
+    assert_eq!(exercised, 3);
+}
+
+#[test]
+fn workspace_create_retry_cannot_change_admitted_capability() {
+    let fx = Fixture::new();
+    let mut docs = MemoryWorkspaceDocuments::default();
+    let mut action = fx.action("ws-immutable-cap", "unit", "topic-immutable-cap");
+    let original = execute_create_workspace_plan(
+        &emit_create_workspace_plan(action.clone()),
+        &mut Vec::new(),
+        &mut fx.ctx(&mut docs, git_worktree_caps()),
+    )
+    .unwrap();
+    action.path_capability =
+        WorkspacePathCapability::exact_paths(vec!["outside.rs".into()]).unwrap();
+    assert!(execute_create_workspace_plan(
+        &emit_create_workspace_plan(action),
+        &mut Vec::new(),
+        &mut fx.ctx(&mut docs, git_worktree_caps())
+    )
+    .is_err());
+    assert_eq!(docs.workspaces["ws-immutable-cap"], original.workspace);
+    assert!(docs.receipts.is_empty());
+}
+
+fn generated_workspace_integration_cases_apply_only_authorized_snapshot() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["workspace_path_capability_cases"]
+        .as_array()
+        .unwrap();
+    let mut exercised = 0;
+    for case in cases.iter().filter(|case| case["operation"] == "integrate") {
+        exercised += 1;
+        let name = case["name"].as_str().unwrap();
+        let mut fx = Fixture::new();
+        fs::create_dir(fx.repo.join("src")).unwrap();
+        fx.commit("src/main.rs", "base\n");
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let mut action = fx.action("ws-cap-integrate", "unit", "topic-cap-integrate");
+        action.path_capability =
+            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        )
+        .unwrap();
+        let dest = PathBuf::from(&created.placement.host_path);
+        fs::write(dest.join("src/main.rs"), "authorized\n").unwrap();
+        let sealed = seal_writer(&fx, &mut docs, "ws-cap-integrate", "req-writer");
+        let seal = sealed.workspace.seal_hash.as_deref().unwrap();
+        bind_integrate(
+            &mut docs,
+            "ws-cap-integrate",
+            "req-int",
+            if name == "different_seal_cannot_integrate" {
+                "different-seal"
+            } else {
+                seal
+            },
+        );
+        match name {
+            "authorized_integration_once" | "different_seal_cannot_integrate" => {}
+            "integration_rejects_unowned_delta" => {
+                fs::write(dest.join("outside.rs"), "unowned\n").unwrap();
+            }
+            "snapshot_drift_cannot_apply_other_bytes" => {
+                fs::write(dest.join("src/main.rs"), "different snapshot\n").unwrap();
+            }
+            other => panic!("unmapped integration case {other}"),
+        }
+        let before_workspace = docs.workspaces["ws-cap-integrate"].clone();
+        let before_receipts = docs.receipts.clone();
+        let before_head = git(&fx.repo, &["rev-parse", "HEAD"]);
+        let before_count: usize = git(&fx.repo, &["rev-list", "--count", "HEAD"])
+            .parse()
+            .unwrap();
+        let result = execute_integrate_workspace_plan(
+            &emit_integrate_workspace_plan(IntegrateWorkspaceAction {
+                workspace_id: "ws-cap-integrate".into(),
+                produced_by_request_id: "req-int".into(),
+                produced_by_request_doc_id: "req-int-doc".into(),
+                mode: IntegrateMode::ApplyDiff,
+            }),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, integrate_caps()),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case["disposition"] == "accepted",
+            "{name}: {result:?}"
+        );
+        if let Ok(integrated) = result {
+            finalize_integrate_trunk(&fx.repo, integrated.pending_head_sha.as_deref()).unwrap();
+            assert_eq!(
+                fs::read_to_string(fx.repo.join("src/main.rs")).unwrap(),
+                "authorized\n"
+            );
+            let after_count: usize = git(&fx.repo, &["rev-list", "--count", "HEAD"])
+                .parse()
+                .unwrap();
+            assert_eq!(
+                after_count - before_count,
+                case["expected"]["trunk_effects"].as_u64().unwrap() as usize
+            );
+            assert_eq!(
+                docs.receipts
+                    .values()
+                    .filter(|r| r.kind == "integrator")
+                    .count(),
+                1
+            );
+        } else {
+            assert_eq!(
+                git(&fx.repo, &["rev-parse", "HEAD"]),
+                before_head,
+                "{name}: trunk moved"
+            );
+            assert_eq!(
+                fs::read_to_string(fx.repo.join("src/main.rs")).unwrap(),
+                "base\n"
+            );
+            assert!(!fx.repo.join("outside.rs").exists());
+            assert_eq!(docs.receipts, before_receipts, "{name}: receipt changed");
+        }
+        assert_eq!(
+            docs.workspaces["ws-cap-integrate"], before_workspace,
+            "{name}: immutable seal changed"
+        );
+    }
+    assert_eq!(exercised, 4);
+}
+
+fn generated_workspace_fresh_admission_requires_exact_canonical_capability() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["workspace_path_capability_cases"]
+        .as_array()
+        .unwrap();
+    let names = [
+        "fresh_exact_provisions",
+        "fresh_legacy_cannot_provision",
+        "malformed_manifest_denied",
+    ];
+    for name in names {
+        let case = cases.iter().find(|case| case["name"] == name).unwrap();
+        let fx = Fixture::new();
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let mut action = fx.action("ws-fresh-cap", "unit", "topic-fresh-cap");
+        action.path_capability =
+            serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+        if name == "malformed_manifest_denied" {
+            action.path_capability = WorkspacePathCapability::ExactPaths {
+                paths: vec!["../escape".into()],
+            };
+        }
+        let result = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case["disposition"] == "accepted",
+            "{name}: {result:?}"
+        );
+        if let Ok(created) = result {
+            assert_eq!(created.workspace.lifecycle_state, "ready");
+            assert!(created.workspace.path_capability.is_exact());
+        } else {
+            assert!(
+                docs.workspaces.is_empty(),
+                "{name}: denied creation persisted workspace"
+            );
+            assert!(docs.receipts.is_empty());
+        }
+    }
+}
+
+fn generated_legacy_workspace_cases_recover_identity_without_fresh_provision() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    for name in [
+        "existing_identical_legacy_recovers",
+        "legacy_recovery_missing_checkout_cannot_reprovision",
+    ] {
+        let case = snapshot["workspace_path_capability_cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == name)
+            .unwrap();
+        let fx = Fixture::new();
+        let mut docs = MemoryWorkspaceDocuments::default();
+        let mut action = fx.action("ws-legacy-cap", "unit", "topic-legacy-cap");
+        let created = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action.clone()),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        )
+        .unwrap();
+        let dest = PathBuf::from(&created.placement.host_path);
+        // Simulate the precise migration boundary: persisted old row now has
+        // explicit compatibility, while the historical host marker lacks it.
+        docs.workspaces
+            .get_mut("ws-legacy-cap")
+            .unwrap()
+            .path_capability = WorkspacePathCapability::UnrestrictedCompatibility;
+        action.path_capability = WorkspacePathCapability::UnrestrictedCompatibility;
+        let git_dir = PathBuf::from(git(&dest, &["rev-parse", "--absolute-git-dir"]));
+        let marker = git_dir.join("gents-workspace-identity.json");
+        let mut old: serde_json::Value =
+            serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap();
+        old.as_object_mut().unwrap().remove("path_capability");
+        fs::write(&marker, serde_json::to_vec_pretty(&old).unwrap()).unwrap();
+        let present = case["evidence"]["checkout_present"].as_bool().unwrap();
+        if !present {
+            fs::remove_dir_all(&dest).unwrap();
+        }
+        let before = docs.workspaces["ws-legacy-cap"].clone();
+        let result = execute_create_workspace_plan(
+            &emit_create_workspace_plan(action),
+            &mut Vec::new(),
+            &mut fx.ctx(&mut docs, git_worktree_caps()),
+        );
+        assert_eq!(
+            result.is_ok(),
+            case["disposition"] == "recovered",
+            "{name}: {result:?}"
+        );
+        assert_eq!(
+            dest.exists(),
+            present,
+            "{name}: legacy recovery reprovisioned a missing checkout"
+        );
+        assert_eq!(
+            docs.workspaces["ws-legacy-cap"].path_capability,
+            before.path_capability
+        );
+        assert!(docs.receipts.is_empty());
+    }
+}
+
+fn generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let case = snapshot["workspace_path_capability_cases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["name"] == "noncanonical_delta_rejected")
+        .unwrap();
+    let fx = Fixture::new();
+    let cap: WorkspacePathCapability =
+        serde_json::from_value(case["before"]["capability"].clone()).unwrap();
+    let blob = git(&fx.repo, &["rev-parse", "HEAD:README.md"]);
+    let mut tree = b"100644 ../outside\0".to_vec();
+    for byte in blob.as_bytes().chunks_exact(2) {
+        tree.push(u8::from_str_radix(std::str::from_utf8(byte).unwrap(), 16).unwrap());
+    }
+    let mut child = Command::new("git")
+        .args(["hash-object", "--literally", "-t", "tree", "-w", "--stdin"])
+        .current_dir(&fx.repo)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&tree).unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "Git fixture rejected raw object: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tree_id = String::from_utf8(output.stdout).unwrap();
+    let before = git(&fx.repo, &["rev-parse", "HEAD"]);
+    assert!(
+        super::adapter::validate_tree_delta(&fx.repo, &fx.base_sha, tree_id.trim(), &cap).is_err()
+    );
+    assert_eq!(git(&fx.repo, &["rev-parse", "HEAD"]), before);
+    assert!(!fx.parent().join("outside").exists());
+}
+
+#[path = "tests/capability_regressions.rs"]
+mod capability_regressions;
+
+#[test]
+fn generated_workspace_path_capability_cases_drive_real_git_executor() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    assert_eq!(
+        snapshot["workspace_path_capability_cases"]
+            .as_array()
+            .unwrap()
+            .len(),
+        24,
+        "review and wire every new generated operation case"
+    );
+    generated_workspace_path_capability_seal_cases_drive_real_git_executor();
+    generated_workspace_receipt_cases_recover_without_checkout_or_reapplying();
+    generated_workspace_integration_cases_apply_only_authorized_snapshot();
+    generated_workspace_fresh_admission_requires_exact_canonical_capability();
+    generated_legacy_workspace_cases_recover_identity_without_fresh_provision();
+    generated_noncanonical_git_delta_is_rejected_without_filesystem_traversal();
+}
+
+#[path = "tests/capability_runtime.rs"]
+mod capability_runtime;

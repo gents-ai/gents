@@ -92,6 +92,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     writer_principal
     integrator_principal
     instruction_manifest
+    path_capability
     seal_hash
     lifecycle_state
     caused_by_invocation_id

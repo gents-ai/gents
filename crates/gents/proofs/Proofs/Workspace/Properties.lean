@@ -121,7 +121,8 @@ theorem identity_fields_preserved
     post.baseSha = pre.baseSha ∧
     post.branch = pre.branch ∧
     post.creationPolicy = pre.creationPolicy ∧
-    post.ownerDeploymentId = pre.ownerDeploymentId := by
+    post.ownerDeploymentId = pre.ownerDeploymentId ∧
+    post.pathCapability = pre.pathCapability := by
   cases h <;> simp_all
 
 theorem seal_requires_hash

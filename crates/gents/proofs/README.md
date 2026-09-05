@@ -1177,3 +1177,42 @@ the loser reports a storage transaction conflict and only the winner's child
 effect survives. This establishes the tested same-store owner-key conflict
 mechanism, not absent-range protection or cross-replica consensus. Caller tests
 separately cover typed resume, automatic continuation and fresh Goal opening.
+
+### Immutable workspace path capability (#1349)
+
+`Workspace/PathCapability.lean` refines the existing host executor and receipt
+operations. The existing workspace identity now includes an immutable capability;
+its lifecycle transitions preserve that field. Fresh provision accepts only an
+explicit canonical exact-path set (empty means no changes). Compatibility is
+authored only by explicit predecessor-version migration and can recover an
+identical existing host identity, never provision a fresh unrestricted tree.
+
+Seal and integration require the actual captured immutable-base delta to obey
+the admitted capability and apply that same snapshot. Receipt replay checks the
+exact workspace/base/owner/capability/tree binding and produces no new trunk
+effect; an already-applied exact receipt can recover with no checkout. Prepared
+commits without a durable receipt remain unfinished integration and require the
+checkout; explicit cleanup does not grant permission to integrate. The old
+lifecycle-only seal guard remains a coarse necessary condition, not sufficient
+authorization for host effects. Path normalization/encoding/alias and Git capture
+are observed host predicates, not claimed filesystem or hash proofs.
+
+Twenty-four explicit operation cases are consumed by the real Git/executor
+umbrella test `generated_workspace_path_capability_cases_drive_real_git_executor`.
+Five migration cases are consumed by
+`gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows`.
+Operation cases cover legacy fresh denial, identity recovery, empty exact sets, both rename endpoints,
+symlink/gitlink denial, immutable-base/snapshot mismatch, denied receipt repair,
+authorized integration, absent-checkout receipt recovery and capability tampering.
+
+Migration always stamps predecessor-schema rows with explicit compatibility,
+even if untrusted input injects an exact capability field absent from that source
+schema. Current-schema values are preserved. This is a source-version migration
+rule, not new-request permission to provision compatibility workspaces.
+
+The migration consumer executes the production source-version lens for legacy
+inputs, including injected fields impossible in the predecessor schema, and
+uses actual current database creation/readback for current-source cases. The
+separate old-row WASM migration test verifies migration transport. The generated
+case count does not imply that every injected old-schema value was persisted
+through the old schema: those inputs deliberately test the lens boundary.

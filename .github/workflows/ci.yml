@@ -161,17 +161,15 @@ jobs:
       # gents-migration's build script compiles the fixture lens for WASM and
       # is in the dependency graph of every heavy suite. Install the target
       # explicitly instead of relying on mutable host toolchain state.
-      - uses: dtolnay/rust-toolchain@1.97.1
-        with:
-          components: rustfmt
-          targets: wasm32-unknown-unknown
+      - name: Install pinned Rust toolchain and WASM target
+        run: .github/scripts/setup-rust.sh
 
       - name: Install elan
-        # Runtime conformance and desktop-bridge tests both load the generated
-        # Lean contract. The FULL CLI suite (main pushes only — PR runs use
+        # Runtime conformance, desktop-bridge, and support migration tests load
+        # the generated Lean contract. The FULL CLI suite (main pushes only — PR runs use
         # the smoke subset) loads it too, via gents-cli's lean_apply_write_
         # boundary and identity_decide fences.
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         run: |
           .github/scripts/setup-elan.sh
           cargo_dir="$(dirname "$(rustup which cargo)")"
@@ -184,15 +182,15 @@ jobs:
       - name: Prepare disk-backed Rust build cache
         run: .github/scripts/setup-rust-build-cache.sh
 
-      # Runtime conformance and desktop-bridge tests load the generated Lean
-      # contract. Mathlib publishes matching precompiled artifacts; without
+      # Runtime, desktop-bridge, and support migration tests load the generated
+      # Lean contract. Mathlib publishes matching precompiled artifacts; without
       # this cache Lake recompiles the dependency graph in every clean checkout.
       - name: Prepare persistent Lean build cache
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         run: .github/scripts/setup-lean-build-cache.sh
 
       - name: Download precompiled Mathlib artifacts
-        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
+        if: matrix.suite == 'runtime' || matrix.suite == 'desktop' || matrix.suite == 'support' || (matrix.suite == 'cli' && github.event_name != 'pull_request')
         working-directory: crates/gents/proofs
         # Lean 4.18's LLVM 15 linker emits a native cache executable that
         # macOS 26 rejects. Running the same checked-in entry point through the
@@ -285,6 +283,8 @@ jobs:
           cargo test --no-fail-fast \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
+            -p gents-lens-workspace-capability \
+            -p gents-lens-workspace-receipt-capability \
             -p gents-callback-fixture-create-workspace \
             -p gents-protocol \
             -p gents-schemas \
@@ -292,6 +292,20 @@ jobs:
             -p gents-chatgpt-login \
             -p gents-fs-runner \
             -p gents-lean-contract
+
+      - name: Collect migration lens diagnostics on support failure
+        if: failure() && matrix.suite == 'support'
+        run: python3 .github/scripts/collect-migration-lens-diagnostics.py "${RUNNER_TEMP}/gents-migration-lenses"
+
+      - name: Upload migration lens diagnostics
+        if: failure() && matrix.suite == 'support'
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-migration-lenses-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/gents-migration-lenses
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Run PR runtime smoke tests
         if: matrix.suite == 'runtime' && github.event_name == 'pull_request'

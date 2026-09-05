@@ -20,6 +20,8 @@ sha2.workspace = true
 hex = "0.4"
 
 [dev-dependencies]
+gents-lean-contract = { path = "../gents-lean-contract" }
+gents-lens-workspace-capability = { path = "../gents-lenses/workspace_capability", default-features = false }
 defra-node.workspace = true
 gents-lens-fixture-add-label = { path = "../gents-lenses/fixture_add_label", default-features = false }
 tempfile = "3"

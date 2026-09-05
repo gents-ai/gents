@@ -283,6 +283,11 @@ async fn provision_workspace(
         )
     })?;
     let parent_workspace = load_workspace(node, parent_id).await?;
+    if !parent_workspace.path_capability.is_exact() {
+        return Err(SpawnWorkspaceError::invalid(
+            "new child workspaces require an exact parent path capability",
+        ));
+    }
     require_parent_stamp_agrees(parent, &parent_workspace)?;
     require_local_workspace(node, &parent_workspace).await?;
     let local = ensure_local_host_deployment(node)
@@ -335,6 +340,7 @@ async fn provision_workspace(
     });
 
     let plan = emit_create_workspace_plan(CreateWorkspaceAction {
+        path_capability: parent_workspace.path_capability.clone(),
         workspace_id: workspace_id.clone(),
         work_unit_id,
         repository_id: parent_workspace.repository_id.clone(),

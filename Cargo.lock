@@ -1481,6 +1481,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "caseless"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b6fd507454086c8edfd769ca6ada439193cdb209c7681712ef6275cccbfe5d8"
+dependencies = [
+ "unicode-normalization",
+]
+
+[[package]]
 name = "cbor4ii"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3740,6 +3749,7 @@ dependencies = [
  "base64 0.22.1",
  "bs58",
  "bytes",
+ "caseless",
  "chrono",
  "chrono-tz",
  "crypto",
@@ -3786,6 +3796,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "unicode-normalization",
  "uuid",
  "wasmtime",
  "wat",
@@ -4024,12 +4035,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "gents-lens-workspace-capability"
+version = "0.1.0"
+dependencies = [
+ "lens_sdk",
+ "serde_json",
+]
+
+[[package]]
+name = "gents-lens-workspace-receipt-capability"
+version = "0.1.0"
+dependencies = [
+ "lens_sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "gents-migration"
 version = "0.15.0"
 dependencies = [
  "anyhow",
  "defra-node",
+ "gents-lean-contract",
  "gents-lens-fixture-add-label",
+ "gents-lens-workspace-capability",
  "gents-protocol",
  "hex",
  "serde",
@@ -10888,6 +10917,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-segmentation"

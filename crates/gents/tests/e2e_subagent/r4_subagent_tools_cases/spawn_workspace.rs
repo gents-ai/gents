@@ -22,6 +22,7 @@ struct ChildWorkspaceRow {
 #[derive(Debug, Deserialize)]
 struct IsolatedWorkspaceRow {
     workspace_id: String,
+    path_capability: String,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
@@ -49,6 +50,10 @@ async fn seed_isolated_workspace(
     principal_did: &str,
 ) {
     let doc = IsolatedWorkspaceDoc {
+        path_capability: gents::workspace::WorkspacePathCapability::exact_paths(vec![
+            "README.md".into()
+        ])
+        .unwrap(),
         workspace_id: workspace_id.to_string(),
         work_unit_id: format!("{workspace_id}-unit"),
         repository_id: repository_id.to_string(),
@@ -234,6 +239,7 @@ async fn fetch_isolated_workspace(node: &EmbeddedNode, workspace_id: &str) -> Is
             ) {{
                 workspace_id
                 lifecycle_state
+                path_capability
                 repository_id
                 branch
             }}
@@ -621,6 +627,13 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
     assert_eq!(created.workspace_id, first_id);
     assert_eq!(created.lifecycle_state.as_deref(), Some("ready"));
     assert_eq!(created.repository_id.as_deref(), Some("repo-provision"));
+    let capability: gents::workspace::WorkspacePathCapability =
+        serde_json::from_str(&created.path_capability).unwrap();
+    assert_eq!(
+        capability,
+        gents::workspace::WorkspacePathCapability::exact_paths(vec!["README.md".into()]).unwrap(),
+        "fresh child must inherit its parent's exact file scope"
+    );
     assert_ne!(created.branch.as_deref(), Some("topic"));
     assert!(
         created
