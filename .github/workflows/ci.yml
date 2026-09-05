@@ -285,6 +285,8 @@ jobs:
           cargo test --no-fail-fast \
             -p gents-migration \
             -p gents-lens-fixture-add-label \
+            -p gents-lens-workspace-capability \
+            -p gents-lens-workspace-receipt-capability \
             -p gents-callback-fixture-create-workspace \
             -p gents-protocol \
             -p gents-schemas \
