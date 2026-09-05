@@ -5,7 +5,7 @@ import Proofs.Transcript.State
 
 Anthropic Messages HTTP is the only Claude wire. Its `tool_use` /
 `tool_result` content blocks are mapped here onto existing `ToolCallId`s /
-`MessageKind` rows. This file does not model the HTTP transport, the seat
+`MessageKind` rows. This file does not model the HTTP transport, the agent's subscription credential
 token read, or oat.
 
 Unmapped names (including Claude-native `Bash`) and `tool_use` on an empty
@@ -173,8 +173,9 @@ inductive Msg where
   | other (tag : String)
   deriving DecidableEq, Repr
 
-/-- The Claude Code identity block. `system[0]` on every request; the seat's
-oat routes on it. Checked against Rust `CLAUDE_CODE_IDENTITY` by the vocab test. -/
+/-- The Claude Code identity block. `system[0]` on every request; the agent's
+subscription credential routes on it. Checked against Rust `CLAUDE_CODE_IDENTITY`
+by the vocab test. -/
 def identity : String := "You are Claude Code, Anthropic's official CLI for Claude."
 
 /-- Pull `System` rows out in order; everything else is untouched. Rust also
