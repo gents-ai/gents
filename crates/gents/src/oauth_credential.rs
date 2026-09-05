@@ -18,6 +18,11 @@ use tokio::sync::Mutex;
 
 const OAUTH_CREDENTIAL_FIELDS: &str = "_docID credential_id agent_did provider access_token refresh_token id_token account_id chatgpt_plan_type is_fedramp access_token_expires_at last_refresh enabled";
 const REFRESH_SKEW: Duration = Duration::minutes(5);
+/// After a failed refresh the bearer serves that failure again for this long
+/// instead of POSTing the provider's token endpoint on every request. A
+/// re-login is still picked up at once: the database is re-read before the
+/// cooldown is consulted.
+const REFRESH_FAILURE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Product copy used when classifying auth failures for operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -555,7 +560,9 @@ pub struct DbCredentialBearer {
     credential_id: String,
     http: reqwest::Client,
     cache: Mutex<Option<OAuthCredential>>,
-    refresh_lock: Mutex<()>,
+    /// Single-flight refresh lock. It also holds the last refresh failure, so
+    /// the cooldown check and the refresh share one critical section.
+    refresh_lock: Mutex<Option<(std::time::Instant, OAuthAuthProblem)>>,
     is_owner: bool,
     force_refresh: AtomicBool,
     refresh_kind: OAuthRefreshKind,
@@ -602,7 +609,7 @@ impl DbCredentialBearer {
             credential_id: credential_id.into(),
             http: reqwest::Client::new(),
             cache: Mutex::new(cache_seed),
-            refresh_lock: Mutex::new(()),
+            refresh_lock: Mutex::new(None),
             is_owner,
             force_refresh: AtomicBool::new(false),
             refresh_kind,
@@ -702,7 +709,7 @@ impl BearerSource for DbCredentialBearer {
             }
         }
 
-        let _guard = self.refresh_lock.lock().await;
+        let mut last_failure = self.refresh_lock.lock().await;
 
         let forced = self.force_refresh.load(Ordering::SeqCst);
 
@@ -740,10 +747,23 @@ impl BearerSource for DbCredentialBearer {
             }
         }
 
-        let refreshed = self
-            .refresh_tokens(&credential.refresh_token)
-            .await
-            .map_err(|problem| self.auth_error(&problem))?;
+        if let Some((failed_at, problem)) = last_failure.as_ref() {
+            if failed_at.elapsed() < REFRESH_FAILURE_COOLDOWN {
+                self.force_refresh.store(false, Ordering::SeqCst);
+                return Err(self.auth_error(problem));
+            }
+        }
+
+        let refreshed = match self.refresh_tokens(&credential.refresh_token).await {
+            Ok(refreshed) => refreshed,
+            Err(problem) => {
+                let error = self.auth_error(&problem);
+                *last_failure = Some((std::time::Instant::now(), problem));
+                self.force_refresh.store(false, Ordering::SeqCst);
+                return Err(error);
+            }
+        };
+        *last_failure = None;
         apply_refreshed_tokens(&mut credential, refreshed);
 
         self.cache_credential(&credential).await;
@@ -963,6 +983,51 @@ mod tests {
             "tier gate should not push re-login as the fix: {msg}"
         );
         assert!(msg.contains("api.x.ai"), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod cooldown_tests {
+    use super::test_support::{one_shot_token_server, seed_credential, test_node};
+    use super::*;
+
+    /// A failed refresh is served from the cooldown on the next call instead
+    /// of POSTing the token endpoint again. The one-shot server accepts one
+    /// request and is gone before the second call, so a second POST would
+    /// surface as a transport error rather than the cached "expired or
+    /// revoked" text.
+    #[tokio::test]
+    async fn failed_refresh_is_not_retried_during_the_cooldown() {
+        let node = Arc::new(test_node().await);
+        let did = "did:key:z6MkRevoked";
+        let provider = crate::xai_grok_oauth::XAI_OAUTH_PROVIDER;
+        seed_credential(&node, did, provider, Utc::now() - Duration::minutes(1)).await;
+        let (url, handle) = one_shot_token_server(401, r#"{"error":"invalid_grant"}"#).await;
+        // Process-global; no other lib test refreshes an xAI credential.
+        std::env::set_var(
+            crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV,
+            &url,
+        );
+        let bearer = DbCredentialBearer::new(
+            node,
+            did,
+            provider,
+            oauth_credential_id(did, provider),
+            true,
+            OAuthRefreshKind::Xai,
+            XAI_OAUTH_PRODUCT,
+        );
+        let first = bearer.current_bearer().await.expect_err("revoked");
+        let request = handle.await.expect("server");
+        let second = bearer.current_bearer().await.expect_err("cooldown");
+        std::env::remove_var(crate::xai_oauth_refresh::XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV);
+
+        assert!(request.contains("grant_type=refresh_token"), "{request}");
+        assert!(
+            first.to_string().contains("is expired or revoked"),
+            "{first}"
+        );
+        assert_eq!(first.to_string(), second.to_string());
     }
 }
 
