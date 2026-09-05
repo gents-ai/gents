@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
 use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::current_tool_runtime_context;
+use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
@@ -563,30 +563,21 @@ pub(crate) async fn run_command(
     let root = context.root();
     let (program, command_args, sandbox) =
         sandboxed_command_for_policy(&root, command_name, args, &policy)?;
-    let runtime = current_tool_runtime_context();
-    let request_deadline = runtime.as_ref().and_then(|runtime| runtime.deadline_at);
-    let command_deadline = chrono::Utc::now()
-        + chrono::Duration::from_std(timeout).unwrap_or_else(|_| chrono::Duration::days(36_500));
-    let deadline_at =
-        Some(request_deadline.map_or(command_deadline, |deadline| deadline.min(command_deadline)));
-    let cancellation_token = runtime
-        .as_ref()
-        .map(|runtime| runtime.cancellation_token.clone())
-        .unwrap_or_default();
-    let live_output = runtime.and_then(|runtime| runtime.live_output);
+    let bounds = tool_execution_bounds(timeout);
+    let request_deadline = bounds.request_deadline_at;
     let started = Instant::now();
     let outcome = run_managed_exec(ManagedExecRequest {
         argv: std::iter::once(program)
             .chain(command_args)
             .collect::<Vec<_>>(),
         cwd: cwd.clone(),
-        deadline_at,
-        cancellation_token,
+        deadline_at: bounds.deadline_at,
+        cancellation_token: bounds.cancellation_token,
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
         environment: Some(build_shell_env()),
         tool_name: Some(tool_name.to_string()),
-        live_output,
+        live_output: bounds.live_output,
     })
     .await;
     let duration_ms = elapsed_ms(started);
