@@ -9,7 +9,7 @@ use crate::post_graphql;
 
 const RECENT_REQUEST_SCAN: usize = 200;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub(crate) struct SelfBehavior {
     pub(crate) behavior_id: String,
     pub(crate) display_name: String,
@@ -20,6 +20,10 @@ pub(crate) struct SelfBehavior {
     pub(crate) endpoint: String,
     pub(crate) inference_profile_id: String,
     pub(crate) context_window: Option<i64>,
+    /// Compaction threshold fraction (0.0-1.0) sourced from the behavior row,
+    /// falling back to `gents::config::DEFAULT_COMPACTION_THRESHOLD` when the
+    /// row leaves it unset.
+    pub(crate) compaction_threshold: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -34,6 +38,8 @@ pub(crate) struct ContextBudget {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub(crate) struct ContextIndicator {
+    /// The effective input budget (context window scaled by the compaction
+    /// threshold) of the primary behavior, not the raw context window.
     pub(crate) max_tokens: Option<i64>,
     pub(crate) current_estimate: Option<i64>,
     pub(crate) utilization_percent: Option<f64>,
@@ -73,6 +79,8 @@ struct BehaviorRow {
     inference_profile_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    compaction_threshold: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -144,6 +152,7 @@ fn self_view_query(agent_did: &str) -> String {
             backend_id
             inference_profile_id
             enabled
+            compaction_threshold
         }}
         InferenceBackend(order: {{ backend_id: ASC }}) {{
             backend_id
@@ -238,6 +247,9 @@ fn build_behaviors(
                     .unwrap_or_default(),
                 inference_profile_id,
                 context_window: profile.and_then(|profile| profile.context_window),
+                compaction_threshold: behavior
+                    .compaction_threshold
+                    .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD),
             })
         })
         .collect()
@@ -273,12 +285,23 @@ fn build_context_indicator(
     behaviors: &[SelfBehavior],
     context_budget: &ContextBudget,
 ) -> ContextIndicator {
+    // max_tokens is the effective input budget (context window scaled by the
+    // compaction threshold) of the enabled behavior with the largest window,
+    // not the raw context window: utilization is measured against the same
+    // budget the runtime dispatches against.
     let max_tokens = behaviors
         .iter()
         .filter(|behavior| behavior.enabled)
-        .filter_map(|behavior| behavior.context_window)
-        .filter(|value| *value > 0)
-        .max();
+        .filter(|behavior| behavior.context_window.is_some_and(|value| value > 0))
+        .max_by_key(|behavior| behavior.context_window.unwrap_or_default())
+        .map(|behavior| {
+            let context_window = behavior.context_window.unwrap_or_default().max(0) as usize;
+            let budget = gents::provider_budget::effective_input_budget(
+                context_window,
+                behavior.compaction_threshold,
+            );
+            i64::try_from(budget).unwrap_or(i64::MAX)
+        });
     let current_estimate = context_budget
         .latest_compacted_tokens
         .or(context_budget.latest_original_tokens);
@@ -330,6 +353,10 @@ mod tests {
         assert_eq!(b.provider_kind, "OpenAiCompatible");
         assert_eq!(b.endpoint, "http://host/v1");
         assert_eq!(b.context_window, Some(128000));
+        assert_eq!(
+            b.compaction_threshold,
+            gents::config::DEFAULT_COMPACTION_THRESHOLD
+        );
     }
 
     #[test]
@@ -344,6 +371,10 @@ mod tests {
         assert_eq!(behaviors[0].endpoint, "");
         assert_eq!(behaviors[0].context_window, None);
         assert!(behaviors[0].enabled);
+        assert_eq!(
+            behaviors[0].compaction_threshold,
+            gents::config::DEFAULT_COMPACTION_THRESHOLD
+        );
     }
 
     #[test]
@@ -393,6 +424,7 @@ mod tests {
                 endpoint: String::new(),
                 inference_profile_id: String::new(),
                 context_window: Some(2000),
+                compaction_threshold: 0.75,
             },
             SelfBehavior {
                 behavior_id: "enabled".to_string(),
@@ -404,6 +436,7 @@ mod tests {
                 endpoint: String::new(),
                 inference_profile_id: String::new(),
                 context_window: Some(1000),
+                compaction_threshold: 0.8,
             },
         ];
         let budget = ContextBudget {
@@ -417,13 +450,47 @@ mod tests {
 
         let context = build_context_indicator(&behaviors, &budget);
 
-        assert_eq!(context.max_tokens, Some(1000));
+        // max_tokens is the effective input budget of the enabled behavior
+        // with the largest window (1000 * 0.8 == 800), not the raw window.
+        assert_eq!(context.max_tokens, Some(800));
         assert_eq!(context.current_estimate, Some(400));
-        assert_eq!(context.utilization_percent, Some(40.0));
+        assert_eq!(context.utilization_percent, Some(50.0));
         assert_eq!(context.compaction_count, 2);
         assert_eq!(
             context.last_compacted_at.as_deref(),
             Some("2026-06-03T10:30:00Z")
         );
+    }
+
+    #[test]
+    fn context_indicator_utilization_is_measured_against_the_effective_input_budget() {
+        let behaviors = vec![SelfBehavior {
+            behavior_id: "enabled".to_string(),
+            display_name: String::new(),
+            model_name: String::new(),
+            enabled: true,
+            backend_id: String::new(),
+            provider_kind: String::new(),
+            endpoint: String::new(),
+            inference_profile_id: String::new(),
+            context_window: Some(100_000),
+            compaction_threshold: 0.75,
+        }];
+        let budget = ContextBudget {
+            compaction_count: 0,
+            latest_compaction_at: None,
+            latest_original_tokens: Some(60_000),
+            latest_compacted_tokens: None,
+            sessions_considered: 1,
+            request_scan_limit: RECENT_REQUEST_SCAN as i64,
+        };
+
+        let context = build_context_indicator(&behaviors, &budget);
+
+        // Budget is 100_000 * 0.75 == 75_000, so 60_000 current tokens is
+        // 80% utilized, not 60% of the raw 100_000 window.
+        assert_eq!(context.max_tokens, Some(75_000));
+        assert_eq!(context.current_estimate, Some(60_000));
+        assert_eq!(context.utilization_percent, Some(80.0));
     }
 }
