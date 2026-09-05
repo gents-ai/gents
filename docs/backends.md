@@ -299,14 +299,10 @@ regardless of the backend document's endpoint; only discovery honours an
 
 Design notes:
 
-- [`docs/design-notes/claude-subscription-spike.md`](design-notes/claude-subscription-spike.md)
-- Historical in-process seat design (locked 2026-09-01, predates the
-  credential model; its setup steps no longer apply):
-  [`docs/design-notes/SPEC-claude-a2b-in-process.md`](design-notes/SPEC-claude-a2b-in-process.md)
-- [`docs/design-notes/SPEC-claude-a2c-tool-bridging.md`](design-notes/SPEC-claude-a2c-tool-bridging.md)
-  (tool bridging; the C2 auth lock records the move to the credential model)
-- Historical Path A packaging (loopback proxy era):
-  [`docs/design-notes/SPEC-claude-phase6-packaging.md`](design-notes/SPEC-claude-phase6-packaging.md)
+- [`docs/design-notes/claude-subscription.md`](design-notes/claude-subscription.md)
+  (the design as shipped: wire, auth, health, discovery, Lean fence, invariants)
+- [`docs/design-notes/claude-subscription-history.md`](design-notes/claude-subscription-history.md)
+  (timeline and the decisions that were kept or reversed on the way here)
 
 ### Setup
 
