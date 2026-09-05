@@ -40,7 +40,9 @@ Plumbing and tooling need no proof change when they preserve semantics. The
 - Rig is a provider client behind `llm::rig_compat` and `provider_input`.
   Persisted messages remain native. DefraDB is the pinned public dependency in
   the workspace `Cargo.toml`; investigate node, schema, identity, and
-  transaction behavior there.
+  transaction behavior there. Claude subscriptions use Anthropic Messages HTTP
+  with an agent-scoped `OAuthCredential` written by `gents claude-login` and
+  refreshed by gents; the `claude` binary is not a dependency.
 
 ## Repository rules
 
