@@ -374,13 +374,6 @@ fn rewrite_selection(
         Value::String(principal_did.to_owned()),
     );
     object.insert("file_tool_root".to_owned(), Value::Null);
-    if object.get("enable_bash").and_then(Value::as_bool) == Some(true) {
-        object.insert("bash_mode".to_owned(), Value::String("ReadOnly".to_owned()));
-        object.insert(
-            "command_execution_policy".to_owned(),
-            Value::String("read_only".to_owned()),
-        );
-    }
     object.insert(
         "command_network_mode".to_owned(),
         Value::String("disabled".to_owned()),
@@ -1105,6 +1098,14 @@ mod tests {
             4,
             "active package datastore tool surfaces must be visible"
         );
+        let tool_root = tempfile::tempdir().unwrap();
+        let ceiling = crate::tool_surface::ToolCeiling::readwrite(tool_root.path());
+        let surfaces = active_view
+            .datastore_tool_surfaces
+            .values()
+            .map(|record| record.value.clone())
+            .collect::<Vec<_>>();
+        let mut artifact_selections = 0;
         for selection in active_view
             .tool_selections
             .values()
@@ -1120,7 +1121,36 @@ mod tests {
                 "package ToolSelection {} must retain its surface links",
                 selection.value.selection_id
             );
+            let config = crate::tool_surface::BehaviorToolConfig::from_tool_selection_document_with_surfaces(
+                &selection.value.selection_id,
+                &selection.value,
+                &surfaces,
+                &[],
+                &ceiling,
+                Vec::new(),
+            )
+            .unwrap();
+            if config.static_policy().bash.execution_mode
+                == crate::toolset::CommandExecutionMode::ArtifactWrite
+            {
+                artifact_selections += 1;
+                assert!(config
+                    .host_tools()
+                    .is_backgroundable_tool_name("bash_unrestricted"));
+                assert_eq!(
+                    config.static_policy().file,
+                    crate::tool_surface::FileToolMode::ReadOnly
+                );
+                assert_eq!(
+                    config.static_policy().bash.network_mode,
+                    crate::toolset::CommandNetworkMode::Disabled
+                );
+            }
         }
+        assert_eq!(
+            artifact_selections, 1,
+            "installed verifier must retain its artifact policy"
+        );
         let run = start_graph_run(
             &node,
             None,
