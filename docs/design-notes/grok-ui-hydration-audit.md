@@ -83,7 +83,8 @@ twins/creation-claim cleanup. No model request is submitted for these controls.
 The stock shell's command output uses `ContentChunk._meta.hostTurn`; the
 follow-up uses the same marker. Arbitrary `/goal <objective>` creation remains
 an explicit unsupported command, rather than pretending to submit an atomic
-goal-backed run; the runtime's configured create_goal tool remains available.
+goal-backed run. Goals can be created through the runtime CLI or through
+`create_goal` when that tool is enabled for the behavior.
 
 All 324 shim regressions and the all-target workspace check passed before the
 final hostTurn marker adjustment. The targeted marker/empty-metadata regression,
@@ -142,6 +143,34 @@ so final goal accounting is not yet verified. The runtime goal source refreshes
 usage for active/budget-limited candidates, not completed goals. Resolve the
 accounting owner/read projection before declaring the overall audit complete;
 do not introduce observer-side database writes to mask stale materialization.
+
+The next local correction uses the existing read-only runtime
+`goal::session_token_usage` calculation for both the panel observation and
+`/goal status`. Goal fields are changed only in the in-memory projection input,
+never persisted by observation. The delivery comparison includes this derived
+usage, so a late InferenceCall update can refresh a completed panel even when
+the Goal row has not changed. A DB regression covers completion, late usage,
+status output, and an unchanged persisted Goal snapshot. Verification of this
+correction is pending; it adds runtime accounting reads to goal observation.
+
+The correction now passed 319 shim-module tests plus 5 serve/shim flag tests,
+the workspace all-target check, and the binary build. Live socket validation
+on the completed session reports 37,128 tokens through both GoalUpdated and
+`/goal status`, matching the inference ledger. The before/after persisted Goal
+snapshot remains unchanged at its 14,315-token scheduler checkpoint. Stock
+Grok 1.0.13 dashboard resume displays **Goal: Done, 37.1k/100k tokens**.
+The clear/recreate wire probe also passed again on fresh session
+`grok-edge-bba19f2ea7b046a7` with ledger-derived usage.
+
+That rendered replay exposed a separate unresolved timing defect: the brief
+completed goal continuation displays **Thought for 13m5s** when resumed about
+13 minutes later. Investigate historical event timestamps versus live arrival
+fallback in `send_projection_event`/`RequestUpdateTiming`; do not treat this
+as verified replay fidelity or a model that actually reasoned for 13 minutes.
+
+Commits `676ef953` and `f5c4c65a` are now published on PR #1363. CI run
+`33951867228` is checking that tip; the accounting correction above is not yet
+included in it.
 
 The review otherwise verified the native DTO, scoping, runtime transition
 ownership, retry cursor, and transactional clear. Nonblocking observations:

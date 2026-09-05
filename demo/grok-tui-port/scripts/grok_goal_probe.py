@@ -48,6 +48,13 @@ def main():
         owners = graphql_query(args.graphql, '{AgentSession(filter:{session_id:{_eq:"' + escaped + '"}}){agent_did requester_did}}')["AgentSession"]
         assert len(owners) == 1 and owners[0]["agent_did"] == owners[0]["requester_did"], owners
         principal = graphql_escape(owners[0]["agent_did"])
+        requests = graphql_query(args.graphql, '{AgentRequest(filter:{agent_did:{_eq:"' + principal + '"},session_id:{_eq:"' + escaped + '"}}){request_id}}')["AgentRequest"]
+        request_ids = sorted({row["request_id"] for row in requests})
+        expected_tokens = 0
+        if request_ids:
+            ids = ",".join('"' + graphql_escape(value) + '"' for value in request_ids)
+            calls = graphql_query(args.graphql, '{InferenceCall(filter:{agent_did:{_eq:"' + principal + '"},request_id:{_in:[' + ids + ']}}){prompt_tokens completion_tokens}}')["InferenceCall"]
+            expected_tokens = sum((row.get("prompt_tokens") or 0) + (row.get("completion_tokens") or 0) for row in calls)
         goal_filter = 'agent_did:{_eq:"' + principal + '"},session_id:{_eq:"' + escaped + '"}'
         def goals():
             return graphql_query(args.graphql, '{Goal(filter:{' + goal_filter + '}){goal_id status tokens_used}}')["Goal"]
@@ -69,7 +76,7 @@ def main():
             observed.append(command)
             if command == "status":
                 update = wait_goal(client, events, lambda update: update.get("_meta", {}).get("gents/goalId") == goal_id)
-                assert update["status"] == "user_paused" and update["tokens_used"] == 123 and update["elapsed_ms"] == 7000, update
+                assert update["status"] == "user_paused" and update["tokens_used"] == expected_tokens and update["elapsed_ms"] == 7000, update
                 first_wire_id = update["goal_id"]
             if command == "clear":
                 wait_goal(client, events, lambda update: update.get("goal_id") == first_wire_id and update.get("status") == "cleared")

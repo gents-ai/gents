@@ -78,6 +78,7 @@ impl GoalCommand {
             goal =
                 gents::goal::set_goal(node, principal, session, None, Some(status), None).await?;
         }
+        goal.tokens_used = Some(gents::goal::session_token_usage(node, principal, session).await?);
         Ok(format!(
             "Goal: {}\nStatus: {}\nTokens used: {}{}",
             goal.objective,
@@ -106,7 +107,15 @@ impl GoalCursor {
         sender: &PromptSender,
         projections: &ProjectionEngine,
     ) -> Result<()> {
-        let goal = gents::goal::load_canonical_goal(node, principal, session).await?;
+        let mut goal = gents::goal::load_canonical_goal(node, principal, session).await?;
+        if let Some(goal) = goal.as_mut() {
+            // The stored Goal counter is a scheduler checkpoint. Inference can
+            // finish after update_goal marks it complete, when the scheduler
+            // no longer refreshes it. Read the runtime's budget calculation;
+            // never repair persisted state from this observer.
+            goal.tokens_used =
+                Some(gents::goal::session_token_usage(node, principal, session).await?);
+        }
         let observed = goal.as_ref().map(serde_json::to_value).transpose()?;
         if observed == self.delivered {
             return Ok(());
@@ -292,6 +301,7 @@ mod tests {
             "owned"
         );
         let first_wire_id = delivered["params"]["update"]["goal_id"].clone();
+        assert_eq!(delivered["params"]["update"]["tokens_used"], 0);
         assert_eq!(
             before,
             node.execute("{Goal {goal_id status tokens_used}}")
@@ -347,6 +357,51 @@ mod tests {
         let next: Value = serde_json::from_str(&lines[2]).unwrap();
         assert_ne!(next["params"]["update"]["goal_id"], first_wire_id);
         assert_eq!(next["params"]["update"]["_meta"]["gents/goalId"], "owned");
+        drop(lines);
+
+        // A completed goal does not receive scheduler usage refreshes. Late
+        // persisted inference must still update its panel, without changing
+        // the canonical Goal row or depending on a Goal document event.
+        for mutation in [
+            r#"mutation {update_Goal(filter:{goal_id:{_eq:"owned"}}, input:{status:"complete",tokens_used:12}) {_docID}}"#,
+            r#"mutation {create_AgentRequest(input:{request_id:"usage-request",agent_did:"principal",session_id:"session"}) {_docID}}"#,
+            r#"mutation {create_InferenceCall(input:{call_id:"usage-call",request_id:"usage-request",agent_did:"principal",prompt_tokens:20,completion_tokens:3}) {_docID}}"#,
+        ] {
+            ensure_no_errors(&node.execute(mutation).await, "seed completed usage").unwrap();
+        }
+        cursor
+            .refresh(&node, "principal", "session", &sender, &projections)
+            .await
+            .unwrap();
+        let snapshot = node
+            .execute("{Goal {goal_id status tokens_used}}")
+            .await
+            .data;
+        let updated = node.execute(r#"mutation {update_InferenceCall(filter:{call_id:{_eq:"usage-call"}},input:{completion_tokens:8}) {_docID}}"#).await;
+        ensure_no_errors(&updated, "late completion usage").unwrap();
+        cursor
+            .refresh(&node, "principal", "session", &sender, &projections)
+            .await
+            .unwrap();
+        let lines = buffer.lock().await;
+        assert_eq!(lines.len(), 5);
+        let first: Value = serde_json::from_str(&lines[3]).unwrap();
+        let late: Value = serde_json::from_str(&lines[4]).unwrap();
+        assert_eq!(first["params"]["update"]["tokens_used"], 23);
+        assert_eq!(late["params"]["update"]["tokens_used"], 28);
+        assert_eq!(late["params"]["update"]["status"], "complete");
+        drop(lines);
+        let reply = GoalCommand::Status
+            .execute(&node, "principal", "session")
+            .await
+            .unwrap();
+        assert!(reply.contains("Tokens used: 28"), "{reply}");
+        assert_eq!(
+            snapshot,
+            node.execute("{Goal {goal_id status tokens_used}}")
+                .await
+                .data
+        );
     }
 
     #[test]
