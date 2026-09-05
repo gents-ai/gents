@@ -32,6 +32,7 @@ import Proofs.Conformance.CoverageLedger
 import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.GraphPipeline
+import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 
@@ -46,6 +47,8 @@ def snapshotJson : String :=
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
       ++ jsonArray (stateMachines.map StateMachineContract.toJson) ++ ","
+    ++ "\"graph_failure_attribution_traces\":"
+      ++ Conformance.GraphFailureAttributionContracts.traceCasesJson ++ ","
     ++ "\"graph_pipeline_validation_cases\":"
       ++ Conformance.GraphPipelineContracts.validationCasesJson ++ ","
     ++ "\"graph_pipeline_revision_gate_cases\":"
