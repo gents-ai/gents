@@ -45,6 +45,10 @@ fn validate_rejects_non_positive_deadline_without_relationship_error() {
 
 #[test]
 fn validate_reports_each_invalid_timeout_without_relationship_error() {
+    // `InferenceProfile::validate` (#1331, the single owner) reports every
+    // violated rule at once (fix round 1) — both timeout bounds surface
+    // when both are invalid, and the relationship check is still skipped
+    // (neither individual bound is valid enough to compare).
     let mut manifest = empty_manifest("did:test:test");
     let mut profile = profile("invalid-timeouts");
     profile.stream_liveness_timeout_secs = Some(0);
@@ -70,6 +74,14 @@ fn validate_reports_each_invalid_timeout_without_relationship_error() {
             .iter()
             .any(|message| message.contains("must be less than deadline_duration_secs")),
         "expected no relationship error for invalid timeouts, got {errors:?}"
+    );
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|message| message.contains("InferenceProfile invalid-timeouts"))
+            .count(),
+        2,
+        "each invalid profile bound must be a separate error-list entry: {errors:?}"
     );
 }
 
@@ -289,6 +301,66 @@ fn behavior_model_must_be_advertised_by_its_backend() {
             "behavior default selects model GLM-5.2 which backend reviewers does not advertise",
         )
     }));
+}
+
+#[test]
+fn behavior_validation_reports_each_missing_reference_separately() {
+    let mut manifest = template_manifest(None, None);
+    let behavior = &mut manifest.agent_behaviors[0];
+    behavior.backend_id = Some("missing-backend".to_string());
+    behavior.tool_selection_id = Some("missing-tools".to_string());
+    behavior.inference_profile_id = Some("missing-profile".to_string());
+    behavior.skill_refs = vec!["missing-skill-a".to_string(), "missing-skill-b".to_string()];
+    behavior.skill_excludes = vec!["missing-skill-c".to_string()];
+
+    let errors = validation_errors(&manifest);
+    let expected = [
+        "missing backend_id missing-backend",
+        "missing tool_selection_id missing-tools",
+        "missing inference_profile_id missing-profile",
+        "missing skill_ref missing-skill-a",
+        "missing skill_ref missing-skill-b",
+        "missing skill_exclude missing-skill-c",
+    ];
+
+    for expected_message in expected {
+        assert_eq!(
+            errors
+                .iter()
+                .filter(|error| error.contains(expected_message))
+                .count(),
+            1,
+            "expected one separate {expected_message:?} error, got {errors:?}"
+        );
+    }
+
+    assert_eq!(
+        errors.len(),
+        expected.len(),
+        "expected one error-list entry per missing reference, got {errors:?}"
+    );
+}
+
+#[test]
+fn backend_validation_reports_each_violation_separately() {
+    let mut manifest = template_manifest(None, None);
+    let mut invalid = backend("invalid-backend");
+    invalid.endpoint = "  ".to_string();
+    invalid.max_concurrent = 0;
+    invalid.max_queue_depth = -1;
+    manifest.inference_backends.push(invalid);
+
+    let errors = validation_errors(&manifest);
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("endpoint must not be empty")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("max_concurrent must be positive")));
+    assert!(errors
+        .iter()
+        .any(|error| error.contains("max_queue_depth must be positive")));
 }
 
 fn manifest_with_reasoning_effort(reasoning_effort: Option<&str>) -> DesiredStateManifest {

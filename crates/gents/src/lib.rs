@@ -196,9 +196,9 @@ pub use document_config::{
     upsert_agent_principal, upsert_chain_key_binding, upsert_chain_key_binding_mutation,
     upsert_inference_profile, upsert_tool_selection, wide_open_tool_selection_document,
     wide_open_tool_selection_id_for_agent, AgentBehavior as AgentBehaviorDocument,
-    ChainKeyBindingDocument, DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile,
-    MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget, SurfaceToolDecl,
-    ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    ChainKeyBindingDocument, ConfigReferences, DatastoreToolSurfaceDocument, EthToolDocument,
+    InferenceProfile, MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget,
+    SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
     WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{

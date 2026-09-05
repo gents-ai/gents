@@ -57,7 +57,7 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         temperature: Some(0.2),
         stream_batch_ms: Some(50),
         stream_liveness_timeout_secs: Some(300),
-        deadline_duration_secs: Some(300),
+        deadline_duration_secs: Some(600),
         retry_max_transport: None,
         retry_backoff_ms: None,
         retry_max_resample: None,
@@ -113,7 +113,12 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         enable_context_budget: Some(true),
         enable_defra_query: Some(true),
         defra_query_collections: vec!["AgentSession".to_string()],
-        subagent_targets: vec!["amy-research".to_string()],
+        subagent_targets: vec![gents::subagent_target_entry(
+            "amy-research",
+            "did:test:amy",
+            "amy-research",
+            None,
+        )],
         subagent_spawn_enabled: Some(true),
         subagent_steering_enabled: Some(true),
         subagent_background_enabled: Some(true),
@@ -213,7 +218,8 @@ async fn manage_document_saves_refresh_store() -> Result<()> {
         tools.backgroundable_tool_names,
         vec!["read_file".to_string()]
     );
-    assert_eq!(tools.subagent_targets, vec!["amy-research".to_string()]);
+    assert_eq!(tools.subagent_targets.len(), 1);
+    assert!(tools.subagent_targets[0].contains("amy-research"));
     assert_eq!(tools.subagent_spawn_enabled, Some(true));
     assert_eq!(tools.subagent_steering_enabled, Some(true));
     assert_eq!(tools.subagent_background_enabled, Some(true));

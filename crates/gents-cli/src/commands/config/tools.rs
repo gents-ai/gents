@@ -201,7 +201,6 @@ fn tool_selection_command_plan(args: &ToolSelectionUpsertArgs) -> Result<ToolSel
         enable_lsp: None,
         lsp_config: None,
     };
-    selection.validate()?;
     Ok(ToolSelectionCommandPlan {
         selection,
         file_tools_mode,

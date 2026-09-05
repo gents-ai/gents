@@ -54,6 +54,9 @@ pub(super) async fn behavior_set(args: BehaviorUpsertArgs) -> Result<()> {
         skill_excludes: Vec::new(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
     };
+    // This raw field edit deliberately stays outside persona admission (see
+    // `gents::agent::persona_ops`). The shared writer owns effective-row
+    // projection and reference validation for this sparse update.
     let doc_id = write_agent_behavior_document(&access, &behavior).await?;
     let output = json!({
         "doc_id": doc_id,
@@ -444,7 +447,14 @@ mod tests {
         apply_persona_request, PersonaCatalogView, PersonaOp, PersonaRequestDoc,
     };
     use gents::agent::persona_presets::PRESET_WRITE;
-    use gents::{ensure_runtime_schemas, load_tool_selection};
+    use gents::config_client::{
+        write_inference_backend_document, ConfigAccess as LocalConfigAccess,
+        InferenceBackendUpsertDocument,
+    };
+    use gents::{
+        ensure_runtime_schemas, load_tool_selection, upsert_inference_profile, BackendProviderKind,
+        InferenceProfile, UNKNOWN_PROBE_STATUS,
+    };
 
     use super::*;
     use crate::cli::ToolPackageArg;
@@ -477,6 +487,34 @@ mod tests {
             .await
             .expect("runtime schemas register");
         let node = Arc::new(node);
+
+        write_inference_backend_document(
+            &LocalConfigAccess::Local(node.clone()),
+            &InferenceBackendUpsertDocument {
+                backend_id: "openai".to_string(),
+                name: "OpenAI".to_string(),
+                provider_kind: BackendProviderKind::OpenAiCompatible,
+                openai_wire_api: None,
+                endpoint: "https://api.openai.com/v1".to_string(),
+                api_key: None,
+                api_key_env_var: None,
+                max_concurrent: 1,
+                max_queue_depth: 1,
+                enabled: true,
+                models_on_add: vec!["gpt-5".to_string()],
+                models_on_update: None,
+                probe_status: UNKNOWN_PROBE_STATUS.to_string(),
+            },
+        )
+        .await?;
+        upsert_inference_profile(
+            &node,
+            &InferenceProfile {
+                profile_id: "profile-1".to_string(),
+                ..Default::default()
+            },
+        )
+        .await?;
 
         let doc = PersonaRequestDoc {
             request_key: "drift-guard-1".to_string(),

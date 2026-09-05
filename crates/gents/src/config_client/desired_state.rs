@@ -290,6 +290,9 @@ async fn apply_generic_document(
     unique_value: &str,
     document: &DesiredStateApplyDocument,
 ) -> Result<String> {
+    if collection == Collection::AgentBehavior {
+        validate_agent_behavior_document(txn, unique_value, document).await?;
+    }
     let collection_name = collection.graphql_type();
     let unique_field = collection.unique_field();
     // The existing desired-state path uses an upsert for generic config
@@ -306,6 +309,34 @@ async fn apply_generic_document(
     );
     let response = txn.execute(&mutation).await?;
     extract_mutation_doc_id(&response, collection_name)
+}
+
+async fn validate_agent_behavior_document(
+    txn: &ConfigApplyTxn<'_>,
+    behavior_id: &str,
+    document: &DesiredStateApplyDocument,
+) -> Result<()> {
+    let candidate =
+        if let Some(existing) = super::load_agent_behavior_in_txn(txn, behavior_id).await? {
+            let mut candidate = serde_json::to_value(existing)?;
+            let candidate_fields = candidate
+                .as_object_mut()
+                .context("serialized AgentBehavior was not an object")?;
+            let update = sanitize_update_input(&document.update);
+            let update_fields = update
+                .as_object()
+                .context("desired-state AgentBehavior update was not an object")?;
+            for (field, value) in update_fields {
+                candidate_fields.insert(field.clone(), value.clone());
+            }
+            candidate
+        } else {
+            sanitize_create_input(&document.add)
+        };
+    let behavior: crate::AgentBehaviorDocument = serde_json::from_value(candidate)
+        .context("decode effective desired-state AgentBehavior")?;
+    let references = crate::ConfigReferences::load_in_txn(txn, &behavior.agent_did).await?;
+    behavior.validate_references(&references)
 }
 
 #[cfg(test)]

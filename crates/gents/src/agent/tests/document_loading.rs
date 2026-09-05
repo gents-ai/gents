@@ -527,7 +527,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             system_prompt: Some("You write code.".to_string()),
             request_context_template: None,
             backend_id: Some("backend-healthy".to_string()),
-            model_name: Some("gpt-code".to_string()),
+            model_name: Some("default".to_string()),
             tool_selection_id: None,
             inference_profile_id: Some(default_profile_id),
             compaction_strategy: Some("StripThenSummarize".to_string()),
@@ -550,8 +550,8 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             summary: None,
             system_prompt: Some("This backend is missing.".to_string()),
             request_context_template: None,
-            backend_id: Some("backend-missing".to_string()),
-            model_name: Some("gpt-missing".to_string()),
+            backend_id: None,
+            model_name: None,
             tool_selection_id: None,
             inference_profile_id: None,
             compaction_strategy: Some("StripThenSummarize".to_string()),
@@ -562,6 +562,26 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     )
     .await
     .unwrap();
+    // This row deliberately represents persisted corruption so the loader's
+    // unavailable-behavior path remains covered. The guarded writer rejects
+    // dangling backend references, as it should; inject the corruption raw.
+    let escaped_did = crate::graphql::escape_graphql_string(&did);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentBehavior(
+                filter: {{
+                    behavior_id: {{ _eq: "broken" }},
+                    agent_did: {{ _eq: "{escaped_did}" }}
+                }},
+                input: {{
+                    backend_id: "backend-missing",
+                    model_name: "gpt-missing"
+                }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
     crate::upsert_agent_behavior(
         node.as_ref(),
         &AgentBehavior {
@@ -599,7 +619,7 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
             system_prompt: Some("Backend is unhealthy.".to_string()),
             request_context_template: None,
             backend_id: Some("backend-unhealthy".to_string()),
-            model_name: Some("gpt-unhealthy".to_string()),
+            model_name: Some("default".to_string()),
             tool_selection_id: None,
             inference_profile_id: None,
             compaction_strategy: Some("StripThenSummarize".to_string()),

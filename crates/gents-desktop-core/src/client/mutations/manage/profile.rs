@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use defra_node::EmbeddedNode;
+use gents::InferenceProfile;
 use gents_protocol::row::InferenceProfileRow;
 use serde_json::Value;
 
@@ -14,26 +15,10 @@ pub async fn upsert_inference_profile(
     row: &InferenceProfileRow,
 ) -> Result<()> {
     let profile_id = normalize_required("profile_id", &row.profile_id)?;
-    if row
-        .stream_liveness_timeout_secs
-        .is_some_and(|value| value <= 0)
-    {
-        anyhow::bail!("stream_liveness_timeout_secs must be positive");
-    }
-    if row.seed.is_some_and(|value| value < 0) {
-        anyhow::bail!("seed must be non-negative");
-    }
-    if row.reasoning_effort.as_deref().is_some_and(|value| {
-        !matches!(
-            value,
-            "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-        )
-    }) {
-        anyhow::bail!(
-            "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
-        );
-    }
+    validate_inference_profile(row)?;
 
+    // Keep the desktop encoder: absent row values are authoritative clears
+    // here, while the canonical document upsert omits absent numeric fields.
     let add_fields = [
         Some(format!(
             r#"profile_id: "{}""#,
@@ -192,6 +177,33 @@ pub async fn upsert_inference_profile(
         update_fields = join_fields(&update_fields),
     );
     execute_mutation(node, &mutation, "upsert_inference_profile").await
+}
+
+fn validate_inference_profile(row: &InferenceProfileRow) -> Result<()> {
+    let profile: InferenceProfile = serde_json::from_value(serde_json::to_value(row)?)?;
+    profile.validate()
+}
+
+#[cfg(test)]
+mod validation_tests {
+    use super::validate_inference_profile;
+    use gents_protocol::row::InferenceProfileRow;
+
+    #[test]
+    fn rejects_every_invalid_profile_field_in_one_error() {
+        let row: InferenceProfileRow = serde_json::from_value(serde_json::json!({
+            "profile_id": "invalid-profile",
+            "top_p": 2.0,
+            "seed": -1
+        }))
+        .expect("profile row");
+
+        let error = validate_inference_profile(&row)
+            .expect_err("invalid profile")
+            .to_string();
+        assert!(error.contains("top_p must be within [0, 1]"));
+        assert!(error.contains("seed must be non-negative"));
+    }
 }
 
 pub async fn delete_inference_profile(node: &EmbeddedNode, profile_id: &str) -> Result<usize> {

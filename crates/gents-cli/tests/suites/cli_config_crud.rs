@@ -175,6 +175,81 @@ async fn config_core_documents_list_show_and_rm() -> Result<()> {
     Ok(())
 }
 
+/// #1331: `behavior set` writes `AgentBehavior` directly (not through
+/// persona admission — see `gents::agent::persona_ops`'s module doc), so
+/// it's this call site's job to validate references before writing. A
+/// dangling `--tool-selection-id` must be rejected with the single owner's
+/// message (`AgentBehavior::validate_references`), not silently written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn behavior_set_rejects_missing_tool_selection() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-behavior-set-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let agent_name = format!("cli-behavior-set-{}", Uuid::new_v4().simple());
+    let graphql = graphql_url(port);
+
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+
+    let behavior_id = format!("{agent_name}-missing-tools");
+    let rejection = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "config",
+            "behavior",
+            "set",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--behavior-id",
+            &behavior_id,
+            "--tool-selection-id",
+            "does-not-exist",
+        ],
+    )?;
+    assert!(
+        rejection.contains("references missing tool_selection_id does-not-exist"),
+        "{rejection}"
+    );
+
+    // The rejected write must not have landed.
+    let show = run_cli_failure_stderr(
+        &home_dir,
+        &[
+            "config",
+            "behavior",
+            "show",
+            &behavior_id,
+            "--graphql",
+            &graphql,
+        ],
+    )?;
+    assert!(
+        show.contains("not found") || show.contains("missing"),
+        "{show}"
+    );
+
+    Ok(())
+}
+
 async fn assert_list_show_rm(
     home_dir: &std::path::Path,
     graphql: &str,

@@ -292,14 +292,21 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     )
     .await;
     let default_behavior_id = crate::default_behavior_id_for_agent(identity.did());
-    let mut default_behavior = crate::load_agent_behavior(node.as_ref(), &default_behavior_id)
-        .await
-        .unwrap()
-        .expect("default behavior document");
-    default_behavior.tool_selection_id = Some("missing-tool-selection".to_string());
-    crate::upsert_agent_behavior(node.as_ref(), &default_behavior)
-        .await
-        .unwrap();
+    // This test exercises startup handling for corrupt persisted configuration.
+    // The public writer correctly rejects the dangling reference, so inject the
+    // invalid row through the storage boundary instead.
+    let escaped_behavior_id = escape_graphql_string(&default_behavior_id);
+    let escaped_tool_selection_id = escape_graphql_string("missing-tool-selection");
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentBehavior(
+                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
+                input: {{ tool_selection_id: "{escaped_tool_selection_id}" }}
+            ) {{ _docID }}
+        }}"#
+    );
+    let response = node.execute(&mutation).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
 
     let agent = crate::Gents::from_default_behavior_documents(
         node.clone(),

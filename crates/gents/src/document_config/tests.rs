@@ -889,6 +889,7 @@ async fn inference_profile_completion_retry_fields_round_trip() {
 #[tokio::test]
 async fn inference_profile_upsert_rejects_negative_seed() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    crate::ensure_runtime_schemas(&node).await.unwrap();
     let profile = InferenceProfile {
         profile_id: "negative-seed-profile".to_string(),
         seed: Some(-1),
@@ -900,7 +901,7 @@ async fn inference_profile_upsert_rejects_negative_seed() {
             .await
             .unwrap_err()
             .to_string(),
-        "seed must be non-negative"
+        "InferenceProfile negative-seed-profile seed must be non-negative"
     );
 }
 
@@ -1041,6 +1042,31 @@ fn validate_rejects_background_default_when_background_disabled() {
 }
 
 #[test]
+fn tool_selection_validation_reports_every_violation() {
+    let doc = ToolSelectionDocument {
+        selection_id: "invalid-tools".to_string(),
+        agent_did: "did:test:test".to_string(),
+        subagent_targets: Some(vec![String::new()]),
+        backgroundable_tool_names: Some(vec![String::new()]),
+        subagent_background_enabled: Some(false),
+        subagent_default_await_mode: Some("background".to_string()),
+        ..Default::default()
+    };
+
+    let violations = doc.validation_violations();
+    assert_eq!(violations.len(), 3, "{violations:?}");
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("subagent_targets[0]")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("backgroundable_tool_names[0]")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("subagent_default_await_mode")));
+}
+
+#[test]
 fn validate_rejects_bare_string_subagent_target() {
     // A bare behavior-id string is NOT a valid SubagentTarget JSON entry.
     // The runtime silently drops non-JSON entries, so validate() must catch
@@ -1112,4 +1138,501 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
         ..Default::default()
     };
     assert!(doc.validate().is_err());
+}
+
+// ---------------------------------------------------------------------------
+// InferenceProfile::validate (#1331) — table-driven from the historical
+// gents-cli desired-state rules (crates/gents-cli/src/desired_state/validate/agent.rs).
+// ---------------------------------------------------------------------------
+
+fn base_profile(profile_id: &str) -> InferenceProfile {
+    InferenceProfile {
+        profile_id: profile_id.to_string(),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_defaults() {
+    assert!(base_profile("defaults").validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_stream_liveness_timeout() {
+    for value in [0, -1] {
+        let mut profile = base_profile("liveness");
+        profile.stream_liveness_timeout_secs = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("stream_liveness_timeout_secs must be positive"),
+            "value {value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_deadline() {
+    for value in [0, -1] {
+        let mut profile = base_profile("deadline");
+        profile.stream_liveness_timeout_secs = Some(300);
+        profile.deadline_duration_secs = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("deadline_duration_secs must be positive"),
+            "value {value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_liveness_at_or_past_deadline() {
+    for (liveness, deadline) in [(300, 300), (600, 300)] {
+        let mut profile = base_profile("relationship");
+        profile.stream_liveness_timeout_secs = Some(liveness);
+        profile.deadline_duration_secs = Some(deadline);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains(&format!(
+                "stream_liveness_timeout_secs ({liveness}) must be less than deadline_duration_secs ({deadline})"
+            )),
+            "liveness {liveness} deadline {deadline}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_liveness_shorter_than_deadline() {
+    let mut profile = base_profile("ok-relationship");
+    profile.stream_liveness_timeout_secs = Some(300);
+    profile.deadline_duration_secs = Some(600);
+    assert!(profile.validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_negative_seed() {
+    let mut profile = base_profile("seeded");
+    profile.seed = Some(-1);
+    let error = profile.validate().unwrap_err().to_string();
+    assert_eq!(error, "InferenceProfile seeded seed must be non-negative");
+}
+
+#[test]
+fn inference_profile_validate_accepts_unset_reasoning_effort_in_every_empty_form() {
+    for unset in [None, Some(""), Some("   ")] {
+        let mut profile = base_profile("unset-effort");
+        profile.reasoning_effort = unset.map(str::to_string);
+        assert!(profile.validate().is_ok(), "unset form {unset:?} failed");
+    }
+}
+
+#[test]
+fn inference_profile_validate_accepts_every_reasoning_effort_in_the_vocabulary() {
+    for value in [
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+    ] {
+        let mut profile = base_profile("vocab");
+        profile.reasoning_effort = Some(value.to_string());
+        assert!(profile.validate().is_ok(), "value {value} failed");
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_reasoning_effort_outside_the_vocabulary() {
+    let mut profile = base_profile("bad-effort");
+    profile.reasoning_effort = Some("extreme".to_string());
+    let error = profile.validate().unwrap_err().to_string();
+    assert!(error.contains("reasoning_effort must be one of"), "{error}");
+}
+
+// ---------------------------------------------------------------------------
+// Sampling bounds (#1331 fix round 1 — moved from the imperative
+// `gents config profile set` writer, the only place that enforced them).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inference_profile_validate_accepts_sampling_bounds_at_their_edges() {
+    let mut profile = base_profile("edges");
+    profile.top_p = Some(0.0);
+    profile.min_p = Some(1.0);
+    profile.top_k = Some(1);
+    profile.repetition_penalty = Some(f64::MIN_POSITIVE);
+    profile.frequency_penalty = Some(-2.0);
+    profile.presence_penalty = Some(2.0);
+    assert!(profile.validate().is_ok());
+}
+
+#[test]
+fn inference_profile_validate_rejects_top_p_outside_unit_interval() {
+    for value in [-0.01, 1.01] {
+        let mut profile = base_profile("top-p");
+        profile.top_p = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("top_p must be within [0, 1]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_min_p_outside_unit_interval() {
+    for value in [-0.01, 1.01] {
+        let mut profile = base_profile("min-p");
+        profile.min_p = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("min_p must be within [0, 1]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_top_k() {
+    for value in [0, -1] {
+        let mut profile = base_profile("top-k");
+        profile.top_k = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(error.contains("top_k must be positive"), "{value}: {error}");
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_non_positive_repetition_penalty() {
+    for value in [0.0, -1.0] {
+        let mut profile = base_profile("rep-penalty");
+        profile.repetition_penalty = Some(value);
+        let error = profile.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("repetition_penalty must be positive"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_rejects_frequency_and_presence_penalty_outside_range() {
+    for value in [-2.01, 2.01] {
+        let mut frequency = base_profile("freq-penalty");
+        frequency.frequency_penalty = Some(value);
+        let error = frequency.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("frequency_penalty must be within [-2, 2]"),
+            "{value}: {error}"
+        );
+
+        let mut presence = base_profile("presence-penalty");
+        presence.presence_penalty = Some(value);
+        let error = presence.validate().unwrap_err().to_string();
+        assert!(
+            error.contains("presence_penalty must be within [-2, 2]"),
+            "{value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn inference_profile_validate_reports_every_violation_at_once() {
+    let mut profile = base_profile("multi-bad");
+    profile.seed = Some(-1);
+    profile.top_p = Some(2.0);
+    profile.top_k = Some(0);
+    let error = profile.validate().unwrap_err().to_string();
+    assert!(error.contains("seed must be non-negative"), "{error}");
+    assert!(error.contains("top_p must be within [0, 1]"), "{error}");
+    assert!(error.contains("top_k must be positive"), "{error}");
+}
+
+// ---------------------------------------------------------------------------
+// InferenceBackend::validate lives in `backend_registry` (crate root); see
+// `crates/gents/src/backend_registry/tests.rs` for its table-driven cases.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// AgentBehavior::validate_references (#1331)
+// ---------------------------------------------------------------------------
+
+fn base_behavior(behavior_id: &str) -> AgentBehavior {
+    AgentBehavior {
+        behavior_id: behavior_id.to_string(),
+        agent_did: "did:test:agent".to_string(),
+        display_name: None,
+        description: None,
+        summary: None,
+        system_prompt: None,
+        request_context_template: None,
+        backend_id: None,
+        model_name: None,
+        tool_selection_id: None,
+        inference_profile_id: None,
+        compaction_strategy: None,
+        compaction_threshold: None,
+        enabled: true,
+        skill_refs: Vec::new(),
+        skill_excludes: Vec::new(),
+        created_at: None,
+    }
+}
+
+fn refs_with(
+    backends: &[(&str, &[&str])],
+    tool_selections: &[&str],
+    profiles: &[&str],
+    skills: &[&str],
+) -> ConfigReferences {
+    ConfigReferences {
+        backends: backends
+            .iter()
+            .map(|(id, models)| {
+                (
+                    id.to_string(),
+                    models.iter().map(|m| m.to_string()).collect(),
+                )
+            })
+            .collect(),
+        tool_selections: tool_selections.iter().map(|s| s.to_string()).collect(),
+        profiles: profiles.iter().map(|s| s.to_string()).collect(),
+        skills: skills.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_no_references() {
+    let behavior = base_behavior("empty");
+    let refs = ConfigReferences::default();
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_backend() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("ghost".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing backend_id ghost"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_model_not_advertised() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("GLM-5.2".to_string());
+    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("selects model GLM-5.2 which backend reviewers does not advertise"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_model_when_backend_advertises_none() {
+    // An empty advertised-models list means "any model is accepted" — the
+    // backend hasn't been probed, or advertises nothing specific.
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("anything".to_string());
+    let refs = refs_with(&[("reviewers", &[])], &[], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_advertised_model() {
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("reviewers".to_string());
+    behavior.model_name = Some("d4f".to_string());
+    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_tool_selection() {
+    let mut behavior = base_behavior("b");
+    behavior.tool_selection_id = Some("ghost-tools".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing tool_selection_id ghost-tools"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_tool_selection() {
+    let mut behavior = base_behavior("b");
+    behavior.tool_selection_id = Some("known-tools".to_string());
+    let refs = refs_with(&[], &["known-tools"], &[], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_profile() {
+    let mut behavior = base_behavior("b");
+    behavior.inference_profile_id = Some("ghost-profile".to_string());
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing inference_profile_id ghost-profile"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_profile() {
+    let mut behavior = base_behavior("b");
+    behavior.inference_profile_id = Some("known-profile".to_string());
+    let refs = refs_with(&[], &[], &["known-profile"], &[]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_skill_ref() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_refs = vec!["ghost-skill".to_string()];
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing skill_ref ghost-skill"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_rejects_missing_skill_exclude() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_excludes = vec!["ghost-skill".to_string()];
+    let refs = ConfigReferences::default();
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("references missing skill_exclude ghost-skill"),
+        "{error}"
+    );
+}
+
+#[test]
+fn agent_behavior_validate_references_accepts_known_skills() {
+    let mut behavior = base_behavior("b");
+    behavior.skill_refs = vec!["known-skill".to_string()];
+    behavior.skill_excludes = vec!["known-skill".to_string()];
+    let refs = refs_with(&[], &[], &[], &["known-skill"]);
+    assert!(behavior.validate_references(&refs).is_ok());
+}
+
+#[test]
+fn agent_behavior_reference_violations_reports_every_missing_reference_at_once() {
+    // Regression (#1331 fix round 2): a behavior dangling on backend, tool
+    // selection, AND profile simultaneously must surface all three, not
+    // just the first-checked one — this is what desired state's
+    // `config validate` renders as separate error-list entries.
+    let mut behavior = base_behavior("b");
+    behavior.backend_id = Some("missing-backend".to_string());
+    behavior.tool_selection_id = Some("missing-tools".to_string());
+    behavior.inference_profile_id = Some("missing-profile".to_string());
+    let refs = ConfigReferences::default();
+
+    let violations = behavior.reference_violations(&refs);
+    assert_eq!(
+        violations.len(),
+        3,
+        "expected 3 violations, got {violations:?}"
+    );
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing backend_id missing-backend")));
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing tool_selection_id missing-tools")));
+    assert!(violations
+        .iter()
+        .any(|msg| msg.contains("missing inference_profile_id missing-profile")));
+
+    // validate_references (the Result wrapper) joins them into one error —
+    // still all three, just not as separate Vec entries.
+    let error = behavior.validate_references(&refs).unwrap_err().to_string();
+    assert!(
+        error.contains("missing backend_id missing-backend"),
+        "{error}"
+    );
+    assert!(
+        error.contains("missing tool_selection_id missing-tools"),
+        "{error}"
+    );
+    assert!(
+        error.contains("missing inference_profile_id missing-profile"),
+        "{error}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ConfigReferences::load — lenient backend parsing (#1331, fix round 1)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn config_references_load_tolerates_a_malformed_backend_row_beside_a_good_one() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+
+    // Missing max_concurrent: `InferenceBackend::from_value` (the strict
+    // registry parser) requires it and would fail on this row. It still has
+    // a usable backend_id, so `ConfigReferences::load` — which reads
+    // backend_id/models directly, not through that parser — must not sink
+    // the whole load over it.
+    let malformed = node
+        .execute(
+            r#"mutation {
+                create_InferenceBackend(input: {
+                    backend_id: "malformed-backend",
+                    name: "Malformed",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "http://127.0.0.1:11434/v1",
+                    enabled: true,
+                    models: ["should-not-matter"],
+                    probe_status: "unknown"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!malformed.has_errors(), "{:?}", malformed.errors);
+
+    let good = node
+        .execute(
+            r#"mutation {
+                create_InferenceBackend(input: {
+                    backend_id: "good-backend",
+                    name: "Good",
+                    provider_kind: "OpenAiCompatible",
+                    endpoint: "http://127.0.0.1:11434/v1",
+                    max_concurrent: 4,
+                    max_queue_depth: 100,
+                    enabled: true,
+                    models: ["model-a", "model-b"],
+                    probe_status: "healthy"
+                }) { _docID }
+            }"#,
+        )
+        .await;
+    assert!(!good.has_errors(), "{:?}", good.errors);
+
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
+        .await
+        .expect("begin reference-load transaction");
+    let refs = ConfigReferences::load_in_txn(&txn, "did:test:whatever")
+        .await
+        .expect("load must tolerate a malformed unrelated backend row");
+    txn.discard().await.expect("discard read-only transaction");
+
+    assert_eq!(
+        refs.backends.get("good-backend").map(Vec::as_slice),
+        Some(&["model-a".to_string(), "model-b".to_string()][..]),
+        "the good backend's models must still come through"
+    );
+    // The malformed row's own backend_id is fine — only max_concurrent is
+    // missing — so it's present too; ConfigReferences skips a row only when
+    // even backend_id is unusable. The point of this test is that its
+    // absence of max_concurrent doesn't fail the whole load, not that the
+    // row itself is excluded.
+    assert!(refs.backends.contains_key("malformed-backend"));
 }

@@ -110,6 +110,113 @@ impl InferenceBackend {
     pub fn display_state(&self) -> &'static str {
         derive_display_state(self.enabled, &self.probe_status)
     }
+
+    /// Validate this backend — the single owner every write path (CLI
+    /// desired state, self-config's `configure_backend`) calls. `provider_kind`
+    /// is already a typed enum by construction ([`Self::from_value`] fails to
+    /// parse an invalid string), so that rule is enforced by the type, not
+    /// repeated here.
+    ///
+    /// `current_model` is the model a specific behavior currently binds
+    /// against this backend, if the caller has one in scope (self-config's
+    /// opt-in no-lockout guard does; desired state — which validates backends
+    /// independently of behaviors, and separately checks each behavior's
+    /// model against its backend's advertised list — passes `None`).
+    pub fn validation_violations(&self, current_model: Option<&str>) -> Vec<String> {
+        self.validation_violations_with_api_key_presence(current_model, false)
+    }
+
+    fn validation_violations_with_api_key_presence(
+        &self,
+        current_model: Option<&str>,
+        stored_api_key_is_present: bool,
+    ) -> Vec<String> {
+        let mut violations = Vec::new();
+
+        if self.backend_id.trim().is_empty() {
+            violations.push("backend_id must not be empty".to_string());
+        }
+        if self.endpoint.trim().is_empty() {
+            violations.push(format!(
+                "backend {} endpoint must not be empty",
+                self.backend_id
+            ));
+        }
+        if self
+            .api_key
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            violations.push(format!(
+                "backend {} api_key must not be empty when present",
+                self.backend_id
+            ));
+        }
+        let has_api_key = stored_api_key_is_present
+            || self
+                .api_key
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+        let has_api_key_env_var = self
+            .api_key_env_var
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if has_api_key && has_api_key_env_var {
+            violations.push(format!(
+                "backend {} must not set both api_key and api_key_env_var",
+                self.backend_id
+            ));
+        }
+        if self.max_concurrent <= 0 {
+            violations.push(format!(
+                "backend {} max_concurrent must be positive",
+                self.backend_id
+            ));
+        }
+        if self.max_queue_depth <= 0 {
+            violations.push(format!(
+                "backend {} max_queue_depth must be positive",
+                self.backend_id
+            ));
+        }
+        if let Some(current_model) = current_model.map(str::trim).filter(|v| !v.is_empty()) {
+            if !self.models.is_empty()
+                && !self
+                    .models
+                    .iter()
+                    .any(|model| model.trim() == current_model)
+            {
+                violations.push(format!(
+                    "backend {} models would drop the current model {current_model:?}; no-lockout guard",
+                    self.backend_id
+                ));
+            }
+        }
+        violations
+    }
+
+    /// Validate a secret-redacted backend projection. Self-config never
+    /// reads the stored key value, but it must still enforce the same XOR
+    /// rule when a separate presence-only query says one exists.
+    pub fn validate_with_api_key_presence(
+        &self,
+        current_model: Option<&str>,
+        stored_api_key_is_present: bool,
+    ) -> Result<()> {
+        let violations = self
+            .validation_violations_with_api_key_presence(current_model, stored_api_key_is_present);
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(violations.join("; "))
+        }
+    }
+
+    pub fn validate(&self, current_model: Option<&str>) -> Result<()> {
+        self.validate_with_api_key_presence(current_model, false)
+    }
 }
 
 /// Pure function backing [`InferenceBackend::display_state`]. Lives outside

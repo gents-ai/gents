@@ -689,7 +689,9 @@ async fn recording_graphql_handler(
         }
         Json(json!({ "data": aliased_mutation_response(&query) }))
     } else {
-        Json(json!({ "data": empty_collection_query_response(&query) }))
+        Json(json!({
+            "data": recorded_collection_query_response(&state, tx_id.as_deref(), &query)
+        }))
     }
 }
 
@@ -720,6 +722,63 @@ fn empty_collection_query_response(query: &str) -> Value {
                 Value::Array(Vec::new()),
             );
         }
+    }
+    Value::Object(data)
+}
+
+fn recorded_collection_query_response(
+    state: &RecordingGraphqlState,
+    tx_id: Option<&str>,
+    query: &str,
+) -> Value {
+    let mut events = state.committed.lock().expect("committed lock").clone();
+    if let Some(tx_id) = tx_id {
+        if let Some(pending) = state.transactions.lock().expect("tx lock").get(tx_id) {
+            events.extend(pending.iter().cloned());
+        }
+    }
+
+    let mut visible = Vec::<ObservedWrite>::new();
+    for event in events {
+        visible.retain(|write| {
+            write.collection != event.collection || write.unique_value != event.unique_value
+        });
+        if event.kind != "delete" {
+            visible.push(event);
+        }
+    }
+
+    let mut data = empty_collection_query_response(query)
+        .as_object()
+        .cloned()
+        .expect("empty collection response is an object");
+    for collection in [
+        Collection::InferenceBackend,
+        Collection::ToolSelection,
+        Collection::InferenceProfile,
+        Collection::Skill,
+    ] {
+        if !query.contains(collection.graphql_type()) {
+            continue;
+        }
+        let rows = visible
+            .iter()
+            .filter(|write| write.collection == collection)
+            .map(|write| {
+                let mut row = Map::new();
+                row.insert(
+                    collection.unique_field().to_string(),
+                    Value::String(write.unique_value.clone()),
+                );
+                if collection == Collection::InferenceBackend {
+                    // Empty is the production no-lockout representation for an
+                    // unrestricted backend model set.
+                    row.insert("models".to_string(), Value::Array(Vec::new()));
+                }
+                Value::Object(row)
+            })
+            .collect();
+        data.insert(collection.graphql_type().to_string(), Value::Array(rows));
     }
     Value::Object(data)
 }
@@ -1351,6 +1410,63 @@ async fn config_apply_txn_discard_leaves_committed_empty() {
 mod recorder_unit_tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn recorder_queries_read_committed_and_current_transaction_state() {
+        let state = RecordingGraphqlState::default();
+        state
+            .committed
+            .lock()
+            .expect("committed lock")
+            .push(ObservedWrite {
+                kind: "live".to_string(),
+                collection: Collection::InferenceBackend,
+                unique_value: "committed-backend".to_string(),
+            });
+        state.transactions.lock().expect("tx lock").insert(
+            "current".to_string(),
+            vec![
+                ObservedWrite {
+                    kind: "delete".to_string(),
+                    collection: Collection::InferenceBackend,
+                    unique_value: "committed-backend".to_string(),
+                },
+                ObservedWrite {
+                    kind: "write".to_string(),
+                    collection: Collection::InferenceBackend,
+                    unique_value: "pending-backend".to_string(),
+                },
+            ],
+        );
+        state.transactions.lock().expect("tx lock").insert(
+            "other".to_string(),
+            vec![ObservedWrite {
+                kind: "write".to_string(),
+                collection: Collection::InferenceBackend,
+                unique_value: "other-backend".to_string(),
+            }],
+        );
+
+        let query = "{ InferenceBackend { backend_id models } }";
+        assert_eq!(
+            recorded_collection_query_response(&state, Some("current"), query),
+            json!({
+                "InferenceBackend": [{
+                    "backend_id": "pending-backend",
+                    "models": [],
+                }],
+            })
+        );
+        assert_eq!(
+            recorded_collection_query_response(&state, None, query),
+            json!({
+                "InferenceBackend": [{
+                    "backend_id": "committed-backend",
+                    "models": [],
+                }],
+            })
+        );
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn recorder_begin_returns_numeric_id_and_commit_appends_to_committed() {

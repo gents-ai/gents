@@ -1,5 +1,8 @@
 use anyhow::{bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigApplyTxn;
+use gents::ToolSelectionDocument;
+use gents_protocol::graphql::graphql_rows_from_response;
 use gents_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
 use serde_json::Value;
 
@@ -11,10 +14,53 @@ use super::super::graphql::{
 
 pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) -> Result<()> {
     let mutation = build_upsert_tool_selection_mutation(row)?;
-    execute_mutation(node, &mutation, "upsert_tool_selection").await
+    let mut candidate = tool_selection_document(row)?;
+    let txn = ConfigApplyTxn::begin_local(node, None).await?;
+    let result = async {
+        if let Some(existing) = preserved_tool_selection_fields(&txn, &row.selection_id).await? {
+            // These columns are not represented by this desktop mutation, so
+            // they remain stored state rather than being cleared by the save.
+            candidate.read_only_command_allowlist = existing.read_only_command_allowlist;
+            candidate.approval_required_tools = existing.approval_required_tools;
+        }
+        candidate.validate()?;
+        txn.execute(&mutation).await?;
+        Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+async fn preserved_tool_selection_fields(
+    txn: &ConfigApplyTxn<'_>,
+    selection_id: &str,
+) -> Result<Option<ToolSelectionDocument>> {
+    let selection_id = escape_graphql_string(selection_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ ToolSelection(
+                filter: {{ selection_id: {{ _eq: "{selection_id}" }} }}, limit: 1
+            ) {{ selection_id agent_did read_only_command_allowlist approval_required_tools }} }}"#
+        ))
+        .await?;
+    graphql_rows_from_response(&response, "ToolSelection")
+        .into_iter()
+        .next()
+        .map(serde_json::from_value)
+        .transpose()
+        .context("decoding preserved ToolSelection fields")
 }
 
 fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String> {
+    // Keep the desktop encoder: the canonical upsert writes columns this path
+    // historically leaves alone and omits an absent cross-deployment timeout
+    // where the desktop's full-row save explicitly clears it.
     let selection_id = normalize_required("selection_id", &row.selection_id)?;
     let agent_did = normalize_required(
         "agent_did",
@@ -342,6 +388,10 @@ fn build_upsert_tool_selection_mutation(row: &ToolSelectionRow) -> Result<String
     ))
 }
 
+fn tool_selection_document(row: &ToolSelectionRow) -> Result<ToolSelectionDocument> {
+    serde_json::from_value(serde_json::to_value(row)?).map_err(Into::into)
+}
+
 pub async fn upsert_tool_service_registry(
     node: &EmbeddedNode,
     row: &ToolServiceRegistryRow,
@@ -498,8 +548,13 @@ fn build_delete_tool_service_registry_mutation(service_id: &str) -> Result<Strin
 }
 
 #[cfg(test)]
-mod delete_tests {
-    use super::build_delete_tool_selection_mutation;
+mod tests {
+    use super::{
+        build_delete_tool_selection_mutation, tool_selection_document, upsert_tool_selection,
+    };
+    use defra_node::{EmbeddedNode, StorageBackend};
+    use gents::ensure_runtime_schemas;
+    use gents_protocol::row::ToolSelectionRow;
 
     #[test]
     fn tool_selection_delete_is_scoped_to_agent_and_escapes_values() {
@@ -508,5 +563,58 @@ mod delete_tests {
 
         assert!(mutation.contains(r#"agent_did: { _eq: "did:test:remote" }"#));
         assert!(mutation.contains(r#"selection_id: { _eq: "tools-\"safe\"" }"#));
+    }
+
+    #[test]
+    fn upsert_rejects_an_invalid_subagent_target() {
+        let row: ToolSelectionRow = serde_json::from_value(serde_json::json!({
+            "selection_id": "tools",
+            "agent_did": "did:test:amy",
+            "subagent_targets": ["bare-behavior-id"]
+        }))
+        .expect("tool selection row");
+
+        let error = tool_selection_document(&row)
+            .expect("tool selection document")
+            .validate()
+            .expect_err("invalid tool selection")
+            .to_string();
+        assert!(error.contains("not a valid SubagentTarget JSON object"));
+    }
+
+    #[tokio::test]
+    async fn upsert_validates_preserved_approval_tools() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let node = EmbeddedNode::builder()
+            .data_path(dir.path().join("data"))
+            .with_storage_backend(StorageBackend::Regolith)
+            .build()
+            .await
+            .expect("node");
+        ensure_runtime_schemas(&node).await.expect("schemas");
+        let response = node
+            .execute(
+                r#"mutation { create_ToolSelection(input: {
+                    selection_id: "desktop-tools", agent_did: "did:test:desktop",
+                    display_name: "Original", approval_required_tools: [""]
+                }) { _docID } }"#,
+            )
+            .await;
+        assert!(!response.has_errors(), "seed: {:?}", response.errors);
+
+        let row: ToolSelectionRow = serde_json::from_value(serde_json::json!({
+            "selection_id": "desktop-tools",
+            "agent_did": "did:test:desktop",
+            "display_name": "Updated"
+        }))
+        .expect("tool selection row");
+        let error = upsert_tool_selection(&node, &row)
+            .await
+            .expect_err("preserved invalid approval tool must reject the save")
+            .to_string();
+        assert!(
+            error.contains("approval_required_tools[0] is empty"),
+            "{error}"
+        );
     }
 }

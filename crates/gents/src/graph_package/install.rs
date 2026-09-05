@@ -919,6 +919,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_rejects_a_model_the_bound_backend_does_not_advertise() {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        let access = ConfigAccess::Local(node.clone());
+        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let mut bindings = create_fixture_bindings(node.as_ref()).await;
+        for role in bindings.roles.values_mut() {
+            role.model_name = Some("not-advertised".to_owned());
+        }
+
+        let error =
+            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+                .await
+                .expect_err("package behavior must use a model advertised by its backend");
+        assert!(
+            format!("{error:#}").contains("does not advertise"),
+            "{error:#}"
+        );
+        let state = node
+            .execute("{ AgentBehavior { behavior_id model_name } GraphRevision { digest } }")
+            .await;
+        assert!(!state.has_errors(), "{:?}", state.errors);
+        let data = state.data.unwrap();
+        assert!(data["AgentBehavior"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|behavior| {
+                !behavior["behavior_id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("pkg-"))
+                    && behavior["model_name"] != "not-advertised"
+            }));
+        assert!(data["GraphRevision"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn existing_package_schema_must_match_types_indexes_and_immutability() {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         let access = ConfigAccess::Local(node.clone());

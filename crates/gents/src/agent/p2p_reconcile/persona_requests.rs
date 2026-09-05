@@ -841,6 +841,14 @@ mod tests {
         Arc::new(node)
     }
 
+    async fn build_apply_node(tempdir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
+        let node = build_node(tempdir).await;
+        crate::agent::persona_ops::seed_persona_validation_references(&node)
+            .await
+            .expect("persona validation references seed");
+        node
+    }
+
     fn happy_catalog(agent_did: &str) -> PersonaCatalogView {
         PersonaCatalogView {
             available_models: BTreeSet::from(["openai|gpt-5".to_string()]),
@@ -1054,7 +1062,7 @@ mod tests {
     #[tokio::test]
     async fn pending_admit_applies_and_marks_behavior_id() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let node = build_node(&tempdir).await;
+        let node = build_apply_node(&tempdir).await;
 
         let doc = pending_create_doc("req-1", "did:key:agent");
         let mut catalog_by_agent = BTreeMap::new();
@@ -1112,7 +1120,7 @@ mod tests {
     #[tokio::test]
     async fn terminal_rows_are_untouched() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let node = build_node(&tempdir).await;
+        let node = build_apply_node(&tempdir).await;
 
         let pending_doc = pending_create_doc("req-pending", "did:key:agent");
         let mut applied_doc = pending_create_doc("req-already-applied", "did:key:agent");
@@ -1145,7 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn one_bad_row_does_not_wedge_the_sweep() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let node = build_node(&tempdir).await;
+        let node = build_apply_node(&tempdir).await;
 
         let good_doc = pending_create_doc("req-good", "did:key:good-agent");
         let bad_doc = pending_create_doc("req-bad", "did:key:bad-agent");
@@ -1191,7 +1199,7 @@ mod tests {
     #[tokio::test]
     async fn crash_between_apply_and_mark_repairs_without_duplicate() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
-        let node = build_node(&tempdir).await;
+        let node = build_apply_node(&tempdir).await;
 
         let doc = pending_create_doc("req-repair", "did:key:repair-agent");
         let agent_did = doc.agent_did.clone();

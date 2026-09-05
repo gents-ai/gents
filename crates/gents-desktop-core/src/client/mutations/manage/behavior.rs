@@ -1,18 +1,50 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigApplyTxn;
+use gents::{AgentBehaviorDocument, ConfigReferences};
 use gents_protocol::row::AgentBehaviorRow;
 use serde_json::Value;
 
 use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
-    graphql_optional_float_field, graphql_string_field, graphql_string_list_field, join_fields,
-    normalize_required,
+    escape_graphql_string, graphql_optional_bool_field, graphql_optional_float_field,
+    graphql_string_field, graphql_string_list_field, join_fields, normalize_required,
 };
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
+    let behavior = agent_behavior_document(row)?;
     let mutation = build_upsert_agent_behavior_mutation(row)?;
-    execute_mutation(node, &mutation, "upsert_agent_behavior").await
+    let txn = ConfigApplyTxn::begin_local(node, None).await?;
+    let result = async {
+        let references = ConfigReferences::load_in_txn(&txn, &behavior.agent_did).await?;
+        behavior.validate_references(&references)?;
+        // Keep the desktop encoder: represented row options are authoritative
+        // clears, while columns absent from AgentBehaviorRow (description,
+        // summary, request_context_template) remain stored state.
+        txn.execute(&mutation).await?;
+        Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
+fn agent_behavior_document(row: &AgentBehaviorRow) -> Result<AgentBehaviorDocument> {
+    let agent_did = normalize_required(
+        "agent_did",
+        row.agent_did
+            .as_deref()
+            .context("agent_did is required for AgentBehavior")?,
+    )?;
+    let mut value = serde_json::to_value(row)?;
+    value["agent_did"] = Value::String(agent_did.to_string());
+    value["enabled"] = Value::Bool(row.enabled.unwrap_or(false));
+    Ok(serde_json::from_value(value)?)
 }
 
 fn build_upsert_agent_behavior_mutation(row: &AgentBehaviorRow) -> Result<String> {
@@ -191,8 +223,10 @@ fn build_delete_agent_behavior_mutation(agent_did: &str, behavior_id: &str) -> R
 }
 
 #[cfg(test)]
-mod delete_tests {
-    use super::build_delete_agent_behavior_mutation;
+mod tests {
+    use super::{agent_behavior_document, build_delete_agent_behavior_mutation};
+    use gents::ConfigReferences;
+    use gents_protocol::row::AgentBehaviorRow;
 
     #[test]
     fn delete_is_scoped_to_agent_and_escapes_values() {
@@ -201,5 +235,26 @@ mod delete_tests {
 
         assert!(mutation.contains(r#"agent_did: { _eq: "did:test:remote" }"#));
         assert!(mutation.contains(r#"behavior_id: { _eq: "say-\"hi\"" }"#));
+    }
+
+    #[test]
+    fn behavior_row_reports_all_missing_references() {
+        let row: AgentBehaviorRow = serde_json::from_value(serde_json::json!({
+            "behavior_id": "amy",
+            "agent_did": "did:test:amy",
+            "backend_id": "missing-backend",
+            "tool_selection_id": "missing-tools",
+            "inference_profile_id": "missing-profile"
+        }))
+        .expect("behavior row");
+        let behavior = agent_behavior_document(&row).expect("behavior document");
+
+        let error = behavior
+            .validate_references(&ConfigReferences::default())
+            .expect_err("invalid behavior")
+            .to_string();
+        assert!(error.contains("missing backend_id missing-backend"));
+        assert!(error.contains("missing tool_selection_id missing-tools"));
+        assert!(error.contains("missing inference_profile_id missing-profile"));
     }
 }

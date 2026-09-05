@@ -9,12 +9,45 @@ fn validate_rejects_empty_string_in_subagent_targets() {
     manifest.tool_selections.push(sel);
 
     let errors = validation_errors(&manifest);
+    // `ToolSelectionDocument::validate` (#1331, the single owner) reports
+    // this now; its message doesn't repeat the selection_id (a document
+    // validator sees one document, not the manifest it came from) — the
+    // manifest-side `validate_subagent_targets` no longer re-checks entry
+    // parseability, only duplicate names and cross-deployment permission.
     assert!(
         errors
             .iter()
-            .any(|msg| msg.contains("subagent_targets") && msg.contains("agent-tools")),
+            .any(|msg| msg.contains("subagent_targets[0] is empty")),
         "expected empty subagent_targets entry rejection, got {errors:?}"
     );
+}
+
+#[test]
+fn validate_reports_each_tool_selection_violation_separately() {
+    let mut manifest = manifest_with_default_behavior();
+    let mut selection = sample_tool_selection("invalid-tools");
+    selection.agent_did = "did:test:test".to_string();
+    selection.subagent_targets = vec![String::new()];
+    selection.backgroundable_tool_names = vec![String::new()];
+    selection.subagent_background_enabled = false;
+    selection.subagent_default_await_mode = Some("background".to_string());
+    manifest.tool_selections.push(selection);
+
+    let errors = validation_errors(&manifest);
+    let owned_errors = errors
+        .iter()
+        .filter(|error| error.starts_with("tool selection invalid-tools:"))
+        .collect::<Vec<_>>();
+    assert_eq!(owned_errors.len(), 3, "{errors:?}");
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("subagent_targets[0]")));
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("backgroundable_tool_names[0]")));
+    assert!(owned_errors
+        .iter()
+        .any(|error| error.contains("subagent_default_await_mode")));
 }
 
 #[test]

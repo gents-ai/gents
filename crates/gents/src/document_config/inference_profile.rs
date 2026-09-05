@@ -9,7 +9,7 @@ use crate::config::{
     DEFAULT_MAX_TURNS, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::config_client::mint_recreate_identity_timestamp;
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct InferenceProfile {
@@ -37,6 +37,124 @@ pub struct InferenceProfile {
     pub retry_max_resample: Option<i64>,
     pub retry_allow_repair: Option<bool>,
     pub retry_interactive_max: Option<i64>,
+}
+
+impl InferenceProfile {
+    /// Validate this profile's bounds — the single owner every write path
+    /// (CLI desired state, self-config, `profile set`,
+    /// `upsert_inference_profile`) calls. Mirrors the historical `gents-cli`
+    /// desired-state rules exactly so no case is lost by the move (#1331),
+    /// and reports every violated rule at once so a `config apply` user who
+    /// broke two fields sees both in one round trip.
+    pub fn validation_violations(&self) -> Vec<String> {
+        let profile_id = self.profile_id.trim();
+        let mut violations: Vec<String> = Vec::new();
+
+        let stream_liveness_timeout_secs = match self.stream_liveness_timeout_secs {
+            Some(value) if value <= 0 => {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
+        };
+        let deadline_duration_secs = match self.deadline_duration_secs {
+            Some(value) if value <= 0 => {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} deadline_duration_secs must be positive"
+                ));
+                None
+            }
+            Some(value) => Some(value),
+            None => Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
+        };
+        // Only compare the two bounds when both are individually valid — an
+        // already-invalid bound would make this comparison noise on top of
+        // the violation already reported above.
+        if let (Some(stream_liveness_timeout_secs), Some(deadline_duration_secs)) =
+            (stream_liveness_timeout_secs, deadline_duration_secs)
+        {
+            if stream_liveness_timeout_secs >= deadline_duration_secs {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
+                ));
+            }
+        }
+        if self.seed.is_some_and(|value| value < 0) {
+            violations.push(format!(
+                "InferenceProfile {profile_id} seed must be non-negative"
+            ));
+        }
+        // Sampling bounds (#1331 fix round 1 — previously only enforced by
+        // the `gents config profile set` imperative writer, not the owner).
+        if self
+            .top_p
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            violations.push(format!(
+                "InferenceProfile {profile_id} top_p must be within [0, 1]"
+            ));
+        }
+        if self
+            .min_p
+            .is_some_and(|value| !(0.0..=1.0).contains(&value))
+        {
+            violations.push(format!(
+                "InferenceProfile {profile_id} min_p must be within [0, 1]"
+            ));
+        }
+        if self.top_k.is_some_and(|value| value <= 0) {
+            violations.push(format!(
+                "InferenceProfile {profile_id} top_k must be positive"
+            ));
+        }
+        if self.repetition_penalty.is_some_and(|value| value <= 0.0) {
+            violations.push(format!(
+                "InferenceProfile {profile_id} repetition_penalty must be positive"
+            ));
+        }
+        for (name, value) in [
+            ("frequency_penalty", self.frequency_penalty),
+            ("presence_penalty", self.presence_penalty),
+        ] {
+            if value.is_some_and(|value| !(-2.0..=2.0).contains(&value)) {
+                violations.push(format!(
+                    "InferenceProfile {profile_id} {name} must be within [-2, 2]"
+                ));
+            }
+        }
+        // Empty reasoning effort is unset: DefraDB may materialize nullable
+        // strings as empty values, and exported manifests must round-trip.
+        if self
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|value| {
+                !matches!(
+                    value,
+                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
+                )
+            })
+        {
+            violations.push(format!(
+                "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
+            ));
+        }
+
+        violations
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        let violations = self.validation_violations();
+        if violations.is_empty() {
+            Ok(())
+        } else {
+            anyhow::bail!(violations.join("; "))
+        }
+    }
 }
 
 const DEFAULT_INFERENCE_PROFILE_LABEL: &str = "Default";
@@ -237,13 +355,23 @@ pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     profile: &InferenceProfile,
 ) -> Result<()> {
-    if profile.seed.is_some_and(|seed| seed < 0) {
-        anyhow::bail!("seed must be non-negative");
+    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
+    let result = async {
+        crate::config_client::effective_inference_profile(&txn, profile)
+            .await?
+            .validate()?;
+        txn.execute(&upsert_inference_profile_mutation(profile))
+            .await?;
+        Ok(())
     }
-    let mutation = upsert_inference_profile_mutation(profile);
-
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert InferenceProfile").await?;
-    Ok(())
+    .await;
+    match result {
+        Ok(()) => txn.commit().await,
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
 }
 
 pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> String {

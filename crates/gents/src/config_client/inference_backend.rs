@@ -1,9 +1,30 @@
 use crate::graphql::escape_graphql_string;
 use crate::{BackendProviderKind, OpenAiWireApi};
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::{mint_recreate_identity_timestamp, ConfigAccess};
 use gents_protocol::graphql::{graphql_bool_literal, nullable_string_field, string_list_field};
+
+pub async fn load_inference_backend_in_txn(
+    txn: &super::ConfigApplyTxn<'_>,
+    backend_id: &str,
+) -> Result<Option<crate::InferenceBackend>> {
+    let backend_id = escape_graphql_string(backend_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ InferenceBackend(
+                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }}, limit: 1
+            ) {{ backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var
+                 max_concurrent max_queue_depth enabled models probe_status }} }}"#
+        ))
+        .await?;
+    gents_protocol::graphql::graphql_rows_from_response(&response, "InferenceBackend")
+        .into_iter()
+        .next()
+        .map(|row| crate::InferenceBackend::from_value(&row))
+        .transpose()
+        .context("decoding existing InferenceBackend")
+}
 
 #[derive(Debug, Clone)]
 pub struct InferenceBackendUpsertDocument {
@@ -26,6 +47,24 @@ pub async fn write_inference_backend_document(
     access: &ConfigAccess,
     backend: &InferenceBackendUpsertDocument,
 ) -> Result<String> {
+    crate::InferenceBackend {
+        backend_id: backend.backend_id.clone(),
+        name: backend.name.clone(),
+        provider_kind: backend.provider_kind,
+        openai_wire_api: backend.openai_wire_api,
+        endpoint: backend.endpoint.clone(),
+        api_key: backend.api_key.clone(),
+        api_key_env_var: backend.api_key_env_var.clone(),
+        max_concurrent: backend.max_concurrent,
+        max_queue_depth: backend.max_queue_depth,
+        enabled: backend.enabled,
+        models: backend
+            .models_on_update
+            .clone()
+            .unwrap_or_else(|| backend.models_on_add.clone()),
+        probe_status: backend.probe_status.clone(),
+    }
+    .validate(None)?;
     let recreate_identity = escape_graphql_string(&mint_recreate_identity_timestamp());
     let models_add = string_list_field("models", &backend.models_on_add)
         .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;

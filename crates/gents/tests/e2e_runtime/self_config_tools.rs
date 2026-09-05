@@ -74,6 +74,8 @@ async fn seed_config(node: &Arc<EmbeddedNode>) {
                 provider_kind: "OpenAiCompatible",
                 endpoint: "http://127.0.0.1:11434/v1",
                 api_key: "sk-secret-should-never-leak",
+                max_concurrent: 1,
+                max_queue_depth: 1,
                 enabled: true,
                 models: ["model-small", "model-large"],
                 probe_status: "healthy"
@@ -168,7 +170,9 @@ async fn configure_behavior_patches_and_rejects_wholesale() {
     )
     .await
     .expect_err("dangling backend_id must be rejected");
-    assert!(error.contains("does not exist"), "{error}");
+    // `AgentBehavior::validate_references` (#1331, the single owner) phrases
+    // this as "references missing backend_id", not "does not exist".
+    assert!(error.contains("references missing backend_id"), "{error}");
     let behavior = load_agent_behavior(&db.node, BEHAVIOR_ID)
         .await
         .expect("load behavior")
@@ -383,6 +387,48 @@ async fn configure_rejects_non_scalar_patch_values() {
     assert!(
         rows.is_empty(),
         "no document may be forged in another collection: {rows:?}"
+    );
+}
+
+#[tokio::test]
+async fn configure_backend_rejects_env_var_when_a_secret_key_is_stored() {
+    let db = test_db("self-config-backend-key-xor").await;
+    seed_config(&db.node).await;
+    let tools = build_self_config_tools(
+        db.node.clone(),
+        AGENT_DID.to_string(),
+        None,
+        &tool_config(&["backend"], false, false),
+    );
+
+    let error = call_tool(
+        &tools,
+        "configure_backend",
+        json!({ "patch": { "api_key_env_var": "GENTS_TEST_API_KEY" } }),
+    )
+    .await
+    .expect_err("a stored api_key and api_key_env_var must remain mutually exclusive");
+    assert!(
+        error.contains("must not set both api_key and api_key_env_var"),
+        "{error}"
+    );
+
+    let response = db
+        .node
+        .execute(&format!(
+            r#"{{ InferenceBackend(filter: {{ backend_id: {{ _eq: "{BACKEND_ID}" }} }}) {{ api_key_env_var }} }}"#
+        ))
+        .await;
+    let api_key_env_var = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("api_key_env_var"));
+    assert!(
+        api_key_env_var.is_none_or(Value::is_null),
+        "rejected patch must not commit: {response:?}"
     );
 }
 

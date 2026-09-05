@@ -3,12 +3,7 @@ use gents_protocol::graphql::{
     extract_mutation_doc_id as shared_extract_mutation_doc_id,
     graphql_endpoint_available as shared_graphql_endpoint_available,
     graphql_input_literal as shared_graphql_input_literal, graphql_rows_from_response,
-    graphql_string_list_literal as shared_graphql_string_list_literal,
-    optional_bool_field as shared_optional_bool_field,
-    optional_f64_field as shared_optional_f64_field,
-    optional_i64_field as shared_optional_i64_field,
-    optional_i64_list_field as shared_optional_i64_list_field,
-    optional_string_field as shared_optional_string_field, GraphqlRequestOptions,
+    graphql_string_list_literal as shared_graphql_string_list_literal, GraphqlRequestOptions,
 };
 use serde_json::Value;
 
@@ -66,24 +61,4 @@ pub(crate) fn graphql_input_literal(value: &Value) -> Result<String> {
 
 pub(crate) fn extract_mutation_doc_id(response: &Value, collection_name: &str) -> Result<String> {
     shared_extract_mutation_doc_id(response, collection_name)
-}
-
-pub(crate) fn optional_i64_field(name: &str, value: Option<i64>) -> Option<String> {
-    shared_optional_i64_field(name, value)
-}
-
-pub(crate) fn optional_f64_field(name: &str, value: Option<f64>) -> Option<String> {
-    shared_optional_f64_field(name, value)
-}
-
-pub(crate) fn optional_bool_field(name: &str, value: Option<bool>) -> Option<String> {
-    shared_optional_bool_field(name, value)
-}
-
-pub(crate) fn optional_i64_list_field(name: &str, value: Option<&[i64]>) -> Option<String> {
-    shared_optional_i64_list_field(name, value)
-}
-
-pub(crate) fn optional_string_field(name: &str, value: Option<&str>) -> Option<String> {
-    shared_optional_string_field(name, value)
 }

@@ -164,47 +164,47 @@ fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyReque
         let agent_did = agent_did.clone();
         Box::pin(async move {
             let behavior: crate::AgentBehaviorDocument = decode_merged("AgentBehavior", &merged)?;
-            for (field, target) in [
-                ("tool_selection_id", SelfConfigTarget::ToolSelection),
-                ("inference_profile_id", SelfConfigTarget::InferenceProfile),
-                ("backend_id", SelfConfigTarget::InferenceBackend),
-            ] {
-                if let Some(reference) = merged
-                    .get(field)
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
+
+            // Self only: a patched tool_selection_id must belong to this
+            // agent even if it exists. Not a generic document reference
+            // rule — ToolSelection ownership is self-config policy, not
+            // document shape — so it stays here; existence is checked below
+            // by the owner along with every other reference.
+            if let Some(selection_id) = merged
+                .get("tool_selection_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                if let Some((_, referenced)) = crate::config_client::patch::read_doc_in_txn(
+                    txn,
+                    SelfConfigTarget::ToolSelection,
+                    selection_id,
+                )
+                .await?
                 {
-                    let Some((_, referenced)) =
-                        crate::config_client::patch::read_doc_in_txn(txn, target, reference)
-                            .await?
-                    else {
+                    let owner = referenced
+                        .get("agent_did")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if owner != agent_did {
                         bail!(
-                            "behavior.{field} references {reference:?}, which does not exist \
-                             in {}",
-                            target.collection_name()
+                            "behavior.tool_selection_id references {selection_id:?}, which is \
+                             owned by {owner:?}, not this agent — self-config is self only"
                         );
-                    };
-                    // ToolSelection is per-agent: binding another agent's
-                    // selection is invalid config (the document view rejects
-                    // cross-agent rows) and would let configure_tools patch a
-                    // foreign selection. Profiles/backends are global by
-                    // design.
-                    if target == SelfConfigTarget::ToolSelection {
-                        let owner = referenced
-                            .get("agent_did")
-                            .and_then(Value::as_str)
-                            .unwrap_or("");
-                        if owner != agent_did {
-                            bail!(
-                                "behavior.tool_selection_id references {reference:?}, which is \
-                                 owned by {owner:?}, not this agent — self-config is self only"
-                            );
-                        }
                     }
                 }
             }
-            let _ = behavior;
+
+            // Document rule: backend/model/tool_selection/profile/skill
+            // reference existence is owned by
+            // `AgentBehavior::validate_references`. A patch may leave a
+            // reference field untouched (e.g. skill_refs when only
+            // system_prompt changes), so this needs the full current
+            // reference snapshot, not just the fields the patch touches.
+            let refs =
+                crate::document_config::ConfigReferences::load_in_txn(txn, &agent_did).await?;
+            behavior.validate_references(&refs)?;
             Ok(())
         })
     });
@@ -266,9 +266,9 @@ fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
     request.validate = Box::new(|_txn, _anchor, _stored, merged| {
         let merged = merged.clone();
         Box::pin(async move {
-            let _profile: crate::document_config::InferenceProfile =
+            let profile: crate::document_config::InferenceProfile =
                 decode_merged("InferenceProfile", &merged)?;
-            Ok(())
+            profile.validate()
         })
     });
     request
@@ -281,21 +281,16 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
             .ref_id("backend_id")
             .ok_or_else(|| anyhow!("behavior has no backend_id; bind one via configure_behavior"))
     });
-    request.validate = Box::new(|_txn, _anchor, _stored, merged| {
+    request.validate = Box::new(|txn, _anchor, _stored, merged| {
         let merged = merged.clone();
         Box::pin(async move {
-            crate::BackendProviderKind::parse_optional(
-                merged.get("provider_kind").and_then(Value::as_str),
-            )?;
-            for field in ["max_concurrent", "max_queue_depth"] {
-                if let Some(value) = merged.get(field) {
-                    let valid = value.as_i64().is_some_and(|value| value > 0);
-                    if !valid {
-                        bail!("backend.{field} must be a positive integer");
-                    }
-                }
-            }
-            Ok(())
+            let backend = crate::InferenceBackend::from_value(&Value::Object(merged))?;
+            let stored_api_key_is_present =
+                backend_has_stored_api_key(txn, &backend.backend_id).await?;
+            // `current_model=None`: the no-lockout conjunct is opt-in policy
+            // (`self_config_no_lockout`), enforced below in `guard` only when
+            // the operator has turned it on.
+            backend.validate_with_api_key_presence(None, stored_api_key_is_present)
         })
     });
     request.guard = Box::new(|anchor, merged| {
@@ -305,30 +300,44 @@ fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
                  model unresolvable"
             );
         }
-        if let Some(models) = merged.get("models").and_then(Value::as_array) {
-            if !models.is_empty() {
-                if let Some(model_name) = anchor
-                    .doc
-                    .get("model_name")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                {
-                    let listed = models
-                        .iter()
-                        .any(|model| model.as_str() == Some(model_name));
-                    if !listed {
-                        bail!(
-                            "no-lockout guard: the patched models list drops this behavior's \
-                             model {model_name:?}"
-                        );
-                    }
-                }
-            }
-        }
-        Ok(())
+        // Document rule: dropping the current model from `models` is owned
+        // by `InferenceBackend::validate`'s no-lockout conjunct.
+        let backend = crate::InferenceBackend::from_value(&Value::Object(merged.clone()))?;
+        let current_model = anchor
+            .doc
+            .get("model_name")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        backend.validate(current_model)
     });
     request
+}
+
+async fn backend_has_stored_api_key(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    backend_id: &str,
+) -> Result<bool> {
+    let backend_id = crate::graphql::escape_graphql_string(backend_id);
+    let query = format!(
+        r#"{{
+            InferenceBackend(
+                filter: {{
+                    _and: [
+                        {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                        {{ api_key: {{ _ne: "" }} }}
+                    ]
+                }},
+                limit: 1
+            ) {{ backend_id }}
+        }}"#
+    );
+    let response = txn.execute(&query).await?;
+    Ok(response
+        .get("data")
+        .and_then(|data| data.get("InferenceBackend"))
+        .and_then(Value::as_array)
+        .is_some_and(|rows| !rows.is_empty()))
 }
 
 fn mcp_service_request(service_id: String, patch: SelfConfigPatch) -> ApplyRequest<'static> {

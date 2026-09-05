@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use gents::{discover_backend_models, BackendProviderKind};
+use gents::{discover_backend_models, BackendProviderKind, InferenceBackend};
 use serde_json::{json, Value};
 
 use crate::cli::*;
@@ -16,8 +16,42 @@ use crate::{
     EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
+/// Decode this command's resolved args into the document type
+/// `InferenceBackend::validate` owns. `models` isn't a `backend set` flag —
+/// this writer always stamps the `"default"` placeholder
+/// `write_inference_backend_document` below actually sends — so the
+/// no-lockout conjunct never fires here (it needs a non-empty advertised
+/// list to compare a current model against).
+fn to_document_backend(
+    args: &BackendUpsertArgs,
+    backend: &ResolvedBackendConfig,
+) -> InferenceBackend {
+    InferenceBackend {
+        backend_id: args.backend_id.clone(),
+        name: args.name.clone(),
+        provider_kind: backend.provider_kind,
+        openai_wire_api: backend.openai_wire_api,
+        endpoint: backend.endpoint.clone(),
+        api_key: backend.api_key.clone(),
+        api_key_env_var: backend.api_key_env_var.clone(),
+        max_concurrent: args.max_concurrent,
+        max_queue_depth: args.max_queue_depth,
+        enabled: args.enabled,
+        models: vec!["default".to_string()],
+        probe_status: args.probe_status.clone(),
+    }
+}
+
 pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
     let backend = resolve_backend_upsert_config(&args)?;
+    // Document rules (backend_id/endpoint non-empty, api_key shape,
+    // max_concurrent/max_queue_depth positive) are owned by
+    // `InferenceBackend::validate` (#1331) — previously unchecked by this
+    // writer entirely (the api_key-xor-env_var shape check in
+    // `resolve_backend_upsert_config` above is a separate, earlier,
+    // raw-flag sanity check shared with `gents init`; this is the
+    // document-shape gate right before the write).
+    to_document_backend(&args, &backend).validate(None)?;
     let access = ConfigAccess::Graphql(args.graphql.clone());
     let doc = InferenceBackendUpsertDocument {
         backend_id: args.backend_id.clone(),

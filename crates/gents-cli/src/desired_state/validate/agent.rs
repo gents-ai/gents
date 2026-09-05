@@ -1,12 +1,89 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use gents::template::{
     catalog::default_catalog, reads::validate_system_template, validate_request_context_template,
 };
-use gents::{DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS};
+use gents::{
+    AgentBehaviorDocument, ConfigReferences, InferenceBackend, InferenceProfile,
+    UNKNOWN_PROBE_STATUS,
+};
 
 use super::super::DesiredStateManifest;
+use super::super::{DesiredAgentBehavior, DesiredInferenceBackend, DesiredInferenceProfile};
 use super::storage::non_empty;
+
+/// Decode a manifest backend into the document type `InferenceBackend::validate`
+/// owns. `probe_status` is runtime-owned (not part of desired state) and does
+/// not affect validation.
+fn to_document_backend(backend: &DesiredInferenceBackend) -> InferenceBackend {
+    InferenceBackend {
+        backend_id: backend.backend_id.clone(),
+        name: backend.name.clone(),
+        provider_kind: backend.provider_kind,
+        openai_wire_api: backend.openai_wire_api,
+        endpoint: backend.endpoint.clone(),
+        api_key: backend.api_key.clone(),
+        api_key_env_var: backend.api_key_env_var.clone(),
+        max_concurrent: backend.max_concurrent,
+        max_queue_depth: backend.max_queue_depth,
+        enabled: backend.enabled,
+        models: backend.models.clone(),
+        probe_status: UNKNOWN_PROBE_STATUS.to_string(),
+    }
+}
+
+/// Decode a manifest profile into the document type `InferenceProfile::validate`
+/// owns. The two structs are field-for-field identical; this is a plain copy.
+fn to_document_profile(profile: &DesiredInferenceProfile) -> InferenceProfile {
+    InferenceProfile {
+        profile_id: profile.profile_id.clone(),
+        display_name: profile.display_name.clone(),
+        context_window: profile.context_window,
+        max_output_tokens: profile.max_output_tokens,
+        max_turns: profile.max_turns,
+        temperature: profile.temperature,
+        top_p: profile.top_p,
+        top_k: profile.top_k,
+        seed: profile.seed,
+        min_p: profile.min_p,
+        frequency_penalty: profile.frequency_penalty,
+        presence_penalty: profile.presence_penalty,
+        repetition_penalty: profile.repetition_penalty,
+        reasoning_effort: profile.reasoning_effort.clone(),
+        stream_batch_ms: profile.stream_batch_ms,
+        stream_liveness_timeout_secs: profile.stream_liveness_timeout_secs,
+        deadline_duration_secs: profile.deadline_duration_secs,
+        retry_max_transport: profile.retry_max_transport,
+        retry_backoff_ms: profile.retry_backoff_ms.clone(),
+        retry_max_resample: profile.retry_max_resample,
+        retry_allow_repair: profile.retry_allow_repair,
+        retry_interactive_max: profile.retry_interactive_max,
+    }
+}
+
+/// Decode a manifest behavior into the document type
+/// `AgentBehavior::validate_references` owns.
+fn to_document_behavior(behavior: &DesiredAgentBehavior) -> AgentBehaviorDocument {
+    AgentBehaviorDocument {
+        behavior_id: behavior.behavior_id.clone(),
+        agent_did: behavior.agent_did.clone(),
+        display_name: behavior.display_name.clone(),
+        description: behavior.description.clone(),
+        summary: behavior.summary.clone(),
+        system_prompt: behavior.system_prompt.clone(),
+        request_context_template: behavior.request_context_template.clone(),
+        backend_id: behavior.backend_id.clone(),
+        model_name: behavior.model_name.clone(),
+        tool_selection_id: behavior.tool_selection_id.clone(),
+        inference_profile_id: behavior.inference_profile_id.clone(),
+        compaction_strategy: behavior.compaction_strategy.clone(),
+        compaction_threshold: behavior.compaction_threshold,
+        enabled: behavior.enabled,
+        skill_refs: behavior.skill_refs.clone(),
+        skill_excludes: behavior.skill_excludes.clone(),
+        created_at: None,
+    }
+}
 
 pub(super) fn validate_principal<'a>(
     manifest: &'a DesiredStateManifest,
@@ -26,17 +103,14 @@ pub(super) fn validate_backends(
     let mut backend_ids = BTreeSet::new();
     let mut backend_models = HashMap::<String, BTreeSet<String>>::new();
     for backend in &manifest.inference_backends {
+        // Manifest-shape: duplicate backend_id detection has no document
+        // equivalent (a document validator sees one document at a time).
         let backend_id = backend.backend_id.trim();
-        if backend_id.is_empty() {
-            errors.push(
-                "inference-backends.json contains a backend with an empty backend_id".to_string(),
-            );
-        } else if !backend_ids.insert(backend_id.to_string()) {
+        if !backend_id.is_empty() && !backend_ids.insert(backend_id.to_string()) {
             errors.push(format!(
                 "duplicate backend_id in inference-backends.json: {backend_id}"
             ));
         }
-
         if !backend_id.is_empty() {
             backend_models.insert(
                 backend_id.to_string(),
@@ -50,43 +124,14 @@ pub(super) fn validate_backends(
             );
         }
 
-        if backend.endpoint.trim().is_empty() {
-            errors.push(format!(
-                "backend {} in inference-backends.json must contain a non-empty endpoint",
-                backend.backend_id
-            ));
-        }
-
-        if backend
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| value.is_empty())
-        {
-            errors.push(format!(
-                "backend {} in inference-backends.json contains an empty api_key",
-                backend.backend_id
-            ));
-        }
-
-        if backend
-            .api_key
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some()
-            && backend
-                .api_key_env_var
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .is_some()
-        {
-            errors.push(format!(
-                "backend {} in inference-backends.json must not set both api_key and api_key_env_var",
-                backend.backend_id
-            ));
-        }
+        // Document rules (empty backend_id/endpoint, api_key shape,
+        // max_concurrent/max_queue_depth) are owned by
+        // `InferenceBackend::validate`. `current_model=None`: desired state
+        // validates backends independently of behaviors and separately
+        // checks each behavior's model against its backend's advertised list
+        // in `validate_behaviors`, so the no-lockout conjunct never fires
+        // here.
+        errors.extend(to_document_backend(backend).validation_violations(None));
     }
     (backend_ids, backend_models)
 }
@@ -97,6 +142,11 @@ pub(super) fn validate_profiles(
 ) -> BTreeSet<String> {
     let mut profile_ids = BTreeSet::new();
     for profile in &manifest.inference_profiles {
+        // Manifest-shape: empty/duplicate profile_id detection has no
+        // document equivalent (`InferenceProfile::validate` does not check
+        // profile_id — a document validator sees one document at a time and
+        // cannot compare it against siblings; emptiness here is a manifest
+        // authoring mistake naming the file it came from).
         let profile_id = profile.profile_id.trim();
         if profile_id.is_empty() {
             errors.push(
@@ -107,58 +157,11 @@ pub(super) fn validate_profiles(
                 "duplicate profile_id in inference-profiles.json: {profile_id}"
             ));
         }
-        let stream_liveness_timeout_secs = match profile.stream_liveness_timeout_secs {
-            Some(value) if value <= 0 => {
-                errors.push(format!(
-                    "InferenceProfile {profile_id} stream_liveness_timeout_secs must be positive"
-                ));
-                None
-            }
-            Some(value) => Some(value),
-            None => Some(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
-        };
-        let deadline_duration_secs = match profile.deadline_duration_secs {
-            Some(value) if value <= 0 => {
-                errors.push(format!(
-                    "InferenceProfile {profile_id} deadline_duration_secs must be positive"
-                ));
-                None
-            }
-            Some(value) => Some(value),
-            None => Some(DEFAULT_DEADLINE_DURATION_SECS as i64),
-        };
-        if let (Some(stream_liveness_timeout_secs), Some(deadline_duration_secs)) =
-            (stream_liveness_timeout_secs, deadline_duration_secs)
-        {
-            if stream_liveness_timeout_secs >= deadline_duration_secs {
-                errors.push(format!(
-                    "InferenceProfile {profile_id} stream_liveness_timeout_secs ({stream_liveness_timeout_secs}) must be less than deadline_duration_secs ({deadline_duration_secs})"
-                ));
-            }
-        }
-        if profile.seed.is_some_and(|value| value < 0) {
-            errors.push(format!(
-                "InferenceProfile {profile_id} seed must be non-negative"
-            ));
-        }
-        // Empty reasoning effort is unset: DefraDB may materialize nullable
-        // strings as empty values, and exported manifests must round-trip.
-        if profile
-            .reasoning_effort
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_some_and(|value| {
-                !matches!(
-                    value,
-                    "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | "ultra"
-                )
-            })
-        {
-            errors.push(format!(
-                "InferenceProfile {profile_id} reasoning_effort must be one of: none, minimal, low, medium, high, xhigh, max, ultra"
-            ));
-        }
+
+        // Document rules (timeout/deadline bounds and relationship, seed,
+        // reasoning_effort vocabulary) are owned by
+        // `InferenceProfile::validate`.
+        errors.extend(to_document_profile(profile).validation_violations());
     }
     profile_ids
 }
@@ -211,8 +214,31 @@ pub(super) fn validate_behaviors(
     skill_ids: &BTreeSet<String>,
     errors: &mut Vec<String>,
 ) -> BTreeSet<String> {
+    // Document rule: reference existence (backend, model advertised by the
+    // backend, tool selection, profile, skill refs/excludes) is owned by
+    // `AgentBehavior::validate_references`. `backend_ids` names every
+    // non-empty manifest backend id; document-shape violations for those
+    // backends are reported independently by `validate_backends`.
+    let refs = ConfigReferences {
+        backends: backend_ids
+            .iter()
+            .map(|id| {
+                let models = backend_models
+                    .get(id)
+                    .map(|models| models.iter().cloned().collect())
+                    .unwrap_or_default();
+                (id.clone(), models)
+            })
+            .collect::<BTreeMap<_, _>>(),
+        tool_selections: tool_selection_ids.clone(),
+        profiles: profile_ids.clone(),
+        skills: skill_ids.clone(),
+    };
+
     let mut behavior_ids = BTreeSet::new();
     for behavior in &manifest.agent_behaviors {
+        // Manifest-shape: empty/duplicate behavior_id and principal
+        // ownership have no document equivalent.
         let behavior_id = behavior.behavior_id.trim();
         if behavior_id.is_empty() {
             errors.push(
@@ -231,42 +257,10 @@ pub(super) fn validate_behaviors(
             ));
         }
 
-        if let Some(backend_id) = non_empty(&behavior.backend_id) {
-            if !backend_ids.contains(backend_id) {
-                errors.push(format!(
-                    "behavior {} references missing backend_id {}",
-                    behavior.behavior_id, backend_id
-                ));
-            } else if let Some(model_name) = non_empty(&behavior.model_name) {
-                let advertised = backend_models
-                    .get(backend_id)
-                    .expect("known backend has a model entry");
-                if !advertised.is_empty() && !advertised.contains(model_name) {
-                    errors.push(format!(
-                        "behavior {} selects model {} which backend {} does not advertise",
-                        behavior.behavior_id, model_name, backend_id
-                    ));
-                }
-            }
-        }
-
-        if let Some(selection_id) = non_empty(&behavior.tool_selection_id) {
-            if !tool_selection_ids.contains(selection_id) {
-                errors.push(format!(
-                    "behavior {} references missing tool_selection_id {}",
-                    behavior.behavior_id, selection_id
-                ));
-            }
-        }
-
-        if let Some(profile_id) = non_empty(&behavior.inference_profile_id) {
-            if !profile_ids.contains(profile_id) {
-                errors.push(format!(
-                    "behavior {} references missing inference_profile_id {}",
-                    behavior.behavior_id, profile_id
-                ));
-            }
-        }
+        // Each violation becomes its own error-list entry (not one joined
+        // string) — `reference_violations` is the Vec-returning variant of
+        // `AgentBehavior::validate_references` for exactly this reason.
+        errors.extend(to_document_behavior(behavior).reference_violations(&refs));
 
         if let Some(system_prompt) = behavior.system_prompt.as_deref() {
             validate_behavior_system_template(&behavior.behavior_id, system_prompt, errors);
@@ -278,25 +272,6 @@ pub(super) fn validate_behaviors(
                 request_context_template,
                 errors,
             );
-        }
-
-        for skill_ref in &behavior.skill_refs {
-            let skill_ref = skill_ref.trim();
-            if !skill_ref.is_empty() && !skill_ids.contains(skill_ref) {
-                errors.push(format!(
-                    "behavior {} references missing skill_ref {} (import the skill first)",
-                    behavior.behavior_id, skill_ref
-                ));
-            }
-        }
-        for skill_exclude in &behavior.skill_excludes {
-            let skill_exclude = skill_exclude.trim();
-            if !skill_exclude.is_empty() && !skill_ids.contains(skill_exclude) {
-                errors.push(format!(
-                    "behavior {} references missing skill_exclude {}",
-                    behavior.behavior_id, skill_exclude
-                ));
-            }
         }
     }
     behavior_ids
