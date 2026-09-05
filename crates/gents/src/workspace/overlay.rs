@@ -6,6 +6,7 @@ use std::sync::RwLock;
 
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use crate::graphql::{
@@ -475,15 +476,11 @@ pub(super) async fn previous_exclusive_is_stale(
     Ok(!request_is_live(node, &active.request_id).await?)
 }
 
-fn request_lifecycle_is_live(lifecycle_state: Option<&str>, status: Option<&str>) -> bool {
-    let state = optional_id(lifecycle_state).or_else(|| optional_id(status));
-    let Some(state) = state else {
+fn request_lifecycle_is_live(lifecycle_state: Option<&str>) -> bool {
+    let Some(state) = optional_id(lifecycle_state) else {
         return false;
     };
-    !matches!(
-        state,
-        "completed" | "failed" | "dead" | "interrupted" | "superseded" | "error"
-    )
+    !RequestLifecycleState::is_terminal_str(Some(state))
 }
 
 async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> {
@@ -492,7 +489,6 @@ async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> 
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 lifecycle_state
-                status
             }}
         }}"#
     );
@@ -501,10 +497,7 @@ async fn request_is_live(node: &EmbeddedNode, request_id: &str) -> Result<bool> 
     let Some(row) = first_row::<RequestLivenessRow>(&response, "AgentRequest")? else {
         return Ok(false);
     };
-    Ok(request_lifecycle_is_live(
-        row.lifecycle_state.as_deref(),
-        row.status.as_deref(),
-    ))
+    Ok(request_lifecycle_is_live(row.lifecycle_state.as_deref()))
 }
 
 pub(super) async fn load_workspace_bindings_for(
@@ -598,7 +591,6 @@ pub(super) async fn persist_workspace_binding_docs(
 #[derive(Deserialize)]
 struct RequestLivenessRow {
     lifecycle_state: Option<String>,
-    status: Option<String>,
 }
 
 #[derive(Deserialize)]

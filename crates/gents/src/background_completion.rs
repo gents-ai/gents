@@ -13,6 +13,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 

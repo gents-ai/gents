@@ -84,7 +84,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
         r#"mutation {{ create_AgentRequest(input: {{
             request_id: "{request_id}", agent_did: "{agent_did}",
             requester_did: "{requester}", behavior_id: "{behavior_id}",
-            session_id: "{session_id}", content: "{content}", status: "pending",
+            session_id: "{session_id}", content: "{content}",
             lifecycle_state: "pending", execution_origin: "interactive",
             created_at: "{now}", retry_count: 0, max_retries: 2
         }}) {{ _docID }} }}"#,

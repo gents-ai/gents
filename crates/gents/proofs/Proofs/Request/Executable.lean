@@ -3,6 +3,7 @@ import Proofs.Request.Transition
 namespace RequestContext
 
 inductive Action where
+  | bindWorkspace
   | claim
   | dedupLose
   | admissionReject
@@ -18,6 +19,11 @@ inductive Action where
   deriving DecidableEq, Repr
 
 def step? (pre : RequestContext) : Action → Option RequestContext
+  | .bindWorkspace =>
+      if pre.state = .workspaceBindingPending ∧ pre.admission = .released then
+        some { pre with state := .pending }
+      else
+        none
   | .claim =>
       if pre.state = .pending ∧ pre.admission = .released ∧ pre.ttlOpen then
         some { pre with state := .claimed, admission := .waiting, claimTime := pre.currentTime, deadline := pre.claimDeadline }
@@ -102,6 +108,10 @@ theorem step_sound
     (h_step : step? pre action = some post) :
     Transition pre post := by
   cases action with
+  | bindWorkspace =>
+      simp [step?] at h_step
+      rcases h_step with ⟨⟨h_state, h_admission⟩, h_post⟩
+      exact Transition.bind_workspace h_state h_admission h_post.symm
   | claim =>
       simp [step?] at h_step
       rcases h_step with ⟨h_claim, h_post⟩
@@ -172,6 +182,8 @@ theorem transition_complete
     (h_trans : Transition pre post) :
     ∃ action : Action, step? pre action = some post := by
   cases h_trans with
+  | bind_workspace h_state h_admission h_post =>
+      exact ⟨.bindWorkspace, by simp [step?, h_state, h_admission, h_post]⟩
   | claim h_state h_admission h_ttl h_post =>
       exact ⟨.claim, by simp [step?, h_state, h_admission, h_ttl, h_post]⟩
   | dedup_lose h_state h_admission h_post =>

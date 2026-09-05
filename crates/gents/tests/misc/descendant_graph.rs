@@ -34,7 +34,6 @@ async fn create_request(
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "descendant graph root",
-                    status: "processing",
                     lifecycle_state: "processing",
                     backend_id: "",
                     execution_origin: "interactive",

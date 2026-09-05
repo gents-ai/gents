@@ -123,7 +123,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let projection = node
         .execute(
             r#"{
-                AgentRequest { status lifecycle_state }
+                AgentRequest { lifecycle_state }
                 AgentResponse { status content }
                 AgentMessage(order: { sequence: ASC }) { role content }
                 AgentConversation { status }
@@ -131,10 +131,6 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
         )
         .await;
     assert!(!projection.has_errors(), "{:?}", projection.errors);
-    assert_eq!(
-        projection.data.as_ref().unwrap()["AgentRequest"][0]["status"],
-        "completed"
-    );
     assert_eq!(
         projection.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
         "completed"

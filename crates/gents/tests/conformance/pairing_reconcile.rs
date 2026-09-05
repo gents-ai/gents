@@ -200,7 +200,7 @@ fn layered_desired_merge_keeps_data_plane_replicator_only() {
 fn layered_desired_merge_prefers_signed_data_plane_filter() {
     let base_filter = equality_filter("requester_did", "did:key:phone");
     let data_filter = FilterPredicate::predicate(
-        serde_json::json!({ "status": { "_in": ["pending", "processing"] } })
+        serde_json::json!({ "lifecycle_state": { "_in": ["pending", "processing"] } })
             .as_object()
             .expect("object")
             .clone(),

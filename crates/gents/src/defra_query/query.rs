@@ -298,14 +298,14 @@ mod tests {
 
     #[test]
     fn builds_filtered_query_with_explicit_limit() {
-        let mut p = params("AgentRequest", &["request_id", "status"]);
-        p.filter = Some(json!({ "status": { "_eq": "pending" } }));
+        let mut p = params("AgentRequest", &["request_id", "lifecycle_state"]);
+        p.filter = Some(json!({ "lifecycle_state": { "_eq": "pending" } }));
         p.limit = Some(10);
 
         let query = build_query(&p, &CollectionScope::all()).unwrap();
         assert_eq!(
             query,
-            r#"{ AgentRequest(filter: { status: { _eq: "pending" } }, limit: 10) { request_id status } }"#
+            r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }, limit: 10) { request_id lifecycle_state } }"#
         );
     }
 

@@ -100,10 +100,10 @@ async fn enqueue_session_request_ignores_append_row_with_same_source_and_key() {
     assert_eq!(rows.len(), 2);
     assert!(rows
         .iter()
-        .any(|row| row.request_id == "req-existing-append-same-key" && row.status == "pending"));
-    assert!(rows
-        .iter()
-        .any(|row| row.request_id == enqueued.request_id && row.status == "pending"));
+        .any(|row| row.request_id == "req-existing-append-same-key"
+            && row.lifecycle_state.as_deref() == Some("pending")));
+    assert!(rows.iter().any(|row| row.request_id == enqueued.request_id
+        && row.lifecycle_state.as_deref() == Some("pending")));
 }
 
 #[tokio::test]
@@ -154,14 +154,12 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         .iter()
         .find(|row| row.request_id == survivor.request_id)
         .expect("survivor row");
-    assert_eq!(survivor_row.status, "pending");
     assert_eq!(survivor_row.lifecycle_state.as_deref(), Some("pending"));
 
     let duplicate = rows
         .iter()
         .find(|row| row.doc_id == duplicate_doc_id)
         .expect("duplicate row");
-    assert_eq!(duplicate.status, "superseded");
     assert_eq!(duplicate.lifecycle_state.as_deref(), Some("superseded"));
     assert_eq!(
         duplicate.superseded_by_request.as_deref(),
@@ -218,12 +216,12 @@ async fn enqueue_session_request_reconciles_preexisting_duplicate_coalesce_rows(
         .iter()
         .find(|row| row.doc_id == survivor_doc_id)
         .expect("survivor");
-    assert_eq!(survivor.status, "pending");
+    assert_eq!(survivor.lifecycle_state.as_deref(), Some("pending"));
     let duplicate = rows
         .iter()
         .find(|row| row.doc_id == duplicate_doc_id)
         .expect("duplicate");
-    assert_eq!(duplicate.status, "superseded");
+    assert_eq!(duplicate.lifecycle_state.as_deref(), Some("superseded"));
     assert_eq!(
         duplicate.superseded_by_request.as_deref(),
         Some("req-preexisting-coalesce-a-survivor")

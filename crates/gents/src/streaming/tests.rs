@@ -104,7 +104,6 @@ async fn create_processing_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -159,7 +158,6 @@ async fn load_request(
                     limit: 1
                 ) {{
                     _docID
-                    status
                     lifecycle_state
                     failure_reason
                 }}
@@ -372,10 +370,6 @@ async fn finalize_removes_buffer_after_successful_mutation() {
 
     let request_row = load_request(&node, &request_id).await;
     assert_eq!(
-        request_row.get("status").and_then(|value| value.as_str()),
-        Some("completed")
-    );
-    assert_eq!(
         request_row
             .get("lifecycle_state")
             .and_then(|value| value.as_str()),
@@ -426,10 +420,6 @@ async fn finalize_treats_matching_terminal_observation_as_idempotent() {
     );
 
     let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row.get("status").and_then(|value| value.as_str()),
-        Some("completed")
-    );
     assert_eq!(
         request_row
             .get("lifecycle_state")
@@ -504,10 +494,6 @@ async fn finalize_without_buffer_uses_fallback_mutation() {
         .is_some_and(|value| !value.is_empty()));
 
     let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row.get("status").and_then(|value| value.as_str()),
-        Some("error")
-    );
     assert_eq!(
         request_row
             .get("lifecycle_state")
@@ -725,10 +711,6 @@ async fn finalize_existing_request_error_terminalizes_streaming_response_without
 
     let request_row = load_request(&node, &request_id).await;
     assert_eq!(
-        request_row.get("status").and_then(|value| value.as_str()),
-        Some("error")
-    );
-    assert_eq!(
         request_row
             .get("lifecycle_state")
             .and_then(|value| value.as_str()),
@@ -794,10 +776,6 @@ async fn finalize_interrupted_response_does_not_rewrite_request_failed() {
         .is_some_and(|value| !value.is_empty()));
 
     let request_row = load_request(&node, &request_id).await;
-    assert_eq!(
-        request_row.get("status").and_then(|value| value.as_str()),
-        Some("processing")
-    );
     assert_eq!(
         request_row
             .get("lifecycle_state")

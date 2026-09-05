@@ -716,7 +716,7 @@ mod tests {
                     AgentRequest(
                         filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                         limit: 1
-                    ) {{ request_id content metadata lifecycle_state status }}
+                    ) {{ request_id content metadata lifecycle_state }}
                 }}"#
                 );
                 let rows = query_rows(core, &query, "AgentRequest").await?;

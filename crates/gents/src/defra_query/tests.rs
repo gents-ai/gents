@@ -9,7 +9,7 @@ async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
 
-    for (request_id, status) in [
+    for (request_id, lifecycle_state) in [
         ("req-pending-1", "pending"),
         ("req-pending-2", "pending"),
         ("req-completed-1", "completed"),
@@ -19,7 +19,7 @@ async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
                     agent_did: "did:key:z-test",
-                    status: "{status}",
+                    lifecycle_state: "{lifecycle_state}",
                     content: "hello"
                 }}) {{ _docID }}
             }}"#
@@ -48,7 +48,7 @@ async fn oversized_field_is_truncated_json_stays_valid() {
             create_AgentRequest(input: {{
                 request_id: "req-big-content",
                 agent_did: "did:key:z-test",
-                status: "pending",
+                lifecycle_state: "pending",
                 content: "{big_content}"
             }}) {{ _docID }}
         }}"#
@@ -108,8 +108,8 @@ async fn returns_only_rows_matching_the_filter() {
         &tool,
         DefraQueryParams {
             collection: "AgentRequest".to_string(),
-            filter: Some(json!({ "status": { "_eq": "pending" } })),
-            fields: vec!["request_id".to_string(), "status".to_string()],
+            filter: Some(json!({ "lifecycle_state": { "_eq": "pending" } })),
+            fields: vec!["request_id".to_string(), "lifecycle_state".to_string()],
             limit: None,
         },
     )
@@ -123,7 +123,7 @@ async fn returns_only_rows_matching_the_filter() {
     let results = parsed["results"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     for row in results {
-        assert_eq!(row["status"], "pending");
+        assert_eq!(row["lifecycle_state"], "pending");
         assert!(row["request_id"]
             .as_str()
             .unwrap()
@@ -279,7 +279,7 @@ async fn wildcard_fields_returns_field_inventory() {
         .map(|f| f["name"].as_str().unwrap())
         .collect();
     assert!(names.contains(&"request_id"), "{names:?}");
-    assert!(names.contains(&"status"), "{names:?}");
+    assert!(names.contains(&"lifecycle_state"), "{names:?}");
     assert!(!names.contains(&"AVG"), "aggregates hidden: {names:?}");
     assert!(!names.contains(&"_version"), "internals hidden: {names:?}");
 }

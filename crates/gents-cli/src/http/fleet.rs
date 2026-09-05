@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -36,28 +37,31 @@ struct RequestRow {
     #[serde(default)]
     agent_did: Option<String>,
     #[serde(default)]
-    status: Option<String>,
+    lifecycle_state: Option<String>,
 }
 
 pub(crate) async fn load_fleet_snapshot(graphql: &str) -> Result<FleetSnapshot> {
     let generated_at = Utc::now();
-    let response = post_graphql(graphql, fleet_query()).await?;
+    let response = post_graphql(graphql, &fleet_query()).await?;
     let envelope = decode_fleet_response(response)?;
     Ok(build_fleet_snapshot(generated_at, envelope))
 }
 
-fn fleet_query() -> &'static str {
-    r#"{
-        AgentBehaviorReadiness(order: { agent_did: ASC }) {
+fn fleet_query() -> String {
+    format!(
+        r#"{{
+        AgentBehaviorReadiness(order: {{ agent_did: ASC }}) {{
             agent_did
             snapshot_json
             updated_at
-        }
-        AgentRequest(filter: { status: { _in: ["pending", "processing"] } }) {
+        }}
+        AgentRequest(filter: {{ lifecycle_state: {{ _in: {} }} }}) {{
             agent_did
-            status
-        }
-    }"#
+            lifecycle_state
+        }}
+    }}"#,
+        RequestLifecycleState::active_runtime_graphql_list(),
+    )
 }
 
 fn decode_fleet_response(response: Value) -> Result<FleetEnvelope> {
@@ -82,8 +86,8 @@ fn build_fleet_snapshot(generated_at: DateTime<Utc>, envelope: FleetEnvelope) ->
             continue;
         }
         let entry = counts.entry(agent_did).or_default();
-        match request.status.as_deref().map(str::trim) {
-            Some("processing") => entry.0 += 1,
+        match request.lifecycle_state.as_deref().map(str::trim) {
+            Some("claimed" | "processing") => entry.0 += 1,
             Some("pending") => entry.1 += 1,
             _ => {}
         }
@@ -169,10 +173,10 @@ mod tests {
                     readiness("did:b", BehaviorReadinessProcessState::Recovering, "2026-06-02T11:58:00Z")
                 ],
                 "AgentRequest": [
-                    { "agent_did": "did:a", "status": "processing" },
-                    { "agent_did": "did:a", "status": "pending" },
-                    { "agent_did": "did:a", "status": "pending" },
-                    { "agent_did": "did:b", "status": "processing" }
+                    { "agent_did": "did:a", "lifecycle_state": "processing" },
+                    { "agent_did": "did:a", "lifecycle_state": "pending" },
+                    { "agent_did": "did:a", "lifecycle_state": "pending" },
+                    { "agent_did": "did:b", "lifecycle_state": "claimed" }
                 ]
             })),
         );

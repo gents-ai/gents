@@ -72,6 +72,9 @@ theorem transition_produces_coherent
     (h_trans : Transition pre post) :
     post.coherent := by
   cases h_trans with
+  | bind_workspace _ h_release h_post =>
+    rw [coherent, h_post]
+    simp [coherentStateAdmission, h_release]
   | claim _ _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
@@ -125,6 +128,8 @@ theorem claim_requires_ttl_open
     (h_claimed : post.state = .claimed) :
     pre.ttlOpen := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+      simp [h_post] at h_claimed
   | claim _ _ h_ttl _ =>
       exact h_ttl
   | dedup_lose _ _ h_post =>
@@ -169,6 +174,8 @@ theorem claim_deadline_explicit
     (h_requestDeadline : pre.requestDeadline = some t) :
     post.deadline = t := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+      simp [h_post] at h_claimed
   | claim _ _ _ h_post =>
       simp [h_post, claimDeadline, h_requestDeadline]
   | dedup_lose _ _ h_post =>
@@ -201,6 +208,8 @@ theorem claim_deadline_default
     (h_requestDeadline : pre.requestDeadline = none) :
     post.deadline = pre.currentTime + 1 := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+      simp [h_post] at h_claimed
   | claim _ _ _ h_post =>
       simp [h_post, claimDeadline, h_requestDeadline]
   | dedup_lose _ _ h_post =>

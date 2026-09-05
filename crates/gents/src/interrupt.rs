@@ -157,7 +157,6 @@ async fn active_session_request_id(
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
-                    status: {{ _eq: "processing" }},
                     lifecycle_state: {{ _in: ["claimed", "processing"] }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}],

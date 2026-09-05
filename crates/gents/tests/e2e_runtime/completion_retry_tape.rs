@@ -485,7 +485,6 @@ async fn fetch_timeline_request(node: &EmbeddedNode, request_id: &str) -> Timeli
                 session_id
                 content
                 metadata
-                status
                 lifecycle_state
                 backend_id
                 failure_reason

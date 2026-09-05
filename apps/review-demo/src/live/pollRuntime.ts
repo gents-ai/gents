@@ -62,7 +62,7 @@ export async function loadSnapshot(): Promise<ReviewSnapshot> {
     Finding { finding_id run_id title verdict severity }
     TriageReport { _docID run_id high_priority_count confirmed_count refuted_count summary }
     AgentRequest {
-      request_id session_id behavior_id status lifecycle_state
+      request_id session_id behavior_id lifecycle_state
       caused_by_trigger_id caused_by_correlation caused_by_source_doc_id created_at
     }
     InferenceCall { request_id prompt_tokens completion_tokens }

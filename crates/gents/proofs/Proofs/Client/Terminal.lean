@@ -34,13 +34,15 @@ theorem terminal_coherence (view : AttemptView) :
         · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h))))
         · exact Or.inr (Or.inr (Or.inr (Or.inr (Or.inr (Or.inl h)))))
       ·
-        have h_nonterm : req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
+        have h_nonterm : req.lifecycleState = .workspaceBindingPending ∨
+                         req.lifecycleState = .pending ∨ req.lifecycleState = .claimed ∨
                          req.lifecycleState = .processing ∨ req.lifecycleState = .inputRequired := by
           cases h_lc : req.lifecycleState
           · exact Or.inl rfl
           · exact Or.inr (Or.inl rfl)
           · exact Or.inr (Or.inr (Or.inl rfl))
-          · exact Or.inr (Or.inr (Or.inr rfl))
+          · exact Or.inr (Or.inr (Or.inr (Or.inl rfl)))
+          · exact Or.inr (Or.inr (Or.inr (Or.inr rfl)))
           · exact absurd (Or.inl h_lc) h_is_terminal_lc
           · exact absurd (Or.inr (Or.inl h_lc)) h_is_terminal_lc
           · exact absurd (Or.inr (Or.inr (Or.inl h_lc))) h_is_terminal_lc
@@ -80,20 +82,24 @@ theorem terminal_coherence (view : AttemptView) :
       ·
         simp only at h_resp
         cases h_lc : req.lifecycleState
-        case pending =>
+        case workspaceBindingPending =>
           rw [deriveAttempt_nonterminal_response_driven h_super (Or.inl h_lc)]
           rw [h_resp]
           rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal]
-        case claimed =>
+        case pending =>
           rw [deriveAttempt_nonterminal_response_driven h_super (Or.inr (Or.inl h_lc))]
           rw [h_resp]
           rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal]
-        case processing =>
+        case claimed =>
           rw [deriveAttempt_nonterminal_response_driven h_super (Or.inr (Or.inr (Or.inl h_lc)))]
           rw [h_resp]
           rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal]
+        case processing =>
+          rw [deriveAttempt_nonterminal_response_driven h_super (Or.inr (Or.inr (Or.inr (Or.inl h_lc))))]
+          rw [h_resp]
+          rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal]
         case inputRequired =>
-          rw [deriveAttempt_nonterminal_response_driven h_super (Or.inr (Or.inr (Or.inr h_lc)))]
+          rw [deriveAttempt_nonterminal_response_driven h_super (Or.inr (Or.inr (Or.inr (Or.inr h_lc))))]
           rw [h_resp]
           rcases h_status with h | h <;> simp [h, ClientTurnState.isTerminal]
         case completed =>

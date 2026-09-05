@@ -343,7 +343,6 @@ fn import_langgraph_capture(
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
         metadata: Some(root_metadata),
-        status: Some(status.clone()),
         lifecycle_state: Some(status.clone()),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
@@ -355,7 +354,6 @@ fn import_langgraph_capture(
             request_id: child_request_id.clone(),
             session_id: Some(session_id.clone()),
             content: Some("Imported LangGraph child request boundary".to_string()),
-            status: Some(status.clone()),
             lifecycle_state: Some(status.clone()),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
@@ -872,7 +870,6 @@ fn import_multi_agent_capture(
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
         metadata: Some(root_metadata(capture, mapping)?),
-        status: Some(status.clone()),
         lifecycle_state: Some(status.clone()),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
@@ -903,7 +900,6 @@ fn import_multi_agent_capture(
                 .map(participant_metadata)
                 .transpose()
                 .context("serializing child request participant metadata")?,
-            status: Some(status.clone()),
             lifecycle_state: Some(status.clone()),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),

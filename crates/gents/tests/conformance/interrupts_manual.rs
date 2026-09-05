@@ -137,7 +137,6 @@ async fn pending_interrupted_via_interrupt_before_claim() {
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "interrupted");
-    assert_eq!(snap.status, "interrupted");
 }
 
 #[tokio::test]
@@ -217,7 +216,6 @@ async fn transition_to_interrupted_from_claimed() {
     assert_lean_transition_is_legal("Request", "claimed", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "interrupted");
     assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
@@ -273,7 +271,6 @@ async fn processing_interrupted_preserves_partial_response() {
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "interrupted");
     assert_eq!(snap.lifecycle_state, "interrupted");
 
     let content = fetch_response_content(&db.node, &response_doc_id).await;
@@ -330,7 +327,6 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "processing");
     assert_eq!(snap.lifecycle_state, "inputRequired");
 
     let complete_err = lifecycle
@@ -354,7 +350,6 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     assert_lean_transition_is_illegal("Request", "inputRequired", "failed");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "processing");
     assert_eq!(snap.lifecycle_state, "inputRequired");
 }
 
@@ -434,7 +429,6 @@ async fn transition_to_interrupted_from_processing() {
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "interrupted");
     assert_eq!(snap.lifecycle_state, "interrupted");
 }
 
@@ -471,7 +465,6 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
     lifecycle.fail().await.unwrap();
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.status, "interrupted");
     assert_eq!(snap.lifecycle_state, "interrupted");
     assert_lean_transition_is_legal("Request", "processing", "interrupted");
     assert_lean_transition_is_illegal("Request", "interrupted", "failed");
@@ -552,7 +545,6 @@ async fn interrupt_on_already_terminal_is_noop() {
     lifecycle.complete().await.unwrap();
 
     let before = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(before.status, "completed");
     assert_eq!(before.lifecycle_state, "completed");
 
     let interrupt_at = chrono::Utc::now().to_rfc3339();
@@ -560,7 +552,6 @@ async fn interrupt_on_already_terminal_is_noop() {
     lifecycle.transition_to_interrupted().await.unwrap();
 
     let after = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(after.status, "completed", "terminal row must not regress");
     assert_eq!(
         after.lifecycle_state, "completed",
         "terminal lifecycle_state must not regress"
@@ -793,7 +784,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
 
     let snap0 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap0.lifecycle_state, "interrupted");
-    assert_eq!(snap0.status, "interrupted");
     assert_lean_transition_is_illegal("Request", "interrupted", "completed");
     assert_lean_transition_is_illegal("Request", "interrupted", "failed");
     assert_lean_transition_is_illegal("Request", "interrupted", "processing");
@@ -804,7 +794,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
         snap1.lifecycle_state, "interrupted",
         "S1: repeated transition_to_interrupted must stay interrupted"
     );
-    assert_eq!(snap1.status, "interrupted");
 
     let _complete_result = lifecycle.complete().await;
     let snap2 = fetch_request_snapshot(&db.node, &doc_id).await;
@@ -812,7 +801,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
         snap2.lifecycle_state, "interrupted",
         "S1: complete() on interrupted must not reverse the terminal"
     );
-    assert_eq!(snap2.status, "interrupted");
 
     let _fail_result = lifecycle.fail().await;
     let snap3 = fetch_request_snapshot(&db.node, &doc_id).await;
@@ -820,7 +808,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
         snap3.lifecycle_state, "interrupted",
         "S1: fail() on interrupted must not reverse the terminal"
     );
-    assert_eq!(snap3.status, "interrupted");
 }
 
 #[tokio::test]
@@ -895,13 +882,13 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
 }
 
 #[test]
-fn conformance_mapping_all_9_lifecycle_states_round_trip() {
+fn conformance_mapping_all_10_lifecycle_states_round_trip() {
     use gents_protocol::client_protocol::RequestLifecycleState;
 
     let lean_states = lean_vocabulary_values("RequestState");
     assert_eq!(
         lean_states.len(),
-        9,
+        10,
         "RequestState contract should be finite"
     );
     for s in lean_states {
@@ -962,12 +949,8 @@ async fn manual_run_materializes_pending_request() {
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.status, "pending",
-        "manual run must persist status=pending for the intake watcher to claim"
-    );
-    assert_eq!(
         snap.lifecycle_state, "pending",
-        "manual run must persist lifecycle_state=pending (not claimed)"
+        "manual run must persist lifecycle_state=pending for the intake watcher to claim (not claimed)"
     );
     assert!(
         !snap.claimed_at_present,
@@ -1092,7 +1075,6 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, "claimed");
-    assert_eq!(snap.status, "processing");
     assert!(snap.claimed_at_present, "claim must stamp claimed_at");
     assert!(snap.deadline_present, "claim must stamp deadline");
     assert_eq!(

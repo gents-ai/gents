@@ -60,7 +60,6 @@ struct ChildRequestRow {
     session_id: String,
     behavior_id: String,
     content: String,
-    status: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
     subagent_depth: Option<i64>,
@@ -306,7 +305,6 @@ async fn create_parent_request_with_extra_fields(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -420,7 +418,6 @@ async fn fetch_child_request(node: &EmbeddedNode, child_request_id: &str) -> Chi
                 session_id
                 behavior_id
                 content
-                status
                 lifecycle_state
                 failure_reason
                 subagent_depth
@@ -451,7 +448,6 @@ async fn fetch_child_request_optional(
                 session_id
                 behavior_id
                 content
-                status
                 lifecycle_state
                 failure_reason
                 subagent_depth
@@ -483,7 +479,6 @@ async fn child_request_for_tool(
                 session_id
                 behavior_id
                 content
-                status
                 lifecycle_state
                 failure_reason
                 subagent_depth
@@ -543,7 +538,7 @@ async fn persist_child_completion(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ status: "completed", lifecycle_state: "completed" }}
+                input: {{ lifecycle_state: "completed" }}
             ) {{ _docID }}
         }}"#
     );
@@ -621,12 +616,6 @@ async fn persist_child_terminal(
 ) {
     let escaped_child_request_id = escape_graphql_string(child_request_id);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
-    let status = match lifecycle_state {
-        "completed" => "completed",
-        "superseded" => "superseded",
-        "failed" | "dead" | "interrupted" => "error",
-        other => other,
-    };
     let failure_reason_field = failure_reason
         .map(|reason| {
             let escaped = escape_graphql_string(reason);
@@ -638,7 +627,6 @@ async fn persist_child_terminal(
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
                 input: {{
-                    status: "{status}",
                     lifecycle_state: "{escaped_lifecycle_state}"
                     {failure_reason_field}
                 }}
@@ -653,21 +641,14 @@ async fn persist_child_terminal(
     );
 }
 
-async fn update_request_state(
-    node: &EmbeddedNode,
-    request_id: &str,
-    status: &str,
-    lifecycle_state: &str,
-) {
+async fn update_request_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_status = escape_graphql_string(status);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 input: {{
-                    status: "{escaped_status}",
                     lifecycle_state: "{escaped_lifecycle_state}"
                 }}
             ) {{ _docID }}
@@ -710,7 +691,6 @@ async fn create_child_session_queued_request(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "queued child session request",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",

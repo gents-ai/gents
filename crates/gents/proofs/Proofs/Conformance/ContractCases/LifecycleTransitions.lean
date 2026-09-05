@@ -44,11 +44,12 @@ def actionForPairFromSamples {σ α : Type}
   candidates.head?
 
 def requestTransitionStates : List RequestState :=
-  [ .pending, .claimed, .processing, .inputRequired, .completed
+  [ .workspaceBindingPending, .pending, .claimed, .processing, .inputRequired, .completed
   , .failed, .superseded, .dead, .interrupted ]
 
 def requestTransitionActions : List (String × RequestContext.Action) :=
-  [ ("claim", .claim)
+  [ ("bindWorkspace", .bindWorkspace)
+  , ("claim", .claim)
   , ("dedupLose", .dedupLose)
   , ("admissionReject", .admissionReject)
   , ("beginInference", .beginInference)
@@ -86,7 +87,8 @@ def requestTransitionContext
   }
 
 def requestTransitionSamples : List RequestContext :=
-  [ requestTransitionContext .pending .released
+  [ requestTransitionContext .workspaceBindingPending .released
+  , requestTransitionContext .pending .released
   , requestTransitionContext .pending .released true
   , requestTransitionContext .pending .released false (some 0) 1
   , requestTransitionContext .claimed .waiting

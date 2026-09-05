@@ -71,7 +71,6 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                     agent_did: "{}",
                     behavior_id: "{}",
                     session_id: "{}",
-                    status: "completed",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:01:00Z"
                 }}) {{ _docID }}
@@ -88,7 +87,6 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
                     agent_did: "{}",
                     behavior_id: "{}",
                     session_id: "{}",
-                    status: "completed",
                     lifecycle_state: "completed",
                     created_at: "2026-06-12T10:02:00Z"
                 }}) {{ _docID }}

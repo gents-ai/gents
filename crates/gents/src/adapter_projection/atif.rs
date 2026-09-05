@@ -148,7 +148,7 @@ pub(super) fn build_atif_trajectory(
                 ),
                 (
                     "status",
-                    optional_string_value(timeline.request.status.as_deref()),
+                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
                 ),
                 (
                     "lifecycle_state",
@@ -328,7 +328,10 @@ pub(super) fn build_atif_trajectory(
             total_steps: steps.len(),
             extra: optional_extra([
                 ("request_id", string_value(&timeline.request_id)),
-                ("status", optional_string_value(timeline.request.status.as_deref())),
+                (
+                    "status",
+                    optional_string_value(timeline.request.lifecycle_state.as_deref()),
+                ),
                 (
                     "lifecycle_state",
                     optional_string_value(timeline.request.lifecycle_state.as_deref()),
@@ -990,7 +993,6 @@ mod tests {
                 content: Some("Fix the project.".to_string()),
                 seed: Some(7),
                 max_total_tokens: Some(10_000),
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: Some("d4f".to_string()),
                 created_at: Some("2026-07-31T20:00:00Z".to_string()),
@@ -1139,7 +1141,7 @@ mod tests {
                 request_id: "req-root".to_string(),
                 doc_id: Some("req-root-doc".to_string()),
                 max_total_tokens: Some(10_000),
-                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
                 content: Some("hi".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1203,7 +1205,7 @@ mod tests {
             request: TimelineRequestRow {
                 request_id: "req-title".to_string(),
                 doc_id: Some("req-title-doc".to_string()),
-                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
                 content: Some("hello".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1251,7 +1253,7 @@ mod tests {
                 request_id: "req-empty".to_string(),
                 doc_id: Some("req-empty-doc".to_string()),
                 max_total_tokens: Some(5_000),
-                status: Some("completed".to_string()),
+                lifecycle_state: Some("completed".to_string()),
                 content: Some("hello".to_string()),
                 ..TimelineRequestRow::default()
             },
@@ -1371,7 +1373,6 @@ mod tests {
                 request_id: "req-decoded".to_string(),
                 session_id: Some("session-decoded".to_string()),
                 content: Some("Fix the project.".to_string()),
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 created_at: Some("2026-07-31T20:00:00Z".to_string()),
                 ..TimelineRequestRow::default()

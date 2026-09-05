@@ -26,7 +26,6 @@ struct CancelPendingBridgeRow {
 
 #[derive(Debug, Deserialize)]
 struct ChildAckProbeRow {
-    status: Option<String>,
     lifecycle_state: Option<String>,
     interrupt_requested_at: Option<String>,
 }
@@ -257,7 +256,6 @@ async fn load_child_ack_probe(
                 filter: {{ _docID: {{ _eq: "{escaped}" }} }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
                 interrupt_requested_at
             }}
@@ -277,13 +275,8 @@ async fn load_child_ack_probe(
 }
 
 fn request_terminal_or_interrupted(row: &ChildAckProbeRow) -> bool {
-    matches!(
-        row.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "dead" | "interrupted" | "superseded")
-    ) || matches!(
-        row.status.as_deref(),
-        Some("completed" | "error" | "dead" | "interrupted" | "superseded")
-    ) || row.interrupt_requested_at.is_some()
+    RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref())
+        || row.interrupt_requested_at.is_some()
 }
 
 pub(super) async fn request_is_locally_owned(

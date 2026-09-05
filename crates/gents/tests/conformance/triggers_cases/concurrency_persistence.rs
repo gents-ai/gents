@@ -89,9 +89,8 @@ async fn latest_only_supersedes_prior_fire() {
         .await
         .expect("prior request still present");
     assert_eq!(
-        prior_state,
-        ("superseded".into(), "superseded".into()),
-        "prior event-kind AgentRequest must be (lifecycle_state=superseded, status=superseded)"
+        prior_state, "superseded",
+        "prior event-kind AgentRequest must be lifecycle_state=superseded"
     );
 
     let new_lineage = TriggerLineage {

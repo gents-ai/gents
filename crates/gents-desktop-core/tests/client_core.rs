@@ -116,7 +116,6 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
                     behavior_id: "default"
                     session_id: "{session_id}"
                     content: "hello"
-                    status: "error"
                     lifecycle_state: "failed"
                 }}) {{ _docID }}
                 response: create_AgentResponse(input: {{
@@ -219,7 +218,6 @@ async fn initial_session_hydration_waits_for_existing_or_terminal_session_eviden
                     behavior_id: "default"
                     session_id: "{session_id}"
                     content: "hello"
-                    status: "pending"
                     lifecycle_state: "pending"
                 }}) {{ _docID }}
             }}"#

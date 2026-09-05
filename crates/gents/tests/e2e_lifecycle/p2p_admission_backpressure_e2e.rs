@@ -27,7 +27,6 @@ const BEHAVIOR_ID: &str = "admission-p2p-behavior";
 #[derive(Debug, Clone, Deserialize)]
 struct RequestRow {
     agent_did: String,
-    status: String,
     lifecycle_state: String,
 }
 
@@ -87,7 +86,6 @@ async fn create_request(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
@@ -104,7 +102,6 @@ async fn create_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "admission backpressure e2e",
-                status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -126,7 +123,6 @@ async fn terminalize_request(
     node: &EmbeddedNode,
     request_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
@@ -139,7 +135,6 @@ async fn terminalize_request(
                     agent_did: {{ _eq: "{agent_did}" }}
                 }},
                 input: {{
-                    status: "{status}",
                     lifecycle_state: "{lifecycle_state}"
                 }}
             ) {{ _docID }}
@@ -159,7 +154,6 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<RequestR
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
                 agent_did
-                status
                 lifecycle_state
             }}
         }}"#
@@ -220,7 +214,6 @@ async fn single_push_worker_still_converges_agent_request_over_p2p() {
         session_id,
         OWNER_DID,
         "processing",
-        "processing",
     )
     .await;
 
@@ -233,16 +226,8 @@ async fn single_push_worker_still_converges_agent_request_over_p2p() {
     )
     .await;
     assert_eq!(on_peer_processing.agent_did, OWNER_DID);
-    assert_eq!(on_peer_processing.status, "processing");
 
-    terminalize_request(
-        owner.node.as_ref(),
-        request_id,
-        OWNER_DID,
-        "completed",
-        "completed",
-    )
-    .await;
+    terminalize_request(owner.node.as_ref(), request_id, OWNER_DID, "completed").await;
 
     let on_peer_terminal = wait_for_request_lifecycle(
         peer.node.as_ref(),
@@ -252,7 +237,6 @@ async fn single_push_worker_still_converges_agent_request_over_p2p() {
         "peer (terminal, single push worker)",
     )
     .await;
-    assert_eq!(on_peer_terminal.status, "completed");
     assert_eq!(on_peer_terminal.agent_did, OWNER_DID);
 }
 
@@ -273,7 +257,6 @@ async fn single_push_worker_delivers_multi_wave_updates() {
             &session_id,
             OWNER_DID,
             "completed",
-            "completed",
         )
         .await;
         let on_peer = wait_for_request_lifecycle(
@@ -285,6 +268,5 @@ async fn single_push_worker_delivers_multi_wave_updates() {
         )
         .await;
         assert_eq!(on_peer.agent_did, OWNER_DID);
-        assert_eq!(on_peer.status, "completed");
     }
 }

@@ -110,7 +110,7 @@ async fn codex_shim_thread_list_reconstructs_turned_threads_from_durable_data() 
                 r#"mutation {{ create_AgentRequest(input: {{
                     request_id: "{request}", agent_did: "{agent_did}",
                     behavior_id: "{behavior_id}", session_id: "{session}",
-                    content: "pending projection", status: "pending",
+                    content: "pending projection",
                     lifecycle_state: "pending", execution_origin: "interactive",
                     metadata: "{{\"codex_shim\":{{}}}}",
                     created_at: "2026-01-01T00:00:01Z"

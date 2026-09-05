@@ -336,7 +336,6 @@ pub struct TaskRunSummaryView {
     pub request_id: String,
     pub session_id: Option<String>,
     pub behavior_id: Option<String>,
-    pub status: Option<String>,
     pub lifecycle_state: Option<String>,
     pub execution_origin: Option<String>,
     pub caused_by_trigger_id: Option<String>,

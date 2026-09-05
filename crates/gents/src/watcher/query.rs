@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
 use super::{validate_agent_request, AgentRequest, DefraWatcher};
@@ -49,11 +50,10 @@ impl DefraWatcher {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }}
+                        lifecycle_state: {{ _eq: "pending" }}
                     }},
                     limit: 1
                 ) {{{fields}
-                    status
                     lifecycle_state
                     interrupt_requested_at
                     valid_until
@@ -95,18 +95,16 @@ impl DefraWatcher {
     }
 
     pub(super) async fn pending_requests(&self) -> anyhow::Result<Vec<AgentRequest>> {
-        let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _in: ["pending", "processing"] }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{{fields}
-                    status
                     lifecycle_state
                     interrupt_requested_at
                     valid_until
@@ -180,10 +178,7 @@ impl DefraWatcher {
     }
 
     async fn terminalize_malformed_pending_request(&self, row: &MalformedPendingRow) {
-        if row.agent_did != self.agent_did
-            || row.status != "pending"
-            || row.lifecycle_state.as_deref() != Some("pending")
-        {
+        if row.agent_did != self.agent_did || row.lifecycle_state.as_deref() != Some("pending") {
             return;
         }
         let reason = "request rejected at ingest: malformed durable AgentRequest row";
@@ -210,20 +205,18 @@ impl DefraWatcher {
         }
 
         let session_id = crate::graphql::escape_graphql_string(&row.session_id);
-        let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
+        let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{session_id}" }},
-                        status: {{ _in: ["pending", "processing"] }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
                 ) {{
                     _docID
                     request_id
-                    status
                     lifecycle_state
                     created_at
                 }}
@@ -269,7 +262,6 @@ fn active_runtime_rows(data: Option<&serde_json::Value>) -> anyhow::Result<Vec<A
 struct MalformedPendingRow {
     doc_id: String,
     agent_did: String,
-    status: String,
     lifecycle_state: Option<String>,
 }
 
@@ -289,13 +281,10 @@ fn parse_active_runtime_rows(
             Ok(row) => rows.push(row),
             Err(error) => {
                 let string = |name: &str| value.get(name).and_then(serde_json::Value::as_str);
-                if let (Some(doc_id), Some(agent_did), Some(status)) =
-                    (string("_docID"), string("agent_did"), string("status"))
-                {
+                if let (Some(doc_id), Some(agent_did)) = (string("_docID"), string("agent_did")) {
                     malformed.push(MalformedPendingRow {
                         doc_id: doc_id.to_string(),
                         agent_did: agent_did.to_string(),
-                        status: status.to_string(),
                         lifecycle_state: string("lifecycle_state").map(str::to_string),
                     });
                 } else {
@@ -411,7 +400,6 @@ mod tests {
             "metadata": metadata,
             "execution_origin": execution_origin,
             "created_at": created_at,
-            "status": "pending",
             "lifecycle_state": "pending"
         })
     }

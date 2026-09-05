@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::identity::AgentIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
     AgentBehaviorRow, AgentPrincipalRow, AgentRequestRow, EventTriggerRow, InferenceBackendRow,
     InferenceProfileRow, ScheduleRow, SkillRow, TaskRow, ToolSelectionRow, ToolServiceRegistryRow,
@@ -36,13 +37,6 @@ fn required_peer_generation<'a>(name: &str, value: Option<&'a str>) -> Result<&'
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .with_context(|| format!("{name} is missing from the current peer authority"))
-}
-
-fn is_terminal_lifecycle_state(value: Option<&str>) -> bool {
-    matches!(
-        value,
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    )
 }
 
 fn row_matches_source(
@@ -510,9 +504,9 @@ impl ClientCore {
         }
 
         let (_rows, bytes, _hash) = signature;
-        let terminal = patch
-            .request_row(request_id)
-            .is_some_and(|row| is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+        let terminal = patch.request_row(request_id).is_some_and(|row| {
+            RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref())
+        });
         let version = self.store.merge_chat_patch(patch);
         tracing::debug!(
             target: "gents_desktop_core::replication",
@@ -1808,7 +1802,7 @@ async fn load_local_hydration_start_evidence(
     let nonterminal_request_present =
         gents::graphql::rows::<HydrationLifecycleRow>(&response, "AgentRequest")?
             .iter()
-            .any(|row| !is_terminal_lifecycle_state(row.lifecycle_state.as_deref()));
+            .any(|row| !RequestLifecycleState::is_terminal_str(row.lifecycle_state.as_deref()));
     Ok(LocalHydrationStartEvidence {
         owned_session_present,
         nonterminal_request_present,

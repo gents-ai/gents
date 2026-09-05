@@ -1265,7 +1265,6 @@ mod tests {
         assert!(rejected.is_none());
         #[derive(Deserialize)]
         struct RejectedRow {
-            status: String,
             lifecycle_state: String,
             claimed_at: Option<String>,
             failure_reason: Option<String>,
@@ -1273,7 +1272,7 @@ mod tests {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    status lifecycle_state claimed_at failure_reason
+                    lifecycle_state claimed_at failure_reason
                 }} }}"#,
                 crate::graphql::escape_graphql_string(&revoked_request_id),
             ))
@@ -1286,7 +1285,6 @@ mod tests {
         let rejected_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("rejected request row");
-        assert_eq!(rejected_row.status, "error");
         assert_eq!(rejected_row.lifecycle_state, "failed");
         assert!(rejected_row.claimed_at.is_none());
         assert!(rejected_row
@@ -1363,7 +1361,7 @@ mod tests {
         let response = node
             .execute(&format!(
                 r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    status lifecycle_state claimed_at failure_reason
+                    lifecycle_state claimed_at failure_reason
                 }} }}"#,
                 crate::graphql::escape_graphql_string(&replacement_request_id),
             ))
@@ -1371,7 +1369,6 @@ mod tests {
         let pending_row: RejectedRow = crate::graphql::first_row(&response, "AgentRequest")
             .unwrap()
             .expect("temporarily unavailable request row");
-        assert_eq!(pending_row.status, "pending");
         assert_eq!(pending_row.lifecycle_state, "pending");
         assert!(pending_row.claimed_at.is_none());
         assert!(pending_row

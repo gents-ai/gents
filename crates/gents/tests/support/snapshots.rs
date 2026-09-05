@@ -13,7 +13,6 @@ where
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RequestSnapshotRow {
-    status: String,
     lifecycle_state: String,
     behavior_id: String,
     #[serde(deserialize_with = "null_string_default")]
@@ -33,7 +32,6 @@ struct RequestSnapshotRow {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
-    pub status: String,
     pub lifecycle_state: String,
     pub behavior_id: String,
     pub backend_id: String,
@@ -51,7 +49,6 @@ pub struct RequestSnapshot {
 impl From<RequestSnapshotRow> for RequestSnapshot {
     fn from(row: RequestSnapshotRow) -> Self {
         Self {
-            status: row.status,
             lifecycle_state: row.lifecycle_state,
             behavior_id: row.behavior_id,
             backend_id: row.backend_id,
@@ -158,7 +155,6 @@ pub async fn fetch_request_snapshot(node: &EmbeddedNode, doc_id: &str) -> Reques
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
                 behavior_id
                 backend_id
@@ -227,7 +223,6 @@ pub async fn fetch_request_lineage_snapshot_by_tuple(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshotRaw {
-    pub status: String,
     pub lifecycle_state: String,
     pub interrupt_requested_at: Option<String>,
     pub valid_until: Option<String>,
@@ -235,7 +230,6 @@ pub struct RequestSnapshotRaw {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RequestSnapshotRawRow {
-    status: String,
     lifecycle_state: String,
     interrupt_requested_at: Option<String>,
     valid_until: Option<String>,
@@ -244,7 +238,6 @@ struct RequestSnapshotRawRow {
 impl From<RequestSnapshotRawRow> for RequestSnapshotRaw {
     fn from(row: RequestSnapshotRawRow) -> Self {
         Self {
-            status: row.status,
             lifecycle_state: row.lifecycle_state,
             interrupt_requested_at: row.interrupt_requested_at.filter(|value| !value.is_empty()),
             valid_until: row.valid_until.filter(|value| !value.is_empty()),
@@ -260,7 +253,6 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
                 interrupt_requested_at
                 valid_until

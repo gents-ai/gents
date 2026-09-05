@@ -6,6 +6,24 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Breaking changes
+
+- `AgentRequest.status` is removed; `lifecycle_state` is the only request
+  state column and `gents_protocol::request_lifecycle::RequestLifecycleState`
+  is its only owner (#1330). The pre-claim `workspace_binding_pending` status
+  is now the lifecycle state `workspaceBindingPending`. `AgentRequest` is a
+  client-authored collection that evolves only by baseline re-pin, so
+  existing stores fail `ensure_migrations` with `UnknownLineage` for
+  `AgentRequest` after upgrading and must be reset or export/imported; there
+  is deliberately no migration step.
+- Desktop bridge contract 5.2 -> 6.0: `SubagentNodeView`, `TaskRunResult`,
+  and `TaskRunSummaryView` lose their request `status` field. Clients on an
+  older contract are rejected.
+- CLI JSON output drops the duplicate request `status` fields
+  (`SubagentTreeNode.status`, `SessionHistoryRow.latest_request_status`,
+  `RequestShowHeader.status`, `ChildRequestView.status`,
+  `GraphRunRequestView.status`); read `lifecycle_state` instead.
+
 ## 0.15.0 - 2026-09-01
 
 ### Breaking changes

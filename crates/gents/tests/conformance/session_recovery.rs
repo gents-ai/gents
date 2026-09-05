@@ -66,11 +66,6 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
         "released"
     );
 
-    let source_not_released = lean_session_recovery_case("illegal_source_not_released");
-    assert!(!source_not_released.legal);
-    assert_eq!(source_not_released.pre_failed_state.as_str(), "failed");
-    assert_eq!(source_not_released.pre_failed_admission.as_str(), "waiting");
-
     let non_latest = lean_session_recovery_case("illegal_non_latest_failed_with_pending_latest");
     assert!(!non_latest.legal);
     assert_eq!(non_latest.pre_failed_state.as_str(), "failed");
@@ -90,7 +85,6 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
         "illegal_new_request_id_already_exists",
         "illegal_new_request_id_matches_failed_id",
         "illegal_source_not_failed",
-        "illegal_source_not_released",
         "illegal_source_completed_terminal",
         "illegal_source_dead_stale_terminal",
         "illegal_source_superseded_terminal",
@@ -108,7 +102,7 @@ fn generated_session_recovery_cases_cover_retry_guards_and_preservation() {
 pub(super) async fn generated_session_recovery_cases_drive_db_backed_reissue_contract() {
     let cases = &lean_contract_snapshot().session_recovery_cases;
     assert_eq!(cases.iter().filter(|case| case.legal).count(), 2);
-    assert_eq!(cases.len(), 18);
+    assert_eq!(cases.len(), 17);
 
     let db = test_db("session-recovery-generated-contract").await;
     for case in cases {
@@ -188,7 +182,6 @@ struct RecoveryRequestRow {
     behavior_id: String,
     session_id: String,
     content: String,
-    status: String,
     lifecycle_state: String,
     backend_id: String,
     execution_origin: String,
@@ -216,11 +209,10 @@ async fn seed_session_recovery_case(
     create_agent_session(node, &session_id, AGENT_NAME, "2026-03-23T00:00:00Z").await;
     for request_id in &case.pre_request_ids {
         let request_id_string = recovery_request_id(case, *request_id);
-        let (state, status, retry_count, max_retries, deadline, backend, origin) =
+        let (state, retry_count, max_retries, deadline, backend, origin) =
             if *request_id == case.failed_id {
                 (
                     case.pre_failed_state.as_str(),
-                    recovery_status_for_source(case),
                     case.pre_retry_count as i64,
                     case.max_retries as i64,
                     recovery_deadline(case.pre_deadline_exceeded),
@@ -230,7 +222,6 @@ async fn seed_session_recovery_case(
             } else if *request_id == case.pre_latest_id {
                 (
                     case.pre_latest_state.as_str(),
-                    status_for_lifecycle_state(&case.pre_latest_state),
                     0,
                     case.max_retries as i64,
                     recovery_deadline(false),
@@ -239,7 +230,6 @@ async fn seed_session_recovery_case(
                 )
             } else {
                 (
-                    "pending",
                     "pending",
                     0,
                     case.max_retries as i64,
@@ -254,7 +244,6 @@ async fn seed_session_recovery_case(
             &request_id_string,
             &session_id,
             state,
-            status,
             retry_count,
             max_retries,
             &deadline,
@@ -289,7 +278,6 @@ async fn create_session_recovery_request(
     request_id: &str,
     session_id: &str,
     lifecycle_state: &str,
-    status: &str,
     retry_count: i64,
     max_retries: i64,
     deadline: &str,
@@ -302,7 +290,6 @@ async fn create_session_recovery_request(
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
-    let status = escape_graphql_string(status);
     let deadline = escape_graphql_string(deadline);
     let backend_id = escape_graphql_string(backend_id);
     let execution_origin = escape_graphql_string(execution_origin);
@@ -324,7 +311,6 @@ async fn create_session_recovery_request(
                 retry_root_request: "{retry_root_request}",
                 superseded_by_request: "",
                 content: "session recovery contract",
-                status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "{backend_id}",
                 execution_origin: "{execution_origin}",
@@ -354,10 +340,10 @@ async fn reissue_failed_request_for_contract(
             pre.failed_request_id
         ));
     };
-    if parent.lifecycle_state != "failed" || parent.status != "error" {
+    if parent.lifecycle_state != "failed" {
         return Err(format!(
-            "retry parent request must be failed/error, got lifecycle_state={} status={}",
-            parent.lifecycle_state, parent.status
+            "retry parent request must be failed, got lifecycle_state={}",
+            parent.lifecycle_state
         ));
     }
     if parent.execution_origin != "interactive" {
@@ -411,7 +397,6 @@ async fn reissue_failed_request_for_contract(
         &pre.new_request_id,
         &pre.session_id,
         "pending",
-        "pending",
         parent.retry_count + 1,
         parent.max_retries,
         &recovery_deadline(false),
@@ -454,7 +439,6 @@ async fn assert_legal_reissue_postconditions(
     assert_eq!(new_request.session_id, pre.session_id);
     assert_eq!(new_request.agent_did, AGENT_DID);
     assert_eq!(new_request.behavior_id, AGENT_NAME);
-    assert_eq!(new_request.status, "pending");
     assert_eq!(new_request.lifecycle_state, case.post_new_state);
     assert_eq!(new_request.retry_parent_request, pre.failed_request_id);
     assert_eq!(new_request.retry_root_request, pre.failed_request_id);
@@ -469,7 +453,6 @@ async fn assert_legal_reissue_postconditions(
         .await
         .expect("legal reissue must retain source request");
     assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
-    assert_eq!(failed_request.status, "error");
     assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
     assert_eq!(failed_request.max_retries, case.max_retries as i64);
     assert_eq!(failed_request.backend_id, case.pre_backend);
@@ -500,7 +483,6 @@ async fn fetch_recovery_request(
                 behavior_id
                 session_id
                 content
-                status
                 lifecycle_state
                 backend_id
                 execution_origin
@@ -592,35 +574,13 @@ fn recovery_deadline(exceeded: bool) -> String {
     deadline.to_rfc3339()
 }
 
-fn recovery_status_for_source(case: &lean_vocab_test::LeanSessionRecoveryCase) -> &'static str {
-    if case.pre_failed_state == "failed" && case.pre_failed_admission == "released" {
-        "error"
-    } else if case.pre_failed_state == "failed" {
-        "processing"
-    } else {
-        status_for_lifecycle_state(&case.pre_failed_state)
-    }
-}
-
-fn status_for_lifecycle_state(lifecycle_state: &str) -> &'static str {
-    match lifecycle_state {
-        "pending" => "pending",
-        "completed" => "completed",
-        "failed" => "error",
-        "superseded" => "superseded",
-        "dead" => "dead",
-        "interrupted" => "interrupted",
-        _ => "processing",
-    }
-}
-
 fn expected_reissue_denial_fragment(
     case: &lean_vocab_test::LeanSessionRecoveryCase,
 ) -> &'static str {
     if !case.pre_failed_exists {
         "not found"
     } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
-        "failed/error"
+        "must be failed"
     } else if case.pre_origin != "interactive" {
         "must be interactive"
     } else if case.pre_retry_count >= case.max_retries {

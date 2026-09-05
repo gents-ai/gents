@@ -26,6 +26,8 @@ use crate::lifecycle::queue::{
     QueueHints, QueuePolicy, QueueSource,
 };
 use crate::session::execute_mutation_with_retry;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
 pub(crate) use self::buffer::{
@@ -1289,7 +1291,6 @@ pub(crate) async fn active_session_request_id(
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
-                    status: {{ _eq: "processing" }},
                     lifecycle_state: {{ _in: ["claimed", "processing"] }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
@@ -1333,7 +1334,6 @@ pub(crate) async fn pending_automated_wakeup_request_ids(
             AgentRequest(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
-                    status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -2159,23 +2159,23 @@ pub(crate) struct ChildRequestTerminalRow {
 }
 
 pub(crate) fn project_child_terminal(row: &ChildRequestTerminalRow) -> Option<ChildTerminal> {
-    let lifecycle_state = row.lifecycle_state.as_deref().unwrap_or_default();
-    match lifecycle_state {
-        "completed" => None,
-        "failed" => Some(ChildTerminal::Failed {
+    match RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref()) {
+        Some(RequestLifecycleState::Completed) => None,
+        Some(RequestLifecycleState::Failed) => Some(ChildTerminal::Failed {
             reason: non_empty_string(row.failure_reason.as_deref())
                 .unwrap_or_else(|| "child request failed".to_string()),
             failure_class: FailureClass::External,
         }),
-        "dead" => Some(ChildTerminal::Dead),
-        "interrupted" => Some(ChildTerminal::Interrupted),
-        "superseded" => Some(ChildTerminal::Superseded),
+        Some(RequestLifecycleState::Dead) => Some(ChildTerminal::Dead),
+        Some(RequestLifecycleState::Interrupted) => Some(ChildTerminal::Interrupted),
+        Some(RequestLifecycleState::Superseded) => Some(ChildTerminal::Superseded),
         _ => None,
     }
 }
 
 pub(crate) fn child_request_completed(row: &ChildRequestTerminalRow) -> bool {
-    row.lifecycle_state.as_deref() == Some("completed")
+    RequestLifecycleState::parse_opt(row.lifecycle_state.as_deref())
+        == Some(RequestLifecycleState::Completed)
 }
 
 pub(crate) fn subagent_tool_not_allowed_payload(

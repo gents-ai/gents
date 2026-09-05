@@ -302,6 +302,7 @@ pub mod __test_internals {
         handle_list_subagents, handle_read_subagent, load_steer_subagent_target, ChildEdge,
         SteerSubagentTarget, AWAITING_CHILD_MATERIALIZATION,
     };
+    pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{
         drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,

@@ -129,7 +129,6 @@ pub(super) async fn seed_blank_materialized_completion(
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
-                    status: "completed",
                     lifecycle_state: "completed",
                     failure_reason: ""
                 }}
@@ -234,7 +233,6 @@ pub(super) async fn seed_authorized_subagent_link(
                 session_id: "{child_session_id}",
                 content: "Inspect the parent change",
                 metadata: "{{}}",
-                status: "processing",
                 lifecycle_state: "processing",
                 execution_origin: "subagent",
                 failure_reason: "",
@@ -487,7 +485,6 @@ pub(super) async fn finalize_child_response_after_materialization(
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
-                    status: "completed",
                     lifecycle_state: "completed",
                     failure_reason: ""
                 }}
@@ -510,7 +507,6 @@ pub(super) async fn update_request_lifecycle(
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
                 input: {{
-                    status: "{lifecycle_state}",
                     lifecycle_state: "{lifecycle_state}",
                     failure_reason: ""
                 }}
@@ -567,7 +563,7 @@ pub(super) async fn seed_background_completion_wake(
                 source: create_AgentRequest(input: {{ {source_fields} }}) {{ _docID }}
                 terminal: update_AgentRequest(
                     filter: {{ request_id: {{ _eq: "{}" }} }},
-                    input: {{ status: "completed", lifecycle_state: "completed" }}
+                    input: {{ lifecycle_state: "completed" }}
                 ) {{ _docID }}
             }}"#,
             escape_graphql_string(&source_request_id),

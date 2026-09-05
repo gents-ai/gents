@@ -16,7 +16,6 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 agent_did: Some(case.parent_deployment.clone()),
                 behavior_id: None,
                 lifecycle_state: Some("Processing".to_string()),
-                status: Some("processing".to_string()),
                 subagent_depth: Some(0),
                 caused_by_parent_request_id: None,
                 caused_by_parent_tool_call_id: None,
@@ -29,7 +28,6 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 agent_did: Some(case.child_deployment.clone()),
                 behavior_id: Some(case.target_behavior_id.clone()),
                 lifecycle_state: Some("Processing".to_string()),
-                status: Some("processing".to_string()),
                 subagent_depth: Some(1),
                 caused_by_parent_request_id: case
                     .caused_by_parent_request_id_matches

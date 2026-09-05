@@ -118,6 +118,7 @@ inductive RequestProgressIndicator where
   deriving DecidableEq, Repr
 
 def projectRequestProgress : RequestState → RequestProgressIndicator
+  | .workspaceBindingPending => .queued
   | .pending       => .queued
   | .claimed       => .claimed
   | .processing    => .working

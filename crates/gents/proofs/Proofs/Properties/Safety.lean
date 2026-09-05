@@ -2,6 +2,22 @@ import Proofs.CrossMachineComposed
 
 open RequestState RequestContext ProcessState PersistenceState ComposedState
 
+private theorem workspaceBindingPending_not_terminal :
+    ¬ isTerminal RequestState.workspaceBindingPending := by
+  intro h
+  cases h with
+  | inl h => cases h
+  | inr h =>
+    cases h with
+    | inl h => cases h
+    | inr h =>
+      cases h with
+      | inl h => cases h
+      | inr h =>
+        cases h with
+        | inl h => cases h
+        | inr h => cases h
+
 private theorem pending_not_terminal : ¬ isTerminal RequestState.pending := by
   intro h
   cases h with
@@ -68,6 +84,9 @@ theorem terminal_irreversibility
     (h_trans : RequestContext.Transition pre post) :
     isTerminal post.state := by
   cases h_trans with
+  | bind_workspace h_pre _ _ =>
+    rw [h_pre] at h_terminal
+    exact (workspaceBindingPending_not_terminal h_terminal).elim
   | claim h_pre _ _ _ =>
     rw [h_pre] at h_terminal
     exact (pending_not_terminal h_terminal).elim
@@ -110,6 +129,8 @@ theorem progress_monotonic
     (h_trans : RequestContext.Transition pre post) :
     post.progressSeq ≥ pre.progressSeq := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+    simp [h_post]
   | claim _ _ _ h_post =>
     simp [h_post]
   | dedup_lose _ _ h_post =>
@@ -141,6 +162,8 @@ theorem completed_not_deadline_expired
     (h_completed : post.state = .completed) :
     pre.state = .processing := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+    simp [h_post] at h_completed
   | finish h_pre _ h_post =>
     exact h_pre
   | claim _ _ _ h_post =>
@@ -226,6 +249,8 @@ theorem persistence_before_completion
     (h_completed : post.state = .completed) :
     post.persistence = .committed := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+    simp [h_post] at h_completed
   | finish _ _ h_post =>
     simp [h_post]
   | claim _ _ _ h_post =>
@@ -264,6 +289,8 @@ theorem claim_deadline_structural_bound
     (h_claimed : post.state = .claimed) :
     post.deadline = pre.claimDeadline := by
   cases h_trans with
+  | bind_workspace _ _ h_post =>
+      simp [h_post] at h_claimed
   | claim _ _ _ h_post =>
       simp [h_post]
   | dedup_lose _ _ h_post =>

@@ -4,36 +4,6 @@ import Proofs.InferenceCall
 import Proofs.Persistence
 import Proofs.Conformance.Triggers
 
-inductive GentsLifecycleState where
-  | pending
-  | claimed
-  | streaming
-  | completed
-  | failed
-  | superseded
-  | dead
-  | interrupted
-  deriving DecidableEq, Repr
-
-namespace GentsLifecycleState
-
-def toIdeal : GentsLifecycleState → RequestState
-  | .pending => .pending
-  | .claimed => .claimed
-  | .streaming => .processing
-  | .completed => .completed
-  | .failed => .failed
-  | .superseded => .superseded
-  | .dead => .dead
-  | .interrupted => .interrupted
-
-theorem toIdeal_preserves_terminal (s : GentsLifecycleState) :
-    isTerminal s.toIdeal ↔
-    (s = .completed ∨ s = .failed ∨ s = .superseded ∨ s = .dead ∨ s = .interrupted) := by
-  cases s <;> simp [toIdeal, HasTerminal.isTerminal, RequestState.instHasTerminal]
-
-end GentsLifecycleState
-
 inductive GentsProcessState where
   | uninitialized
   | recovering

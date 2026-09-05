@@ -49,7 +49,6 @@ async fn load_agent_request_by_doc_id(
                 agent_did
                 behavior_id
                 session_id
-                status
                 lifecycle_state
             }}
         }}"#
@@ -171,7 +170,6 @@ pub async fn run_schedule_config(
         session_id: row.session_id.unwrap_or_default(),
         agent_did: row.agent_did.unwrap_or_default(),
         behavior_id: row.behavior_id.unwrap_or_default(),
-        status: row.status,
         lifecycle_state: row.lifecycle_state,
     })
 }
@@ -244,7 +242,6 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
         session_id: row.session_id.unwrap_or_default(),
         agent_did: row.agent_did.unwrap_or_default(),
         behavior_id: row.behavior_id.unwrap_or_default(),
-        status: row.status,
         lifecycle_state: row.lifecycle_state,
     })
 }

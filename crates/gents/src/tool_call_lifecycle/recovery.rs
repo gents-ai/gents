@@ -10,6 +10,8 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::background_completion::ensure_background_subagent_completion_side_effects;
 use crate::background_tools::{
     child_request_completed, fail_running_subagent_tool_call, load_parent_subagent_authorization,
@@ -671,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_lifecycle_is_cancel_worthy() {
+    fn interrupted_parent_is_cancel_worthy_terminal_but_not_cleanly_completed() {
         let interrupted = ParentRequestRow {
             lifecycle_state: "interrupted".to_string(),
             ..Default::default()
@@ -682,7 +684,7 @@ mod tests {
     }
 
     #[test]
-    fn completed_lifecycle_is_not_cancel_worthy() {
+    fn clean_completion_is_not_cancel_worthy_terminal() {
         let clean = ParentRequestRow {
             lifecycle_state: "completed".to_string(),
             ..Default::default()
@@ -1453,7 +1455,9 @@ async fn interrupt_queued_descendants_of_terminal_parents(
                 let terminal = load_request_liveness_row(node, parent_request_id)
                     .await?
                     .is_some_and(|parent| {
-                        request_lifecycle_is_terminal(Some(&parent.lifecycle_state))
+                        RequestLifecycleState::is_terminal_str(Some(
+                            parent.lifecycle_state.as_str(),
+                        ))
                     });
                 parent_terminal_cache.insert(parent_request_id.to_string(), terminal);
                 terminal
@@ -1545,7 +1549,6 @@ async fn interrupt_pending_descendant_row(
                     lifecycle_state: {{ _eq: "pending" }}
                 }},
                 input: {{
-                    status: "interrupted",
                     lifecycle_state: "interrupted",
                     failure_reason: "{escaped_reason}",
                     terminalized_at: "{terminalized_at}",
@@ -1677,7 +1680,7 @@ async fn terminalize_expired_child_with_row(
     if child.agent_did != agent_did {
         return Ok(false);
     }
-    if request_lifecycle_is_terminal(Some(&child.lifecycle_state)) {
+    if RequestLifecycleState::is_terminal_str(Some(child.lifecycle_state.as_str())) {
         return Ok(false);
     }
     let Some(deadline_at) = parse_datetime(child.deadline.as_deref()) else {
@@ -1794,7 +1797,7 @@ async fn mark_child_request_dead(
     child: &ChildRequestLivenessRow,
     reason: &str,
 ) -> Result<bool> {
-    let active_runtime_states = crate::lifecycle::active_runtime_lifecycle_state_graphql_list();
+    let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
     let escaped_doc_id = escape_graphql_string(&child.doc_id);
     let escaped_agent_did = escape_graphql_string(&child.agent_did);
     let escaped_reason = escape_graphql_string(reason);
@@ -1805,11 +1808,9 @@ async fn mark_child_request_dead(
                 filter: {{
                     _docID: {{ _eq: "{escaped_doc_id}" }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    lifecycle_state: {{ _in: {active_runtime_states} }},
-                    status: {{ _nin: ["completed", "interrupted", "dead", "superseded", "error"] }}
+                    lifecycle_state: {{ _in: {active_runtime_states} }}
                 }},
                 input: {{
-                    status: "dead",
                     lifecycle_state: "dead",
                     failure_reason: "{escaped_reason}",
                     terminalized_at: "{terminalized_at}",
@@ -2172,29 +2173,25 @@ fn effective_deadline(
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
-    parent.lifecycle_state == "interrupted"
+    RequestLifecycleState::parse_opt(Some(parent.lifecycle_state.as_str()))
+        == Some(RequestLifecycleState::Interrupted)
 }
 
-fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
-    matches!(
-        parent.lifecycle_state.as_str(),
-        "failed" | "superseded" | "dead" | "interrupted"
-    )
-}
-
+/// Parent reached a successful terminal state — not a cancel signal for
+/// linked background/cascade children.
 fn request_is_cleanly_completed(parent: &ParentRequestRow) -> bool {
-    parent.lifecycle_state == "completed"
+    RequestLifecycleState::parse_opt(Some(parent.lifecycle_state.as_str()))
+        == Some(RequestLifecycleState::Completed)
+}
+
+/// Terminal parent whose terminal is cancel-worthy (interrupt, failure, dead,
+/// supersede, …) — terminal but not a clean completion.
+fn request_is_cancel_worthy_terminal(parent: &ParentRequestRow) -> bool {
+    request_is_terminal(parent) && !request_is_cleanly_completed(parent)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    request_lifecycle_is_terminal(Some(&parent.lifecycle_state))
-}
-
-fn request_lifecycle_is_terminal(lifecycle_state: Option<&str>) -> bool {
-    matches!(
-        lifecycle_state,
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    )
+    RequestLifecycleState::is_terminal_str(Some(parent.lifecycle_state.as_str()))
 }
 
 fn child_request_id(row: &RunningToolCallRow) -> Option<&str> {

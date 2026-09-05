@@ -84,6 +84,7 @@ fn live_overlay_cases_match_lean_table() {
 
 fn request_progress(lifecycle_state: &str) -> Option<(&'static str, bool)> {
     match lifecycle_state {
+        "workspaceBindingPending" => Some(("Queued", true)),
         "pending" => Some(("Queued", true)),
         "claimed" => Some(("Claimed", true)),
         "processing" => Some(("Working", true)),
@@ -100,7 +101,11 @@ fn request_progress(lifecycle_state: &str) -> Option<(&'static str, bool)> {
 #[test]
 fn request_progress_cases_match_lean_table() {
     let cases: &[LeanRequestProgressCase] = lean_request_progress_cases();
-    assert_eq!(cases.len(), 9, "every request lifecycle state is projected");
+    assert_eq!(
+        cases.len(),
+        10,
+        "every request lifecycle state is projected"
+    );
 
     for case in cases {
         let actual = request_progress(&case.lifecycle_state)

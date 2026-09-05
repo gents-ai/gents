@@ -127,7 +127,6 @@ mod tests {
                     caused_by_trigger_id
                     execution_origin
                     lifecycle_state
-                    status
                     metadata
                 }}
             }}"#
@@ -158,7 +157,6 @@ mod tests {
         );
         assert_eq!(row["execution_origin"].as_str(), Some("interactive"));
         assert_eq!(row["lifecycle_state"].as_str(), Some("pending"));
-        assert_eq!(row["status"].as_str(), Some("pending"));
         assert!(row["metadata"].is_null());
     }
 

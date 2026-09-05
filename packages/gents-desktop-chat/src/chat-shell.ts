@@ -21,6 +21,7 @@ export function requestProgressPresentation(
   lifecycleState?: string | null,
 ): RequestProgressPresentation | null {
   switch (lifecycleState) {
+    case "workspaceBindingPending":
     case "pending":
       return { label: "Queued", animated: true };
     case "claimed":

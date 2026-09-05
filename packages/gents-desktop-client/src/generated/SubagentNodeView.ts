@@ -4,4 +4,4 @@ export type SubagentNodeView = { requestId: string,
 /**
  * Peer label the row was resolved from; None = the local node.
  */
-resolvedVia: string | null, sessionId: string | null, agentDid: string | null, behaviorId: string | null, lifecycleState: string | null, status: string | null, subagentDepth: number | null, causedByParentRequestId: string | null, causedByParentToolCallId: string | null, backendId: string | null, };
+resolvedVia: string | null, sessionId: string | null, agentDid: string | null, behaviorId: string | null, lifecycleState: string | null, subagentDepth: number | null, causedByParentRequestId: string | null, causedByParentToolCallId: string | null, backendId: string | null, };

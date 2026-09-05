@@ -1350,7 +1350,7 @@ mod tests {
             0,
             "revoked work reached provider"
         );
-        let rejected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ status lifecycle_state claimed_at }} }}"#,
+        let rejected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ lifecycle_state claimed_at }} }}"#,
             crate::graphql::escape_graphql_string(&revoked.doc_id))).await;
         let row = rejected
             .data
@@ -1359,7 +1359,6 @@ mod tests {
             .and_then(|rows| rows.as_array())
             .and_then(|rows| rows.first())
             .unwrap();
-        assert_eq!(row["status"], "error");
         assert_eq!(row["lifecycle_state"], "failed");
         assert!(row["claimed_at"].is_null());
 

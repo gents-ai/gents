@@ -54,7 +54,8 @@ def requestProgressCase
   , animated := progress.animated }
 
 def requestProgressCases : List RequestProgressCase :=
-  [ requestProgressCase "pending_is_queued" .pending
+  [ requestProgressCase "workspace_binding_pending_is_queued" .workspaceBindingPending
+  , requestProgressCase "pending_is_queued" .pending
   , requestProgressCase "claimed_is_claimed" .claimed
   , requestProgressCase "processing_is_working" .processing
   , requestProgressCase "input_required_waits_for_input" .inputRequired

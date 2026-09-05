@@ -587,7 +587,7 @@ async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
+    set_parent_state(db.node.as_ref(), &request_id, "completed").await;
     let _runs =
         gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
             .await
@@ -630,7 +630,7 @@ async fn periodic_recovery_preserves_registered_worker_after_parent_interrupt() 
     );
     let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
 
-    set_parent_state(db.node.as_ref(), &request_id, "interrupted", "interrupted").await;
+    set_parent_state(db.node.as_ref(), &request_id, "interrupted").await;
     gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
         .await
         .unwrap();
@@ -672,7 +672,7 @@ async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
         chrono::Utc::now() - chrono::Duration::seconds(1),
     );
     lifecycle.start_running().await.unwrap();
-    set_parent_state(db.node.as_ref(), &request_id, "completed", "completed").await;
+    set_parent_state(db.node.as_ref(), &request_id, "completed").await;
 
     gents::run_periodic_recovery_sweeps(
         db.node.as_ref(),
@@ -743,20 +743,14 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
     );
 }
 
-async fn set_parent_state(
-    node: &EmbeddedNode,
-    request_id: &str,
-    status: &str,
-    lifecycle_state: &str,
-) {
+async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
     let request_id = escape_graphql_string(request_id);
-    let status = escape_graphql_string(status);
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
+                input: {{ lifecycle_state: "{lifecycle_state}" }}
             ) {{ _docID }}
         }}"#
     );

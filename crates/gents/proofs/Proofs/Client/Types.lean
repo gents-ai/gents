@@ -63,7 +63,7 @@ def deriveAttempt : AttemptView → ClientTurnState
     | .failed        => .failed
     | .dead          => .failed
     | .interrupted   => .interrupted
-    | .pending | .claimed | .processing | .inputRequired =>
+    | .workspaceBindingPending | .pending | .claimed | .processing | .inputRequired =>
       match resp with
       | some r =>
         match r.status with

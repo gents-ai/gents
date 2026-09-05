@@ -12,7 +12,6 @@ const REQUESTER_DID: &str = "did:test:requester";
 
 #[derive(Debug, Deserialize)]
 struct ConvergenceRow {
-    status: String,
     lifecycle_state: String,
     agent_did: String,
     failure_reason: Option<String>,
@@ -25,7 +24,6 @@ async fn create_owned_request(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
 ) -> String {
     create_owned_request_with_times(
@@ -33,7 +31,6 @@ async fn create_owned_request(
         request_id,
         session_id,
         agent_did,
-        status,
         lifecycle_state,
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
@@ -52,7 +49,6 @@ async fn create_owned_request_with_times(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -62,7 +58,6 @@ async fn create_owned_request_with_times(
         request_id,
         session_id,
         agent_did,
-        status,
         lifecycle_state,
         created_at,
         terminalized_at,
@@ -77,7 +72,6 @@ async fn create_routed_owned_request_with_times(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -87,7 +81,6 @@ async fn create_routed_owned_request_with_times(
         request_id,
         session_id,
         agent_did,
-        status,
         lifecycle_state,
         created_at,
         terminalized_at,
@@ -102,7 +95,6 @@ async fn create_owned_request_with_times_and_requester(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-    status: &str,
     lifecycle_state: &str,
     created_at: &str,
     terminalized_at: &str,
@@ -115,7 +107,6 @@ async fn create_owned_request_with_times_and_requester(
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_status = escape_graphql_string(status);
     let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_terminalized_at = escape_graphql_string(terminalized_at);
@@ -139,7 +130,6 @@ async fn create_owned_request_with_times_and_requester(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "{escaped_status}",
                 lifecycle_state: "{escaped_lifecycle_state}",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -170,7 +160,6 @@ async fn create_owned_request_with_times_and_requester(
 
 #[derive(Debug, Deserialize)]
 struct QueueConvergenceRow {
-    status: String,
     lifecycle_state: String,
     agent_did: String,
     superseded_by_request: Option<String>,
@@ -209,7 +198,6 @@ async fn create_queue_request(
                 superseded_by_request: "",
                 content: "wake up",
                 metadata: "{escaped_metadata}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
@@ -242,7 +230,6 @@ async fn fetch_queue_convergence_row(node: &EmbeddedNode, request_id: &str) -> Q
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                status
                 lifecycle_state
                 agent_did
                 superseded_by_request
@@ -257,7 +244,6 @@ async fn fetch_convergence_row(node: &EmbeddedNode, request_id: &str) -> Converg
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
-                status
                 lifecycle_state
                 agent_did
                 failure_reason
@@ -302,7 +288,6 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
         "convergence-foreign-session",
         FOREIGN_DID,
         "pending",
-        "pending",
     )
     .await;
 
@@ -329,7 +314,6 @@ pub(super) async fn single_claimer_watcher_never_claims_foreign_replica() {
         "convergence-own-session",
         OWNER_DID,
         "pending",
-        "pending",
     )
     .await;
     let claimed = watcher.try_fetch_request(&own_doc).await.unwrap();
@@ -348,7 +332,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "convergence-owned-failed",
         "convergence-owned-failed-session",
         OWNER_DID,
-        "error",
         "failed",
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
@@ -359,7 +342,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "convergence-foreign-failed",
         "convergence-foreign-failed-session",
         FOREIGN_DID,
-        "error",
         "failed",
         CONVERGENCE_CREATED_AT,
         CONVERGENCE_CREATED_AT,
@@ -371,7 +353,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "convergence-owned-processing-session",
         OWNER_DID,
         "processing",
-        "processing",
     )
     .await;
     create_owned_request(
@@ -379,7 +360,6 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
         "convergence-owned-local-terminal",
         "convergence-owned-local-terminal-session",
         OWNER_DID,
-        "completed",
         "completed",
     )
     .await;
@@ -398,13 +378,12 @@ pub(super) async fn terminal_convergence_redrive_reasserts_unconverged_terminal(
     assert!(!first.is_noop());
 
     let owned = fetch_convergence_row(&db.node, "convergence-owned-failed").await;
-    assert_eq!(owned.status, "error");
     assert_eq!(owned.lifecycle_state, "failed");
     assert_eq!(owned.terminal_redrive_attempts, Some(1));
     assert!(owned.terminalized_at.is_some());
     let foreign = fetch_convergence_row(&db.node, "convergence-foreign-failed").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
-    assert_eq!(foreign.status, "error");
+    assert_eq!(foreign.lifecycle_state, "failed");
 
     for _ in 1..TERMINAL_REDRIVE_CAP {
         let more = RequestLifecycle::redrive_terminal_convergence(&db.node, OWNER_DID)
@@ -440,7 +419,6 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
             &format!("convergence-newer-session-{index:02}"),
             OWNER_DID,
             "completed",
-            "completed",
             "2026-03-23T00:00:00Z",
             "2026-03-23T00:00:01Z",
         )
@@ -451,7 +429,6 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
         "convergence-old-late-terminal",
         "convergence-old-late-terminal-session",
         OWNER_DID,
-        "completed",
         "completed",
         "2020-01-01T00:00:00Z",
         "2026-03-23T00:00:02Z",
@@ -481,15 +458,8 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     let db = test_db("convergence-terminal-repair").await;
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
-    let request_doc_id = create_owned_request(
-        &db.node,
-        request_id,
-        session_id,
-        OWNER_DID,
-        "processing",
-        "processing",
-    )
-    .await;
+    let request_doc_id =
+        create_owned_request(&db.node, request_id, session_id, OWNER_DID, "processing").await;
     seed_owned_request_projection(&db.node, session_id, request_id).await;
     let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
     let response_doc_id =
@@ -521,7 +491,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         "one logical terminal repair must add one composite request commit"
     );
     let row = fetch_convergence_row(&db.node, request_id).await;
-    assert_eq!(row.status, "error");
     assert_eq!(row.lifecycle_state, "failed");
     assert_eq!(
         row.failure_reason.as_deref(),
@@ -542,7 +511,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         provider_request_id,
         provider_session_id,
         OWNER_DID,
-        "processing",
         "processing",
     )
     .await;
@@ -578,7 +546,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(provider_repair.repaired, 1);
     let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
-    assert_eq!(provider_row.status, "error");
     assert_eq!(provider_row.lifecycle_state, "failed");
     assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
 
@@ -589,7 +556,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         runtime_interrupt_request_id,
         runtime_interrupt_session_id,
         OWNER_DID,
-        "processing",
         "processing",
     )
     .await;
@@ -634,7 +600,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(runtime_interrupt_repair.repaired, 1);
     let runtime_interrupt_row = fetch_convergence_row(&db.node, runtime_interrupt_request_id).await;
-    assert_eq!(runtime_interrupt_row.status, "interrupted");
     assert_eq!(runtime_interrupt_row.lifecycle_state, "interrupted");
     assert_eq!(
         runtime_interrupt_row.failure_reason.as_deref(),
@@ -650,7 +615,6 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
         "convergence-stuck-claimed",
         "convergence-stuck-claimed-session",
         OWNER_DID,
-        "claimed",
         "claimed",
     )
     .await;
@@ -739,12 +703,10 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
 
     let owner_survivor =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-survivor").await;
-    assert_eq!(owner_survivor.status, "pending");
     assert_eq!(owner_survivor.lifecycle_state, "pending");
 
     let owner_duplicate =
         fetch_queue_convergence_row(&db.node, "convergence-coalesce-owner-duplicate").await;
-    assert_eq!(owner_duplicate.status, "superseded");
     assert_eq!(owner_duplicate.lifecycle_state, "superseded");
     assert_eq!(
         owner_duplicate.superseded_by_request.as_deref(),
@@ -757,10 +719,9 @@ pub(super) async fn reconcile_coalesce_never_supersedes_foreign_replica() {
         "foreign replica ownership unchanged"
     );
     assert_eq!(
-        foreign.status, "pending",
+        foreign.lifecycle_state, "pending",
         "foreign replica must not be superseded by the owner's coalesce reconcile"
     );
-    assert_eq!(foreign.lifecycle_state, "pending");
     assert_eq!(
         foreign.superseded_by_request.as_deref().unwrap_or(""),
         "",
@@ -808,14 +769,12 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     );
 
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;
-    assert_eq!(owner.status, "interrupted");
     assert_eq!(owner.lifecycle_state, "interrupted");
 
     let foreign = fetch_queue_convergence_row(&db.node, "convergence-drain-foreign").await;
     assert_eq!(foreign.agent_did, FOREIGN_DID);
     assert_eq!(
-        foreign.status, "pending",
+        foreign.lifecycle_state, "pending",
         "foreign replica must not be interrupted by the owner's wake-up drain"
     );
-    assert_eq!(foreign.lifecycle_state, "pending");
 }

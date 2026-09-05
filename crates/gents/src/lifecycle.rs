@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use defra_node::EmbeddedNode;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
@@ -21,14 +22,14 @@ mod task_title;
 mod transition;
 
 pub use manual::{write_manual_agent_request, write_manual_agent_request_with_conversation_title};
-pub(crate) use materialize::{
-    activate_workspace_bound_request,
-    write_pending_agent_request_with_lineage_and_conversation_title,
-    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
-};
 pub use materialize::{
+    activate_workspace_bound_request,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
     EnqueuedAgentRequest,
+};
+pub(crate) use materialize::{
+    write_pending_agent_request_with_lineage_and_conversation_title,
+    write_pending_agent_request_with_lineage_workspace_and_conversation_title,
 };
 pub(crate) use task_title::task_goal_conversation_title;
 pub use task_title::task_run_conversation_title;
@@ -343,129 +344,6 @@ impl TriggerExecutionContext {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-enum PersistedLifecycleState {
-    Pending,
-    Claimed,
-    Processing,
-    InputRequired,
-    Completed,
-    Failed,
-    Superseded,
-    Dead,
-    Interrupted,
-}
-
-impl PersistedLifecycleState {
-    const ALL: [Self; 9] = [
-        Self::Pending,
-        Self::Claimed,
-        Self::Processing,
-        Self::InputRequired,
-        Self::Completed,
-        Self::Failed,
-        Self::Superseded,
-        Self::Dead,
-        Self::Interrupted,
-    ];
-
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Pending => "pending",
-            Self::Claimed => "claimed",
-            Self::Processing => "processing",
-            Self::InputRequired => "inputRequired",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Superseded => "superseded",
-            Self::Dead => "dead",
-            Self::Interrupted => "interrupted",
-        }
-    }
-
-    const fn is_terminal(self) -> bool {
-        matches!(
-            self,
-            Self::Completed | Self::Failed | Self::Superseded | Self::Dead | Self::Interrupted
-        )
-    }
-
-    fn from_persisted(value: &str) -> Option<Self> {
-        match value {
-            "pending" => Some(Self::Pending),
-            "claimed" => Some(Self::Claimed),
-            "processing" => Some(Self::Processing),
-            "inputRequired" => Some(Self::InputRequired),
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            "superseded" => Some(Self::Superseded),
-            "dead" => Some(Self::Dead),
-            "interrupted" => Some(Self::Interrupted),
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
-    const fn is_nonterminal(self) -> bool {
-        !self.is_terminal()
-    }
-
-    const fn is_active_runtime(self) -> bool {
-        matches!(self, Self::Pending | Self::Claimed | Self::Processing)
-    }
-}
-
-fn lifecycle_state_graphql_list(
-    states: impl IntoIterator<Item = PersistedLifecycleState>,
-) -> String {
-    let states = states
-        .into_iter()
-        .map(|state| format!(r#""{}""#, state.as_str()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("[{states}]")
-}
-
-#[cfg(test)]
-pub(crate) fn nonterminal_lifecycle_state_graphql_list() -> String {
-    lifecycle_state_graphql_list(
-        PersistedLifecycleState::ALL
-            .iter()
-            .copied()
-            .filter(|state| state.is_nonterminal()),
-    )
-}
-
-pub(crate) fn active_runtime_lifecycle_state_graphql_list() -> String {
-    lifecycle_state_graphql_list(
-        PersistedLifecycleState::ALL
-            .iter()
-            .copied()
-            .filter(|state| state.is_active_runtime()),
-    )
-}
-
-pub(crate) fn stuck_request_lifecycle_state_graphql_list() -> String {
-    lifecycle_state_graphql_list([
-        PersistedLifecycleState::Claimed,
-        PersistedLifecycleState::Processing,
-    ])
-}
-
-pub(crate) fn terminal_lifecycle_state_graphql_list() -> String {
-    lifecycle_state_graphql_list(
-        PersistedLifecycleState::ALL
-            .iter()
-            .copied()
-            .filter(|state| state.is_terminal()),
-    )
-}
-
-fn lifecycle_state_graphql_list_for(states: &[PersistedLifecycleState]) -> String {
-    lifecycle_state_graphql_list(states.iter().copied())
-}
-
 pub struct RequestLifecycle {
     node: Arc<EmbeddedNode>,
     agent_name: String,
@@ -607,14 +485,14 @@ mod tests {
 
     #[test]
     fn rust_request_lifecycle_state_vocabulary_matches_lean_model() {
-        let rust_states = PersistedLifecycleState::ALL
+        let rust_states = RequestLifecycleState::ALL
             .iter()
             .copied()
-            .map(PersistedLifecycleState::as_str)
+            .map(RequestLifecycleState::as_str)
             .collect::<Vec<_>>();
         assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
             domain: "RequestState",
-            rust_source: "PersistedLifecycleState::ALL",
+            rust_source: "RequestLifecycleState::ALL",
             rust_values: &rust_states,
         });
     }
@@ -640,13 +518,13 @@ mod tests {
     #[test]
     fn persisted_lifecycle_terminal_partition_matches_lean_contract() {
         let request_machine = lean_state_machine_contract("Request");
-        let nonterminal = PersistedLifecycleState::ALL
+        let nonterminal = RequestLifecycleState::ALL
             .iter()
             .copied()
-            .filter(|state| state.is_nonterminal())
+            .filter(|state| !state.is_terminal())
             .map(|state| state.as_str())
             .collect::<Vec<_>>();
-        let terminal = PersistedLifecycleState::ALL
+        let terminal = RequestLifecycleState::ALL
             .iter()
             .copied()
             .filter(|state| state.is_terminal())
@@ -669,9 +547,9 @@ mod tests {
                 .map(String::as_str)
                 .collect::<Vec<_>>()
         );
-        assert!(PersistedLifecycleState::InputRequired.is_nonterminal());
-        assert!(!PersistedLifecycleState::InputRequired.is_active_runtime());
-        assert!(PersistedLifecycleState::Interrupted.is_terminal());
+        assert!(!RequestLifecycleState::InputRequired.is_terminal());
+        assert!(!RequestLifecycleState::InputRequired.is_active_runtime());
+        assert!(RequestLifecycleState::Interrupted.is_terminal());
         let expected_nonterminal_graphql_list = format!(
             "[{}]",
             request_machine
@@ -682,11 +560,11 @@ mod tests {
                 .join(", ")
         );
         assert_eq!(
-            nonterminal_lifecycle_state_graphql_list(),
+            RequestLifecycleState::nonterminal_graphql_list(),
             expected_nonterminal_graphql_list
         );
         assert_eq!(
-            active_runtime_lifecycle_state_graphql_list(),
+            RequestLifecycleState::active_runtime_graphql_list(),
             r#"["pending", "claimed", "processing"]"#
         );
         assert_eq!(
@@ -842,7 +720,7 @@ mod tests {
             r#"mutation {{
                 update_AgentRequest(
                     filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                    input: {{ status: "completed", lifecycle_state: "completed" }}
+                    input: {{ lifecycle_state: "completed" }}
                 ) {{ _docID }}
             }}"#
         );
@@ -861,14 +739,10 @@ mod tests {
             .is_some_and(response_has_documents));
 
         let query = format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ status lifecycle_state }} }}"#
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ lifecycle_state }} }}"#
         );
         let persisted = node.execute(&query).await;
         assert!(!persisted.has_errors(), "{:?}", persisted.errors);
-        assert_eq!(
-            persisted.data.as_ref().unwrap()["AgentRequest"][0]["status"],
-            "completed"
-        );
         assert_eq!(
             persisted.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
             "completed"

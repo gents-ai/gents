@@ -245,7 +245,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     );
     assert_eq!(
         deadline.get("request_status").and_then(Value::as_str),
-        Some("error")
+        Some("failed")
     );
     assert_eq!(
         deadline
@@ -452,8 +452,7 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
                 session_id: "session-cap",
                 content: "capture me",
                 metadata: "",
-                status: "completed",
-                lifecycle_state: "complete",
+                lifecycle_state: "completed",
                 backend_id: "studios-cluster",
                 failure_reason: "",
                 created_at: "2026-08-07T12:00:00Z",
@@ -1336,8 +1335,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 session_id: "session-1",
                 content: "Inspect the repo and show README.md",
                 metadata: "{\"run_id\":\"run-metadata\",\"case_id\":\"case-metadata\"}",
-                status: "completed",
-                lifecycle_state: "complete",
+                lifecycle_state: "completed",
                 backend_id: "studios-cluster",
                 failure_reason: "",
                 created_at: "2026-05-04T12:00:01Z",
@@ -1572,8 +1570,7 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 session_id: "session-child",
                 content: "Review the README finding",
                 metadata: "",
-                status: "completed",
-                lifecycle_state: "complete",
+                lifecycle_state: "completed",
                 backend_id: "studios-cluster",
                 failure_reason: "",
                 created_at: "2026-05-04T12:00:04Z",
@@ -1718,7 +1715,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 session_id: "session-2",
                 content: "Read README.md but the request later times out",
                 metadata: "",
-                status: "error",
                 lifecycle_state: "failed",
                 backend_id: "studios-cluster",
                 failure_reason: "request deadline exceeded while waiting for inference stream item",

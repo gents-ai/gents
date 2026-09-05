@@ -351,7 +351,7 @@ mod tests {
             "AgentRequest".to_string(),
             combine_filters(
                 equality_filter("requester_did", "did:key:phone"),
-                equality_filter("status", "pending"),
+                equality_filter("lifecycle_state", "pending"),
             ),
         )]
         .into_iter()
@@ -363,7 +363,7 @@ mod tests {
             serde_json::json!({
                 "_and": [
                     { "requester_did": { "_eq": "did:key:phone" } },
-                    { "status": { "_eq": "pending" } }
+                    { "lifecycle_state": { "_eq": "pending" } }
                 ]
             })
             .as_object()
@@ -846,7 +846,6 @@ mod tests {
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "issue 604 filtered replay",
-                    status: "processing",
                     lifecycle_state: "processing",
                     backend_id: "",
                     execution_origin: "interactive",
@@ -1268,7 +1267,7 @@ mod tests {
                     request_id: "{parent_request_id}", agent_did: "{coordinator_did}",
                     requester_did: "{coordinator_did}", behavior_id: "parent-behavior",
                     session_id: "remote-session", retry_root_request: "{parent_request_id}",
-                    content: "remote parent", status: "processing", lifecycle_state: "processing",
+                    content: "remote parent", lifecycle_state: "processing",
                     execution_origin: "interactive", created_at: "2026-08-30T00:00:00Z",
                     retry_count: 0, max_retries: 3, subagent_depth: 0
                 }}) {{ _docID }} }}"#,
@@ -1489,7 +1488,7 @@ mod tests {
         let rejected = host
             .execute(
                 r#"{ AgentRequest(filter: { request_id: { _eq: "remote-child-2" } }, limit: 1) {
-                    status lifecycle_state claimed_at
+                    lifecycle_state claimed_at
                 } }"#,
             )
             .await;
@@ -1500,10 +1499,6 @@ mod tests {
             .and_then(|rows| rows.as_array())
             .and_then(|rows| rows.first())
             .expect("terminal denied child");
-        assert_eq!(
-            rejected.get("status").and_then(serde_json::Value::as_str),
-            Some("error")
-        );
         assert_eq!(
             rejected
                 .get("lifecycle_state")

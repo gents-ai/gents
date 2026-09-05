@@ -197,10 +197,8 @@ impl RequestLifecycle {
     pub async fn begin_execution(&mut self) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_execution")?;
         self.transition_execution_view(
-            "processing",
-            PersistedLifecycleState::Claimed,
-            "processing",
-            PersistedLifecycleState::Processing,
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing,
         )
         .await
     }
@@ -215,11 +213,9 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "interrupted",
                         lifecycle_state: "interrupted",
                         terminalized_at: "{terminalized_at}",
                         terminal_redrive_attempts: 0
@@ -240,18 +236,15 @@ impl RequestLifecycle {
             .is_some_and(response_has_documents)
         {
             let request_view = self.request_view().await?;
-            if request_view.as_ref().is_some_and(|row| {
-                row.status == "interrupted" && row.lifecycle_state.as_deref() == Some("interrupted")
-            }) {
+            if request_view
+                .as_ref()
+                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("interrupted"))
+            {
                 return Ok(());
             }
             anyhow::bail!(
-                "request {} could not transition pending -> interrupted; current status={} lifecycle_state={}",
+                "request {} could not transition pending -> interrupted; current lifecycle_state={}",
                 self.request.request_id,
-                request_view
-                    .as_ref()
-                    .map(|row| row.status.as_str())
-                    .unwrap_or("missing"),
                 request_view
                     .as_ref()
                     .and_then(|row| row.lifecycle_state.as_deref())
@@ -271,11 +264,9 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "dead",
                         lifecycle_state: "dead",
                         failure_reason: "Stale",
                         terminalized_at: "{terminalized_at}",
@@ -297,18 +288,15 @@ impl RequestLifecycle {
             .is_some_and(response_has_documents)
         {
             let request_view = self.request_view().await?;
-            if request_view.as_ref().is_some_and(|row| {
-                row.status == "dead" && row.lifecycle_state.as_deref() == Some("dead")
-            }) {
+            if request_view
+                .as_ref()
+                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("dead"))
+            {
                 return Ok(());
             }
             anyhow::bail!(
-                "request {} could not transition pending -> dead; current status={} lifecycle_state={}",
+                "request {} could not transition pending -> dead; current lifecycle_state={}",
                 self.request.request_id,
-                request_view
-                    .as_ref()
-                    .map(|row| row.status.as_str())
-                    .unwrap_or("missing"),
                 request_view
                     .as_ref()
                     .and_then(|row| row.lifecycle_state.as_deref())
@@ -339,11 +327,9 @@ impl RequestLifecycle {
                     filter: {{
                         _docID: {{ _eq: "{request_doc_id}" }},
                         agent_did: {{ _eq: "{agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "error",
                         lifecycle_state: "failed",
                         failure_reason: "{reason}",
                         terminalized_at: "{terminalized_at}",
@@ -419,16 +405,13 @@ impl RequestLifecycle {
         let (updated, response_doc_id) = updated;
         if !updated {
             let request_view = self.request_view().await?;
-            if !request_view.as_ref().is_some_and(|row| {
-                row.status == "error" && row.lifecycle_state.as_deref() == Some("failed")
-            }) {
+            if !request_view
+                .as_ref()
+                .is_some_and(|row| row.lifecycle_state.as_deref() == Some("failed"))
+            {
                 anyhow::bail!(
-                    "request {} could not reject admission from status={} lifecycle_state={}",
+                    "request {} could not reject admission from lifecycle_state={}",
                     self.request.request_id,
-                    request_view
-                        .as_ref()
-                        .map(|row| row.status.as_str())
-                        .unwrap_or("missing"),
                     request_view
                         .as_ref()
                         .and_then(|row| row.lifecycle_state.as_deref())
@@ -510,11 +493,9 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "processing",
                         lifecycle_state: "{lifecycle_state}",
                         backend_id: "{escaped_backend_id}",
                         claimed_at: "{escaped_claimed_at}",
@@ -522,14 +503,13 @@ impl RequestLifecycle {
                         deadline: "{escaped_deadline}"
                     }}
                 ) {{{request_fields}
-                    status
                     lifecycle_state
                     interrupt_requested_at
                     valid_until
                     _version {{ cid height fieldName }}
                 }}
             }}"#,
-                lifecycle_state = PersistedLifecycleState::Claimed.as_str(),
+                lifecycle_state = RequestLifecycleState::Claimed.as_str(),
             )
         };
 
@@ -640,7 +620,6 @@ mod tests {
                     superseded_by_request: "",
                     content: "same-session request",
                     {metadata_field}
-                    status: "pending",
                     lifecycle_state: "pending",
                     backend_id: "",
                     execution_origin: "{escaped_execution_origin}",

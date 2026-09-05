@@ -431,22 +431,13 @@ pub async fn create_request_for_agent_with_signed_fields(
     agent_did: &str,
     request_id: &str,
     session_id: &str,
-    status: &str,
+    lifecycle_state: &str,
     created_at: &str,
     valid_until: Option<&str>,
     metadata: Option<&str>,
     retry_parent_request: Option<&str>,
     retry_root_request: Option<&str>,
 ) -> String {
-    let lifecycle_state = match status {
-        "pending" => "pending",
-        "processing" => "processing",
-        "completed" => "completed",
-        "error" => "failed",
-        "superseded" => "superseded",
-        "interrupted" => "interrupted",
-        other => panic!("unsupported test request status: {other}"),
-    };
     let request_id = escape_graphql_string(request_id);
     let session_id = escape_graphql_string(session_id);
     let created_at = escape_graphql_string(created_at);
@@ -474,7 +465,6 @@ pub async fn create_request_for_agent_with_signed_fields(
                 retry_root_request: "{retry_root_request}",
                 superseded_by_request: "",
                 content: "hello",
-                status: "{status}",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -572,7 +562,6 @@ pub async fn create_retry_request(
                 retry_root_request: "{retry_root_escaped}",
                 superseded_by_request: "",
                 content: "{content_escaped}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",

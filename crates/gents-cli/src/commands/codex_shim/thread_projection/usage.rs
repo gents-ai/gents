@@ -106,9 +106,10 @@ pub(in crate::commands::codex_shim) fn latest_inference_usage_observation(
     rows.iter()
         .filter(|row| row.get("call_kind").and_then(Value::as_str) == Some("inference"))
         .filter(|row| {
+            // InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
             matches!(
                 row.get("call_state").and_then(Value::as_str),
-                Some("completed" | "failed" | "cancelled")
+                Some("failed" | "completed" | "cancelled")
             )
         })
         .filter_map(|row| {

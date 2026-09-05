@@ -212,7 +212,6 @@ fn fleet_slot_snapshot_query() -> &'static str {
             call_state
         }
         AgentRequest(filter: {
-            status: { _eq: "processing" },
             lifecycle_state: { _eq: "processing" }
         }) {
             behavior_id

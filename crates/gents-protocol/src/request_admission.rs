@@ -6,6 +6,7 @@
 use crate::canonical::{
     parse_utc_seconds, require_enum, require_identifier, require_optional_identifier,
 };
+use crate::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
 const REQUEST_SIGNATURE_DOMAIN: &str = "gents-agent-request-admission-v1";
@@ -737,7 +738,7 @@ pub struct AgentRequestCreate {
     pub workspace_authority: Option<String>,
     pub workspace_owner_deployment_id: Option<String>,
     pub workspace_seal_hash: Option<String>,
-    pub initial_status: String,
+    pub initial_lifecycle_state: RequestLifecycleState,
     pub admission: AgentRequestAdmissionRecord,
 }
 
@@ -793,7 +794,7 @@ impl AgentRequestCreate {
             workspace_authority: None,
             workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
-            initial_status: "pending".to_string(),
+            initial_lifecycle_state: RequestLifecycleState::Pending,
             admission,
         }
     }
@@ -852,8 +853,8 @@ impl AgentRequestCreate {
             .validate_canonical_fields()
             .map_err(|_| "AgentRequest admission field is non-canonical")?;
         if !matches!(
-            self.initial_status.as_str(),
-            "pending" | "workspace_binding_pending"
+            self.initial_lifecycle_state,
+            RequestLifecycleState::Pending | RequestLifecycleState::WorkspaceBindingPending
         ) {
             return Err("new AgentRequest must begin in a pre-claim pending state");
         }
@@ -1026,8 +1027,11 @@ impl AgentRequestCreate {
             "runtime_bridge_author_did",
             self.admission.runtime_bridge_author_did.as_deref(),
         );
-        text(&mut fields, "status", &self.initial_status);
-        text(&mut fields, "lifecycle_state", "pending");
+        text(
+            &mut fields,
+            "lifecycle_state",
+            self.initial_lifecycle_state.as_str(),
+        );
         text(&mut fields, "failure_reason", "");
         Ok(fields.join(", "))
     }
@@ -1365,5 +1369,24 @@ mod tests {
         let mutation = local_create().graphql_mutation().unwrap();
         assert!(!mutation.contains("[]"));
         assert!(mutation.contains("admission_kind: \"local-self\""));
+    }
+
+    #[test]
+    fn non_pending_initial_lifecycle_state_is_rejected() {
+        let mut create = local_create();
+        create.initial_lifecycle_state = RequestLifecycleState::Claimed;
+        assert_eq!(
+            create.graphql_input_fields(),
+            Err("new AgentRequest must begin in a pre-claim pending state")
+        );
+    }
+
+    #[test]
+    fn workspace_binding_pending_emits_lifecycle_state_and_no_status_field() {
+        let mut create = local_create();
+        create.initial_lifecycle_state = RequestLifecycleState::WorkspaceBindingPending;
+        let fields = create.graphql_input_fields().unwrap();
+        assert!(fields.contains(r#"lifecycle_state: "workspaceBindingPending""#));
+        assert!(!fields.contains("status:"));
     }
 }

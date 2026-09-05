@@ -93,7 +93,7 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
         db.node_identity.did(),
         request_id,
         SESSION,
-        "error",
+        "failed",
         "2026-07-15T00:00:00Z",
         None,
         None,
@@ -434,7 +434,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
             behavior_id: "foreign", session_id: "foreign-session",
             retry_root_request: "foreign-retry-collision",
             retry_key: "{}",
-            content: "foreign", status: "completed", lifecycle_state: "completed",
+            content: "foreign", lifecycle_state: "completed",
             execution_origin: "interactive", created_at: "2026-07-15T00:00:01Z",
             retry_count: 0, max_retries: 3
         }}) {{ _docID }} }}"#,
@@ -917,7 +917,8 @@ async fn goal_backed_submission_discards_goal_when_request_staging_fails() {
     let db = test_db("goal-backed-submit-rollback").await;
     let access = ConfigAccess::Local(db.node.clone());
     let mut invalid = signed_goal_backed_request(&db, "goal-backed-invalid").await;
-    invalid.initial_status = "processing".to_string();
+    invalid.initial_lifecycle_state =
+        gents_protocol::client_protocol::RequestLifecycleState::Processing;
     let error = gents::goal::submit_goal_backed_request(
         &access,
         db.node_identity.did(),
@@ -1222,7 +1223,7 @@ async fn provider_usage_limit_moves_active_goal_to_usage_limited() {
         db.node_identity.did(),
         "usage-limited-request",
         SESSION,
-        "error",
+        "failed",
         "2026-07-15T00:00:00Z",
         None,
         None,

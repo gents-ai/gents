@@ -7,7 +7,6 @@ fn request(origin: &str, retry_count: i64, max_retries: i64) -> AgentRequestRow 
         "requester_did": "did:test:requester",
         "session_id": "session-1",
         "content": "try this",
-        "status": "error",
         "lifecycle_state": "failed",
         "execution_origin": origin,
         "retry_count": retry_count,

@@ -78,6 +78,7 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(
         lean_vocabulary_values("SessionRecoveryLatestRequestState"),
         vec![
+            "workspaceBindingPending",
             "pending",
             "claimed",
             "processing",
@@ -122,10 +123,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
         "CommandPolicy should be emitted as generated contract output, not a follow-up hook"
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 8);
-    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
+    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 100);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 9);
-    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 18);
+    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 17);
     assert_eq!(
         lean_contract_snapshot()
             .inference_slot_accounting_cases

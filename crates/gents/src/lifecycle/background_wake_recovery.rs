@@ -176,7 +176,6 @@ async fn load_candidates(
             r#"{{
                 failed: AgentRequest(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
-                    status: {{ _eq: "error" }},
                     lifecycle_state: {{ _eq: "failed" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}, order: [{{ terminalized_at: ASC }}, {{ request_id: ASC }}]) {{
@@ -191,7 +190,6 @@ async fn load_candidates(
                 }}) {{ retry_parent_request_doc_id }}
                 pending: AgentRequest(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
-                    status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }}) {{ session_id metadata }}
             }}"#
@@ -366,7 +364,7 @@ fn precondition_query(candidate: &FailedWakeRow, retry_key: &str) -> String {
         r#"{{
             source: AgentRequest(filter: {{
                 _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
-                status: {{ _eq: "error" }}, lifecycle_state: {{ _eq: "failed" }},
+                lifecycle_state: {{ _eq: "failed" }},
                 execution_origin: {{ _eq: "scheduled" }}
             }}, limit: 1) {{ _docID }}
             successor: AgentRequest(
@@ -374,7 +372,7 @@ fn precondition_query(candidate: &FailedWakeRow, retry_key: &str) -> String {
             ) {{ _docID }}
             pending: AgentRequest(filter: {{
                 session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }},
-                status: {{ _eq: "pending" }}, lifecycle_state: {{ _eq: "pending" }}
+                lifecycle_state: {{ _eq: "pending" }}
             }}) {{ metadata }}
             conversations: AgentConversation(filter: {{
                 session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }}

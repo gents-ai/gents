@@ -216,10 +216,10 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let prompt_selection = crate::skills::prompt_slash_skill_selection(content);
     let content = prompt_selection.prompt.as_str();
-    let initial_status = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
-        "workspace_binding_pending"
+    let initial_lifecycle_state = if workspace_lineage.is_some_and(WorkspaceLineage::is_bound) {
+        RequestLifecycleState::WorkspaceBindingPending
     } else {
-        "pending"
+        RequestLifecycleState::Pending
     };
     let conversation_title = conversation_title.and_then(|title| {
         let title = title.trim();
@@ -266,7 +266,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     create.metadata =
         (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string());
     create.retry_key = retry_key.map(str::to_owned);
-    create.initial_status = initial_status.to_string();
+    create.initial_lifecycle_state = initial_lifecycle_state;
     create.caused_by_trigger_id = trigger_lineage.trigger_id.clone();
     create.caused_by_trigger_kind = trigger_lineage.trigger_kind.clone();
     create.caused_by_trigger_doc_id = trigger_doc_id.map(str::to_owned);
@@ -290,7 +290,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
     Ok(create)
 }
 
-pub(crate) async fn activate_workspace_bound_request(
+pub async fn activate_workspace_bound_request(
     node: &EmbeddedNode,
     request_doc_id: &str,
 ) -> Result<()> {
@@ -299,13 +299,14 @@ pub(crate) async fn activate_workspace_bound_request(
             update_AgentRequest(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
-                    status: {{ _eq: "workspace_binding_pending" }},
-                    lifecycle_state: {{ _eq: "pending" }}
+                    lifecycle_state: {{ _eq: "{workspace_binding_pending}" }}
                 }},
-                input: {{ status: "pending" }}
+                input: {{ lifecycle_state: "{pending}" }}
             ) {{ _docID }}
         }}"#,
         doc_id = escape_graphql_string(request_doc_id),
+        workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
+        pending = RequestLifecycleState::Pending.as_str(),
     );
     let response = crate::graphql::graphql_mutation_with_transaction_retry(
         node,
@@ -316,7 +317,7 @@ pub(crate) async fn activate_workspace_bound_request(
     if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                status lifecycle_state workspace_id
+                lifecycle_state workspace_id
             }} }}"#,
             doc_id = escape_graphql_string(request_doc_id),
         );
@@ -338,9 +339,11 @@ pub(crate) async fn activate_workspace_bound_request(
                 .and_then(serde_json::Value::as_str)
                 .is_some_and(|workspace_id| !workspace_id.trim().is_empty())
                 && row
-                    .get("status")
+                    .get("lifecycle_state")
                     .and_then(serde_json::Value::as_str)
-                    .is_some_and(|status| status != "workspace_binding_pending")
+                    .is_some_and(|state| {
+                        state != RequestLifecycleState::WorkspaceBindingPending.as_str()
+                    })
         });
         if activation_already_visible {
             return Ok(());

@@ -166,7 +166,6 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   let nonLatestFailed := recoveryContext .failed .released 1 3 10 5 false
   let latestFailed := recoveryContext .failed .released 0 3 10 5 true
   let pendingLatest := recoveryContext .pending .released 1 3 10 5 true
-  let waitingFailed := recoveryContext .failed .waiting 1 3 10 5 true
   let completedLatest := recoveryContext .completed .released 1 3 10 5 true
   let deadLatest := recoveryContext .dead .released 1 3 10 5 true
   let supersededLatest := recoveryContext .superseded .released 1 3 10 5 true
@@ -221,11 +220,6 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   , recoveryCaseFromStep
       "illegal_source_not_failed"
       (recoveryPre pendingLatest pendingLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_not_released"
-      (recoveryPre waitingFailed waitingFailed 1)
       1
       2
   , recoveryCaseFromStep

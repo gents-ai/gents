@@ -180,7 +180,7 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
     let request_query = format!(
         r#"{{
             AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{
-                _docID request_id status lifecycle_state
+                _docID request_id lifecycle_state
             }}
         }}"#,
         escape_graphql_string(&parent.session_id)
@@ -202,7 +202,7 @@ async fn concurrent_notifications_converge_to_one_pending_wake() {
     assert_eq!(
         requests
             .iter()
-            .filter(|row| row["status"] == "pending" && row["lifecycle_state"] == "pending")
+            .filter(|row| row["lifecycle_state"] == "pending")
             .count(),
         1
     );

@@ -44,7 +44,6 @@ pub struct SessionHistoryRow {
     pub started_at: Option<String>,
     pub ended_at: Option<String>,
     pub latest_request_id: Option<String>,
-    pub latest_request_status: Option<String>,
     pub latest_request_lifecycle_state: Option<String>,
     pub latest_request_created_at: Option<String>,
     pub request_count: i64,
@@ -73,7 +72,6 @@ pub struct SessionInvestigationSnapshot {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionRequestEvent {
     pub request_id: String,
-    pub status: Option<String>,
     pub lifecycle_state: Option<String>,
     pub created_at: Option<String>,
     pub terminalized_at: Option<String>,
@@ -182,8 +180,6 @@ struct RequestRow {
     session_id: Option<String>,
     #[serde(default)]
     behavior_id: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
@@ -499,7 +495,6 @@ fn session_investigation_query(agent_did: &str, session_id: &str) -> String {
                 request_id
                 session_id
                 behavior_id
-                status
                 lifecycle_state
                 created_at
                 terminalized_at
@@ -631,7 +626,6 @@ fn build_session_investigation(
         .iter()
         .map(|request| SessionRequestEvent {
             request_id: clean(request.request_id.as_ref()).unwrap_or_default(),
-            status: clean(request.status.as_ref()),
             lifecycle_state: clean(request.lifecycle_state.as_ref()),
             created_at: clean(request.created_at.as_ref()),
             terminalized_at: clean(request.terminalized_at.as_ref()),
@@ -845,7 +839,6 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
                 request_id
                 session_id
                 behavior_id
-                status
                 lifecycle_state
                 created_at
             }}
@@ -935,14 +928,13 @@ fn build_session_rows(
                     .or_else(|| latest_request.and_then(|row| clean(row.behavior_id.as_ref()))),
                 status: session
                     .and_then(|row| clean(row.status.as_ref()))
-                    .or_else(|| latest_request.and_then(|row| clean(row.status.as_ref()))),
+                    .or_else(|| latest_request.and_then(|row| clean(row.lifecycle_state.as_ref()))),
                 created_at: started_at
                     .clone()
                     .or_else(|| latest_request_created_at.clone()),
                 started_at,
                 ended_at: session.and_then(|row| clean(row.ended.as_ref())),
                 latest_request_id: latest_request.and_then(|row| clean(row.request_id.as_ref())),
-                latest_request_status: latest_request.and_then(|row| clean(row.status.as_ref())),
                 latest_request_lifecycle_state: latest_request
                     .and_then(|row| clean(row.lifecycle_state.as_ref())),
                 latest_request_created_at,
@@ -1133,7 +1125,6 @@ mod tests {
                     agent_did: "did:key:z-sessions",
                     behavior_id: "behavior-a",
                     session_id: "session-a",
-                    status: "completed",
                     lifecycle_state: "completed",
                     created_at: "2026-06-03T10:00:00Z"
                 }) { _docID }
@@ -1144,7 +1135,6 @@ mod tests {
                     agent_did: "did:key:z-sessions",
                     behavior_id: "behavior-a",
                     session_id: "session-a",
-                    status: "processing",
                     lifecycle_state: "processing",
                     created_at: "2026-06-03T10:05:00Z"
                 }) { _docID }
@@ -1155,7 +1145,6 @@ mod tests {
                     agent_did: "did:key:z-sessions",
                     behavior_id: "behavior-b",
                     session_id: "session-b",
-                    status: "completed",
                     lifecycle_state: "completed",
                     created_at: "2026-06-03T11:00:00Z"
                 }) { _docID }
@@ -1166,7 +1155,6 @@ mod tests {
                     agent_did: "did:key:z-other",
                     behavior_id: "behavior-c",
                     session_id: "session-c",
-                    status: "completed",
                     lifecycle_state: "completed",
                     created_at: "2026-06-03T12:00:00Z"
                 }) { _docID }
@@ -1497,7 +1485,7 @@ mod tests {
                         agent_did: "did:key:z-sessions"
                         behavior_id: "behavior-b"
                         session_id: "session-b"
-                        status: "completed"
+                        lifecycle_state: "completed"
                         created_at: "2026-06-03T11:05:00Z"
                     }) { _docID }
                 }"#,

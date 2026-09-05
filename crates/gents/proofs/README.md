@@ -374,6 +374,7 @@ Operational meaning:
 
 States:
 
+- `workspaceBindingPending`
 - `pending`
 - `claimed`
 - `processing`
@@ -386,6 +387,9 @@ States:
 
 Operational meaning:
 
+- `workspaceBindingPending` is created bound to a workspace and not yet
+  claimable; `bindWorkspace` moves it to `pending` once the WorkspaceBinding
+  document is materialized
 - `pending` has not been claimed by a backend slot yet
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
@@ -401,17 +405,9 @@ Operational meaning:
 - `interrupted` models operator cancellation and releases admission
 - terminal states are `completed`, `failed`, `superseded`, `dead`, and `interrupted`
 
-Lean `AdmissionState` is not persisted as its own `AgentRequest` column. Rust
-bridges it through persisted request fields and runtime-owned call rows:
-`pending/released` is stored as `status="pending", lifecycle_state="pending"`;
-claimed work that is waiting or acquired is stored as
-`status="processing", lifecycle_state="claimed"`; executing work is stored as
-`status="processing", lifecycle_state="processing"` and holds capacity through a
-running `InferenceCall`; terminal released work is stored with a terminal
-`lifecycle_state` (`failed` uses `status="error"`). The desktop retry API
-therefore accepts Lean's released failed source only when the parent row is
-persisted as `lifecycle_state="failed", status="error"` and rejects the
-source-not-released witness with a non-error in-flight status.
+`AgentRequest.lifecycle_state` is the only persisted request state column;
+`RequestState.toDefraDB` is its vocabulary. Lean `AdmissionState` is bridged
+through runtime-owned `InferenceCall` rows, not a request column.
 
 ### Layer 3: Persistence Lifecycle
 

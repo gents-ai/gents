@@ -719,7 +719,6 @@ async fn create_interruptible_request_for_agent(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "child request",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "subagent",

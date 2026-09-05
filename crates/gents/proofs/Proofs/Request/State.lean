@@ -4,6 +4,7 @@ import Proofs.Scheduling
 import Proofs.ToolExecution.State
 
 inductive RequestState where
+  | workspaceBindingPending
   | pending
   | claimed
   | processing
@@ -18,6 +19,7 @@ inductive RequestState where
 namespace RequestState
 
 def toDefraDB : RequestState → String
+  | .workspaceBindingPending => "workspaceBindingPending"
   | .pending => "pending"
   | .claimed => "claimed"
   | .processing => "processing"
@@ -29,6 +31,7 @@ def toDefraDB : RequestState → String
   | .interrupted => "interrupted"
 
 def fromDefraDB? : String → Option RequestState
+  | "workspaceBindingPending" => some .workspaceBindingPending
   | "pending" => some .pending
   | "claimed" => some .claimed
   | "processing" => some .processing
@@ -54,6 +57,15 @@ instance : HasTerminal RequestState where
     | .superseded => isTrue (Or.inr (Or.inr (Or.inl rfl)))
     | .dead => isTrue (Or.inr (Or.inr (Or.inr (Or.inl rfl))))
     | .interrupted => isTrue (Or.inr (Or.inr (Or.inr (Or.inr rfl))))
+    | .workspaceBindingPending => isFalse (by intro h; cases h with
+        | inl h => exact absurd h (by decide)
+        | inr h => cases h with
+          | inl h => exact absurd h (by decide)
+          | inr h => cases h with
+            | inl h => exact absurd h (by decide)
+            | inr h => cases h with
+              | inl h => exact absurd h (by decide)
+              | inr h => exact absurd h (by decide))
     | .pending => isFalse (by intro h; cases h with
         | inl h => exact absurd h (by decide)
         | inr h => cases h with
@@ -118,6 +130,7 @@ structure RequestContext where
 namespace RequestContext
 
 def coherentStateAdmission : RequestState → AdmissionState → Prop
+  | .workspaceBindingPending, a => a = .released
   | .pending, a => a = .released
   | .claimed, a => a = .waiting ∨ a = .acquired
   | .processing, a => a = .executing
@@ -169,6 +182,7 @@ def releaseToTerminal (r : RequestContext) (terminal : RequestState) : RequestCo
   | .superseded => { r with state := .superseded, admission := .released }
   | .dead => { r with state := .dead, admission := .released }
   | .interrupted => { r with state := .interrupted, admission := .released }
+  | .workspaceBindingPending => { r with admission := .released }
   | .pending => { r with admission := .released }
   | .claimed => { r with admission := .released }
   | .processing => { r with admission := .released }

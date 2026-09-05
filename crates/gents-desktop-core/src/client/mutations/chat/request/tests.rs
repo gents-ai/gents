@@ -25,7 +25,6 @@ struct RecoveryPreState {
 
 #[derive(Debug)]
 struct ForcedRequestState {
-    status: &'static str,
     lifecycle_state: String,
     deadline: String,
     backend_id: String,
@@ -52,7 +51,6 @@ struct RecoveryRequestRow {
     max_tokens: Option<i64>,
     max_total_tokens: Option<i64>,
     metadata: Option<String>,
-    status: String,
     lifecycle_state: String,
     #[serde(deserialize_with = "null_string_default")]
     backend_id: String,
@@ -264,7 +262,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
     let illegal_count = cases.len() - legal_count;
     assert_eq!(
         (legal_count, illegal_count),
-        (2, 16),
+        (2, 15),
         "Lean SessionRecovery case split changed; update this desktop driver before bumping"
     );
 
@@ -452,7 +450,6 @@ async fn seed_session_recovery_pre_state(
         failed_request_id.clone()
     };
 
-    let expected_parent_status = retry_parent_status_for_case(case);
     if let Some(failed) = failed.as_ref() {
         force_request_state_for_test(
             core.node(),
@@ -482,12 +479,6 @@ async fn seed_session_recovery_pre_state(
             parent.lifecycle_state.as_deref(),
             Some(case.pre_failed_state.as_str()),
             "seeded retry parent lifecycle must match Lean witness for {}",
-            case.name
-        );
-        assert_eq!(
-            parent.status.as_deref(),
-            Some(expected_parent_status),
-            "seeded retry parent admission/status must match Lean witness for {}",
             case.name
         );
         assert_eq!(
@@ -593,7 +584,6 @@ fn synthetic_missing_retry_parent(
         max_tokens: None,
         max_total_tokens: None,
         metadata: None,
-        status: Some(retry_parent_status_for_case(case).to_string()),
         lifecycle_state: Some(case.pre_failed_state.clone()),
         backend_id: Some(case.pre_backend.clone()),
         execution_origin: Some(case.pre_origin.clone()),
@@ -684,7 +674,6 @@ async fn assert_legal_session_recovery_post_state(
         new_request.content,
         pre.parent.content.as_deref().unwrap_or_default()
     );
-    assert_eq!(new_request.status, "pending");
     assert_eq!(new_request.lifecycle_state, case.post_new_state);
     assert_eq!(new_request.retry_parent_request, pre.failed_request_id);
     assert_eq!(new_request.retry_root_request, pre.failed_request_id);
@@ -699,7 +688,6 @@ async fn assert_legal_session_recovery_post_state(
 
     let failed_request = fetch_request_row_for_test(core.node(), &pre.failed_request_id).await?;
     assert_eq!(failed_request.lifecycle_state, case.post_failed_state);
-    assert_eq!(failed_request.status, retry_parent_status_for_case(case));
     assert_eq!(failed_request.retry_count, case.pre_retry_count as i64);
     assert_eq!(failed_request.backend_id, case.pre_backend);
     assert_eq!(failed_request.execution_origin, case.pre_origin);
@@ -785,7 +773,6 @@ async fn retry_request_with_id_injection_for_test(
 
 fn forced_retry_parent_state(case: &LeanSessionRecoveryCase) -> ForcedRequestState {
     ForcedRequestState {
-        status: retry_parent_status_for_case(case),
         lifecycle_state: case.pre_failed_state.clone(),
         deadline: recovery_deadline_for_case(case),
         backend_id: case.pre_backend.clone(),
@@ -803,32 +790,9 @@ fn recovery_deadline_for_case(case: &LeanSessionRecoveryCase) -> String {
 
 fn forced_latest_request_state(case: &LeanSessionRecoveryCase) -> ForcedRequestState {
     ForcedRequestState {
-        status: status_for_lifecycle_state(&case.pre_latest_state),
         lifecycle_state: case.pre_latest_state.clone(),
         deadline: (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
         backend_id: case.pre_backend.clone(),
-    }
-}
-
-fn retry_parent_status_for_case(case: &LeanSessionRecoveryCase) -> &'static str {
-    if case.pre_failed_state != "failed" {
-        status_for_lifecycle_state(&case.pre_failed_state)
-    } else if case.pre_failed_admission == "released" {
-        "error"
-    } else {
-        "processing"
-    }
-}
-
-fn status_for_lifecycle_state(lifecycle_state: &str) -> &'static str {
-    match lifecycle_state {
-        "failed" => "error",
-        "pending" => "pending",
-        "completed" => "completed",
-        "superseded" => "superseded",
-        "dead" => "dead",
-        "interrupted" => "interrupted",
-        _ => "processing",
     }
 }
 
@@ -860,8 +824,8 @@ fn expected_illegal_guard_fragment(case: &LeanSessionRecoveryCase) -> &'static s
     // precedence deliberately.
     if !case.pre_failed_exists {
         "not found"
-    } else if case.pre_failed_state != "failed" || case.pre_failed_admission != "released" {
-        "failed/error"
+    } else if case.pre_failed_state != "failed" {
+        "must be failed"
     } else if case.pre_origin != "interactive" {
         "must be interactive"
     } else if case.pre_retry_count >= case.max_retries {
@@ -910,7 +874,6 @@ async fn fetch_request_row_for_test(
                         max_tokens
                         max_total_tokens
                         metadata
-                        status
                         lifecycle_state
                         backend_id
                         execution_origin
@@ -943,7 +906,7 @@ async fn latest_request_id_for_session_for_test(
                     ) {{
                         _docID request_id agent_did behavior_id session_id content
                         temperature top_p top_k seed max_tokens max_total_tokens metadata
-                        status lifecycle_state backend_id execution_origin retry_root_request
+                        lifecycle_state backend_id execution_origin retry_root_request
                         retry_parent_request retry_parent_request_doc_id retry_count max_retries
                     }}
                 }}"#
@@ -1142,7 +1105,6 @@ async fn force_request_state_for_test(
     state: &ForcedRequestState,
 ) -> Result<()> {
     let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_status = escape_graphql_string(state.status);
     let escaped_lifecycle_state = escape_graphql_string(&state.lifecycle_state);
     let escaped_deadline = escape_graphql_string(&state.deadline);
     let escaped_backend_id = escape_graphql_string(&state.backend_id);
@@ -1151,7 +1113,6 @@ async fn force_request_state_for_test(
                 update_AgentRequest(
                     filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                     input: {{
-                        status: "{escaped_status}",
                         lifecycle_state: "{escaped_lifecycle_state}",
                         deadline: "{escaped_deadline}",
                         backend_id: "{escaped_backend_id}"
@@ -1194,7 +1155,6 @@ async fn retry_request_with_injected_id_rejects_duplicate_new_request_id() -> Re
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     force_retry_parent_eligible_for_test(core.node(), &original.request_id, &deadline.to_rfc3339())
         .await?;
-    parent.status = Some("error".to_string());
     parent.lifecycle_state = Some("failed".to_string());
     parent.deadline = Some(deadline.to_rfc3339());
     parent.retry_count = Some(0);
@@ -1367,7 +1327,6 @@ async fn force_retry_parent_eligible_for_test(
                 update_AgentRequest(
                     filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                     input: {{
-                        status: "error",
                         lifecycle_state: "failed",
                         deadline: "{escaped_deadline}"
                     }}

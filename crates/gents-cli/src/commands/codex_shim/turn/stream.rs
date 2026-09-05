@@ -499,8 +499,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                     "content": null,
                 })
             });
-            let should_wait_for_materialized_content =
-                matches!(response_status, "complete" | "completed")
+            let should_wait_for_materialized_content = matches!(response_status, "complete" | "completed") // AgentResponse.status
                     && response_field_is_blank(&terminal_response, "content")
                     && terminal_response
                         .get("materialized_message_sequence")

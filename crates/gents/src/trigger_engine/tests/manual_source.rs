@@ -149,7 +149,6 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
                 caused_by_trigger_kind
                 caused_by_source_doc_id
                 execution_origin
-                status
                 lifecycle_state
                 content
             }}
@@ -191,14 +190,10 @@ async fn production_materializer_accepts_manual_lineage_end_to_end() {
         "Manual fires map to ExecutionOrigin::Interactive per spec: {row}"
     );
     assert_eq!(
-        row.get("status").and_then(|v| v.as_str()),
-        Some("pending"),
-        "Production materializer should enqueue Manual fires for normal intake: {row}"
-    );
-    assert_eq!(
         row.get("lifecycle_state").and_then(|v| v.as_str()),
         Some("pending"),
-        "Production materializer should leave Manual fires pending until daemon claim: {row}"
+        "Production materializer should enqueue Manual fires for normal intake and leave \
+         them pending until daemon claim: {row}"
     );
     assert_eq!(
         row.get("content").and_then(|v| v.as_str()),

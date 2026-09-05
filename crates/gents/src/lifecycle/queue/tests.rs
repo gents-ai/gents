@@ -27,7 +27,6 @@ struct QueueRow {
     behavior_id: String,
     content: String,
     metadata: Option<String>,
-    status: String,
     lifecycle_state: Option<String>,
     execution_origin: String,
     superseded_by_request: Option<String>,
@@ -141,7 +140,6 @@ async fn queue_rows(node: &EmbeddedNode, session_id: &str) -> Vec<QueueRow> {
                 behavior_id
                 content
                 metadata
-                status
                 lifecycle_state
                 execution_origin
                 superseded_by_request
@@ -192,7 +190,6 @@ async fn insert_raw_queue_request(
                 superseded_by_request: "",
                 content: "raw duplicate",
                 metadata: "{escaped_metadata}",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "scheduled",

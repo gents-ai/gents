@@ -369,7 +369,6 @@ async fn create_local_processing_request(
                 superseded_by_request: "",
                 content: "local subagent cancel fixture",
                 metadata: "",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "{execution_origin}",

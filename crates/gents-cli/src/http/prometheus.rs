@@ -1193,8 +1193,9 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
     families
 }
 
+/// InferenceCall.call_state vocabulary, not AgentRequest.lifecycle_state.
 fn is_terminal_inference_status(status: &str) -> bool {
-    matches!(status.trim(), "completed" | "failed" | "cancelled")
+    matches!(status.trim(), "failed" | "completed" | "cancelled")
 }
 
 fn clean_metric_label(value: &str) -> Option<String> {
@@ -1233,7 +1234,6 @@ pub(crate) async fn load_metrics_query_data(
                 last_probe
             }
             AgentRequest(filter: {
-                status: { _eq: "processing" },
                 lifecycle_state: { _eq: "processing" }
             }) {
                 request_id

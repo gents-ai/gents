@@ -48,7 +48,6 @@ async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) 
         r#"{{
             AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{
                 content
-                status
                 lifecycle_state
                 execution_origin
                 caused_by_trigger_id
@@ -128,11 +127,6 @@ async fn manual_run_materializes_agent_request_with_lineage() {
         row["lifecycle_state"].as_str(),
         Some("pending"),
         "manual runs must land at lifecycle_state=pending"
-    );
-    assert_eq!(
-        row["status"].as_str(),
-        Some("pending"),
-        "manual runs must land at status=pending"
     );
     assert_eq!(
         row["content"].as_str(),

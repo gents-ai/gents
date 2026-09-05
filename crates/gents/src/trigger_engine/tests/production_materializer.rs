@@ -106,7 +106,7 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
     let query = format!(
         r#"{{
             AgentRequest(filter: {{ retry_key: {{ _eq: "{}" }} }}) {{
-                request_id agent_did session_id retry_key status lifecycle_state content
+                request_id agent_did session_id retry_key lifecycle_state content
                 caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
                 caused_by_source_doc_id caused_by_correlation admission_kind
                 runtime_source_request_id runtime_source_kind
@@ -155,7 +155,6 @@ async fn goal_task_materialization_is_atomic_and_idempotent_for_one_durable_fire
         request["retry_key"].as_str(),
         Some(identity.retry_key.as_str())
     );
-    assert_eq!(request["status"].as_str(), Some("pending"));
     assert_eq!(request["lifecycle_state"].as_str(), Some("pending"));
     assert_eq!(request["content"].as_str(), Some("implement release"));
     assert_eq!(
@@ -301,7 +300,6 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
                 session_id: "{}",
                 retry_key: "{}",
                 content: "foreign collision",
-                status: "pending",
                 lifecycle_state: "pending"
             }}) {{ _docID }}
         }}"#,
@@ -346,7 +344,6 @@ async fn create_request(
                 request_id: "{request_id}",
                 agent_did: "{agent_did}",
                 content: "production marker test",
-                status: "{lifecycle_state}",
                 lifecycle_state: "{lifecycle_state}",
                 caused_by_trigger_id: "{trigger_id}",
                 caused_by_trigger_kind: "{trigger_kind}",
@@ -669,7 +666,6 @@ async fn workspace_requests(
         r#"{{
             AgentRequest(filter: {{ workspace_id: {{ _eq: "{id}" }} }}) {{
                 request_id
-                status
                 lifecycle_state
                 workspace_owner_deployment_id
                 workspace_authority
@@ -833,7 +829,7 @@ async fn goal_task_workspace_activation_retry_is_idempotent() {
     assert_eq!(retry, first);
     let rows = workspace_requests(node.as_ref(), "ws-goal-retry").await;
     assert_eq!(rows.len(), 1, "retry must reuse the staged request");
-    assert_eq!(rows[0]["status"].as_str(), Some("pending"));
+    assert_eq!(rows[0]["lifecycle_state"].as_str(), Some("pending"));
 }
 
 #[tokio::test]
@@ -885,16 +881,13 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
     assert_eq!(rows.len(), 2, "{rows:?}");
     let claimable = rows
         .iter()
-        .filter(|row| {
-            row["status"].as_str() == Some("pending")
-                && row["lifecycle_state"].as_str() == Some("pending")
-        })
+        .filter(|row| row["lifecycle_state"].as_str() == Some("pending"))
         .collect::<Vec<_>>();
     assert_eq!(claimable.len(), 1, "{rows:?}");
     assert_eq!(claimable[0]["request_id"].as_str(), Some(first.as_str()));
     assert_eq!(
         rows.iter()
-            .filter(|row| row["status"].as_str() == Some("workspace_binding_pending"))
+            .filter(|row| row["lifecycle_state"].as_str() == Some("workspaceBindingPending"))
             .count(),
         1,
         "{rows:?}"

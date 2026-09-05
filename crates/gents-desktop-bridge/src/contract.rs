@@ -9,6 +9,9 @@ use crate::error::BridgeErrorCode;
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
 // 6.0: breaking — exact-version matching, single-owner client state, and
 //      compatibility aliases removed; includes the 5.2 goal save fields.
+//      Also in 6.0: AgentRequest.status is removed; request state is carried
+//      solely by lifecycle_state (RequestLifecycleState). SubagentNodeView,
+//      TaskRunResult, and TaskRunSummaryView drop their status fields.
 // 5.2: additive — goal capability and Task goal save fields may be omitted to
 //      preserve stored values; explicit null clears the override/declaration.
 // 5.1: additive — durable-goal tool capabilities and Task declarations.
@@ -46,7 +49,7 @@ pub const CONTRACT_VERSION: &str = "6.0";
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "bc2cb1e3ebc4879b73fcca4dd171d381a19a10f92152fe64fb54fea16b51ae34";
+    "fd48a0586b813346e3c25e0efc4af410d40e625701bd73cc792f842a7074fb9b";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");

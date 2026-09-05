@@ -167,7 +167,6 @@ async fn create_pending_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "test prompt",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",

@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
+use gents_protocol::client_protocol::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::watch;
@@ -147,19 +148,24 @@ async fn watch_loaded_root_continuations(
             if !continuation_request_has_started(lifecycle_state) {
                 continue;
             }
-            if lifecycle_state == "superseded" {
+            if RequestLifecycleState::parse_opt(Some(lifecycle_state))
+                == Some(RequestLifecycleState::Superseded)
+            {
                 observed.insert(request.request_id);
                 continue;
             }
 
             let baseline_turn = baseline_turns.remove(&request.request_id);
             if baseline_turn_is_terminal(baseline_turn.as_ref())
-                && request_is_terminal(lifecycle_state)
+                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
             {
                 observed.insert(request.request_id);
                 continue;
             }
-            if !initialized && suppress_existing_terminal && request_is_terminal(lifecycle_state) {
+            if !initialized
+                && suppress_existing_terminal
+                && RequestLifecycleState::is_terminal_str(Some(lifecycle_state))
+            {
                 observed.insert(request.request_id);
                 continue;
             }
@@ -433,13 +439,11 @@ pub(super) fn is_background_completion_metadata(metadata: Option<&str>) -> bool 
 }
 
 fn continuation_request_has_started(lifecycle_state: &str) -> bool {
-    !matches!(lifecycle_state.trim(), "" | "pending")
-}
-
-fn request_is_terminal(lifecycle_state: &str) -> bool {
-    matches!(
-        lifecycle_state.trim(),
-        "completed" | "failed" | "dead" | "interrupted" | "superseded"
+    !matches!(
+        RequestLifecycleState::parse_opt(Some(lifecycle_state.trim())),
+        None | Some(
+            RequestLifecycleState::Pending | RequestLifecycleState::WorkspaceBindingPending
+        )
     )
 }
 
@@ -451,9 +455,10 @@ fn baseline_turn_is_terminal(turn: Option<&codex::Turn>) -> bool {
 mod tests {
     use super::{
         baseline_turn_is_terminal, continuation_request_has_started,
-        is_background_completion_metadata, request_is_terminal, turn_value_with_timing,
+        is_background_completion_metadata, turn_value_with_timing,
     };
     use gents_codex_protocol as codex;
+    use gents_protocol::client_protocol::RequestLifecycleState;
 
     #[test]
     fn recognizes_only_the_canonical_background_completion_source() {
@@ -475,10 +480,11 @@ mod tests {
     #[test]
     fn pending_wakes_are_not_announced_before_the_runtime_claims_them() {
         assert!(!continuation_request_has_started("pending"));
+        assert!(!continuation_request_has_started("workspaceBindingPending"));
         assert!(continuation_request_has_started("claimed"));
         assert!(continuation_request_has_started("processing"));
-        assert!(request_is_terminal("completed"));
-        assert!(request_is_terminal("interrupted"));
+        assert!(RequestLifecycleState::is_terminal_str(Some("completed")));
+        assert!(RequestLifecycleState::is_terminal_str(Some("interrupted")));
     }
 
     #[test]

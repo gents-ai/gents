@@ -71,7 +71,6 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
                     behavior_id: "general"
                     session_id: "invalid-origin-route-session"
                     content: "hostile"
-                    status: "pending"
                     lifecycle_state: "pending"
                     created_at: "2026-09-03T00:00:00Z"
                 }) { _docID }
@@ -129,7 +128,7 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
                 AgentRequest(
                     filter: { request_id: { _eq: "invalid-origin-route-request" } }
                     limit: 1
-                ) { status lifecycle_state failure_reason }
+                ) { lifecycle_state failure_reason }
             }"#,
         )
         .await;
@@ -145,7 +144,6 @@ async fn invalid_execution_origin_route_rejection_terminalizes_without_stopping_
         .and_then(|rows| rows.as_array())
         .and_then(|rows| rows.first())
         .expect("terminal request row");
-    assert_eq!(row.get("status").and_then(Value::as_str), Some("error"));
     assert_eq!(
         row.get("lifecycle_state").and_then(Value::as_str),
         Some("failed")

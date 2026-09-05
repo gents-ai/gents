@@ -12,6 +12,7 @@ use gents::{
     graphql::escape_graphql_string, ConfigAccess, DescendantGraphAccess, DescendantQuery,
     MAX_DESCENDANT_PAGE_LIMIT,
 };
+use gents_protocol::client_protocol::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,16 +21,6 @@ use crate::{http::router::RuntimeHttpState, post_graphql};
 const SNAPSHOT_SOURCE: &str = "graphql.subagent_tree";
 const DEFAULT_MAX_DEPTH: usize = 8;
 const HARD_MAX_DEPTH: usize = 32;
-const TERMINAL_STATES: &[&str] = &[
-    "completed",
-    "failed",
-    "error",
-    "timedout",
-    "cancelled",
-    "interrupted",
-    "superseded",
-    "dead",
-];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +41,6 @@ pub(crate) struct SubagentTreeNode {
     pub(crate) agent_did: Option<String>,
     pub(crate) behavior_id: Option<String>,
     pub(crate) lifecycle_state: Option<String>,
-    pub(crate) status: Option<String>,
     pub(crate) subagent_depth: Option<i64>,
     pub(crate) caused_by_parent_request_id: Option<String>,
     pub(crate) caused_by_parent_tool_call_id: Option<String>,
@@ -95,8 +85,6 @@ struct RequestRow {
     behavior_id: Option<String>,
     #[serde(default)]
     lifecycle_state: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
     #[serde(default)]
     subagent_depth: Option<i64>,
     #[serde(default)]
@@ -188,7 +176,6 @@ pub(crate) async fn load_subagent_tree_snapshot(
                     agent_did: edge.principal_did.clone(),
                     behavior_id: edge.behavior_id.clone(),
                     lifecycle_state: Some(edge.lifecycle_state.clone()),
-                    status: Some(edge.lifecycle_state.clone()),
                     subagent_depth: Some(edge.depth as i64),
                     caused_by_parent_request_id: Some(edge.immediate_parent_request_id.clone()),
                     caused_by_parent_tool_call_id: Some(edge.immediate_parent_tool_call_id.clone()),
@@ -240,7 +227,6 @@ fn request_row_into_node(row: RequestRow) -> SubagentTreeNode {
         agent_did: clean_optional_string(row.agent_did.as_deref()),
         behavior_id: clean_optional_string(row.behavior_id.as_deref()),
         lifecycle_state: clean_optional_string(row.lifecycle_state.as_deref()),
-        status: clean_optional_string(row.status.as_deref()),
         subagent_depth: row.subagent_depth,
         caused_by_parent_request_id: clean_optional_string(
             row.caused_by_parent_request_id.as_deref(),
@@ -264,7 +250,6 @@ async fn fetch_root_request(graphql: &str, root_request_id: &str) -> Result<Opti
                 agent_did
                 behavior_id
                 lifecycle_state
-                status
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
@@ -307,7 +292,7 @@ fn prune_terminal_subtrees(
     ) -> bool {
         let live_self = nodes
             .get(request_id)
-            .map(|node| !lifecycle_is_terminal(node.lifecycle_state.as_deref()))
+            .map(|node| !RequestLifecycleState::is_terminal_str(node.lifecycle_state.as_deref()))
             .unwrap_or(false);
         let mut keep_self = live_self;
         if let Some(child_ids) = children.get(request_id) {
@@ -329,14 +314,6 @@ fn prune_terminal_subtrees(
     edges.retain(|edge| {
         keep.contains(&edge.parent_request_id) && keep.contains(&edge.child_request_id)
     });
-}
-
-fn lifecycle_is_terminal(value: Option<&str>) -> bool {
-    let Some(value) = value else {
-        return false;
-    };
-    let value = value.trim().to_ascii_lowercase();
-    TERMINAL_STATES.iter().any(|terminal| value == *terminal)
 }
 
 fn clean_optional_string(value: Option<&str>) -> Option<String> {
@@ -437,7 +414,6 @@ mod tests {
                         "agent_did": "deployment-a",
                         "behavior_id": "amy-general",
                         "lifecycle_state": "Processing",
-                        "status": "processing",
                         "subagent_depth": 0,
                         "caused_by_parent_request_id": null,
                         "caused_by_parent_tool_call_id": null
@@ -454,7 +430,6 @@ mod tests {
         agent_did: &str,
         behavior_id: &str,
         lifecycle_state: &str,
-        status: &str,
     ) -> Value {
         json!({
             "data": { "AgentRequest": [{
@@ -464,7 +439,6 @@ mod tests {
                 "requester_did": null,
                 "behavior_id": behavior_id,
                 "session_id": session_id,
-                "status": status,
                 "lifecycle_state": lifecycle_state,
                 "caused_by_parent_request_id": null,
                 "caused_by_parent_request_doc_id": null,
@@ -532,7 +506,6 @@ mod tests {
             "requester_did": null,
             "behavior_id": behavior_id,
             "session_id": session_id,
-            "status": lifecycle_state,
             "lifecycle_state": lifecycle_state,
             "caused_by_parent_request_id": parent_request_id,
             "caused_by_parent_request_doc_id": parent_doc_id,
@@ -562,7 +535,6 @@ mod tests {
                 "sess-root",
                 "deployment-a",
                 "amy-general",
-                "processing",
                 "processing",
             ),
             canonical_bridges_response(vec![canonical_bridge_row(
@@ -647,7 +619,6 @@ mod tests {
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
                         "lifecycle_state": "Processing",
-                        "status": "processing",
                         "subagent_depth": 0
                     }
                 ]
@@ -659,7 +630,6 @@ mod tests {
             "sess-root",
             "deployment-a",
             "amy-general",
-            "processing",
             "processing",
         );
         let canonical_level_one = canonical_bridges_response(vec![canonical_bridge_row(
@@ -772,7 +742,6 @@ mod tests {
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
                         "lifecycle_state": "Processing",
-                        "status": "processing",
                         "subagent_depth": 0
                     }
                 ]
@@ -784,7 +753,6 @@ mod tests {
             "sess-root",
             "deployment-a",
             "amy-general",
-            "processing",
             "processing",
         );
         let bridges = canonical_bridges_response(vec![

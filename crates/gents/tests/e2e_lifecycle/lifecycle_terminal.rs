@@ -61,12 +61,11 @@ async fn missing_conversation_projection_does_not_block_terminal_request() {
             r#"{
                 AgentRequest(
                     filter: { request_id: { _eq: "req-missing-terminal-projection" } }
-                ) { status lifecycle_state }
+                ) { lifecycle_state }
             }"#,
         )
         .await;
     let request = first_row::<serde_json::Value>(&response, "AgentRequest");
-    assert_eq!(request["status"], "completed");
     assert_eq!(request["lifecycle_state"], "completed");
 }
 

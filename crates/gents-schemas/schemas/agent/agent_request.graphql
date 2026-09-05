@@ -30,7 +30,6 @@ type AgentRequest @branchable {
     max_tokens: Int @immutable
     max_total_tokens: Int @immutable
     metadata: String @immutable
-    status: String @index
     lifecycle_state: String @index
     backend_id: String @index
     execution_origin: String @immutable

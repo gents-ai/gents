@@ -175,10 +175,9 @@ async fn drive_streaming_response_idle_timeout_case(
     assert_eq!(live_tail_shape(&pre_response), case.pre_live_tail);
     assert!(pre_response.token_count > 0);
 
-    let pre_request =
+    let _pre_request =
         wait_for_request_lifecycle_state_realtime(db.node.as_ref(), &request_doc_id, "processing")
             .await;
-    assert_eq!(pre_request.status, "processing");
     let pre_call =
         wait_for_latest_inference_call_state_realtime(db.node.as_ref(), &request_id, "running")
             .await;
@@ -225,7 +224,6 @@ async fn drive_streaming_response_idle_timeout_case(
             .expect("idle timeout case should project a request state"),
     )
     .await;
-    assert_eq!(post_request.status, "error");
     assert_eq!(post_request.backend_id, IDLE_TIMEOUT_BACKEND_ID);
     assert!(request_state_is_terminal(&post_request.lifecycle_state));
     assert!(
@@ -475,7 +473,6 @@ async fn drive_streaming_response_interrupt_flow_case(
 
     let post_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
     assert_eq!(post_request.lifecycle_state, case.post_request_state);
-    assert_eq!(post_request.status, case.post_request_state);
     assert_eq!(
         request_state_is_terminal(&post_request.lifecycle_state),
         case.request_terminal
@@ -778,17 +775,6 @@ async fn assert_request_bridge_shape(
         snapshot.lifecycle_state.as_str(),
         expected_state,
         "{}: request lifecycle_state",
-        case.name
-    );
-    let expected_status = match expected_state {
-        "completed" => "completed",
-        "failed" => "error",
-        other => other,
-    };
-    assert_eq!(
-        snapshot.status.as_str(),
-        expected_status,
-        "{}: request status",
         case.name
     );
     assert_eq!(

@@ -264,7 +264,6 @@ pub async fn wait_for_request_lifecycle_state(
                     limit: 1
                 ) {{
                     request_id
-                    status
                     lifecycle_state
                     interrupt_requested_at
                     failure_reason

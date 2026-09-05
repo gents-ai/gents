@@ -385,7 +385,6 @@ async fn compaction_entry_stores_exact_request_document_edge() {
                     agent_did: "did:test:test",
                     session_id: "session-exact-edge",
                     content: "compact me",
-                    status: "processing",
                     lifecycle_state: "processing",
                     created_at: "{created_at}"
                 }}) {{ _docID }}

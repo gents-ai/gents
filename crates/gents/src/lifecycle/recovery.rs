@@ -47,16 +47,15 @@ impl RequestLifecycle {
     /// `agent_did` MUST be the runtime's own DID: only the owner re-asserts its
     /// own documents; peers stay passive (a peer-authored delta to a foreign doc
     /// would fork the CRDT, not converge it). `agent_did` itself is never
-    /// written (it is `@immutable`); only the mutable terminal `status`,
-    /// `lifecycle_state`, and bounded attempt counter are written together in
-    /// one document update.
+    /// written (it is `@immutable`); only the mutable terminal `lifecycle_state`
+    /// and bounded attempt counter are written together in one document update.
     ///
     pub async fn redrive_terminal_convergence(
         node: &EmbeddedNode,
         agent_did: &str,
     ) -> Result<TerminalRedriveReport> {
         let escaped_agent_did = escape_graphql_string(agent_did);
-        let terminal_states = crate::lifecycle::terminal_lifecycle_state_graphql_list();
+        let terminal_states = RequestLifecycleState::terminal_graphql_list();
         let query = format!(
             r#"{{
                 AgentRequest(
@@ -71,7 +70,6 @@ impl RequestLifecycle {
                 ) {{
                     _docID
                     request_id
-                    status
                     lifecycle_state
                     terminal_redrive_attempts
                 }}
@@ -93,11 +91,10 @@ impl RequestLifecycle {
             .cloned()
             .unwrap_or_default();
 
-        let mut candidates: Vec<(String, String, String, String, u32)> = Vec::new();
+        let mut candidates: Vec<(String, String, String, u32)> = Vec::new();
         for row in &rows {
             let doc_id = row.get("_docID").and_then(|v| v.as_str()).unwrap_or("");
             let request_id = row.get("request_id").and_then(|v| v.as_str()).unwrap_or("");
-            let status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
             let lifecycle_state = row
                 .get("lifecycle_state")
                 .and_then(|v| v.as_str())
@@ -106,13 +103,12 @@ impl RequestLifecycle {
                 .get("terminal_redrive_attempts")
                 .and_then(|value| value.as_u64())
                 .unwrap_or(TERMINAL_REDRIVE_CAP as u64) as u32;
-            if doc_id.is_empty() || status.is_empty() || lifecycle_state.is_empty() {
+            if doc_id.is_empty() || lifecycle_state.is_empty() {
                 continue;
             }
             candidates.push((
                 doc_id.to_string(),
                 request_id.to_string(),
-                status.to_string(),
                 lifecycle_state.to_string(),
                 attempts,
             ));
@@ -121,10 +117,9 @@ impl RequestLifecycle {
         let scanned = candidates.len();
         let mut reasserted = 0usize;
         let mut failed = 0usize;
-        for (doc_id, request_id, status, lifecycle_state, attempts) in &candidates {
+        for (doc_id, request_id, lifecycle_state, attempts) in &candidates {
             let next_attempts = attempts.saturating_add(1);
             let escaped_doc_id = escape_graphql_string(doc_id);
-            let escaped_status = escape_graphql_string(status);
             let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
             // Defense-in-depth: the candidate query is already `agent_did == self`
             // scoped, but keep the mutation itself owner-scoped too, matching the
@@ -140,7 +135,6 @@ impl RequestLifecycle {
                             terminal_redrive_attempts: {{ _eq: {attempts} }}
                         }},
                         input: {{
-                            status: "{escaped_status}",
                             lifecycle_state: "{escaped_lifecycle_state}",
                             terminal_redrive_attempts: {next_attempts}
                         }}
@@ -158,7 +152,7 @@ impl RequestLifecycle {
                 tracing::warn!(
                     doc_id = %doc_id,
                     request_id = %request_id,
-                    status = %status,
+                    lifecycle_state = %lifecycle_state,
                     errors = ?resp.errors,
                     "failed to re-drive terminal request convergence"
                 );
@@ -178,7 +172,6 @@ impl RequestLifecycle {
             tracing::debug!(
                 doc_id = %doc_id,
                 request_id = %request_id,
-                status = %status,
                 lifecycle_state = %lifecycle_state,
                 terminal_redrive_attempts = next_attempts,
                 "re-asserted terminal request state to converge replicas"
@@ -197,10 +190,11 @@ impl RequestLifecycle {
         agent_did: &str,
     ) -> Result<TerminalRepairReport> {
         // Key the stale predicate on `lifecycle_state ∈ {claimed, processing}` to
-        // mirror the Lean `Recovery.requestRecoveryStale` model exactly, rather than
-        // on the coarser `status = "processing"`. A stuck `claimed` own-request is
-        // now recovered even if its `status` is not `"processing"`.
-        let stale_states = crate::lifecycle::stuck_request_lifecycle_state_graphql_list();
+        // mirror the Lean `Recovery.requestRecoveryStale` model exactly.
+        let stale_states = RequestLifecycleState::graphql_list([
+            RequestLifecycleState::Claimed,
+            RequestLifecycleState::Processing,
+        ]);
         let escaped_agent_did = escape_graphql_string(agent_did);
         let query = format!(
             r#"{{
@@ -261,25 +255,28 @@ impl RequestLifecycle {
                 .interrupted_at
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty());
-            let (next_status, next_lifecycle_state) =
+            let next_lifecycle_state =
                 if matches!(response_status.as_str(), "complete" | "completed") {
-                    ("completed", PersistedLifecycleState::Completed.as_str())
+                    RequestLifecycleState::Completed
                 } else if response_was_interrupted {
-                    ("interrupted", PersistedLifecycleState::Interrupted.as_str())
+                    RequestLifecycleState::Interrupted
                 } else {
-                    ("error", PersistedLifecycleState::Failed.as_str())
+                    RequestLifecycleState::Failed
                 };
             let terminalized_at = chrono::Utc::now().to_rfc3339();
             let escaped_terminalized_at = escape_graphql_string(&terminalized_at);
             let escaped_doc_id = escape_graphql_string(doc_id);
             let failure_reason = match next_lifecycle_state {
-                state if state == PersistedLifecycleState::Completed.as_str() => "",
-                state if state == PersistedLifecycleState::Interrupted.as_str() => "interrupted",
+                RequestLifecycleState::Completed => "",
+                RequestLifecycleState::Interrupted => "interrupted",
                 _ => response_reason,
             };
             let escaped_failure_reason = escape_graphql_string(failure_reason);
             let escaped_agent_did = escape_graphql_string(agent_did);
-            let stale_states = crate::lifecycle::stuck_request_lifecycle_state_graphql_list();
+            let stale_states = RequestLifecycleState::graphql_list([
+                RequestLifecycleState::Claimed,
+                RequestLifecycleState::Processing,
+            ]);
 
             let mutation = format!(
                 r#"mutation {{
@@ -290,7 +287,6 @@ impl RequestLifecycle {
                         lifecycle_state: {{ _in: {stale_states} }}
                     }},
                     input: {{
-                        status: "{next_status}",
                         lifecycle_state: "{next_lifecycle_state}",
                         failure_reason: "{escaped_failure_reason}",
                         terminalized_at: "{escaped_terminalized_at}",
@@ -299,12 +295,11 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#,
             );
-            let conversation_status =
-                if next_lifecycle_state == PersistedLifecycleState::Completed.as_str() {
-                    "completed"
-                } else {
-                    "active"
-                };
+            let conversation_status = if next_lifecycle_state == RequestLifecycleState::Completed {
+                "completed"
+            } else {
+                "active"
+            };
             let conversation_mutation = session::request_conversation_status_projection_mutation(
                 session_id,
                 request_id,
@@ -325,7 +320,7 @@ impl RequestLifecycle {
                         doc_id = %doc_id,
                         request_id = %request_id,
                         session_id = %session_id,
-                        next_status = %next_status,
+                        next_lifecycle_state = %next_lifecycle_state,
                         response_status = %response_status,
                         error = %error,
                         "failed to recover stuck request"
@@ -348,7 +343,7 @@ impl RequestLifecycle {
                         session_id = %session_id,
                         retry_count = retry_count,
                         response_status = %response_status,
-                        "recovered stuck request: processing → {next_status}"
+                        "recovered stuck request: processing → {next_lifecycle_state}"
                     );
                 }
             }
@@ -447,12 +442,16 @@ async fn recover_stuck_responses(node: &EmbeddedNode, agent_did: &str) -> Result
 
 async fn recover_missing_response_documents(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
     let escaped_agent_did = escape_graphql_string(agent_did);
+    let claimed_or_processing = RequestLifecycleState::graphql_list([
+        RequestLifecycleState::Claimed,
+        RequestLifecycleState::Processing,
+    ]);
     let query = format!(
         r#"{{
             AgentRequest(
                 filter: {{
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    status: {{ _eq: "processing" }}
+                    lifecycle_state: {{ _in: {claimed_or_processing} }}
                 }}
             ) {{
                 _docID

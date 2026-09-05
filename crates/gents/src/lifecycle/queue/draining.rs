@@ -44,7 +44,6 @@ async fn drain_pending_session_requests_where(
                 filter: {{
                     session_id: {{ _eq: "{escaped_session_id}" }},
                     agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    status: {{ _eq: "pending" }},
                     lifecycle_state: {{ _eq: "pending" }}
                 }}
             ) {{
@@ -81,11 +80,9 @@ async fn drain_pending_session_requests_where(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
                         agent_did: {{ _eq: "{escaped_agent_did}" }},
-                        status: {{ _eq: "pending" }},
                         lifecycle_state: {{ _eq: "pending" }}
                     }},
                     input: {{
-                        status: "interrupted",
                         lifecycle_state: "interrupted",
                         failure_reason: "{escaped_reason}",
                         terminalized_at: "{terminalized_at}",

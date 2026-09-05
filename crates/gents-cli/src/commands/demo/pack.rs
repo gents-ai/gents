@@ -26,6 +26,7 @@ use crate::cli::args::{DemoInitArgs, DemoRunArgs, DemoSeedArgs};
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
+use gents_protocol::client_protocol::RequestLifecycleState;
 
 #[derive(Debug, Deserialize)]
 struct PackManifest {
@@ -1424,7 +1425,7 @@ async fn verify_stage_provenance(
                 if !rows.iter().any(|row| {
                     matches!(
                         row.get("status").and_then(Value::as_str),
-                        Some("complete" | "completed")
+                        Some("complete" | "completed") // AgentResponse.status
                     )
                 }) =>
             {
@@ -1812,12 +1813,14 @@ async fn await_stages(
                     .get("lifecycle_state")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                if matches!(state, "completed" | "failed" | "cancelled") {
+                if RequestLifecycleState::is_terminal_str(Some(state)) {
                     let request_id = row
                         .get("request_id")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
-                    if state != "completed" {
+                    if RequestLifecycleState::parse_opt(Some(state))
+                        != Some(RequestLifecycleState::Completed)
+                    {
                         let reason = row
                             .get("failure_reason")
                             .and_then(Value::as_str)
@@ -2411,11 +2414,15 @@ async fn load_background_completion_evidence(
             .and_then(Value::as_u64)
             .unwrap_or_default();
         if subagent_depth > 0 {
-            match lifecycle_state {
-                "completed" => completed_subagent_request_ids.push(request_id.to_string()),
-                "failed" | "dead" | "interrupted" => {
-                    failed_subagent_request_ids.push(request_id.to_string())
+            match RequestLifecycleState::parse_opt(Some(lifecycle_state)) {
+                Some(RequestLifecycleState::Completed) => {
+                    completed_subagent_request_ids.push(request_id.to_string())
                 }
+                Some(
+                    RequestLifecycleState::Failed
+                    | RequestLifecycleState::Dead
+                    | RequestLifecycleState::Interrupted,
+                ) => failed_subagent_request_ids.push(request_id.to_string()),
                 _ => {}
             }
         }
@@ -2423,7 +2430,8 @@ async fn load_background_completion_evidence(
             && gents::lifecycle::is_background_completion_request(
                 row.get("metadata").and_then(Value::as_str),
             )
-            && lifecycle_state == "completed"
+            && RequestLifecycleState::parse_opt(Some(lifecycle_state))
+                == Some(RequestLifecycleState::Completed)
         {
             completed_wake_request_ids.push(request_id.to_string());
         }
@@ -2873,7 +2881,9 @@ pub(crate) async fn run(args: DemoRunArgs) -> Result<()> {
     };
     let mut failures: Vec<String> = Vec::new();
     for stage in &stages {
-        if stage.lifecycle_state != "completed" {
+        if RequestLifecycleState::parse_opt(Some(stage.lifecycle_state.as_str()))
+            != Some(RequestLifecycleState::Completed)
+        {
             failures.push(format!(
                 "{} ended {}",
                 stage.trigger_id, stage.lifecycle_state

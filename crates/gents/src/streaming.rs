@@ -901,9 +901,9 @@ fn build_request_terminal_update(
     terminalized_at: &str,
     failure_reason: Option<&str>,
 ) -> String {
-    let (request_status, lifecycle_state) = match status {
-        StreamStatus::Complete => ("completed", "completed"),
-        StreamStatus::Error => ("error", "failed"),
+    let lifecycle_state = match status {
+        StreamStatus::Complete => "completed",
+        StreamStatus::Error => "failed",
         StreamStatus::Streaming => return String::new(),
     };
     let escaped_request_id = escape_graphql_string(request_id);
@@ -915,11 +915,9 @@ fn build_request_terminal_update(
                     filter: {{
                         request_id: {{ _eq: "{escaped_request_id}" }},
                         agent_did: {{ _eq: "{escaped_owner_did}" }},
-                        status: {{ _eq: "processing" }},
                         lifecycle_state: {{ _in: ["claimed", "processing"] }}
                     }},
                     input: {{
-                        status: "{request_status}",
                         lifecycle_state: "{lifecycle_state}",
                         failure_reason: "{escaped_failure_reason}",
                         terminalized_at: "{escaped_terminalized_at}",

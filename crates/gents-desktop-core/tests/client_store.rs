@@ -99,7 +99,6 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("pending".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: None,
                 execution_origin: None,
@@ -142,7 +141,6 @@ fn store_derives_turn_from_retry_chain_tip() {
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
                 backend_id: None,
                 execution_origin: None,
@@ -255,7 +253,6 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("processing".to_string()),
                 lifecycle_state: Some("processing".to_string()),
                 backend_id: None,
                 execution_origin: None,
@@ -298,7 +295,6 @@ fn store_derives_turn_from_conversation_latest_request_not_random_request_id_ord
                 max_tokens: None,
                 max_total_tokens: None,
                 metadata: None,
-                status: Some("completed".to_string()),
                 lifecycle_state: Some("completed".to_string()),
                 backend_id: None,
                 execution_origin: None,
@@ -451,7 +447,6 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             max_tokens: None,
             max_total_tokens: None,
             metadata: None,
-            status: Some("completed".to_string()),
             lifecycle_state: Some("completed".to_string()),
             backend_id: None,
             execution_origin: None,
@@ -615,7 +610,6 @@ async fn local_request_refresh_preserves_projection_boundaries_and_database_trut
                     behavior_id: "default"
                     session_id: "session-1"
                     content: "run it"
-                    status: "processing"
                     lifecycle_state: "processing"
                     created_at: "2026-08-21T18:07:35Z"
                 }) { _docID }

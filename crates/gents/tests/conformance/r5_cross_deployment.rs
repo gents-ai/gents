@@ -493,7 +493,6 @@ async fn create_parent_request(
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "R5 parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",

@@ -288,7 +288,7 @@ async fn drive_expired_child_recovery_case(case: &lean_vocab_test::LeanRecoveryS
     )
     .await;
     if case.pre_state == "claimed" {
-        set_request_status_and_lifecycle(&db.node, &child_doc_id, "processing", "claimed").await;
+        set_request_lifecycle_state(&db.node, &child_doc_id, "claimed").await;
     }
     set_request_deadline(
         &db.node,
@@ -359,7 +359,7 @@ async fn drive_queued_descendant_recovery_case(case: &lean_vocab_test::LeanRecov
         RECOVERY_CREATED_AT,
     )
     .await;
-    set_request_status_and_lifecycle(&db.node, &parent_doc_id, "completed", "completed").await;
+    set_request_lifecycle_state(&db.node, &parent_doc_id, "completed").await;
 
     let tool_call_id = format!("{}-bridge", case.name);
     let child_request_id = format!("{}-child", case.name);
@@ -580,8 +580,7 @@ pub(super) async fn subagent_liveness_reconciliation_converges_expired_processin
         RECOVERY_CREATED_AT,
     )
     .await;
-    set_request_status_and_lifecycle(&db.node, &terminal_parent_doc_id, "completed", "completed")
-        .await;
+    set_request_lifecycle_state(&db.node, &terminal_parent_doc_id, "completed").await;
     let queued_child_request_id = "convergence-465-queued-child";
     create_linked_pending_child(
         &db.node,
@@ -688,7 +687,6 @@ async fn create_remote_terminal_parent(node: &EmbeddedNode, request_id: &str) {
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "remote parent prompt",
-                status: "completed",
                 lifecycle_state: "completed",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -773,7 +771,6 @@ async fn create_linked_pending_child(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "queued child prompt",
-                status: "pending",
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -1103,17 +1100,10 @@ async fn drive_inference_call_recovery_case(case: &lean_vocab_test::LeanRecovery
     .await;
     match case.name.as_str() {
         "inference_interrupted_parent_to_cancelled" => {
-            set_request_status_and_lifecycle(
-                &db.node,
-                &parent_doc_id,
-                "interrupted",
-                "interrupted",
-            )
-            .await;
+            set_request_lifecycle_state(&db.node, &parent_doc_id, "interrupted").await;
         }
         "inference_queued_stale_to_cancelled" | "inference_running_stale_to_failed" => {
-            set_request_status_and_lifecycle(&db.node, &parent_doc_id, "completed", "completed")
-                .await;
+            set_request_lifecycle_state(&db.node, &parent_doc_id, "completed").await;
         }
         other => panic!("unhandled inference recovery case {other}"),
     }
@@ -1247,8 +1237,7 @@ async fn seed_tool_parent_and_row(
                 };
                 seed_child_request(&node, &child_request_id, child_state).await;
                 if case.name == "detached_bridge_terminal_parent_to_failed" {
-                    set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed")
-                        .await;
+                    set_request_lifecycle_state(&node, &parent_doc_id, "failed").await;
                 }
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
@@ -1283,13 +1272,7 @@ async fn seed_tool_parent_and_row(
             ),
             "tool_running_parent_interrupted_to_cancelled"
             | "live_running_native_tool_parent_interrupted_to_cancelled" => {
-                set_request_status_and_lifecycle(
-                    &node,
-                    &parent_doc_id,
-                    "interrupted",
-                    "interrupted",
-                )
-                .await;
+                set_request_lifecycle_state(&node, &parent_doc_id, "interrupted").await;
                 ToolCallLifecycle::new(
                     node.clone(),
                     parent_request_id.to_string(),
@@ -1304,8 +1287,7 @@ async fn seed_tool_parent_and_row(
             }
             "tool_running_terminal_parent_to_failed"
             | "live_running_tool_parent_terminal_to_failed" => {
-                set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed")
-                    .await;
+                set_request_lifecycle_state(&node, &parent_doc_id, "completed").await;
                 ToolCallLifecycle::new(
                     node.clone(),
                     parent_request_id.to_string(),
@@ -1319,7 +1301,7 @@ async fn seed_tool_parent_and_row(
                 )
             }
             "live_detached_bridge_parent_failed_to_failed" => {
-                set_request_status_and_lifecycle(&node, &parent_doc_id, "error", "failed").await;
+                set_request_lifecycle_state(&node, &parent_doc_id, "failed").await;
                 let child_request_id = format!("{tool_call_id}-detached-child");
                 seed_child_request(&node, &child_request_id, "processing").await;
                 ToolCallLifecycle::new_subagent(
@@ -1370,9 +1352,9 @@ async fn seed_tool_parent_and_row(
         set_tool_deadline(&node, tool_call_id, "2020-01-01T00:00:00Z").await;
     }
     if case.parent_interrupted == Some(true) {
-        set_request_status_and_lifecycle(&node, &parent_doc_id, "interrupted", "interrupted").await;
+        set_request_lifecycle_state(&node, &parent_doc_id, "interrupted").await;
     } else if case.parent_terminal == Some(true) {
-        set_request_status_and_lifecycle(&node, &parent_doc_id, "completed", "completed").await;
+        set_request_lifecycle_state(&node, &parent_doc_id, "completed").await;
     }
     if case.name == "terminal_background_tool_missing_completion_side_effects_to_converged" {
         lifecycle
@@ -1408,7 +1390,7 @@ async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_sta
             .await;
         }
         "failed" => {
-            create_request(node, request_id, &session_id, "error", RECOVERY_CREATED_AT).await;
+            create_request(node, request_id, &session_id, "failed", RECOVERY_CREATED_AT).await;
         }
         "interrupted" => {
             let doc_id = create_request(
@@ -1419,7 +1401,7 @@ async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_sta
                 RECOVERY_CREATED_AT,
             )
             .await;
-            set_request_status_and_lifecycle(node, &doc_id, "interrupted", "interrupted").await;
+            set_request_lifecycle_state(node, &doc_id, "interrupted").await;
         }
         "dead" => {
             let doc_id = create_request(
@@ -1430,7 +1412,7 @@ async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_sta
                 RECOVERY_CREATED_AT,
             )
             .await;
-            set_request_status_and_lifecycle(node, &doc_id, "dead", "dead").await;
+            set_request_lifecycle_state(node, &doc_id, "dead").await;
         }
         "processing" => {
             create_request(
@@ -1444,31 +1426,6 @@ async fn seed_child_request(node: &EmbeddedNode, request_id: &str, lifecycle_sta
         }
         other => panic!("unsupported child lifecycle state {other}"),
     };
-}
-
-async fn set_request_status_and_lifecycle(
-    node: &EmbeddedNode,
-    doc_id: &str,
-    status: &str,
-    lifecycle_state: &str,
-) {
-    let doc_id = escape_graphql_string(doc_id);
-    let status = escape_graphql_string(status);
-    let lifecycle_state = escape_graphql_string(lifecycle_state);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{lifecycle_state}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "set request status/lifecycle failed: {:?}",
-        resp.errors
-    );
 }
 
 async fn set_tool_unclaimed_deadline(node: &EmbeddedNode, tool_call_id: &str, at: &str) {
@@ -1719,25 +1676,13 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         match case.parent_observation.as_str() {
             "live" => {}
             "interrupted" => {
-                set_request_status_and_lifecycle(
-                    &db.node,
-                    &parent_doc_id,
-                    "interrupted",
-                    "interrupted",
-                )
-                .await;
+                set_request_lifecycle_state(&db.node, &parent_doc_id, "interrupted").await;
             }
             "cleanlyCompleted" => {
-                set_request_status_and_lifecycle(
-                    &db.node,
-                    &parent_doc_id,
-                    "completed",
-                    "completed",
-                )
-                .await;
+                set_request_lifecycle_state(&db.node, &parent_doc_id, "completed").await;
             }
             "otherTerminal" => {
-                set_request_status_and_lifecycle(&db.node, &parent_doc_id, "error", "failed").await;
+                set_request_lifecycle_state(&db.node, &parent_doc_id, "failed").await;
             }
             other => panic!("unhandled parent observation {other}"),
         }

@@ -389,7 +389,6 @@ async fn seed_request(
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "seeded subagent list row",
-                    status: "pending",
                     lifecycle_state: "pending",
                     backend_id: "",
                     execution_origin: "interactive",

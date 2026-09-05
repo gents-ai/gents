@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
 use crate::graphql::escape_graphql_string;
 use crate::session::execute_mutation_with_retry;
 
@@ -23,8 +25,6 @@ struct StaleInferenceCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ParentRequestRow {
-    status: String,
-    #[serde(default)]
     lifecycle_state: Option<String>,
 }
 
@@ -124,7 +124,6 @@ async fn lookup_parent_request(
                 }},
                 limit: 1
             ) {{
-                status
                 lifecycle_state
             }}
         }}"#
@@ -196,15 +195,10 @@ async fn recover_inference_call_row(
 }
 
 fn request_is_interrupted(parent: &ParentRequestRow) -> bool {
-    parent.status == "interrupted" || parent.lifecycle_state.as_deref() == Some("interrupted")
+    RequestLifecycleState::parse_opt(parent.lifecycle_state.as_deref())
+        == Some(RequestLifecycleState::Interrupted)
 }
 
 fn request_is_terminal(parent: &ParentRequestRow) -> bool {
-    matches!(
-        parent.status.as_str(),
-        "completed" | "error" | "superseded" | "dead" | "interrupted"
-    ) || matches!(
-        parent.lifecycle_state.as_deref(),
-        Some("completed" | "failed" | "superseded" | "dead" | "interrupted")
-    )
+    RequestLifecycleState::is_terminal_str(parent.lifecycle_state.as_deref())
 }

@@ -2133,7 +2133,6 @@ async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 input: {{
-                    status: "dead",
                     lifecycle_state: "dead"
                 }}
             ) {{ _docID }}
@@ -2155,7 +2154,6 @@ async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 input: {{
-                    status: "completed",
                     lifecycle_state: "completed"
                 }}
             ) {{ _docID }}
@@ -2328,7 +2326,6 @@ async fn create_remote_parent_request(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "remote parent prompt",
-                status: "processing",
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -2539,7 +2536,6 @@ async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
                 input: {{
-                    status: "error",
                     lifecycle_state: "interrupted"
                 }}
             ) {{ _docID }}

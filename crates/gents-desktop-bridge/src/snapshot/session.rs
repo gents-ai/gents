@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::{DateTime, Utc};
 use gents_desktop_core::client::{ClientCore, ClientStore, SessionTranscriptQueryPage};
 use gents_protocol::message::Message;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
 use gents_protocol::transcript::{
     normalize_markdown_text, present_message, present_persisted_message,

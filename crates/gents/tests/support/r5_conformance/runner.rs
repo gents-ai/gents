@@ -365,7 +365,6 @@ async fn write_agent_request(
     let agent_did = escape_graphql_string(agent_did);
     let behavior_id = escape_graphql_string(behavior_id);
     let session_id = escape_graphql_string(&format!("{request_id}-session"));
-    let status = status_for_lifecycle(state);
     let now = chrono::Utc::now().to_rfc3339();
     let deadline = (chrono::Utc::now() + chrono::Duration::minutes(30)).to_rfc3339();
     let parent_request_field = parent_request_id
@@ -400,7 +399,6 @@ async fn write_agent_request(
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "r5 scenario request",
-                    status: "{status}",
                     lifecycle_state: "{state}",
                     backend_id: "",
                     execution_origin: "interactive",
@@ -417,7 +415,6 @@ async fn write_agent_request(
                 update: {{
                     agent_did: "{agent_did}",
                     behavior_id: "{behavior_id}",
-                    status: "{status}",
                     lifecycle_state: "{state}"
                     {parent_request_field}
                     {parent_tool_field}
@@ -535,7 +532,7 @@ async fn export_doc(
     };
     let fields = match collection {
         "AgentRequest" => {
-            "request_id agent_did behavior_id session_id status lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
+            "request_id agent_did behavior_id session_id lifecycle_state caused_by_parent_request_id caused_by_parent_tool_call_id caused_by_trigger_id caused_by_trigger_kind interrupt_requested_at"
         }
         "AgentToolCall" => {
             "tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
@@ -789,12 +786,11 @@ async fn terminalize_child_on_b(
     terminal: &str,
     final_response: Option<&str>,
 ) -> Result<()> {
-    let status = status_for_lifecycle(terminal);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
                 filter: {{ request_id: {{ _eq: "{}" }} }},
-                input: {{ status: "{status}", lifecycle_state: "{}" }}
+                input: {{ lifecycle_state: "{}" }}
             ) {{ _docID }}
         }}"#,
         escape_graphql_string(request_id),
@@ -1295,16 +1291,6 @@ fn string_array_literal(values: &[String]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{values}]")
-}
-
-fn status_for_lifecycle(state: &str) -> &str {
-    match state {
-        "completed" => "completed",
-        "failed" | "dead" | "interrupted" => "error",
-        "superseded" => "superseded",
-        "processing" => "processing",
-        _ => state,
-    }
 }
 
 async fn exec(node: &HarnessNode, mutation: &str, label: &str) -> Result<()> {
