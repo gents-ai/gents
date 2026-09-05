@@ -1195,6 +1195,12 @@ pub(crate) enum BackendPresetArg {
     ChatGptCodex,
     #[value(name = "xai-oauth")]
     XaiGrokOAuth,
+    #[value(
+        name = "claude-cli-subscription",
+        alias = "claude-subscription",
+        alias = "claude-cli"
+    )]
+    ClaudeCliSubscription,
     #[value(name = "ollama")]
     Ollama,
     #[value(name = "vllm")]
@@ -1211,6 +1217,7 @@ impl BackendPresetArg {
             Self::OpenRouter => "openrouter",
             Self::ChatGptCodex => "chatgpt-codex",
             Self::XaiGrokOAuth => "xai-oauth",
+            Self::ClaudeCliSubscription => "claude-cli-subscription",
             Self::Ollama => "ollama",
             Self::Vllm => "vllm",
             Self::LlamaCpp => "llama-cpp",
@@ -1222,6 +1229,7 @@ impl BackendPresetArg {
             Self::OpenRouter => BackendProviderKind::OpenRouter,
             Self::ChatGptCodex => BackendProviderKind::ChatGptCodex,
             Self::XaiGrokOAuth => BackendProviderKind::XaiGrokOAuth,
+            Self::ClaudeCliSubscription => BackendProviderKind::ClaudeCliSubscription,
             Self::GenericOpenAiCompatible
             | Self::OpenAi
             | Self::Ollama
@@ -1237,6 +1245,9 @@ impl BackendPresetArg {
             Self::OpenRouter => Some("https://openrouter.ai/api/v1"),
             Self::ChatGptCodex => Some(gents::chatgpt_codex::default_backend_endpoint()),
             Self::XaiGrokOAuth => Some(gents::xai_grok_oauth::default_backend_endpoint()),
+            Self::ClaudeCliSubscription => {
+                Some(gents::claude_subscription::default_backend_endpoint())
+            }
             Self::Ollama => Some(crate::DEFAULT_OLLAMA_ENDPOINT),
             Self::Vllm => Some("http://127.0.0.1:8000/v1"),
             Self::LlamaCpp => Some("http://127.0.0.1:8080/v1"),
@@ -1253,6 +1264,7 @@ impl BackendPresetArg {
             Self::LlamaCpp => Some(crate::DEFAULT_INIT_MODEL_NAME),
             Self::ChatGptCodex => Some(crate::DEFAULT_CHATGPT_CODEX_MODEL_NAME),
             Self::XaiGrokOAuth => Some(crate::DEFAULT_XAI_GROK_OAUTH_MODEL_NAME),
+            Self::ClaudeCliSubscription => Some(gents::claude_subscription::default_model_name()),
             Self::GenericOpenAiCompatible | Self::OpenAi | Self::OpenRouter | Self::Vllm => None,
         }
     }
@@ -1264,6 +1276,7 @@ impl BackendPresetArg {
             Self::GenericOpenAiCompatible
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
+            | Self::ClaudeCliSubscription
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,
@@ -1277,6 +1290,7 @@ impl BackendPresetArg {
             | Self::OpenRouter
             | Self::ChatGptCodex
             | Self::XaiGrokOAuth
+            | Self::ClaudeCliSubscription
             | Self::Ollama
             | Self::Vllm
             | Self::LlamaCpp => None,
