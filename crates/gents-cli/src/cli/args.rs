@@ -81,6 +81,12 @@ pub(crate) enum Command {
         about = "Probe a DefraDB-backed Grok / xAI OAuth credential (read-only)"
     )]
     GrokAuthProbe(GrokAuthProbeArgs),
+    #[command(
+        name = "claude-login",
+        about = "Sign in with the Claude subscription (OAuth) and store credentials in DefraDB",
+        after_help = "Default: opens the browser and listens on a localhost callback. Use --manual on hosts without a browser: open the printed URL anywhere, then paste the code shown on Anthropic's page."
+    )]
+    ClaudeLogin(ClaudeLoginArgs),
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
@@ -502,6 +508,34 @@ pub(crate) struct GrokLoginArgs {
     pub(crate) agent_did: Option<String>,
     #[arg(long, default_value = "xai-oauth")]
     pub(crate) provider: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ClaudeLoginArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "claude-subscription")]
+    pub(crate) provider: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Manual-paste login (no localhost callback, no browser)"
+    )]
+    pub(crate) manual: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Print the login URL instead of opening a browser"
+    )]
+    pub(crate) no_browser: bool,
+    #[arg(long, help = "OAuth client ID override for testing")]
+    pub(crate) client_id: Option<String>,
+    #[arg(long, help = "OAuth token endpoint override for testing")]
+    pub(crate) token_url: Option<String>,
 }
 
 #[derive(clap::Args)]
