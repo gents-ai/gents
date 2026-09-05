@@ -1690,6 +1690,11 @@ impl TurnManager {
         let mut deferred_notifications = false;
         let mut child_finishes = Vec::new();
         for event in batch.events {
+            let event = if descendant_depth > 0 {
+                cursor.lock().await.child_output_event(event)
+            } else {
+                event
+            };
             if activity_only && !is_background_activity(&event.payload) {
                 continue;
             }
@@ -2104,6 +2109,7 @@ fn is_background_activity(payload: &Value) -> bool {
                 | "tool_call_update"
                 | "task_backgrounded"
                 | "task_completed"
+                | "monitor_event"
                 | "subagent_spawned"
                 | "subagent_progress"
                 | "subagent_finished"
@@ -3496,7 +3502,10 @@ mod tests {
                 r#"mutation { create_AgentToolCall(input: {
             tool_call_key: "session-1-child:child-bash", tool_call_id: "child-bash",
             request_id: "pane-child", session_id: "session-1-child",
-            agent_did: "did:test:grok-shim", tool_name: "bash", lifecycle_state: "running"
+            agent_did: "did:test:grok-shim", tool_name: "bash", lifecycle_state: "running",
+            await_mode: "background", started_at: "2026-01-01T00:00:00Z",
+            args: "{\"command\":\"echo CHILD_BG_OUTPUT\"}",
+            partial_output_tail: "CHILD_BG_OUTPUT"
         }) { _docID } }"#,
             )
             .await;
@@ -3522,6 +3531,25 @@ mod tests {
             .await
             .unwrap();
         let activity = parse_buffered_updates(&buffer).await;
+        let task_start = activity
+            .iter()
+            .position(|row| {
+                row["params"]["update"]["sessionUpdate"] == "task_backgrounded"
+                    && row["params"]["sessionId"] == "session-1-child"
+            })
+            .unwrap();
+        let output = activity
+            .iter()
+            .position(|row| {
+                row["params"]["update"]["sessionUpdate"] == "monitor_event"
+                    && row["params"]["sessionId"] == "session-1-child"
+            })
+            .unwrap();
+        assert!(task_start < output);
+        assert_eq!(
+            activity[output]["params"]["update"]["event_text"],
+            "CHILD_BG_OUTPUT"
+        );
         assert!(activity
             .iter()
             .any(|row| row["params"]["sessionId"] == "session-1-child"

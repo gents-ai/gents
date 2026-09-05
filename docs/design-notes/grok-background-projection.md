@@ -29,11 +29,22 @@ app/acp_handler/background.rs handles task start/completion via
 resolve_target_view, selecting the child's background-task store. Root
 ToolCallUpdate handling calls route_bg_task_stdout to replace cumulative task
 output. The child branch bypasses that helper and calls session.handle_update
-directly. This is a separate client-side gap for live child task-card output.
-Correct wire delivery alone does not prove that those cards render it.
+directly. Therefore the current cumulative-output projection alone does not
+prove that child task cards render output.
 
-Do not conceal that gap with synthetic completion or root-session rerouting.
-The client fix belongs in its shared tool-update handling.
+The stock client is the compatibility target: no client changes are in scope.
+Its existing `x.ai/monitor_event` handler routes appended background output into
+child task stores. Child projections use that channel; root projections retain
+cumulative `tool_call_update` output. Delivery receipts hold byte offsets and
+hashes, not another output buffer. They commit only after successful sends.
+Evicted bytes are explicitly identified. When final persisted capture differs
+from the live interleaved stream, it is labelled as a captured snapshot rather
+than guessed to be a continuation.
+
+Stock child-pane task cancellation addresses the parent session. The shim
+resolves the task's actual owner through that session's authorized canonical
+descendants, rejecting ambiguous IDs before mutation. The runtime rechecks
+the resolved session/principal/requester scope before cancellation.
 
 ## Live wire check
 
@@ -68,5 +79,13 @@ configured GLM-5.3-Flash-NVFP4 backend, 524,288-token context and high reasoning
   event. The child reply appeared once; successful bash completion included
   its output, while automatic wake echoes carried hidden-scrollback metadata.
 
-These are live framed-ACP results, not a claim that the stock client's child
-background-output routing gap described above has been fixed.
+The unchanged Grok 1.0.13 fullscreen client also displayed a running background
+bash task inside a completed child's pane. Opening its task-output viewer
+showed the generated `CHILD_OUTPUT_VISIBLE_6142` marker. This exercises actual
+rendering, in addition to the framed-ACP assertions above.
+
+A second stock-client session exercised the native child task kill action:
+selecting the running task and pressing `x` immediately rendered
+`Task failed ... (cancelled)`, and the corresponding runtime tool row became
+`cancelled`. The parent-addressed and explicit-child-addressed framed controls
+also passed. No client source or installed client binary was modified.

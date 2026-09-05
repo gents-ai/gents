@@ -1652,6 +1652,36 @@ mod tests {
             caused_by_parent_tool_call_id: "spawn", caused_by_parent_tool_call_doc_id: "{bridge_doc}"
         }}) {{_docID}} }}"#)).await;
         ensure_no_errors(&child, "child fixture").unwrap();
+        for session in ["parent-session", "child-session"] {
+            let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+                node.clone(),
+                "child".into(),
+                session.into(),
+                service.config.agent_did.to_string(),
+                "ambiguous-process".into(),
+                2,
+                "bash".into(),
+                "{}".into(),
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            );
+            lifecycle.start_running().await.unwrap();
+        }
+        let denied = service
+            .handle_acp_payload(&request_payload(
+                "x.ai/task/kill",
+                json!({"sessionId":"parent-session", "taskId":"ambiguous-process"}),
+            ))
+            .await;
+        assert_eq!(
+            parse_response(denied.response.as_deref().unwrap())["result"]["result"]["outcome"],
+            "not_found"
+        );
+        let unchanged = node.execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "ambiguous-process"}}) {lifecycle_state} }"#).await;
+        assert!(unchanged.data.unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["lifecycle_state"] == "running"));
         for session in ["child-session", "unlinked-session"] {
             let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
                 node.clone(),
@@ -1668,7 +1698,8 @@ mod tests {
         }
         for (session, outcome) in [
             ("unlinked-session", "not_found"),
-            ("child-session", "killed"),
+            ("parent-session", "killed"),
+            ("child-session", "already_exited"),
         ] {
             let response = service
                 .handle_acp_payload(&request_payload(

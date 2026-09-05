@@ -38,6 +38,7 @@ use defra_node::EmbeddedNode;
 use gents::{load_agent_behavior, load_inference_profile};
 use serde_json::{json, Map, Value};
 
+mod child_output;
 pub(crate) mod messages;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -974,11 +975,13 @@ impl ProjectionEngine {
                 }
                 tools::ToolUpdate::BackgroundTask(update) => {
                     let advance = if update.kind == "tool_call_update" {
-                        let fingerprint = payload_fingerprint(&update.payload);
+                        let fingerprint =
+                            payload_fingerprint(&json!([update.payload, update.output_start]));
                         (cursor.background_outputs.get(&update.key) != Some(&fingerprint)).then(
                             || CursorAdvance::BackgroundOutput {
                                 key: update.key.clone(),
                                 fingerprint,
+                                output_start: update.output_start,
                             },
                         )
                     } else {
@@ -1421,9 +1424,7 @@ pub(crate) enum CursorAdvance {
     Many(Vec<CursorAdvance>),
     /// Adopt a replacement response document generation before applying
     /// live-tail advances from it.
-    ResponseDocument {
-        doc_id: String,
-    },
+    ResponseDocument { doc_id: String },
     /// The full base payload of a tool call was observed (first time or
     /// changed tracked fields).
     ToolBase {
@@ -1438,21 +1439,19 @@ pub(crate) enum CursorAdvance {
         status: String,
     },
     /// A distinct visible tool list was observed.
-    Commands {
-        fingerprint: u64,
-    },
+    Commands { fingerprint: u64 },
     /// A distinct subagent payload was observed for its key.
-    Subagent {
-        key: String,
-        fingerprint: u64,
-    },
+    Subagent { key: String, fingerprint: u64 },
     /// One native background task lifecycle notification was delivered.
-    BackgroundTask {
-        key: String,
-    },
+    BackgroundTask { key: String },
     BackgroundOutput {
         key: String,
         fingerprint: u64,
+        output_start: Option<u64>,
+    },
+    ChildOutput {
+        key: String,
+        receipt: child_output::OutputReceipt,
     },
     /// A live response tail delta was planned and sent. The `plan` is the
     /// post-send cursor state (including the history anchor it absorbed);
@@ -1476,9 +1475,7 @@ pub(crate) enum CursorAdvance {
     /// Inclusive durable transcript query cursor. This advances only after
     /// the complete projection batch succeeds, so a leaf/send failure re-reads
     /// every still-undelivered row.
-    MessageHighWater {
-        sequence: i64,
-    },
+    MessageHighWater { sequence: i64 },
 }
 
 /// The post-send state of one live tail cursor, carried inside a
@@ -2433,6 +2430,7 @@ pub(crate) struct RequestCursor {
     /// Delivery receipts only; process lifecycle remains in AgentToolCall.
     background_task_events: std::collections::BTreeSet<String>,
     background_outputs: BTreeMap<String, u64>,
+    child_outputs: BTreeMap<String, child_output::OutputReceipt>,
     /// The committed (send-success) state of the live tail cursors.
     live_cursors: LiveCursorPair,
     /// The committed (send-success) delivered length per durable chunk key.
@@ -2640,8 +2638,13 @@ impl RequestCursor {
             CursorAdvance::BackgroundTask { key } => {
                 self.background_task_events.insert(key);
             }
-            CursorAdvance::BackgroundOutput { key, fingerprint } => {
+            CursorAdvance::BackgroundOutput {
+                key, fingerprint, ..
+            } => {
                 self.background_outputs.insert(key, fingerprint);
+            }
+            CursorAdvance::ChildOutput { key, receipt } => {
+                self.child_outputs.insert(key, receipt);
             }
             CursorAdvance::LiveContent { plan, progress_seq } => {
                 self.live_cursors.content.commit(plan, progress_seq);

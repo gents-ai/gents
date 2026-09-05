@@ -55,6 +55,15 @@ def main():
                              if e.get("params", {}).get("update", {}).get("sessionUpdate") == "tool_call_update"
                              and e["params"]["update"].get("toolCallId") == task["tool_call_id"]
                              and "rawOutput" in e["params"]["update"]]
+                if args.child:
+                    chunks = [(i, e["params"]["update"]["event_text"]) for i, e in enumerate(events)
+                              if e.get("params", {}).get("update", {}).get("sessionUpdate") == "monitor_event"
+                              and e["params"]["update"].get("task_id") == task["task_id"]]
+                    output = "".join(chunk for _, chunk in chunks)
+                    if "BG_BEGIN_" in output and "_BG_END" in output and len(output) > 100000:
+                        assert all(i > start for i, _ in chunks), "output preceded task registration"
+                        assert output.count("BG_BEGIN_") == output.count("_BG_END") == 1, "duplicated output"
+                        break
                 if any(i > start and "BG_BEGIN_" in s.get("output_for_prompt", "")
                        and "_BG_END" in s.get("output_for_prompt", "")
                        and len(s["output_for_prompt"]) > 100000 for i, s in snapshots):
@@ -63,7 +72,7 @@ def main():
         else:
             raise AssertionError("no complete >100 KB snapshot after task registration")
         response, _ = client.request("x.ai/task/kill", {
-            "sessionId": task_session, "taskId": task["task_id"], "source": "clientUi"}, record)
+            "sessionId": session, "taskId": task["task_id"], "source": "clientUi"}, record)
         assert response.get("result", {}).get("result", {}).get("outcome") == "killed", response
         response, _ = client.request("x.ai/task/kill", {
             "sessionId": task_session, "taskId": task["task_id"]}, record)

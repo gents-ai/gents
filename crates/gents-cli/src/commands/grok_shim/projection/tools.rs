@@ -517,6 +517,7 @@ pub(super) async fn project_tools(
                             {
                                 row.partial_output_tail = Some(json!({
                                 "stdout": output,
+                                "_gents_output_start": snapshot["first_available_offset"],
                                 "stdout_truncation": {"truncated": snapshot["first_available_offset"].as_u64().unwrap_or(0) > 0}
                             }).to_string());
                             }
@@ -655,6 +656,9 @@ pub(super) fn project_tool_rows(rows: &[ToolCallRow], results: &[ToolResultRow])
                 updates.push(ToolUpdate::BackgroundTask(background::BackgroundTaskUpdate {
                     method: "session/update", kind: "tool_call_update", key: tool_call_id.clone(),
                     payload: json!({"sessionUpdate":"tool_call_update","toolCallId":tool_call_id,"rawOutput":raw}),
+                    output_start: serde_json::from_str::<Value>(result_text).ok()
+                        .and_then(|value| value["_gents_output_start"].as_u64())
+                        .or_else(|| (!durable_result.is_empty()).then_some(0)),
                 }));
                 chronology.push(row.message_sequence);
             }

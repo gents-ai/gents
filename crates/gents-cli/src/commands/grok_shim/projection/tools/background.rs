@@ -10,6 +10,8 @@ pub(crate) struct BackgroundTaskUpdate {
     pub kind: &'static str,
     pub key: String,
     pub payload: Value,
+    /// Runtime stream offset, carried internally rather than on the ACP wire.
+    pub output_start: Option<u64>,
 }
 
 fn update(kind: &'static str, id: &str, payload: Value) -> BackgroundTaskUpdate {
@@ -21,6 +23,7 @@ fn update(kind: &'static str, id: &str, payload: Value) -> BackgroundTaskUpdate 
         kind,
         key: format!("{kind}:{id}"),
         payload,
+        output_start: None,
     }
 }
 
