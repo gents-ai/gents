@@ -92,6 +92,14 @@ async fn generated_goal_operator_resume_cases_drive_real_transactions() {
                 "created" | "recovered" => {
                     let receipt = result.unwrap();
                     assert_eq!(receipt.created, case.outcome == "created");
+                    assert_eq!(
+                        Some(receipt.goal_status.as_str()),
+                        case.goal_status.as_deref()
+                    );
+                    if case.name == "retry_after_later_progress" {
+                        assert_eq!(receipt.goal_status, GoalStatus::Paused);
+                        assert!(!receipt.created);
+                    }
                     let expected = goal_continuation_identity(&f.goal.goal_id, PARENT, 1).unwrap();
                     assert_eq!(receipt.request_id, expected.request_id);
                     assert_eq!(receipt.goal_id, f.goal.goal_id);
@@ -185,6 +193,132 @@ async fn generated_goal_config_reactivation_cases_drive_transactional_setter() {
             expected["status"] = json!(case.target);
         }
         assert_eq!(f.observe().await, expected);
+        f.node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_children() {
+    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let initial = &contracts
+        .goal_operator_resume_cases
+        .iter()
+        .find(|case| case.name == "atomic_publication")
+        .unwrap()
+        .before;
+    for state in [
+        RequestLifecycleState::InputRequired,
+        RequestLifecycleState::WorkspaceBindingPending,
+    ] {
+        assert!(!state.is_terminal());
+        let f = Fixture::new(initial).await;
+        f.other_request("waiting-existing", "2019-01-01T00:00:00Z", state.as_str())
+            .await;
+        let before = f.observe().await;
+        let rows_before = serde_json::to_value(request_rows(&f.node).await).unwrap();
+        let error = resume_goal_request(
+            &crate::ConfigAccess::Local(f.node.clone()),
+            f.identity.as_ref(),
+            f.identity.did(),
+            SESSION,
+            PARENT,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("unfinished requests"),
+            "{state:?}: {error}"
+        );
+        assert_eq!(f.observe().await, before);
+        assert_eq!(
+            serde_json::to_value(request_rows(&f.node).await).unwrap(),
+            rows_before,
+            "{state:?}: resume duplicated existing work"
+        );
+        f.node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn overlapping_resume_and_native_goal_write_conflict_atomically() {
+    async fn native(
+        node: &EmbeddedNode,
+        handle: &query::TransactionHandle,
+        query: &str,
+    ) -> serde_json::Value {
+        let result = node
+            .execute_request_in_txn(defra_node::QueryRequest::new(query), handle)
+            .await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+        result.data.unwrap()
+    }
+    let contracts: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
+    let initial = &contracts
+        .goal_operator_resume_cases
+        .iter()
+        .find(|case| case.name == "atomic_publication")
+        .unwrap()
+        .before;
+    for resume_first in [false, true] {
+        let f = Fixture::new(initial).await;
+        // Remote/native writes do not participate in ConfigApplyTxn's local
+        // mutation mutex. Keep both storage snapshots open deliberately.
+        let remote = f.node.runner().begin_txn(false).await.unwrap();
+        let goal_id = escape_graphql_string(&f.goal.goal_id);
+        let query = format!(
+            r#"{{ Goal(filter: {{ goal_id: {{ _eq: "{goal_id}" }} }}) {{ _docID status continuation_sequence updated_at }} }}"#
+        );
+        let before = native(&f.node, &remote, &query).await;
+        assert_eq!(before["Goal"][0]["status"], "paused");
+        let local = ConfigApplyTxn::begin_local(&f.node, None).await.unwrap();
+        let receipt = stage_resume(
+            &local,
+            f.identity.as_ref(),
+            f.identity.did(),
+            SESSION,
+            PARENT,
+        )
+        .await
+        .unwrap();
+        assert!(receipt.created);
+        let update = format!(
+            r#"mutation {{ update_Goal(filter: {{ goal_id: {{ _eq: "{goal_id}" }}, status: {{ _eq: "paused" }}, continuation_sequence: {{ _eq: 0 }} }}, input: {{ status: "paused", updated_at: "2031-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+        );
+        assert_eq!(
+            native(&f.node, &remote, &update).await["update_Goal"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        let conflict = if resume_first {
+            local.commit().await.unwrap();
+            f.node
+                .runner()
+                .commit_txn(&remote)
+                .await
+                .unwrap_err()
+                .to_string()
+        } else {
+            f.node.runner().commit_txn(&remote).await.unwrap();
+            local.commit().await.unwrap_err().to_string()
+        };
+        assert!(conflict.contains("transaction conflict"), "{conflict}");
+        let _ = f.node.runner().rollback_txn(&remote).await;
+        let observed = f.observe().await;
+        assert_eq!(
+            observed["status"],
+            if resume_first { "active" } else { "paused" }
+        );
+        assert_eq!(observed["sequence"], if resume_first { 1 } else { 0 });
+        assert_eq!(
+            request_rows(&f.node)
+                .await
+                .iter()
+                .filter(|row| row.request_id == receipt.request_id)
+                .count(),
+            usize::from(resume_first)
+        );
         f.node.shutdown().await;
     }
 }

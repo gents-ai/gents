@@ -179,4 +179,23 @@ theorem config_cannot_reactivate (current : Goals.Status) (h : current ≠ .acti
 
 theorem active_config_remains_allowed : configMaySetStatus .active .active = true := rfl
 
+/-- Receipt status observes the transaction result, not a claim that a historical
+acknowledgment reactivated the Goal. This does not change resume transitions. -/
+def receiptStatus (result : Snapshot × Outcome) : Option Goals.Status :=
+  match result.2 with
+  | .created | .recovered => some result.1.goal.status
+  | _ => none
+
+theorem recovered_receipt_observes_current_status (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .recovered) :
+    receiptStatus (resume s r commit) = some s.goal.status := by
+  have same := recovered_is_noop s r commit h
+  simp [receiptStatus, h, same]
+
+theorem created_receipt_reports_active (s : Snapshot) (r : Request) (commit : Bool)
+    (h : (resume s r commit).2 = .created) :
+    receiptStatus (resume s r commit) = some .active := by
+  have active := (created_publishes_atomically s r commit h).1
+  simp [receiptStatus, h, active]
+
 end GoalAutomation.OperatorResume

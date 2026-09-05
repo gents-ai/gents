@@ -84,10 +84,14 @@ def requestJson (x : Request) : String :=
   ",\"authorized\":" ++ b x.authorized ++ ",\"parent_belongs_to_goal\":" ++ b x.parentBelongsToGoal ++
   ",\"terminal_parent\":" ++ b x.terminalParent ++ ",\"session_idle\":" ++ b x.sessionIdle ++
   ",\"binding\":" ++ bindingJson x.binding ++ "}"
+theorem historical_receipt_can_report_paused :
+  receiptStatus (resume later request true) = some .paused := by decide
+
 def caseJson (c : ResumeCase) : String :=
   "{\"name\":" ++ jsonString c.name ++ ",\"before\":" ++ snapshotJson c.before ++
   ",\"request\":" ++ requestJson c.request ++ ",\"commit\":" ++ b c.commit ++
-  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++ jsonString (outcome c.outcome) ++ "}"
+  ",\"expected\":" ++ snapshotJson c.expected ++ ",\"outcome\":" ++ jsonString (outcome c.outcome) ++
+  ",\"goal_status\":" ++ (match receiptStatus (c.expected, c.outcome) with | none => "null" | some value => status value) ++ "}"
 def resumeCasesJson : String := jsonArray (resumeCases.map caseJson)
 def configCasesJson : String := jsonArray (configCases.map fun c =>
   "{\"current\":" ++ status c.1 ++ ",\"target\":" ++ status c.2.1 ++ ",\"allowed\":" ++ b c.2.2 ++ "}")

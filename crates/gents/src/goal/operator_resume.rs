@@ -13,6 +13,8 @@ pub struct GoalResumeReceipt {
     pub request_id: String,
     pub doc_id: String,
     pub created: bool,
+    /// Goal status observed in this transaction; a historical receipt need not be active.
+    pub goal_status: GoalStatus,
 }
 
 /// Resume the canonical goal and publish its continuation atomically.
@@ -111,6 +113,7 @@ async fn stage_resume(
     if let Some(child) = children.first() {
         super::request_head::verify_goal_continuation_receipt(&goal, parent_row, child)?;
         return Ok(GoalResumeReceipt {
+            goal_status: goal.parsed_status().context("goal has an unknown status")?,
             goal_id: goal.goal_id,
             request_id: child.request_id.clone(),
             doc_id: child
@@ -212,6 +215,7 @@ async fn stage_resume(
         .context("continuation create omitted document ID")?
         .to_owned();
     Ok(GoalResumeReceipt {
+        goal_status: post.status,
         goal_id: goal.goal_id,
         request_id: create.request_id,
         doc_id,

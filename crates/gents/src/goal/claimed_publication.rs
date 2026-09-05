@@ -130,6 +130,7 @@ async fn stage_claimed_continuation(
             "claimed continuation receipt conflicts with the observed publication"
         );
         return Ok(Some(GoalResumeReceipt {
+            goal_status: goal.parsed_status().context("goal has an unknown status")?,
             goal_id: goal.goal_id,
             request_id: child.request_id.clone(),
             doc_id: child
@@ -209,6 +210,7 @@ async fn stage_claimed_continuation(
         .and_then(serde_json::Value::as_str)
         .context("claimed child create omitted document ID")?;
     Ok(Some(GoalResumeReceipt {
+        goal_status: goal.parsed_status().context("goal has an unknown status")?,
         goal_id: goal.goal_id,
         request_id: create.request_id,
         doc_id: child_doc.to_owned(),
