@@ -321,6 +321,10 @@ impl BackendAdmissionController {
 
 #[cfg(test)]
 impl BackendAdmissionController {
+    pub(super) fn in_flight_for_test(&self) -> usize {
+        self.in_flight.load(Ordering::SeqCst)
+    }
+
     pub(super) fn queue_waiters_for_test(&self) -> usize {
         self.waiters.load(Ordering::SeqCst)
     }

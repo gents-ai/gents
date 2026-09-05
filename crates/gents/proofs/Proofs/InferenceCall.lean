@@ -4,4 +4,5 @@ import Proofs.InferenceCall.Executable
 import Proofs.InferenceCall.Properties
 import Proofs.InferenceCall.SlotAccounting
 import Proofs.InferenceCall.ControllerBookkeeping
+import Proofs.InferenceCall.Registry
 import Proofs.InferenceCall.Persistence
