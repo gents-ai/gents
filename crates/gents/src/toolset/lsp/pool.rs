@@ -224,6 +224,9 @@ impl LspPool {
     }
 
     pub(crate) async fn get_ready(&self, key: &PoolKey) -> Option<LspLease> {
+        if super::artifact_scope_denied() {
+            return None;
+        }
         let map = self.inner.lock().await;
         let slot = map.get(key)?.clone();
         drop(map);
@@ -252,6 +255,9 @@ impl LspPool {
         server: &CatalogServer,
         config: &LspToolConfig,
     ) -> Result<LspLease, String> {
+        if super::artifact_scope_denied() {
+            return Err(super::ARTIFACT_SCOPE_DENIAL.into());
+        }
         self.try_spawn_sweeper();
         {
             let mut failed = self.failed.lock().await;
@@ -393,6 +399,7 @@ impl LspPool {
         let constraints = super::overlay_lsp_constraints(&config.constraints);
         let (program, argv, env, _sandbox) =
             prepare_managed_command(&workspace, &server.command, &server.args, &constraints)
+                .await
                 .map_err(|err| err.to_string())?;
         let mut full_argv = vec![program.to_string_lossy().into_owned()];
         full_argv.extend(argv);

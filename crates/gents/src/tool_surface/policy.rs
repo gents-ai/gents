@@ -362,7 +362,8 @@ impl ToolPolicySurface {
                 tool: selection.bash,
                 execution_mode: command_policy
                     .map(|policy| policy.mode)
-                    .unwrap_or(match selection.bash {
+                    .unwrap_or(CommandExecutionMode::Unrestricted)
+                    .meet(match selection.bash {
                         BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
                         BashMode::Unrestricted => CommandExecutionMode::Unrestricted,
                     }),

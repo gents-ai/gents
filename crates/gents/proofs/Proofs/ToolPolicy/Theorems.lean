@@ -3,14 +3,11 @@ import Proofs.ToolPolicy.Meet
 namespace ToolPolicy
 
 theorem bash_meet_mode_le (a b : BashPolicy) :
-    (a.meet b).mode.rank ≤ a.mode.rank ∧
-      (a.meet b).mode.rank ≤ b.mode.rank := by
-  cases a with
-  | mk am an af aa ar as =>
-      cases b with
-      | mk bm bn bf ba br bs =>
-        cases am <;> cases bm <;>
-    simp [BashPolicy.meet, ExecMode.rank]
+    CommandPolicy.ExecutionMode.Below (a.meet b).mode.toCommand a.mode.toCommand ∧
+    CommandPolicy.ExecutionMode.Below (a.meet b).mode.toCommand b.mode.toCommand := by
+  simp only [BashPolicy.meet, ExecMode.meet_toCommand]
+  exact ⟨CommandPolicy.ExecutionMode.meet_below_left _ _,
+    CommandPolicy.ExecutionMode.meet_below_right _ _⟩
 
 theorem bash_meet_network_le (a b : BashPolicy) :
     (a.meet b).network.rank ≤ a.network.rank ∧
@@ -100,36 +97,30 @@ theorem bash_meet_network_gate_right (a b : BashPolicy) (req : CmdReq)
 theorem bash_meet_mode_gate_left (a b : BashPolicy) (req : CmdReq)
     (h : (a.meet b).modeGate req) :
     a.modeGate req := by
-  cases ha : a.mode <;> simp [BashPolicy.modeGate, ha]
-  case readOnly =>
-    have hmeet : (a.meet b).mode = ExecMode.readOnly := by
-      unfold BashPolicy.meet
-      rw [ha]
-      cases b.mode <;> simp [ExecMode.rank]
-    rw [BashPolicy.modeGate, hmeet] at h
-    simp at h
-    obtain ⟨hw, hro⟩ := h
-    refine ⟨hw, ?_⟩
-    rcases hro with hhead | hprefix
-    · exact Or.inl (bash_meet_readonly_left a b req.cmdHead hhead)
-    · exact Or.inr (bash_meet_allowedPrefixMatched_left a b req hprefix)
+  rcases h with ⟨hs, ha, hr⟩
+  refine ⟨fun hw => (bash_meet_mode_le a b).1.1 (hs hw),
+    fun hw => (bash_meet_mode_le a b).1.2 (ha hw), ?_⟩
+  intro hro
+  have hmeet : (a.meet b).mode = .readOnly := by
+    simp only [BashPolicy.meet, hro]
+    cases b.mode <;> rfl
+  rcases hr hmeet with hhead | hprefix
+  · exact Or.inl (bash_meet_readonly_left a b req.cmdHead hhead)
+  · exact Or.inr (bash_meet_allowedPrefixMatched_left a b req hprefix)
 
 theorem bash_meet_mode_gate_right (a b : BashPolicy) (req : CmdReq)
     (h : (a.meet b).modeGate req) :
     b.modeGate req := by
-  cases hb : b.mode <;> simp [BashPolicy.modeGate, hb]
-  case readOnly =>
-    have hmeet : (a.meet b).mode = ExecMode.readOnly := by
-      unfold BashPolicy.meet
-      rw [hb]
-      cases a.mode <;> simp [ExecMode.rank]
-    rw [BashPolicy.modeGate, hmeet] at h
-    simp at h
-    obtain ⟨hw, hro⟩ := h
-    refine ⟨hw, ?_⟩
-    rcases hro with hhead | hprefix
-    · exact Or.inl (bash_meet_readonly_right a b req.cmdHead hhead)
-    · exact Or.inr (bash_meet_allowedPrefixMatched_right a b req hprefix)
+  rcases h with ⟨hs, ha, hr⟩
+  refine ⟨fun hw => (bash_meet_mode_le a b).2.1 (hs hw),
+    fun hw => (bash_meet_mode_le a b).2.2 (ha hw), ?_⟩
+  intro hro
+  have hmeet : (a.meet b).mode = .readOnly := by
+    simp only [BashPolicy.meet, hro]
+    cases a.mode <;> rfl
+  rcases hr hmeet with hhead | hprefix
+  · exact Or.inl (bash_meet_readonly_right a b req.cmdHead hhead)
+  · exact Or.inr (bash_meet_allowedPrefixMatched_right a b req hprefix)
 
 theorem BashPolicy.meet_permits_left (a b : BashPolicy) (req : CmdReq) :
     (a.meet b).permits req → a.permits req := by

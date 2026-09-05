@@ -127,8 +127,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .prompt_builder
                 .selected_skill_reminders(&selected_skill_ids);
             let overlay = crate::workspace::resolve_request_workspace_overlay(
-                self.node.as_ref(),
+                &self.node,
                 &request,
+                lifecycle.execution_generation()?,
+                self.behavior.tools.static_policy().bash.execution_mode
+                    == crate::toolset::CommandExecutionMode::ArtifactWrite,
                 self.operator_tool_root.as_deref(),
             )
             .await?;
@@ -147,6 +150,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     workspace_cwd: Some(overlay.cwd),
                     workspace_root: Some(overlay.root),
                     workspace_authority: Some(overlay.authority),
+                    workspace_artifact: overlay.workspace_artifact,
                 },
                 None => crate::tool_call_lifecycle::runtime::ToolWorkspaceScope::cwd_only(
                     crate::workspace::request_workspace_cwd(&request),

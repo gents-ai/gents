@@ -1216,3 +1216,33 @@ uses actual current database creation/readback for current-source cases. The
 separate old-row WASM migration test verifies migration transport. The generated
 case count does not imply that every injected old-schema value was persisted
 through the old schema: those inputs deliberately test the lens boundary.
+
+
+### Artifact-only command authority (#1358)
+
+`CommandPolicy/ArtifactAuthority.lean` owns the canonical four-mode effect meet:
+ReadOnly is bottom, ArtifactWrite and WorkspaceWrite are incomparable, and
+Unrestricted is top. ToolPolicy converts its vocabulary to this owner and proves
+meet preservation; its permission-subset proofs now distinguish source and
+artifact write effects. Existing numeric contract discriminators remain stable
+and are not authority ranks. Workspace ordinary attenuation reuses the same meet;
+`effectiveBoundCommand` separately admits explicit ArtifactWrite only for a
+verified sealed ReadOnly binding. No ordinary WorkspaceWrite request converts
+into artifact authority. Missing, unsupported or invalid artifact context denies.
+
+Generated families (`artifact_mode_meet_cases`, `artifact_admission_cases`,
+`artifact_spawn_cases`) drive the actual command meet, signed request admission,
+workspace binding, managed launch and pre-pool LSP denial. The ledger records the
+injected unavailable-host observation and explicitly scoped background task as
+bounded coverage, separately from durable background-bridge and OS behavior.
+Sandbox cases additionally cover available and unavailable artifact enforcement.
+The contextual requested mode is already met with behavior and operator ceilings;
+an active binding and current live, uncanceled execution are constructor
+preconditions. Persistent LSP starts are initially denied before pool lookup in
+artifact context; supporting their longer lifetime requires preserving the same
+capability and pool identity, not fallback to WorkspaceWrite or Unrestricted.
+
+The model consumes checked seal/owner/incarnation/root/platform observations; it
+does not prove filesystem canonicalization, symlink/hardlink or race safety,
+Seatbelt implementation, compiler behavior, or isolation from unsandboxed host
+actors. Real host containment and compiler QA remain separate acceptance gates.

@@ -24,3 +24,7 @@ mod seed_live;
 mod steward_loop_live;
 #[path = "e2e_live/subagent_delegation_live.rs"]
 mod subagent_delegation_live;
+
+#[cfg(target_os = "macos")]
+#[path = "e2e_live/artifact_compiler_live.rs"]
+mod artifact_compiler_live;

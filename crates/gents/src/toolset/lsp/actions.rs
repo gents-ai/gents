@@ -901,6 +901,9 @@ pub(crate) async fn run_linter_diagnostics(
     path: &std::path::Path,
     timeout: std::time::Duration,
 ) -> Option<String> {
+    if super::artifact_scope_denied() {
+        return Some(super::ARTIFACT_SCOPE_DENIAL.into());
+    }
     let workspace = super::overlay_workspace_or(&config.workspace);
     let constraints = super::overlay_lsp_constraints(&config.constraints);
     let linter = servers.iter().find(|server| {
@@ -926,6 +929,7 @@ pub(crate) async fn run_linter_diagnostics(
     };
     let (program, rest, env, _sandbox) =
         crate::toolset::prepare_managed_command(&workspace, &argv[0], &argv[1..], &constraints)
+            .await
             .ok()?;
     let mut full = vec![program.to_string_lossy().into_owned()];
     full.extend(rest);

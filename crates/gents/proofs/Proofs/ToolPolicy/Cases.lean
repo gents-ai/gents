@@ -259,7 +259,7 @@ def view (s : Surface) (mcpProbe : String) (writeProbe : String × String) : Sur
   , crossDeployment := s.crossDeployment
   , skills := s.skills
   , lsp := s.lsp
-  , bashMode := s.bash.mode.rank
+  , bashMode := s.bash.mode.toContractCode
   , bashNet := s.bash.network.rank
   , bashSandbox := s.bash.sandbox
   , bashAllowedKind := scopeKind s.bash.allowed

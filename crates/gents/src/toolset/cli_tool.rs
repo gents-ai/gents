@@ -49,6 +49,7 @@ impl ToolDyn for CliTool {
     fn call(&self, args: String) -> BoxFuture<'_, Result<String, ToolError>> {
         let config = self.config.clone();
         Box::pin(async move {
+            deny_artifact_scope().map_err(LocalToolError::into_dispatch_error)?;
             let args: CliToolArgs = serde_json::from_str(&args).map_err(ToolError::JsonError)?;
             validate_argv_policy(&config, &args.argv)
                 .map_err(|error| ToolError::ToolCallError(Box::new(LocalToolError::from(error))))?;
@@ -95,7 +96,20 @@ fn cli_tool_environment(config: &CliToolConfig) -> HashMap<String, String> {
     env
 }
 
+fn deny_artifact_scope() -> Result<(), LocalToolError> {
+    if crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        .is_some_and(|scope| scope.workspace_artifact.is_some())
+    {
+        return Err(LocalToolError::reported_failure(
+            crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+            "direct CLI subprocesses are unavailable in artifact-scoped requests; use the sandboxed Bash path".into(),
+        ));
+    }
+    Ok(())
+}
+
 async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<String> {
+    deny_artifact_scope()?;
     let cwd = match config.working_dir.as_ref() {
         Some(path) => {
             if !path.is_dir() {
@@ -190,6 +204,50 @@ mod tests {
             working_dir: None,
             timeout_secs,
         }
+    }
+
+    #[tokio::test]
+    async fn artifact_scope_denies_cli_tool_before_direct_launch() {
+        let fixture = crate::workspace::artifact_test_fixture(&[]).await;
+        let source = fixture.grant.source_root().to_path_buf();
+        let sentinel = source.join("cli-must-not-launch");
+        let mut config = config(5);
+        config.working_dir = Some(source.clone());
+        let tool = CliTool::new(config.clone());
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                workspace_cwd: Some(source.clone()),
+                workspace_root: Some(source),
+                workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),
+                workspace_artifact: Some(fixture.grant.clone()),
+            },
+            None,
+            None,
+            None,
+            Default::default(),
+            false,
+            async {
+                let argv = vec!["-c".to_owned(), "touch cli-must-not-launch".to_owned()];
+                let error = run_cli_command(&config, &argv).await.unwrap_err();
+                assert!(error.to_string().contains("artifact-scoped"));
+                let args = serde_json::json!({"argv": argv}).to_string();
+                let outcome = crate::tool_call_lifecycle::ToolOutcome::from_dispatch(
+                    "sh",
+                    tool.call(args).await,
+                );
+                assert!(matches!(
+                    outcome,
+                    crate::tool_call_lifecycle::ToolOutcome::Failed {
+                        class: crate::tool_call_lifecycle::FailureClass::PolicyDenied,
+                        ..
+                    }
+                ));
+            },
+        )
+        .await;
+        assert!(!sentinel.exists());
     }
 
     #[tokio::test]

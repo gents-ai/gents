@@ -158,6 +158,7 @@ async fn request_runtime_workspace_root_replaces_static_root() {
             crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
                 workspace_cwd: Some(placement.clone()),
                 workspace_root: Some(std::fs::canonicalize(&placement).unwrap()),
+                workspace_artifact: None,
                 workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadWrite),
             },
             None,

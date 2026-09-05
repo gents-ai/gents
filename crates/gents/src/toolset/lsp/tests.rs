@@ -2155,8 +2155,8 @@ fn unrestricted_lsp_defaults_to_inherited_network() {
     assert_eq!(constraints.network_mode, CommandNetworkMode::Inherit);
 }
 
-#[test]
-fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
+#[tokio::test]
+async fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
     let root = tempfile::tempdir().unwrap();
     let constraints = CommandConstraints {
         allowed_argv_prefixes: Vec::new(),
@@ -2173,6 +2173,7 @@ fn explicit_disabled_under_unrestricted_sandbox_is_unenforceable() {
         "/bin/true"
     };
     let err = crate::toolset::prepare_managed_command(root.path(), command, &[], &constraints)
+        .await
         .unwrap_err();
     assert!(
         err.to_string().to_lowercase().contains("disabled")
@@ -2299,6 +2300,7 @@ async fn overlay_read_write_meets_unrestricted_lsp_sandbox_to_workspace_write() 
                 workspace_cwd: None,
                 workspace_root: Some(std::env::temp_dir()),
                 workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadWrite),
+                workspace_artifact: None,
             },
             None,
             None,
@@ -2343,4 +2345,119 @@ async fn start_client_initializes_with_pool_key_workspace() {
     let lease = pool.get_or_start(key, &server, &config).await.unwrap();
     assert_eq!(lease.client().workspace(), overlay.path());
     assert_ne!(lease.client().workspace(), baked.path());
+}
+
+#[tokio::test]
+async fn generated_artifact_scope_denies_lsp_before_pool_or_linter_dispatch() {
+    let snapshot: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = snapshot["artifact_spawn_cases"].as_array().unwrap();
+    let cases: Vec<_> = cases
+        .iter()
+        .filter(|case| case["name"] == "persistent_lsp_denied_before_pool_lookup")
+        .collect();
+    assert_eq!(cases.len(), 1);
+    assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(cases[0]).await;
+}
+
+pub(crate) async fn assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(
+    case: &serde_json::Value,
+) {
+    assert_eq!(case["name"], "persistent_lsp_denied_before_pool_lookup");
+    assert_eq!(case["kind"], "persistent_lsp");
+    assert_eq!(case["mode"], "artifact_write");
+    assert_eq!(case["binding"]["authority"], "readOnly");
+    assert_eq!(case["binding"]["state"], "sealed");
+    for key in [
+        "seal_matches",
+        "owner_matches",
+        "incarnation_matches",
+        "private_root_eligible",
+        "sandbox_enforced",
+    ] {
+        assert_eq!(case["binding"][key], true);
+    }
+    assert!(case["expected_mode"].is_null());
+    let fixture = crate::workspace::artifact_test_fixture(&[]).await;
+    let source = fixture.grant.source_root().to_path_buf();
+    let mut server = rust_analyzer_server(1);
+    server.command = "/artifact-denial-must-not-resolve-this-executable".into();
+    let mut config = sample_config(
+        source.clone(),
+        FileToolMode::ReadOnly,
+        "artifact-denial",
+        vec![server.clone()],
+    );
+    config.constraints.execution_mode = CommandExecutionMode::ReadOnly;
+    config.constraints.sandbox =
+        crate::toolset::lsp_sandbox_for_effective(CommandExecutionMode::ReadOnly);
+    let pool = LspPool::new();
+    let tool = LspTool::new(config.clone(), pool.clone()).unwrap();
+    let key = PoolKey {
+        session_id: config.session_id.clone(),
+        behavior_id: config.behavior_id.clone(),
+        workspace_root: source.clone(),
+        server_name: server.name.clone(),
+        config_digest: config.digest.clone(),
+    };
+    crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+        None,
+        tokio_util::sync::CancellationToken::new(),
+        crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+            workspace_cwd: Some(source.clone()),
+            workspace_root: Some(source.clone()),
+            workspace_authority: Some(crate::toolset::WorkspaceAuthority::ReadOnly),
+            workspace_artifact: Some(fixture.grant.clone()),
+        },
+        None,
+        None,
+        None,
+        Default::default(),
+        false,
+        async {
+            let mut artifact_config = config.clone();
+            artifact_config.constraints.execution_mode = CommandExecutionMode::ArtifactWrite;
+            artifact_config.constraints.sandbox = CommandExecutionMode::ArtifactWrite;
+            let artifact_tool = LspTool::new(artifact_config, pool.clone()).unwrap();
+            for tested_tool in [&tool, &artifact_tool] {
+                let error = tested_tool
+                    .call(LspArgs {
+                        action: "capabilities".into(),
+                        file: Some("README.md".into()),
+                        line: None,
+                        symbol: None,
+                        query: None,
+                        new_name: None,
+                        apply: None,
+                        payload: None,
+                        timeout: None,
+                    })
+                    .await
+                    .unwrap_err();
+                assert!(matches!(
+                    error,
+                    ToolError::ReportedFailure {
+                        class: FailureClass::PolicyDenied,
+                        ..
+                    }
+                ));
+            }
+            let error = pool
+                .get_or_start(key.clone(), &server, &config)
+                .await
+                .err()
+                .expect("pool must deny directly");
+            assert_eq!(error, super::ARTIFACT_SCOPE_DENIAL);
+            assert!(pool.get_ready(&key).await.is_none());
+            let linter = super::actions::run_linter_diagnostics(
+                &config,
+                &[server.clone()],
+                &source.join("README.md"),
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(linter.as_deref(), Some(super::ARTIFACT_SCOPE_DENIAL));
+        },
+    )
+    .await;
+    assert_eq!(pool.live_count().await, 0);
 }

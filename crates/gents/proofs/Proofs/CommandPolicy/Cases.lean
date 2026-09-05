@@ -425,6 +425,16 @@ def commandSandboxCases : List CommandSandboxCase :=
       .workspaceWrite
       false
   , sandboxCase
+      "artifact_write_enforced_selects_macos_seatbelt"
+      "artifact_write_sandbox_selection"
+      .artifactWrite
+      true
+  , sandboxCase
+      "artifact_write_unenforced_denies"
+      "artifact_write_sandbox_selection"
+      .artifactWrite
+      false
+  , sandboxCase
       "unrestricted_selects_unsandboxed_unrestricted"
       "unrestricted_unsandboxed_labeling"
       .unrestricted

@@ -1,5 +1,5 @@
 import Proofs.Workspace.Transition
-import Proofs.CommandPolicy.Types
+import Proofs.CommandPolicy.ArtifactAuthority
 
 namespace IsolatedWorkspace
 
@@ -95,14 +95,29 @@ def BindingAuthority.commandMode : BindingAuthority → ExecutionMode
   | .readWrite => .workspaceWrite
   | .integrate => .readOnly
 
-def modeRank : ExecutionMode → Nat
-  | .readOnly => 0
-  | .workspaceWrite => 1
-  | .unrestricted => 2
-
 def authorityMeet (behavior : ExecutionMode) (authority : BindingAuthority) : ExecutionMode :=
-  let cap := BindingAuthority.commandMode authority
-  if modeRank behavior ≤ modeRank cap then behavior else cap
+  behavior.meet (BindingAuthority.commandMode authority)
+
+/-- Explicit contextual grant, distinct from attenuation. The optional binding
+has already been checked by the existing workspace/execution owners, including
+active binding and current live, uncanceled execution. `requested` is AFTER the
+behavior/selection/operator-ceiling meet, never the raw artifact selection. -/
+def effectiveBoundCommand (requested : ExecutionMode)
+    (binding : Option ArtifactBinding) : Option ExecutionMode :=
+  if requested = .artifactWrite then
+    if admitArtifact requested binding then some .artifactWrite else none
+  else binding.map fun c => authorityMeet requested c.authority
+
+theorem ordinary_workspace_write_stays_readonly (c : ArtifactBinding)
+    (h : c.authority = .readOnly) :
+    effectiveBoundCommand .workspaceWrite (some c) = some .readOnly := by
+  simp [effectiveBoundCommand, authorityMeet, h, BindingAuthority.commandMode,
+    ExecutionMode.meet]
+
+theorem artifact_binding_required (c : Option ArtifactBinding)
+    (h : effectiveBoundCommand .artifactWrite c = some .artifactWrite) :
+    admitArtifact .artifactWrite c = true := by
+  simpa [effectiveBoundCommand] using h
 
 def AuthorityMeetOk (behavior : ExecutionMode) (authority : BindingAuthority) : Prop :=
   ¬ (authority = .readWrite ∧ authorityMeet behavior authority = .unrestricted)
@@ -154,11 +169,11 @@ theorem git_worktree_diff_readWrite_denies_git_metadata :
 
 theorem meet_readWrite_ne_unrestricted (behavior : ExecutionMode) :
     authorityMeet behavior .readWrite ≠ .unrestricted := by
-  cases behavior <;> simp [authorityMeet, BindingAuthority.commandMode, modeRank]
+  cases behavior <;> simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
 
 theorem meet_unrestricted_readWrite_is_workspaceWrite :
     authorityMeet .unrestricted .readWrite = .workspaceWrite := by
-  simp [authorityMeet, BindingAuthority.commandMode, modeRank]
+  simp [authorityMeet, BindingAuthority.commandMode, ExecutionMode.meet]
 
 theorem AuthorityMeetOk_readWrite (behavior : ExecutionMode) :
     AuthorityMeetOk behavior .readWrite := by

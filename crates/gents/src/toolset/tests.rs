@@ -684,6 +684,7 @@ async fn read_only_workspace_authority_denies_file_writes() {
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
                 workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+                workspace_artifact: None,
             },
             None,
             None,
@@ -733,6 +734,7 @@ async fn read_write_overlay_meets_unrestricted_bash_to_workspace_write() {
                 workspace_cwd: Some(root.clone()),
                 workspace_root: Some(std::fs::canonicalize(&root).unwrap()),
                 workspace_authority: Some(WorkspaceAuthority::ReadWrite),
+                workspace_artifact: None,
             },
             None,
             None,
@@ -1434,12 +1436,16 @@ fn generated_command_sandbox_cases_match_rust_selection() {
                 let error = result.unwrap_err().to_string();
                 assert_eq!(
                     case.denial_reason.as_deref(),
-                    Some("workspaceWriteSandboxUnavailable"),
+                    Some(if mode == CommandExecutionMode::ArtifactWrite {
+                        "artifactWriteSandboxUnavailable"
+                    } else {
+                        "workspaceWriteSandboxUnavailable"
+                    }),
                     "Lean CommandPolicy sandbox case {} denied for unexpected reason",
                     case.name
                 );
                 assert!(
-                    error.contains("workspace_write") || error.contains("sandbox-exec"),
+                    error.contains("workspace_write") || error.contains("artifact_write") || error.contains("sandbox-exec"),
                     "Lean CommandPolicy sandbox case {} expected workspace_write denial, got: {error}",
                     case.name
                 );
@@ -2353,4 +2359,385 @@ async fn backgrounded_bash_is_exempt_from_foreground_ceiling() {
         "a backgrounded command must not be killed by the 1s foreground ceiling: {output}"
     );
     assert_eq!(meta["timed_out"], false);
+}
+
+#[test]
+fn generated_artifact_mode_meet_cases_drive_command_effect_intersection() {
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_mode_meet_cases;
+    assert_eq!(cases.len(), 16);
+    for case in cases {
+        let left = CommandExecutionMode::parse(case["left"].as_str().unwrap()).unwrap();
+        let right = CommandExecutionMode::parse(case["right"].as_str().unwrap()).unwrap();
+        let expected = case["expected"].as_str().unwrap();
+        assert_eq!(left.meet(right).as_str(), expected, "{case}");
+    }
+}
+
+#[tokio::test]
+async fn artifact_command_without_runtime_grant_never_dispatches() {
+    let root = temp_root("artifact-missing-grant");
+    let context = ToolContext::new(root.clone(), false).unwrap();
+    let policy =
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::ArtifactWrite);
+    let error = super::shared::run_command(
+        &context,
+        "bash",
+        "/bin/sh",
+        &["-c".into(), "touch escaped".into()],
+        None,
+        Duration::from_secs(5),
+        &policy,
+        false,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("artifact_write requires"),
+        "{error}"
+    );
+    assert!(!root.join("escaped").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn generated_artifact_spawn_cases_drive_live_foreground_and_background_launches() {
+    let fx = crate::workspace::artifact_test_fixture(&[]).await;
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_spawn_cases;
+    assert_eq!(cases.len(), 5);
+    let mut exercised = 0;
+    for case in cases {
+        exercised += 1;
+        if case["kind"] == "persistent_lsp" {
+            super::lsp::tests::assert_artifact_scope_denies_lsp_before_pool_or_linter_dispatch(
+                case,
+            )
+            .await;
+            continue;
+        }
+        let name = case["name"].as_str().unwrap();
+        let background = case["kind"] == "background";
+        let grant = if case["binding"].is_null() {
+            None
+        } else {
+            Some(fx.grant.clone())
+        };
+        if case["binding"]["incarnation_matches"] == false {
+            let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
+            let mutation = format!(
+                r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#
+            );
+            let result = fx.node.execute(&mutation).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
+        let root = fx.grant.source_root().to_path_buf();
+        let output = fx.grant.root().join("target").join(name);
+        let script = format!(
+            "printf artifact > \"$CARGO_TARGET_DIR/{name}\"; printf temporary > \"$TMPDIR/{name}\""
+        );
+        let operation = async move {
+            crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+                None, tokio_util::sync::CancellationToken::new(),
+                crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                    workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
+                    workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: grant,
+                }, None, None, None, Default::default(), background,
+                async move {
+                    let context = ToolContext::new(root, false).unwrap();
+                    let policy = CommandExecutionPolicy::write_capable()
+                        .with_mode(CommandExecutionMode::ArtifactWrite)
+                        .with_network_mode(CommandNetworkMode::Disabled);
+                    super::shared::run_command(&context, "bash", "/bin/sh", &["-c".into(), script],
+                        None, Duration::from_secs(10), &policy, false).await
+                },
+            ).await
+        };
+        // A real task boundary explicitly receives the SAME grant; this does not
+        // claim to cover the separate durable background bridge's serialization.
+        let result = if background {
+            tokio::spawn(operation).await.unwrap()
+        } else {
+            operation.await
+        };
+        let expected = case["expected_mode"] == "artifact_write";
+        assert_eq!(result.is_ok(), expected, "{name}: {result:?}");
+        assert_eq!(
+            output.exists(),
+            expected,
+            "{name}: unexpected dispatch effect"
+        );
+        assert_eq!(fx.grant.root().join("tmp").join(name).exists(), expected);
+    }
+    assert_eq!(exercised, 5);
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn artifact_managed_command_enforces_source_inode_and_network_boundaries() {
+    use std::os::unix::fs::PermissionsExt;
+    let fx =
+        crate::workspace::artifact_test_fixture(&[("protected.txt", "source sentinel\n")]).await;
+    let outside = tempfile::tempdir().unwrap();
+    let sentinel = outside.path().join("external.txt");
+    std::fs::write(&sentinel, "external sentinel\n").unwrap();
+    let protected = fx.grant.source_root().join("protected.txt");
+    let original_mode = std::fs::metadata(&protected).unwrap().permissions().mode();
+    let script = r#"import os, pathlib, socket, errno, sys
+source=pathlib.Path('protected.txt'); artifact=pathlib.Path(os.environ['CARGO_TARGET_DIR']); external=pathlib.Path(sys.argv[1])
+def denied(operation):
+    try: operation()
+    except OSError as error:
+        assert error.errno in (errno.EPERM,errno.EACCES), repr(error)
+    else: raise AssertionError('forbidden syscall succeeded')
+(artifact/'success').write_text('artifact output')
+denied(lambda:source.write_text('escape'))
+denied(lambda:os.rename(source,artifact/'renamed'))
+denied(lambda:os.chmod(source,0o777))
+denied(lambda:os.unlink(source))
+for name,target in [('source-link',source.resolve()),('external-link',external)]:
+    link=artifact/name; os.symlink(target,link)
+    denied(lambda:link.write_text('symlink escape'))
+denied(lambda:os.link(source,artifact/'hardlink'))
+with socket.socket() as connection:
+    connection.settimeout(2)
+    denied(lambda:connection.connect(('127.0.0.1',9)))
+"#;
+    let root = fx.grant.source_root().to_path_buf();
+    let result =
+        crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                workspace_cwd: Some(root.clone()),
+                workspace_root: Some(root.clone()),
+                workspace_authority: Some(WorkspaceAuthority::ReadOnly),
+                workspace_artifact: Some(fx.grant.clone()),
+            },
+            None,
+            None,
+            None,
+            Default::default(),
+            false,
+            async {
+                let constraints = CommandConstraints {
+                    execution_mode: CommandExecutionMode::ArtifactWrite,
+                    sandbox: CommandExecutionMode::ArtifactWrite,
+                    allowed_argv_prefixes: Vec::new(),
+                    forbidden_argv_prefixes: Vec::new(),
+                    network_mode: CommandNetworkMode::Disabled,
+                    deny_all_argv: false,
+                    deny_git_metadata_writes: true,
+                };
+                let (program, argv, env, sandbox) = prepare_managed_command(
+                    &root,
+                    "/usr/bin/python3",
+                    &[
+                        "-B".into(),
+                        "-c".into(),
+                        script.into(),
+                        sentinel.to_string_lossy().into_owned(),
+                    ],
+                    &constraints,
+                )
+                .await
+                .unwrap();
+                assert_eq!(sandbox, "macos_seatbelt");
+                assert_eq!(
+                    env["CARGO_TARGET_DIR"],
+                    fx.grant.root().join("target").to_string_lossy()
+                );
+                assert_eq!(env["TMPDIR"], fx.grant.root().join("tmp").to_string_lossy());
+                crate::managed_exec::run_managed_exec(crate::managed_exec::ManagedExecRequest {
+                    argv: std::iter::once(program.to_string_lossy().into_owned())
+                        .chain(argv)
+                        .collect(),
+                    cwd: root.clone(),
+                    deadline_at: Some(chrono::Utc::now() + chrono::Duration::seconds(15)),
+                    cancellation_token: tokio_util::sync::CancellationToken::new(),
+                    max_output_bytes: 64 * 1024,
+                    stdin: Vec::new(),
+                    environment: Some(env),
+                    tool_name: Some("artifact-probe".into()),
+                    live_output: None,
+                })
+                .await
+            },
+        )
+        .await;
+    match result {
+        crate::managed_exec::ManagedExecOutcome::Exited { code, stderr, .. } => {
+            assert_eq!(code, Some(0), "{}", String::from_utf8_lossy(&stderr));
+        }
+        other => panic!("artifact syscall probe failed: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(&protected).unwrap(),
+        "source sentinel\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&protected).unwrap().permissions().mode(),
+        original_mode
+    );
+    assert_eq!(
+        std::fs::read_to_string(sentinel).unwrap(),
+        "external sentinel\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(fx.grant.root().join("target/success")).unwrap(),
+        "artifact output"
+    );
+    fx.grant.validate_for_launch().await.unwrap();
+}
+
+#[cfg(target_os = "macos")]
+async fn run_artifact_compiler_fixture(build_script: Option<&str>) {
+    let manifest =
+        "[package]\nname = \"artifact-compiler-probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
+    let lock =
+        "version = 3\n\n[[package]]\nname = \"artifact-compiler-probe\"\nversion = \"0.1.0\"\n";
+    let source = "pub fn answer() -> u32 { 42 }\n#[test] fn answer_is_correct() { assert_eq!(answer(), 42); }\n";
+    let mut files = vec![
+        ("Cargo.toml", manifest),
+        ("Cargo.lock", lock),
+        ("src/lib.rs", source),
+        ("protected.txt", "source sentinel\n"),
+    ];
+    if let Some(build) = build_script {
+        files.push(("build.rs", build));
+    }
+    let fx = crate::workspace::artifact_test_fixture(&files).await;
+    let root = fx.grant.source_root().to_path_buf();
+    let before: Vec<_> = files
+        .iter()
+        .map(|(path, _)| ((*path).to_owned(), std::fs::read(root.join(path)).unwrap()))
+        .collect();
+    let git_pointer = std::fs::read(root.join(".git")).unwrap();
+    let pointer_text = String::from_utf8(git_pointer.clone()).unwrap();
+    let git_dir = PathBuf::from(pointer_text.trim().strip_prefix("gitdir: ").unwrap());
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        root.join(git_dir)
+    };
+    // Artifacts deliberately live under a separate host-owned Git placement
+    // directory. The Git control files themselves must remain byte-identical.
+    let metadata_before: Vec<_> = ["HEAD", "index", "commondir", "gitdir"]
+        .into_iter()
+        .map(|name| (name, std::fs::read(git_dir.join(name)).unwrap()))
+        .collect();
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root.clone(), false).unwrap(),
+        Duration::from_secs(120),
+        Duration::from_secs(120),
+        CommandExecutionPolicy::write_capable()
+            .with_mode(CommandExecutionMode::ArtifactWrite)
+            .with_network_mode(CommandNetworkMode::Disabled),
+    );
+    let mut outputs = Vec::new();
+    for subcommand in ["check", "test"] {
+        let result = crate::tool_call_lifecycle::runtime::scope_request_tool_execution_with_workspace_overlay(
+            None, tokio_util::sync::CancellationToken::new(),
+            crate::tool_call_lifecycle::runtime::ToolWorkspaceScope {
+                workspace_cwd: Some(root.clone()), workspace_root: Some(root.clone()),
+                workspace_authority: Some(WorkspaceAuthority::ReadOnly), workspace_artifact: Some(fx.grant.clone()),
+            }, None, None, None, Default::default(), false,
+            crate::llm::tool::Tool::call(&tool, BashArgs { command: "cargo".into(), args: vec![subcommand.into(), "--locked".into(), "--offline".into()],
+                cwd: None, timeout_secs: Some(120), raw_json: true }),
+        ).await;
+        outputs.push(
+            serde_json::json!({"command": ["cargo", subcommand, "--locked", "--offline"],
+            "result": result.as_ref().map(String::as_str).map_err(ToString::to_string)}),
+        );
+        if let Some(evidence) = std::env::var_os("GENTS_ARTIFACT_COMPILER_QA_DIR") {
+            let evidence = PathBuf::from(evidence);
+            std::fs::create_dir_all(&evidence).unwrap();
+            std::fs::write(
+                evidence.join(if build_script.is_some() {
+                    "malicious-build-results.json"
+                } else {
+                    "benign-results.json"
+                }),
+                serde_json::to_vec_pretty(&outputs).unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(
+            result.is_ok(),
+            "actual offline compiler {subcommand} failed: {result:?}"
+        );
+        let output: serde_json::Value = serde_json::from_str(result.as_ref().unwrap()).unwrap();
+        assert_eq!(output["execution_mode"], "artifact_write");
+        assert_eq!(output["network_mode"], "disabled");
+        assert_eq!(output["sandbox"], "macos_seatbelt");
+        assert_eq!(output["exit_code"], 0);
+        if subcommand == "test" {
+            assert!(
+                output["stdout"].as_str().unwrap().contains("1 passed"),
+                "compiler QA must execute its unit test: {output}"
+            );
+        }
+    }
+    for (path, bytes) in before {
+        assert_eq!(
+            std::fs::read(root.join(&path)).unwrap(),
+            bytes,
+            "source changed: {path}"
+        );
+    }
+    assert_eq!(std::fs::read(root.join(".git")).unwrap(), git_pointer);
+    for (name, bytes) in metadata_before {
+        assert_eq!(
+            std::fs::read(git_dir.join(name)).unwrap(),
+            bytes,
+            "Git metadata changed: {name}"
+        );
+    }
+    assert!(!root.join("target").exists());
+    assert!(fx.grant.root().join("target/debug/deps").is_dir());
+    fx.grant.validate_for_launch().await.unwrap();
+    if std::env::var_os("GENTS_ARTIFACT_COMPILER_QA_DIR").is_some() {
+        let artifact_root = fx.grant.root().to_path_buf();
+        let retained = fx._dir.keep();
+        tracing::info!(fixture = %retained.display(), artifacts = %artifact_root.display(), "retained dedicated artifact compiler QA evidence");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "dedicated offline compiler QA; run test executable directly without parent Cargo"]
+async fn artifact_compiler_tool_keeps_sealed_source_read_only() {
+    run_artifact_compiler_fixture(None).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "dedicated offline compiler QA; run test executable directly without parent Cargo"]
+async fn artifact_compiler_build_script_cannot_escape_private_output() {
+    run_artifact_compiler_fixture(Some(r#"
+use std::{env, fs, io, net::{SocketAddr, TcpStream}, os::unix::fs::{symlink, PermissionsExt}, path::PathBuf, time::Duration};
+fn denied(operation: impl FnOnce() -> io::Result<()>) {
+    let error = operation().expect_err("forbidden build-script effect succeeded");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+}
+fn main() {
+    let source = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let output = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let target = PathBuf::from(env::var_os("CARGO_TARGET_DIR").unwrap());
+    let temporary = PathBuf::from(env::var_os("TMPDIR").unwrap());
+    assert!(!target.starts_with(&source)); assert!(!temporary.starts_with(&source));
+    fs::write(output.join("allowed"), "artifact").unwrap();
+    let protected = source.join("protected.txt");
+    denied(|| fs::write(&protected, "overwrite"));
+    denied(|| fs::rename(&protected, output.join("moved")));
+    denied(|| fs::set_permissions(&protected, fs::Permissions::from_mode(0o777)));
+    denied(|| fs::remove_file(&protected));
+    let alias = output.join("source-symlink"); symlink(&protected, &alias).unwrap();
+    denied(|| fs::write(&alias, "symlink escape"));
+    denied(|| fs::hard_link(&protected, output.join("source-hardlink")));
+    // Redirecting model/build-process environment cannot redirect kernel authority.
+    env::set_var("CARGO_TARGET_DIR", &source); env::set_var("TMPDIR", &source);
+    denied(|| fs::write(PathBuf::from(env::var_os("TMPDIR").unwrap()).join("redirected"), "escape"));
+    let address: SocketAddr = "127.0.0.1:9".parse().unwrap();
+    denied(|| TcpStream::connect_timeout(&address, Duration::from_secs(2)).map(|_| ()));
+}
+"#)).await;
 }
