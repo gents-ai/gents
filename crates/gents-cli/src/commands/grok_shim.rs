@@ -11,8 +11,8 @@
 //!    register → registered handshake, readiness gating, ping/pong, and ACP
 //!    payload forwarding to the delegate;
 //! 3. [`acp`] owns the ACP service: initialize capabilities, session/new with
-//!    a preferred id, model/catalog/mode updates, and the shaped method-not-
-//!    found stubs (`session/load`, `x.ai/interject`,
+//!    a preferred id, persisted session list/load, model/catalog/mode updates,
+//!    and the shaped method-not-found stubs (`x.ai/interject`,
 //!    `x.ai/compact_conversation`);
 //! 4. [`turn`] owns connection-scoped pending prompts: JSON-RPC ids,
 //!    submission via [`crate::create_agent_request`], deferred responses until
@@ -35,8 +35,10 @@ pub(crate) mod acp;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;
+mod sessions;
 mod task_control;
 pub(crate) mod turn;
+mod usage;
 
 use crate::commands::grok_shim::projection::resolve_bound_model_context;
 use crate::commands::grok_shim::server::{

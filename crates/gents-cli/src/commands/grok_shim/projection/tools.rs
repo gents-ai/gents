@@ -878,8 +878,8 @@ fn tool_content(result_text: &str) -> Vec<Value> {
         return Vec::new();
     }
     vec![json!({
-        "type": "text",
-        "text": trimmed,
+        "type": "content",
+        "content": {"type": "text", "text": trimmed},
     })]
 }
 
@@ -1126,6 +1126,17 @@ fn decode_tool_result_rows(response: &defra_node::QueryResponse) -> Vec<ToolResu
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tool_results_use_acp_tool_call_content_not_bare_message_blocks() {
+        assert_eq!(
+            super::tool_content("tool call cancelled"),
+            vec![serde_json::json!({
+                "type":"content", "content":{"type":"text","text":"tool call cancelled"}
+            })]
+        );
+        assert!(super::tool_content("  ").is_empty());
+    }
+
     use super::*;
 
     fn tool_row(tool_name: &str, lifecycle_state: Option<&str>) -> ToolCallRow {
@@ -1680,7 +1691,7 @@ mod tests {
         assert_eq!(
             call.content
                 .first()
-                .and_then(|block| block.get("text"))
+                .and_then(|block| block.pointer("/content/text"))
                 .and_then(Value::as_str),
             Some("streaming line one"),
             "the live tail is also the call's content block"

@@ -39,6 +39,7 @@ use gents::{load_agent_behavior, load_inference_profile};
 use serde_json::{json, Map, Value};
 
 mod child_output;
+mod context;
 pub(crate) mod messages;
 pub(crate) mod subagents;
 pub(crate) mod tools;
@@ -117,7 +118,8 @@ impl BoundModelContext {
 ///   `NotificationMeta` dedup contract (the pager deduplicates non-replay
 ///   counters by `eventId`, so a repeated id would silently drop a live
 ///   update);
-/// - `totalTokens` is cumulative and never decreases within a session.
+/// - `totalTokens` is current context occupancy, ordered by persisted
+///   inference dispatch; newer context may decrease after compaction.
 ///
 /// Event ids are *reserved*, not simply allocated: a reservation commits only
 /// after the notification carrying it was successfully sent, and an
@@ -130,11 +132,12 @@ pub(crate) struct ProjectionSequencer {
 }
 
 /// Per-session counters: the committed event-id high-water mark and the
-/// session-cumulative token total.
+/// most recent observed context occupancy (not cumulative token spend).
 #[derive(Debug, Default)]
 struct SessionSequence {
     event_counter: u64,
     total_tokens: u64,
+    context_order: Option<context::ContextOrder>,
 }
 
 /// One reserved event id.
@@ -231,7 +234,7 @@ impl ProjectionSequencer {
             .unwrap_or(0)
     }
 
-    /// The session-cumulative token total for `session_id`.
+    /// Last known current-context occupancy for `session_id`.
     pub(crate) fn session_total_tokens(&self, session_id: &str) -> u64 {
         self.sessions
             .lock()
@@ -241,55 +244,36 @@ impl ProjectionSequencer {
             .unwrap_or(0)
     }
 
-    /// Apply one per-request token observation to the session-cumulative
-    /// total.
-    ///
-    /// `AgentResponse.token_count` is a *per-request* observation, while
-    /// `_meta.totalTokens` must be *session-cumulative and never
-    /// decreasing*. The request-local `high_water` cursor reconciles the
-    /// two: only the positive delta above the highest observation this
-    /// request has already applied is added — exactly once — so repeated
-    /// polls of the same value never double-count and stale or decreasing
-    /// observations (a retry-replaced response row, a late poll) are
-    /// ignored. The cumulative total is clamped to the bound context window
-    /// without ever decreasing.
-    ///
-    /// The high-water advance is recorded at poll time, not send time: it is
-    /// an *observation* record rather than a delivery record, which is
-    /// exactly what makes a re-poll after a failed send add nothing the
-    /// second time.
-    pub(crate) fn apply_token_observation(
-        &self,
-        session_id: &str,
-        high_water: &mut u64,
-        observed: u64,
-        context_window_tokens: u64,
-    ) {
-        if observed <= *high_water {
-            // A repeated, stale, or decreasing observation: the delta was
-            // already applied (or never existed).
-            return;
-        }
-        let delta = observed - *high_water;
-        *high_water = observed;
+    /// Replace context only from the newest persisted inference generation.
+    /// New calls may lower occupancy after compaction; old background polls
+    /// cannot overwrite them. Repeated observations never add token spend.
+    fn observe_context(&self, session_id: &str, sample: context::ContextSample) {
         let mut sessions = self
             .sessions
             .lock()
             .expect("grok shim sequencer lock poisoned");
-        let sequence = sessions.entry(session_id.to_string()).or_default();
-        let candidate = sequence.total_tokens.saturating_add(delta);
-        // Clamp to the window without ever decreasing: a bound window that
-        // shrank mid-session cannot retract tokens already reported.
-        sequence.total_tokens = candidate
-            .min(context_window_tokens)
-            .max(sequence.total_tokens);
+        let sequence = sessions.entry(session_id.to_owned()).or_default();
+        match sequence
+            .context_order
+            .as_ref()
+            .map(|order| sample.order.cmp(order))
+        {
+            Some(std::cmp::Ordering::Less) => return,
+            Some(std::cmp::Ordering::Equal) => {
+                sequence.total_tokens = sequence.total_tokens.max(sample.used)
+            }
+            _ => {
+                sequence.total_tokens = sample.used;
+                sequence.context_order = Some(sample.order);
+            }
+        }
     }
 }
 
 /// Build the `_meta` object stamped on one session/update notification.
 ///
 /// Fields follow the pager's `NotificationMeta`: `eventId` is
-/// `"{sessionId}-{counter}"`, `totalTokens` is the cumulative session usage,
+/// `"{sessionId}-{counter}"`, `totalTokens` is current context occupancy,
 /// and `promptId` correlates the update with its turn. `is_replay` is
 /// `None` for fresh updates (the key is omitted entirely) and `Some(false)`
 /// for the user echo, which carries the key explicitly.
@@ -660,17 +644,13 @@ impl ProjectionEngine {
     ///   prompt's user row is skipped — the turn already echoed the prompt
     ///   blocks directly.
     ///
-    /// The message projection's per-request `token_count` observation is
-    /// applied here — at poll time, not send time — through
-    /// [`ProjectionSequencer::apply_token_observation`] with the caller's
-    /// request-local high-water cursor, so the session-cumulative
-    /// `totalTokens` advances by the positive delta exactly once even if
-    /// this poll's sends fail and the next poll re-observes the same value.
+    /// Context metadata comes from the newest physically owned inference
+    /// accounting observation, not generated-token totals. Re-observation
+    /// after a failed send is idempotent; older requests cannot replace it.
     pub(crate) async fn project_request_updates(
         &self,
         session_id: &str,
         request_id: &str,
-        token_high_water: &mut u64,
         cursor: &mut RequestCursor,
     ) -> Result<ProjectionBatch> {
         // Each family projects independently (one bounded query set per
@@ -692,12 +672,9 @@ impl ProjectionEngine {
         )
         .await?;
         cursor.observe_timestamps(&messages);
-        self.sequencer.apply_token_observation(
-            session_id,
-            token_high_water,
-            messages.total_tokens,
-            self.bound.effective_context_window(),
-        );
+        if let Some(sample) = context::load(&self.node, session_id, request_id).await? {
+            self.sequencer.observe_context(session_id, sample);
+        }
 
         let durable_rows = durable_row_views(&messages);
         let history_rows = messages
@@ -2851,6 +2828,7 @@ pub(crate) async fn resolve_bound_model_context(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::graphql::ensure_no_errors;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::Mutex as StdMutex;
 
@@ -3144,16 +3122,9 @@ mod tests {
         assert_eq!(sequencer.event_counter("s"), 1);
     }
 
-    /// Gate 2 (token accounting): the token observation is applied at poll
-    /// time — an *observation* record, not a delivery record — so a failed
-    /// send rolls the event id back but leaves the session-cumulative
-    /// `totalTokens` advanced by exactly the observed delta. The recovery
-    /// send then re-observes the same value (adds nothing) and stamps the
-    /// already-recorded cumulative total with the rolled-back id. This is
-    /// the deliberate coherence: the failed turn's tokens were *consumed*
-    /// regardless of delivery, and a live-send failure is connection-terminal
-    /// for the pager anyway — the recovery path here models exactly what a
-    /// re-poll through the same channel produces, with no double-count.
+    /// Context observation is independent of transport delivery. A failed
+    /// send rolls back its event ID; re-observing the same inference sample
+    /// neither adds usage nor changes context, and the retry stamps it once.
     #[tokio::test]
     async fn a_failed_send_rolls_back_the_id_but_never_double_counts_tokens() {
         let sequencer = Arc::new(ProjectionSequencer::new());
@@ -3162,8 +3133,7 @@ mod tests {
 
         // The projection pass observed 100 tokens for the request and
         // applied the delta to the session total at poll time.
-        let mut high_water = 0u64;
-        sequencer.apply_token_observation("s", &mut high_water, 100, 1_000);
+        sequencer.observe_context("s", test_context(1, 100));
         assert_eq!(sequencer.session_total_tokens("s"), 100);
 
         // The send fails: the id rolls back, nothing is enqueued.
@@ -3174,9 +3144,8 @@ mod tests {
             .expect_err("the closed sender must fail the send");
         assert_eq!(sequencer.event_counter("s"), 0);
 
-        // The next poll re-observes the same value: the high-water cursor
-        // adds nothing — exactly the documented re-poll idempotence.
-        sequencer.apply_token_observation("s", &mut high_water, 100, 1_000);
+        // The next poll re-observes the same generation and value.
+        sequencer.observe_context("s", test_context(1, 100));
         assert_eq!(sequencer.session_total_tokens("s"), 100);
 
         // The recovery send stamps the recorded cumulative total (100) with
@@ -3255,48 +3224,52 @@ mod tests {
         assert_eq!(sequencer.event_counter("s"), 3);
     }
 
-    #[test]
-    fn token_observations_apply_positive_deltas_exactly_once() {
-        let sequencer = ProjectionSequencer::new();
-        let mut high_water = 0u64;
-        sequencer.apply_token_observation("s", &mut high_water, 100, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 100);
-        // A repeated poll of the same observation adds nothing.
-        sequencer.apply_token_observation("s", &mut high_water, 100, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 100);
-        // A later, larger observation of the same request adds only its
-        // delta.
-        sequencer.apply_token_observation("s", &mut high_water, 250, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 250);
-        // A stale (retry-replaced) smaller observation of the same request
-        // is below the high-water and adds nothing, so the session total
-        // never decreases.
-        sequencer.apply_token_observation("s", &mut high_water, 40, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 250);
-        // A second request starts its own high-water at zero and its
-        // observation accumulates on top of the session total — sequential
-        // requests each contribute their own tokens.
-        let mut second_request_high_water = 0u64;
-        sequencer.apply_token_observation("s", &mut second_request_high_water, 70, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 320);
-        // Two sessions never share a token total.
-        let mut other_session_high_water = 0u64;
-        sequencer.apply_token_observation("other", &mut other_session_high_water, 70, 1_000);
-        assert_eq!(sequencer.session_total_tokens("other"), 70);
-        assert_eq!(sequencer.session_total_tokens("s"), 320);
+    fn test_context(generation: i64, used: u64) -> context::ContextSample {
+        context::ContextSample {
+            order: (
+                chrono::DateTime::from_timestamp(1_700_000_000 + generation, 0).unwrap(),
+                generation,
+                format!("call-{generation}"),
+            ),
+            used,
+        }
     }
 
     #[test]
-    fn token_totals_clamp_to_the_context_window_without_decreasing() {
+    fn context_observations_replace_spend_and_reject_old_requests() {
         let sequencer = ProjectionSequencer::new();
-        let mut high_water = 0u64;
-        sequencer.apply_token_observation("s", &mut high_water, 900, 1_000);
+        sequencer.observe_context("s", test_context(1, 900));
+        sequencer.observe_context("s", test_context(1, 900));
         assert_eq!(sequencer.session_total_tokens("s"), 900);
-        sequencer.apply_token_observation("s", &mut high_water, 1_500, 1_000);
-        assert_eq!(sequencer.session_total_tokens("s"), 1_000);
-        // A window that shrank mid-session cannot retract reported tokens.
-        sequencer.apply_token_observation("s", &mut high_water, 1_500, 500);
-        assert_eq!(sequencer.session_total_tokens("s"), 1_000);
+        sequencer.observe_context("s", test_context(2, 300));
+        assert_eq!(
+            sequencer.session_total_tokens("s"),
+            300,
+            "compaction can reduce current context"
+        );
+        sequencer.observe_context("s", test_context(1, 950));
+        assert_eq!(
+            sequencer.session_total_tokens("s"),
+            300,
+            "old background polling cannot restore old context"
+        );
+        sequencer.observe_context("s", test_context(2, 350));
+        sequencer.observe_context("s", test_context(2, 300));
+        assert_eq!(
+            sequencer.session_total_tokens("s"),
+            350,
+            "same-call stale usage cannot retract completed output"
+        );
+        sequencer.observe_context("other", test_context(3, 100));
+        assert_eq!(sequencer.session_total_tokens("s"), 350);
+        assert_eq!(sequencer.session_total_tokens("other"), 100);
+    }
+
+    #[test]
+    fn observed_context_is_not_clamped_to_hide_budget_overflow() {
+        let sequencer = ProjectionSequencer::new();
+        sequencer.observe_context("s", test_context(1, 1_500));
+        assert_eq!(sequencer.session_total_tokens("s"), 1_500);
     }
 
     #[test]
@@ -3569,12 +3542,11 @@ mod tests {
                 262_144,
             ),
         );
-        let mut token_high_water = 0u64;
         let mut cursor = RequestCursor::new();
 
         // First poll: both chunks of the row are novel.
         let first = engine
-            .project_request_updates("s-chunk", request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates("s-chunk", request_id, &mut cursor)
             .await
             .expect("first poll");
         assert_eq!(first.len(), 2, "thought plus text both stream");
@@ -3593,7 +3565,7 @@ mod tests {
         // identity stays unseen and must be re-emitted by the next poll.
         cursor.record(first[0].advance.clone());
         let second = engine
-            .project_request_updates("s-chunk", request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates("s-chunk", request_id, &mut cursor)
             .await
             .expect("second poll");
         assert_eq!(
@@ -3609,7 +3581,7 @@ mod tests {
         // After the retry's send succeeds, a third poll emits nothing.
         cursor.record(second[0].advance.clone());
         let third = engine
-            .project_request_updates("s-chunk", request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates("s-chunk", request_id, &mut cursor)
             .await
             .expect("third poll");
         assert!(third.is_empty(), "every chunk is now delivered");
@@ -3781,6 +3753,77 @@ mod tests {
     /// and the same on a re-poll after a failed send, without duplicating
     /// the events whose sends succeeded.
     #[tokio::test]
+    async fn persisted_context_hydrates_metadata_without_a_response_token_counter() {
+        let (_dir, engine) = embedded_engine().await;
+        let response = engine.node.execute(r#"mutation { create_AgentRequest(input: {
+            request_id: "context-owner", session_id: "context-session", agent_did: "did:test:grok-shim",
+            requester_did: "did:test:requester", lifecycle_state: "processing"
+        }) {_docID} }"#).await;
+        ensure_no_errors(&response, "context fixture owner").unwrap();
+        let response = engine
+            .node
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "context-owner"}}) {_docID} }"#)
+            .await;
+        let doc = response.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
+            .as_str()
+            .unwrap();
+        let accounting = gents_protocol::rendered_request::ContextAccounting {
+            accounting_version: 1,
+            turn_index: 0,
+            attempt: 0,
+            estimator: "fixture".into(),
+            components: gents_protocol::rendered_request::ContextInputComponents {
+                messages: 900,
+                documents: 0,
+                tool_schemas: 50,
+                additional_parameters: 0,
+                output_schema: 0,
+            },
+            estimated_input_tokens: 950,
+            context_window: 10_000,
+            compaction_threshold_basis_points: 8_000,
+            compaction_threshold_tokens: 8_000,
+            configured_max_output_tokens: Some(1_000),
+            effective_max_output_tokens: Some(1_000),
+            compaction_reason:
+                gents_protocol::rendered_request::ContextCompactionReason::BelowThreshold,
+            pre_compaction_input_tokens: None,
+        };
+        let encoded =
+            gents::graphql::escape_graphql_string(&serde_json::to_string(&accounting).unwrap());
+        let doc = gents::graphql::escape_graphql_string(doc);
+        let response = engine.node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
+            call_id: "context-call", request_id: "context-owner", request_doc_id: "{doc}",
+            agent_did: "did:test:grok-shim", call_kind: "inference", call_seq: 1,
+            queued_at: "2026-09-04T12:00:00Z", completion_tokens: 25, context_accounting_json: "{encoded}"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&response, "context call fixture").unwrap();
+        let mut cursor = RequestCursor::new();
+        engine
+            .project_request_updates("context-session", "context-owner", &mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.sequencer.session_total_tokens("context-session"),
+            975
+        );
+        assert!(
+            context::load(&engine.node, "foreign-session", "context-owner")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        engine
+            .project_request_updates("context-session", "context-owner", &mut cursor)
+            .await
+            .unwrap();
+        assert_eq!(
+            engine.sequencer.session_total_tokens("context-session"),
+            975
+        );
+    }
+
+    #[tokio::test]
     async fn mixed_families_project_in_deterministic_chronology_through_the_embedded_node() {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-chron";
@@ -3893,10 +3936,9 @@ mod tests {
         )
         .await;
 
-        let mut token_high_water = 0u64;
         let mut cursor = RequestCursor::new();
         let first = engine
-            .project_request_updates(session_id, request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("first poll");
         let kinds: Vec<String> = first.iter().map(update_kind).collect();
@@ -3943,7 +3985,7 @@ mod tests {
             cursor.record(advance);
         }
         let second = engine
-            .project_request_updates(session_id, request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("second poll");
         let retry_kinds: Vec<String> = second.iter().map(update_kind).collect();
@@ -3976,7 +4018,7 @@ mod tests {
             cursor.record(advance);
         }
         let third = engine
-            .project_request_updates(session_id, request_id, &mut token_high_water, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("third poll");
         assert!(third.is_empty(), "every event is now delivered");
@@ -4151,11 +4193,10 @@ mod tests {
         engine: &ProjectionEngine,
         session_id: &str,
         request_id: &str,
-        token_high_water: &mut u64,
         cursor: &mut RequestCursor,
     ) -> Vec<NovelProjectionEvent> {
         let batch = engine
-            .project_request_updates(session_id, request_id, token_high_water, cursor)
+            .project_request_updates(session_id, request_id, cursor)
             .await
             .expect("poll");
         for event in &batch.events {
@@ -4199,11 +4240,10 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-live";
         let request_id = "req-live";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "Hel".into())],
@@ -4211,7 +4251,7 @@ mod tests {
         );
 
         update_response_tail(&engine, request_id, "Hello", "", 2, 0).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "lo".into())],
@@ -4219,7 +4259,7 @@ mod tests {
         );
 
         // An unchanged tail re-poll emits nothing.
-        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(third.is_empty(), "an unchanged tail is not novel");
     }
 
@@ -4228,12 +4268,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-one-stream";
         let request_id = "req-one-stream";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
         update_response_tail(&engine, request_id, "answer", "thinking", 1, 1).await;
-        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         let keys: Vec<_> = events
             .iter()
             .filter_map(|event| {
@@ -4255,12 +4294,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reset";
         let request_id = "req-reset";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         // Poll 1 sees the live prefix "He" and delivers it.
         seed_response_row(&engine, session_id, request_id, "He", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "He".into())]
@@ -4274,14 +4312,14 @@ mod tests {
         seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
         update_response_tail(&engine, request_id, "", "", 1, 0).await;
         update_materialized_sequence(&engine, request_id, 5).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "llo".into())],
             "the durable final row emits only the bytes the live cursor never sent"
         );
 
-        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(third.is_empty(), "the final row is fully delivered");
     }
 
@@ -4292,11 +4330,10 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-full";
         let request_id = "req-full";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "Hello".into())]
@@ -4307,7 +4344,7 @@ mod tests {
         seed_assistant_text_row(&engine, session_id, request_id, 5, "Hello").await;
         update_response_tail(&engine, request_id, "", "", 1, 0).await;
         update_materialized_sequence(&engine, request_id, 5).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             second.is_empty(),
             "a fully live-sent final row never replays durably"
@@ -4318,7 +4355,6 @@ mod tests {
     async fn durable_wakeup_notification_projects_once_without_internal_inputs() {
         let (_dir, engine) = embedded_engine().await;
         let mut cursor = RequestCursor::new();
-        let mut tokens = 0;
         for (sequence, key, text) in [
             (1, "wake-context", "private context"),
             (
@@ -4352,7 +4388,7 @@ mod tests {
             assert!(!response.has_errors(), "{:?}", response.errors);
         }
         let unsent = engine
-            .project_request_updates("s-wakeup", "r-wakeup", &mut tokens, &mut cursor)
+            .project_request_updates("s-wakeup", "r-wakeup", &mut cursor)
             .await
             .unwrap();
         assert_eq!(unsent.len(), 1);
@@ -4362,21 +4398,18 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("<tool-completion"));
-        let sent = deliver(&engine, "s-wakeup", "r-wakeup", &mut tokens, &mut cursor).await;
+        let sent = deliver(&engine, "s-wakeup", "r-wakeup", &mut cursor).await;
         assert_eq!(sent.len(), 1, "unsent notification retries");
         assert_eq!(sent[0].payload, unsent[0].payload);
-        assert!(
-            deliver(&engine, "s-wakeup", "r-wakeup", &mut tokens, &mut cursor)
-                .await
-                .is_empty()
-        );
+        assert!(deliver(&engine, "s-wakeup", "r-wakeup", &mut cursor)
+            .await
+            .is_empty());
     }
 
     #[tokio::test]
     async fn failed_tool_terminal_retries_after_content_refinement_delivery() {
         let (_dir, engine) = embedded_engine().await;
         let mut cursor = RequestCursor::new();
-        let mut tokens = 0;
         let doc = seed_tool_call_row(
             &engine,
             "s-failed",
@@ -4392,13 +4425,13 @@ mod tests {
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "running", result: null }}) {{ _docID }} }}"#,
             gents::graphql::escape_graphql_string(&doc))).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor).await;
+        deliver(&engine, "s-failed", "r-failed", &mut cursor).await;
         let response = engine.node.execute(&format!(
             r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "failed", result: "exit 7" }}) {{ _docID }} }}"#,
             gents::graphql::escape_graphql_string(&doc))).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let batch = engine
-            .project_request_updates("s-failed", "r-failed", &mut tokens, &mut cursor)
+            .project_request_updates("s-failed", "r-failed", &mut cursor)
             .await
             .unwrap();
         let updates: Vec<_> = batch
@@ -4413,18 +4446,16 @@ mod tests {
         );
         // The socket accepts the output refinement then fails before status.
         cursor.record(updates[0].advance.clone());
-        let retry = deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor).await;
+        let retry = deliver(&engine, "s-failed", "r-failed", &mut cursor).await;
         let terminal: Vec<_> = retry
             .iter()
             .filter(|event| event.payload["toolCallId"] == "failed-call")
             .collect();
         assert_eq!(terminal.len(), 1);
         assert_eq!(terminal[0].payload, updates[1].payload);
-        assert!(
-            deliver(&engine, "s-failed", "r-failed", &mut tokens, &mut cursor)
-                .await
-                .is_empty()
-        );
+        assert!(deliver(&engine, "s-failed", "r-failed", &mut cursor)
+            .await
+            .is_empty());
     }
 
     /// Production-order regression: two live prefix polls are followed by
@@ -4436,7 +4467,6 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-live-materialize-order";
         let request_id = "req-live-materialize-order";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(
@@ -4450,14 +4480,14 @@ mod tests {
             None,
         )
         .await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "DUPLICATION_SENTIN".into())]
         );
 
         update_response_tail(&engine, request_id, "DUPLICATION_SENTINEL_9472", "", 2, 0).await;
-        let growth = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let growth = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&growth),
             vec![("agent_message_chunk".into(), "EL_9472".into())]
@@ -4471,7 +4501,7 @@ mod tests {
             "DUPLICATION_SENTINEL_9472",
         )
         .await;
-        let open_row = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let open_row = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             chunk_texts(&open_row).is_empty(),
             "a durable row appearing while its fully sent tail is still open must not replay"
@@ -4479,7 +4509,7 @@ mod tests {
         update_materialized_sequence(&engine, request_id, 5).await;
         update_response_tail(&engine, request_id, "", "", 2, 0).await;
 
-        let materialized = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let materialized = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             chunk_texts(&materialized).is_empty(),
             "fully live-sent bytes must suppress the later durable row"
@@ -4493,25 +4523,24 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-grow";
         let request_id = "req-grow";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_assistant_text_row(&engine, session_id, request_id, 2, "Hel").await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "Hel".into())]
         );
 
         grow_assistant_text_row(&engine, request_id, 2, "Hello").await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "lo".into())],
             "row growth emits only the newly proven suffix"
         );
 
-        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(third.is_empty(), "the grown row is fully delivered");
     }
 
@@ -4524,18 +4553,17 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-durable-utf8";
         let request_id = "req-durable-utf8";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_assistant_text_row(&engine, session_id, request_id, 2, "a").await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "a".into())]
         );
 
         grow_assistant_text_row(&engine, request_id, 2, "日x").await;
-        let replacement = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let replacement = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&replacement),
             vec![("agent_message_chunk".into(), "日x".into())]
@@ -4550,12 +4578,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-seg";
         let request_id = "req-seg";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         // Old segment: "Hello" delivered live.
         seed_response_row(&engine, session_id, request_id, "Hello", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "Hello".into())]
@@ -4564,11 +4591,11 @@ mod tests {
         // Reset, then a new segment "Hello world" — its prefix collides with
         // the old segment but it is a *different* logical segment.
         update_response_tail(&engine, request_id, "", "", 1, 0).await;
-        let reset = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let reset = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(reset.is_empty(), "the reset itself emits nothing");
 
         update_response_tail(&engine, request_id, "Hello world", "", 3, 0).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "Hello world".into())],
@@ -4584,14 +4611,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-missed-reset";
         let request_id = "req-missed-reset";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "A", "", 1, 0, None).await;
         update_response_tail(&engine, request_id, "", "", 1, 0).await;
         update_response_tail(&engine, request_id, "B", "", 2, 0).await;
 
-        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&events),
             vec![
@@ -4613,11 +4639,9 @@ mod tests {
             segment_keys[0], segment_keys[1],
             "a reset opens a distinct pager stream generation"
         );
-        assert!(
-            deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
-                .await
-                .is_empty()
-        );
+        assert!(deliver(&engine, session_id, request_id, &mut cursor)
+            .await
+            .is_empty());
     }
 
     /// Identical bytes on either side of a missed reset are two logical
@@ -4627,14 +4651,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-identical-reset";
         let request_id = "req-identical-reset";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "same", "", 1, 0, None).await;
         update_response_tail(&engine, request_id, "", "", 1, 0).await;
         update_response_tail(&engine, request_id, "same", "", 2, 0).await;
 
-        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&events),
             vec![
@@ -4653,7 +4676,6 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-history-order";
         let request_id = "req-history-order";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "first", "", 1, 0, None).await;
@@ -4673,7 +4695,7 @@ mod tests {
         .await;
         seed_assistant_text_row(&engine, session_id, request_id, 6, "second").await;
 
-        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         let ordered: Vec<_> = events
             .iter()
             .filter_map(|event| match event.payload["sessionUpdate"].as_str() {
@@ -4699,12 +4721,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-open-row";
         let request_id = "req-open-row";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "hello", "", 1, 0, None).await;
         seed_assistant_text_row(&engine, session_id, request_id, 3, "hello").await;
-        let events = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let events = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&events),
             vec![("agent_message_chunk".into(), "hello".into())]
@@ -4712,11 +4733,9 @@ mod tests {
         let timing = events[0].timing.as_ref().expect("message timing");
         assert_eq!(timing.stream_start_candidate_ms, Some(1_788_217_200_000));
         assert_eq!(timing.agent_timestamp_candidate_ms, Some(1_788_217_205_000));
-        assert!(
-            deliver(&engine, session_id, request_id, &mut tokens, &mut cursor)
-                .await
-                .is_empty()
-        );
+        assert!(deliver(&engine, session_id, request_id, &mut cursor)
+            .await
+            .is_empty());
     }
 
     #[test]
@@ -4776,18 +4795,17 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reason";
         let request_id = "req-reason";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_thought_chunk".into(), "thinking".into())]
         );
 
         // Stale identical read: same bytes, same seq. Nothing novel.
-        let stale = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let stale = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             stale.is_empty(),
             "identical bytes with an unchanged seq are stale"
@@ -4796,7 +4814,7 @@ mod tests {
         // Genuine later identical rewrite: same bytes, advanced seq. The
         // rewrite stands on the wire already; no new bytes exist to emit.
         update_response_tail(&engine, request_id, "", "thinking", 0, 2).await;
-        let rewrite = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let rewrite = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             rewrite.is_empty(),
             "an identical rewrite carries no new bytes; the sent text stands"
@@ -4805,7 +4823,7 @@ mod tests {
         // A rewrite to *different* bytes does stream: the divergence closes
         // the segment and the new observation streams in full.
         update_response_tail(&engine, request_id, "", "revised", 0, 3).await;
-        let diverged = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let diverged = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&diverged),
             vec![("agent_thought_chunk".into(), "revised".into())],
@@ -4821,14 +4839,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-roll";
         let request_id = "req-roll";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         // A full first window with a distinct head that the runtime will
         // trim when 16 new bytes arrive.
         let head = format!("{}{}", "x".repeat(16), "y".repeat(64 * 1024 - 16));
         seed_response_row(&engine, session_id, request_id, "", &head, 0, 1, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first).len(),
             1,
@@ -4839,7 +4856,7 @@ mod tests {
         // but keeps continuity — the suffix past the overlap is the new text.
         let rolled = format!("{}{}", "y".repeat(64 * 1024 - 16), "z".repeat(16));
         update_response_tail(&engine, request_id, "", &rolled, 0, 2).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_thought_chunk".into(), "z".repeat(16))],
@@ -4847,7 +4864,7 @@ mod tests {
         );
 
         // Re-observing the same window is not novel.
-        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(third.is_empty(), "the rolled window is fully delivered");
     }
 
@@ -4893,7 +4910,6 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-reason-gap";
         let request_id = "req-reason-gap";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
         let first_window = "a".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
         let latest_window = "z".repeat(MAX_LIVE_REASONING_WINDOW_BYTES);
@@ -4909,11 +4925,11 @@ mod tests {
             None,
         )
         .await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(chunk_texts(&first)[0].1, first_window);
 
         update_response_tail(&engine, request_id, "", &latest_window, 0, 2).await;
-        let deferred = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let deferred = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             chunk_texts(&deferred).is_empty(),
             "an unproved window jump must not emit a lossy tail"
@@ -4923,7 +4939,7 @@ mod tests {
         let full_reasoning = format!("{}{}", first_window, missing_suffix);
         seed_assistant_thought_row(&engine, session_id, request_id, 5, &full_reasoning).await;
         update_materialized_sequence(&engine, request_id, 5).await;
-        let recovered = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let recovered = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&recovered),
             vec![("agent_thought_chunk".into(), missing_suffix)]
@@ -4937,18 +4953,17 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-utf8";
         let request_id = "req-utf8";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "日", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "日".into())]
         );
 
         update_response_tail(&engine, request_id, "日本語テキスト", "", 2, 0).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "本語テキスト".into())],
@@ -4957,7 +4972,7 @@ mod tests {
 
         // A 4-byte emoji append at the boundary.
         update_response_tail(&engine, request_id, "日本語テキスト🚀", "", 3, 0).await;
-        let third = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let third = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&third),
             vec![("agent_message_chunk".into(), "🚀".into())]
@@ -4971,18 +4986,17 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-ws";
         let request_id = "req-ws";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "one", "", 1, 0, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_message_chunk".into(), "one".into())]
         );
 
         update_response_tail(&engine, request_id, "one\ntwo", "", 2, 0).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![("agent_message_chunk".into(), "\ntwo".into())],
@@ -4998,13 +5012,12 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-fail";
         let request_id = "req-fail";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "Hel", "", 1, 0, None).await;
         // Poll but record nothing (every send failed).
         let first = engine
-            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("poll");
         assert_eq!(
@@ -5017,7 +5030,7 @@ mod tests {
         // history after its anchor is replayed in order: the exact failed
         // "Hel" event followed by the newly observed "lo" suffix.
         let second = engine
-            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("poll");
         assert_eq!(
@@ -5030,7 +5043,7 @@ mod tests {
         );
 
         // Deliver it; a final poll is empty.
-        let delivered = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let delivered = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&delivered),
             vec![
@@ -5038,7 +5051,7 @@ mod tests {
                 ("agent_message_chunk".into(), "lo".into()),
             ]
         );
-        let final_poll = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let final_poll = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(final_poll.is_empty(), "nothing replays after delivery");
     }
 
@@ -5049,14 +5062,13 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-order";
         let request_id = "req-order";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(
             &engine, session_id, request_id, "answer", "thought", 1, 1, None,
         )
         .await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![
@@ -5068,7 +5080,7 @@ mod tests {
 
         // Independent growth of each stream emits independent suffixes.
         update_response_tail(&engine, request_id, "answered", "thought through", 2, 2).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&second),
             vec![
@@ -5086,7 +5098,6 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-tool";
         let request_id = "req-tool";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         // The assistant row exists at sequence 3 (the live segment's
@@ -5108,7 +5119,7 @@ mod tests {
         )
         .await;
 
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         let kinds: Vec<String> = first.iter().map(update_kind).collect();
         assert_eq!(
             kinds,
@@ -5130,12 +5141,11 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-durable-retry";
         let request_id = "req-durable-retry";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
         seed_assistant_text_row(&engine, session_id, request_id, 3, "durable").await;
 
         let abandoned = engine
-            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("first projection");
         assert_eq!(
@@ -5145,7 +5155,7 @@ mod tests {
         assert_eq!(cursor.message_sequence_high_water, None);
 
         let retry = engine
-            .project_request_updates(session_id, request_id, &mut tokens, &mut cursor)
+            .project_request_updates(session_id, request_id, &mut cursor)
             .await
             .expect("retry projection");
         assert_eq!(
@@ -5169,11 +5179,10 @@ mod tests {
         let (_dir, engine) = embedded_engine().await;
         let session_id = "s-thought";
         let request_id = "req-thought";
-        let mut tokens = 0u64;
         let mut cursor = RequestCursor::new();
 
         seed_response_row(&engine, session_id, request_id, "", "thinking", 0, 1, None).await;
-        let first = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
             chunk_texts(&first),
             vec![("agent_thought_chunk".into(), "thinking".into())]
@@ -5185,7 +5194,7 @@ mod tests {
         seed_assistant_thought_row(&engine, session_id, request_id, 5, "thinking").await;
         update_response_tail(&engine, request_id, "", "", 0, 1).await;
         update_materialized_sequence(&engine, request_id, 5).await;
-        let second = deliver(&engine, session_id, request_id, &mut tokens, &mut cursor).await;
+        let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert!(
             second.iter().all(|event| !matches!(
                 event.payload["sessionUpdate"].as_str(),

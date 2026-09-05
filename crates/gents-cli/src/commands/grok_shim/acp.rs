@@ -4,9 +4,9 @@
 //! it has registered with the Gents leader socket ([`super::server`]) and its
 //! ACP payloads are forwarded here. It implements:
 //!
-//! - `initialize` — the fixed capability/auth advertisement. `loadSession` is
-//!   always `false`: the shim never fabricates a replay, so the pager must
-//!   not offer session restore.
+//! - `initialize` — capabilities include persisted session loading.
+//! - `session/load` / `x.ai/session/list` — authorized read-only history,
+//!   replay through the existing projector, and live observation handoff.
 //! - `authenticate` — the single `gents.runtime` auth method always succeeds;
 //!   client credentials are the transport's concern, not a Gents document.
 //! - `session/new` — honors the preferred `_meta.sessionId`, creates exactly
@@ -19,8 +19,8 @@
 //!   from a per-session override the runtime does not model.
 //! - `session/set_model` — validates against the bound catalog and emits the
 //!   `x.ai/models/update` ext notification. Gents has no per-session model
-//!   field, so the switch is connection-local shim state; the bound behavior
-//!   still selects the model the runtime serves.
+//!   override: only the currently bound model is accepted, and unsupported
+//!   model/effort selections fail rather than pretending to change inference.
 //! - `session/set_mode` — records the pager's mode and emits a
 //!   `current_mode_update` session notification. Mode is a client capability
 //!   concern, not an `AgentSession` field.
@@ -37,8 +37,6 @@
 //!
 //! Shaped stubs return JSON-RPC method-not-found (`-32601`) with an explicit
 //! owned-transition explanation, never a fabricated success:
-//! - `session/load` — the runtime owns replay through normal request
-//!   execution; the shim does not synthesize `_meta.isReplay` streams.
 //! - `x.ai/interject` — the owned completion loop has no formally specified
 //!   injection transition; writing a detached `AgentMessage` would not affect
 //!   provider input.
@@ -110,7 +108,7 @@ pub(crate) const AUTHENTICATE_METHOD: &str = "authenticate";
 /// Wire name of the `session/new` request method.
 pub(crate) const SESSION_NEW_METHOD: &str = "session/new";
 
-/// Wire name of the `session/load` request method (shaped stub).
+/// Wire name of the persisted `session/load` request method.
 pub(crate) const SESSION_LOAD_METHOD: &str = "session/load";
 
 /// Wire name of the `session/set_model` request method.
@@ -247,12 +245,16 @@ impl AcpServiceConfig {
 struct AcpSessionState {
     /// Current pager mode id from `session/set_mode`.
     mode_id: String,
+    /// Delivery handoff only: discovery begins from this pre-replay time
+    /// after the load response has been successfully enqueued.
+    resume_from: Option<String>,
 }
 
 impl AcpSessionState {
     fn new() -> Self {
         Self {
             mode_id: "default".to_string(),
+            resume_from: None,
         }
     }
 }
@@ -599,6 +601,73 @@ impl AcpService {
         match request.method.as_str() {
             INITIALIZE_METHOD => self.handle_initialize(request).await,
             AUTHENTICATE_METHOD => self.handle_authenticate(request).await,
+            "x.ai/session/info" => {
+                let session = required_session_id(&request.params)?;
+                let result = super::usage::session_info(
+                    &self.config.node,
+                    &self.config.agent_did,
+                    &self.config.behavior_id,
+                    &session,
+                    &self.config.current_model.model_id,
+                    &self.config.current_model.name,
+                    self.config.current_model.effective_context_window(),
+                )
+                .await?;
+                Ok(RequestOutcome {
+                    notifications: Vec::new(),
+                    result,
+                })
+            }
+            // Gents has no x.ai subscription or cloud credit ledger. The
+            // native nullable config communicates absence without invented
+            // balances, subscription tiers, or an unsupported-method banner.
+            "x.ai/billing" => Ok(RequestOutcome {
+                notifications: Vec::new(),
+                result: json!({"result":{"config":null,"on_demand_enabled":false}}),
+            }),
+            "x.ai/session/usage" => {
+                let session = required_session_id(&request.params)?;
+                let result = super::usage::session_usage(
+                    &self.config.node,
+                    &self.config.agent_did,
+                    &self.config.behavior_id,
+                    &session,
+                )
+                .await?;
+                Ok(RequestOutcome {
+                    notifications: Vec::new(),
+                    result,
+                })
+            }
+            "x.ai/sessions/list" => Ok(RequestOutcome {
+                notifications: Vec::new(),
+                result: super::sessions::roster(
+                    &self.config.node,
+                    &self.config.agent_did,
+                    &self.config.behavior_id,
+                )
+                .await?,
+            }),
+            "x.ai/session/list" => {
+                let params: super::sessions::ListParams =
+                    serde_json::from_value(request.params.clone()).map_err(|error| {
+                        invalid_params(format!("invalid session list: {error}"))
+                    })?;
+                params
+                    .validate()
+                    .map_err(|error| invalid_params(error.to_string()))?;
+                let result = super::sessions::list(
+                    &self.config.node,
+                    &self.config.agent_did,
+                    &self.config.behavior_id,
+                    params,
+                )
+                .await?;
+                Ok(RequestOutcome {
+                    notifications: Vec::new(),
+                    result,
+                })
+            }
             SESSION_NEW_METHOD => {
                 let outcome = self.handle_session_new(request).await?;
                 if let Some(session_id) = outcome.result.get("sessionId").and_then(Value::as_str) {
@@ -615,9 +684,8 @@ impl AcpService {
             SESSION_SET_MODEL_METHOD => self.handle_session_set_model(request).await,
             SESSION_SET_MODE_METHOD => self.handle_session_set_mode(request, prompt_sender).await,
             SESSION_PROMPT_METHOD => self.handle_session_prompt(request, prompt_sender).await,
-            // The three audited shaped stubs: explicit method-not-found with
-            // the owned-transition explanation, never a fabricated success.
-            SESSION_LOAD_METHOD | INTERJECT_METHOD | COMPACT_CONVERSATION_METHOD => {
+            SESSION_LOAD_METHOD => self.handle_session_load(request, prompt_sender).await,
+            INTERJECT_METHOD | COMPACT_CONVERSATION_METHOD => {
                 Err(shaped_stub_error(&request.method, &request.params))
             }
             // Only the three exact known subagent ext methods reach the
@@ -687,8 +755,8 @@ impl AcpService {
 
     /// Handle `initialize`.
     ///
-    /// `loadSession` is hardcoded `false`: the shaped `session/load` stub
-    /// below means the pager must not present restore as available.
+    /// Session loading replays persisted observations through the same
+    /// projection owner used for live delivery.
     async fn handle_initialize(&self, request: &AcpRequest) -> Result<RequestOutcome> {
         tracing::debug!(
             request_id = ?request.id,
@@ -700,7 +768,7 @@ impl AcpService {
             result: json!({
                 "protocolVersion": ACP_PROTOCOL_VERSION,
                 "agentCapabilities": {
-                    "loadSession": false,
+                    "loadSession": true,
                     "prompt": true,
                     "cancel": true,
                     "setMode": true,
@@ -843,6 +911,76 @@ impl AcpService {
                 },
             }),
         })
+    }
+
+    /// Replay existing observations, then attach after the RPC response.
+    /// Loading does not reactivate or otherwise mutate AgentSession rows.
+    async fn handle_session_load(
+        &self,
+        request: &AcpRequest,
+        sender: &PromptSender,
+    ) -> Result<RequestOutcome> {
+        let session_id = required_session_id(&request.params)?;
+        let mut sessions = self.sessions.lock().await;
+        if sessions.contains_key(&session_id) {
+            return Err(invalid_params(
+                "session is already attached on this connection",
+            ));
+        }
+        let attached_at = chrono::Utc::now().to_rfc3339();
+        let rows = super::sessions::load(
+            &self.config.node,
+            &self.config.agent_did,
+            &self.config.behavior_id,
+            &session_id,
+        )
+        .await?;
+        let running = self
+            .turns
+            .replay_session(&session_id, &rows, sender, &self.projections)
+            .await?;
+        let mut state = AcpSessionState::new();
+        state.resume_from = Some(attached_at);
+        sessions.insert(session_id.clone(), state);
+        Ok(RequestOutcome {
+            notifications: vec![
+                json!({"__method":MCP_INITIALIZED_METHOD, "sessionId":session_id, "mcpToolCount":0, "elapsedMs":0}),
+            ],
+            result: json!({"models":self.config.models_object(), "_meta":{
+                "x.ai/runningPromptId":running, "modelId":self.config.current_model.model_id,
+                "gents/codeRestored":false
+            }}),
+        })
+    }
+
+    /// Called for this load RPC only, after its response is enqueued. A
+    /// concurrent unrelated RPC must not release another load's handoff.
+    async fn activate_loaded_session(&self, payload: &str, sender: &PromptSender) {
+        let Ok(request) = AcpRequest::from_payload(payload) else {
+            return;
+        };
+        if request.method != SESSION_LOAD_METHOD {
+            return;
+        }
+        let Ok(session_id) = required_session_id(&request.params) else {
+            return;
+        };
+        let attached = self
+            .sessions
+            .lock()
+            .await
+            .get_mut(&session_id)
+            .and_then(|state| state.resume_from.take());
+        if let Some(attached) = attached {
+            self.turns
+                .observe_session_since(
+                    &session_id,
+                    attached,
+                    sender.clone(),
+                    self.projections.clone(),
+                )
+                .await;
+        }
     }
 
     /// Handle `session/set_model`.
@@ -1032,6 +1170,17 @@ impl AcpService {
         // The source message is preserved verbatim for diagnostics.
         let parsed = parse_prompt_request(&request.params, request.id.clone())
             .map_err(|error| invalid_params(error.to_string()))?;
+        {
+            let sessions = self.sessions.lock().await;
+            let session = sessions
+                .get(&parsed.session_id)
+                .context("session must be created or loaded before prompting")?;
+            if session.resume_from.is_some() {
+                return Err(invalid_params(
+                    "session replay has not handed off to live observation",
+                ));
+            }
+        }
         // Turn-lifecycle failures after a well-formed prompt are operational
         // (submission/runtime/send) and stay internal `-32603`; the
         // caller-controlled shape validation happened in the parse above.
@@ -1158,18 +1307,12 @@ impl std::fmt::Display for ShapedMethodNotFound {
 
 impl std::error::Error for ShapedMethodNotFound {}
 
-/// Build the shaped method-not-found error for one of the three audited
+/// Build the shaped method-not-found error for the remaining audited
 /// stubs, carrying the explicit owned-transition explanation the audit
 /// requires. None of these stubs touches a document.
 fn shaped_stub_error(method: &str, params: &Value) -> anyhow::Error {
     let session = optional_session_id(params).unwrap_or_default();
     let message = match method {
-        SESSION_LOAD_METHOD => format!(
-            "session/load is not supported by the Gents Grok shim: session replay is owned \
-             by the Gents runtime's normal request execution, and the shim will not \
-             fabricate a _meta.isReplay stream or a restore summary for session \
-             {session:?}. initialize advertises loadSession=false for this reason."
-        ),
         INTERJECT_METHOD => format!(
             "x.ai/interject is not supported by the Gents Grok shim: the owned completion \
              loop has no formally specified injection transition, and writing a detached \
@@ -1274,6 +1417,7 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
             AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}) {{
                 session_id
                 agent_did
+                requester_did
                 behavior_id
             }}
         }}"#
@@ -1321,6 +1465,16 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
     }
 
     let escaped_agent_name = escape_graphql_string(&config.agent_name);
+    // Older shim-created sessions omitted requester_did. They remain
+    // readable only through exactly scoped requests, but an explicit
+    // foreign requester must never be reactivated by session/new.
+    anyhow::ensure!(
+        rows.iter().all(|row| row
+            .get("requester_did")
+            .and_then(Value::as_str)
+            .is_none_or(|requester| requester == config.agent_did.as_ref())),
+        "session belongs to a different immutable requester_did"
+    );
     let escaped_agent_did = escape_graphql_string(&config.agent_did);
     let escaped_behavior_id = escape_graphql_string(&config.behavior_id);
     // DateTime fields round-trip through the "....Z" form the runtime's own
@@ -1334,6 +1488,7 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                     session_id: "{escaped_session_id}",
                     agent_name: "{escaped_agent_name}",
                     agent_did: "{escaped_agent_did}",
+                    requester_did: "{escaped_agent_did}",
                     behavior_id: "{escaped_behavior_id}",
                     started: "{escaped_started}",
                     status: "active"
@@ -1433,6 +1588,7 @@ impl AcpDelegate for AcpService {
             for notification in after_response {
                 outbound.send(notification).await?;
             }
+            self.activate_loaded_session(payload, &sender).await;
             Ok(())
         })
     }
@@ -1459,7 +1615,9 @@ impl AcpService {
         let sender = PromptSender::Buffer {
             buffer: buffer.clone(),
         };
-        self.dispatch_with_sender(payload, &sender).await
+        let dispatch = self.dispatch_with_sender(payload, &sender).await;
+        self.activate_loaded_session(payload, &sender).await;
+        dispatch
     }
 }
 
@@ -1550,6 +1708,244 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn session_load_replays_all_message_pages_without_creating_requests() {
+        let (_dir, service) = test_service().await;
+        ensure_session_document(&service.config, "resume-history")
+            .await
+            .unwrap();
+        let node = &service.config.node;
+        let result = node.execute(r#"mutation { create_AgentRequest(input: {
+            request_id: "resume-request", session_id: "resume-history", agent_did: "did:test:grok-shim",
+            requester_did: "did:test:grok-shim", content: "Original human prompt",
+            lifecycle_state: "completed", created_at: "2026-09-01T12:00:00Z"
+        }) { _docID } }"#).await;
+        ensure_no_errors(&result, "seed resume request").unwrap();
+        for sequence in 1..=70 {
+            let content = serde_json::to_string(&json!({"role":"assistant", "content":[{"type":"text", "text":format!("REPLAY_{sequence:03}\n")}]})).unwrap();
+            let result = node.execute(&format!(r#"mutation {{ create_AgentMessage(input: {{
+                message_key: "resume-message-{sequence}", request_id: "resume-request", session_id: "resume-history",
+                agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
+                sequence: {sequence}, role: "assistant", content: "{}", timestamp: "2026-09-01T12:00:00Z"
+            }}) {{_docID}} }}"#, escape_graphql_string(&content))).await;
+            ensure_no_errors(&result, "seed replay page").unwrap();
+        }
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "session/load",
+                json!({"sessionId":"resume-history", "cwd":"/tmp", "mcpServers":[]}),
+            ))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().unwrap());
+        assert!(response.get("error").is_none(), "{response}");
+        assert!(response["result"]["_meta"]["x.ai/runningPromptId"].is_null());
+        let events: Vec<_> = dispatch
+            .notifications
+            .iter()
+            .map(|line| parse_response(line))
+            .filter(|line| line["method"] == "session/update")
+            .collect();
+        assert!(events
+            .iter()
+            .all(|event| event["params"]["_meta"]["isReplay"] == true));
+        let texts: Vec<_> = events
+            .iter()
+            .filter_map(|event| {
+                event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+            })
+            .collect();
+        assert_eq!(
+            texts
+                .iter()
+                .filter(|text| **text == "Original human prompt")
+                .count(),
+            1
+        );
+        let assistant = texts
+            .iter()
+            .filter(|text| text.starts_with("REPLAY_"))
+            .copied()
+            .collect::<String>();
+        assert_eq!(
+            assistant,
+            (1..=70)
+                .map(|sequence| format!("REPLAY_{sequence:03}\n"))
+                .collect::<String>()
+        );
+        let result = node
+            .execute(r#"{ AgentRequest { request_id } AgentSession { session_id requester_did } }"#)
+            .await;
+        ensure_no_errors(&result, "resume write check").unwrap();
+        assert_eq!(
+            result.data.as_ref().unwrap()["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            result.data.as_ref().unwrap()["AgentSession"][0]["requester_did"],
+            "did:test:grok-shim"
+        );
+        let repeated = service
+            .handle_acp_payload(&request_payload(
+                "session/load",
+                json!({"sessionId":"resume-history"}),
+            ))
+            .await;
+        assert_eq!(
+            parse_response(repeated.response.as_deref().unwrap())["error"]["code"],
+            -32602
+        );
+        service.turns.handle_disconnect().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn history_picker_scopes_searches_paginates_and_preserves_legacy_sessions() {
+        let (_dir, service) = test_service().await;
+        for (id, requester) in [
+            ("older", "null"),
+            ("newer", "\"did:test:grok-shim\""),
+            ("foreign-session", "\"did:test:foreign\""),
+            ("child", "\"did:test:grok-shim\""),
+        ] {
+            let result = service
+                .config
+                .node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentSession(input: {{
+                session_id: "{id}", agent_did: "did:test:grok-shim", requester_did: {requester},
+                behavior_id: "did:test:grok-shim:default", status: "active"
+            }}) {{ _docID }} }}"#
+                ))
+                .await;
+            ensure_no_errors(&result, "seed history owner").unwrap();
+        }
+        for (id, session, requester, content, day, parent) in [
+            (
+                "a",
+                "older",
+                "did:test:grok-shim",
+                "First older prompt",
+                1,
+                "null",
+            ),
+            (
+                "b",
+                "newer",
+                "did:test:grok-shim",
+                "First newer prompt",
+                2,
+                "null",
+            ),
+            (
+                "c",
+                "foreign-session",
+                "did:test:grok-shim",
+                "SECRET session",
+                4,
+                "null",
+            ),
+            (
+                "d",
+                "older",
+                "did:test:foreign",
+                "SECRET request",
+                5,
+                "null",
+            ),
+            (
+                "e",
+                "child",
+                "did:test:grok-shim",
+                "Child instructions",
+                6,
+                "\"a\"",
+            ),
+            (
+                "f",
+                "older",
+                "did:test:grok-shim",
+                "Later searchable NEEDLE",
+                3,
+                "null",
+            ),
+        ] {
+            let result = service
+                .config
+                .node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "{id}", session_id: "{session}", agent_did: "did:test:grok-shim",
+                requester_did: "{requester}", content: "{content}", lifecycle_state: "completed",
+                caused_by_parent_request_id: {parent}, created_at: "2026-09-0{day}T12:00:00Z"
+            }}) {{ _docID }} }}"#
+                ))
+                .await;
+            ensure_no_errors(&result, "seed history request").unwrap();
+        }
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "_x.ai/session/list",
+                json!({"limit":1, "cwd":"/not-historical"}),
+            ))
+            .await;
+        let first = parse_response(dispatch.response.as_deref().unwrap());
+        assert!(first.get("error").is_none(), "{first}");
+        let page = &first["result"];
+        assert_eq!(page["sessions"][0]["sessionId"], "older");
+        assert_eq!(page["sessions"][0]["summary"], "First older prompt");
+        assert!(page["sessions"][0].get("cwd").is_none());
+        assert!(page["sessions"][0].get("modelId").is_none());
+        assert_eq!(page["_meta"]["x.ai/listScope"], "all");
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "x.ai/session/list",
+                json!({"limit":1, "cursor":page["nextCursor"]}),
+            ))
+            .await;
+        let second = parse_response(dispatch.response.as_deref().unwrap());
+        assert_eq!(second["result"]["sessions"][0]["sessionId"], "newer");
+        assert!(second["result"]["nextCursor"].is_null());
+        for (query, count) in [("needle", 1), ("secret", 0)] {
+            let dispatch = service
+                .handle_acp_payload(&request_payload(
+                    "x.ai/session/list",
+                    json!({"query":query}),
+                ))
+                .await;
+            let response = parse_response(dispatch.response.as_deref().unwrap());
+            assert_eq!(
+                response["result"]["sessions"].as_array().unwrap().len(),
+                count
+            );
+        }
+        let rows = super::super::sessions::load(
+            &service.config.node,
+            &service.config.agent_did,
+            &service.config.behavior_id,
+            "older",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.request_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "f"]
+        );
+        assert!(super::super::sessions::load(
+            &service.config.node,
+            &service.config.agent_did,
+            &service.config.behavior_id,
+            "foreign-session"
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
     async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
         let (_dir, service) = test_service().await;
         service
@@ -1609,7 +2005,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_task_kill_reaches_only_physically_linked_child_sessions() {
+    async fn native_child_controls_and_usage_follow_physical_lineage() {
         let (_dir, service) = test_service().await;
         service
             .sessions
@@ -1715,6 +2111,47 @@ mod tests {
                 "{response}"
             );
         }
+        ensure_session_document(&service.config, "parent-session")
+            .await
+            .unwrap();
+        let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
+            request_id: "foreign-usage", session_id: "child-session", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
+        }}) {{_docID}} }}"#)).await;
+        ensure_no_errors(&foreign, "foreign usage fixture").unwrap();
+        for (request, input, output, cached) in [
+            ("parent", 100, 10, 50),
+            ("child", 200, 20, 100),
+            ("foreign-usage", 9999, 999, 0),
+        ] {
+            let owner = node
+                .execute(&format!(
+                    r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request}"}}}}) {{_docID}} }}"#
+                ))
+                .await;
+            ensure_no_errors(&owner, "usage physical identity").unwrap();
+            let doc = owner.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
+                .as_str()
+                .unwrap();
+            let call = node.execute(&format!(r#"mutation {{ create_InferenceCall(input: {{
+                call_id: "usage-{request}", request_id: "parent", request_doc_id: "{}", agent_did: "{did}",
+                call_seq: 1, call_kind: "inference", prompt_tokens: {input}, completion_tokens: {output}, cached_input_tokens: {cached}
+            }}) {{_docID}} }}"#, escape_graphql_string(doc))).await;
+            ensure_no_errors(&call, "usage call fixture").unwrap();
+        }
+        let usage = service
+            .handle_acp_payload(&request_payload(
+                "x.ai/session/usage",
+                json!({"sessionId":"parent-session"}),
+            ))
+            .await;
+        let response = parse_response(usage.response.as_deref().unwrap());
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["usage"]["inputTokens"], 300);
+        assert_eq!(response["result"]["usage"]["outputTokens"], 30);
+        assert_eq!(response["result"]["usage"]["cachedReadTokens"], 150);
+        assert_eq!(response["result"]["usage"]["modelCalls"], 2);
+        assert_eq!(response["result"]["usage"]["usageIsIncomplete"], true);
+        assert!(response["result"]["usage"].get("costUsdTicks").is_none());
     }
 
     fn request_payload(method: &str, params: Value) -> String {
@@ -2167,24 +2604,6 @@ mod tests {
 
     #[test]
     fn shaped_stub_messages_name_the_owned_transition() {
-        let load = shaped_stub_error(
-            SESSION_LOAD_METHOD,
-            &json!({ "sessionId": "s1", "cwd": "/tmp", "mcpServers": [] }),
-        );
-        let message = load.to_string();
-        assert!(
-            message.contains("runtime's normal request execution"),
-            "session/load stub must explain the owned transition: {message}"
-        );
-        assert!(
-            message.contains("isReplay"),
-            "session/load stub must name the replay fabrication it refuses: {message}"
-        );
-        assert!(
-            message.contains("loadSession=false"),
-            "session/load stub must reconcile with the advertised capability: {message}"
-        );
-
         let interject = shaped_stub_error(
             INTERJECT_METHOD,
             &json!({ "sessionId": "s1", "text": "hi", "interjectionId": "i1" }),
@@ -2276,7 +2695,7 @@ mod tests {
     // -- Service tests (node-backed) ----------------------------------------
 
     #[tokio::test]
-    async fn initialize_advertises_load_session_false_and_gents_auth() {
+    async fn initialize_advertises_persisted_session_loading_and_gents_auth() {
         let (_staging, service) = test_service().await;
         let dispatch = service
             .handle_acp_payload(&request_payload(
@@ -2287,14 +2706,26 @@ mod tests {
         assert!(dispatch.notifications.is_empty());
         let response = parse_response(dispatch.response.as_deref().expect("response line"));
         assert_eq!(response["id"], 1);
-        assert_eq!(
-            response["result"]["agentCapabilities"]["loadSession"],
-            false
-        );
+        assert_eq!(response["result"]["agentCapabilities"]["loadSession"], true);
         assert_eq!(response["result"]["authMethods"][0]["id"], "gents.runtime");
         assert_eq!(
             response["result"]["authMethods"][0]["name"],
             "Gents runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_billing_has_no_cloud_balance_or_subscription() {
+        let (_staging, service) = test_service().await;
+        let dispatch = service
+            .handle_acp_payload(&request_payload("x.ai/billing", json!({})))
+            .await;
+        assert!(dispatch.notifications.is_empty());
+        let response = parse_response(dispatch.response.as_deref().expect("response line"));
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(
+            response["result"]["result"],
+            json!({"config":null,"on_demand_enabled":false})
         );
     }
 
@@ -3338,13 +3769,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_load_interject_and_compact_answer_method_not_found() {
+    async fn interject_and_compact_answer_method_not_found() {
         let (_staging, service) = test_service().await;
         for (method, params) in [
-            (
-                "session/load",
-                json!({ "sessionId": "s1", "cwd": "/tmp", "mcpServers": [] }),
-            ),
             (
                 "x.ai/interject",
                 json!({ "sessionId": "s1", "text": "hi", "interjectionId": "i1" }),
@@ -3380,7 +3807,6 @@ mod tests {
             ))
             .await;
         for (method, params) in [
-            ("session/load", json!({ "sessionId": "s-stubs" })),
             (
                 "x.ai/interject",
                 json!({ "sessionId": "s-stubs", "text": "hi", "interjectionId": "i1" }),
@@ -3625,7 +4051,6 @@ mod tests {
 
         // Shaped unsupported methods stay method-not-found.
         for (method, params) in [
-            ("session/load", json!({ "sessionId": "s-table" })),
             (
                 "x.ai/interject",
                 json!({ "sessionId": "s-table", "text": "hi" }),

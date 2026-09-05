@@ -268,7 +268,7 @@ def initialize(
     )
     require("error" not in initialized, f"initialize failed: {initialized}")
     result = initialized["result"]
-    require(result["agentCapabilities"]["loadSession"] is False, "loadSession must be false")
+    require(result["agentCapabilities"]["loadSession"] is True, "persisted session replay must be advertised")
     require(result["authMethods"][0]["id"] == "gents.runtime", "auth method drift")
     require(
         isinstance(result["authMethods"][0].get("name"), str)

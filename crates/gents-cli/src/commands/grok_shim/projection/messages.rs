@@ -37,17 +37,17 @@
 //! observed reset with a stale row list.
 //!
 //! Response selection fails closed: only the last snapshot of the
-//! *validated* composite history may supply the live tail, `totalTokens`,
-//! terminality, or stop reason. When the history cannot be read or proven,
-//! the projection exposes no live bytes, no tokens, and `terminal = false`
+//! *validated* composite history may supply the live tail and response
+//! completion observation. When the history cannot be read or proven,
+//! the projection exposes no live bytes and `terminal = false`
 //! — never falling back to the discovery row — while the durable
 //! `AgentMessage` projection continues and polling may retry. A proven
 //! request is terminal only when the validated tip's response status is
 //! `complete`/`error` or it carries a non-empty `interrupted_at`; anything
-//! else is a still-running turn. `token_count` of the validated tip is the
-//! persisted source projected into connection-local cumulative
-//! `totalTokens` metadata; no `AgentSession` usage field and no synthetic
-//! `ProviderContextReduction` is written.
+//! else is a still-running response. The turn owner separately checks the
+//! canonical request lifecycle before resolving a turn. The legacy
+//! `token_count` observation is not UI context occupancy: `context.rs`
+//! obtains that from the runtime's persisted inference accounting.
 //!
 //! All queries go through the in-process embedded node with every
 //! interpolated value passed through `escape_graphql_string`; no HTTP
@@ -164,7 +164,7 @@ pub(super) struct MessageProjection {
     /// empty only if the aligned update's row could not be identified (never
     /// happens today: every update comes from a decoded row).
     pub update_keys: Vec<String>,
-    /// Cumulative token count for `_meta.totalTokens`, from the latest
+    /// Legacy per-request generated-token observation, from the latest
     /// `AgentResponse.token_count` (u64, never fabricated). Zero when the
     /// request has no response row yet.
     pub total_tokens: u64,

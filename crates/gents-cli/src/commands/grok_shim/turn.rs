@@ -207,6 +207,9 @@ pub(super) enum PromptSender {
     /// stream in real time; only the deferred `session/prompt` response is
     /// written by the dispatcher after the turn resolves.
     Live { outbound: AcpOutbound },
+    /// Historical delivery through the same send-success path. This only
+    /// marks wire observations; it never changes persisted runtime state.
+    Replay { inner: Arc<PromptSender> },
     /// Collects serialized notification lines in memory (tests, headless
     /// capture). The buffer never fails, so a test can simulate a send
     /// failure only through the Live variant.
@@ -221,6 +224,11 @@ impl PromptSender {
     pub(super) async fn send_line(&self, line: String) -> Result<()> {
         match self {
             PromptSender::Live { outbound } => outbound.send(line).await,
+            PromptSender::Replay { inner } => {
+                let mut value: Value = serde_json::from_str(&line)?;
+                value["params"]["_meta"]["isReplay"] = Value::Bool(true);
+                Box::pin(inner.send_line(serde_json::to_string(&value)?)).await
+            }
             #[cfg(test)]
             PromptSender::Buffer { buffer } => {
                 buffer.lock().await.push(line);
@@ -236,6 +244,7 @@ impl PromptSender {
     pub(super) async fn take_lines(&self) -> Vec<String> {
         match self {
             PromptSender::Live { .. } => Vec::new(),
+            PromptSender::Replay { inner } => Box::pin(inner.take_lines()).await,
             #[cfg(test)]
             PromptSender::Buffer { buffer } => {
                 let mut buffer = buffer.lock().await;
@@ -249,7 +258,7 @@ impl PromptSender {
     /// per-session send lock is held across reserve → stamp → send → commit,
     /// so a failed echo does not consume an id and the echo shares the
     /// pager's `"{sessionId}-{counter}"` dedup space with the projected
-    /// updates. `totalTokens` is the session-cumulative usage read under the
+    /// updates. `totalTokens` is the last known context occupancy read under the
     /// same lock (zero before any projected observation has applied).
     pub(super) async fn send_user_message_chunk(
         &self,
@@ -459,7 +468,6 @@ struct ConnectionState {
 struct ObservedRequest {
     prompt_id: Option<String>,
     cursor: Mutex<RequestCursor>,
-    token_high_water: u64,
     timing: RequestUpdateTiming,
     completion_sent: bool,
 }
@@ -469,7 +477,6 @@ impl ObservedRequest {
         Self {
             prompt_id: (!foreground).then_some(prompt_id),
             cursor: Mutex::new(RequestCursor::new()),
-            token_high_water: 0,
             timing: RequestUpdateTiming::new(started_at),
             completion_sent: foreground,
         }
@@ -591,12 +598,29 @@ impl TurnManager {
         sender: PromptSender,
         projections: Arc<ProjectionEngine>,
     ) {
+        self.observe_session_since(
+            session_id,
+            chrono::Utc::now().to_rfc3339(),
+            sender,
+            projections,
+        )
+        .await;
+    }
+
+    /// Resume uses the attachment time captured before reading history, so
+    /// requests created during replay cannot fall into a discovery gap.
+    pub(super) async fn observe_session_since(
+        self: &Arc<Self>,
+        session_id: &str,
+        attached_at: String,
+        sender: PromptSender,
+        projections: Arc<ProjectionEngine>,
+    ) {
         let mut observers = self.observers.lock().await;
         if observers.contains_key(session_id) || self.state.lock().await.closed {
             return;
         }
         let session_id = session_id.to_owned();
-        let attached_at = chrono::Utc::now().to_rfc3339();
         let manager = Arc::downgrade(self);
         let observed_session = session_id.clone();
         observers.insert(
@@ -634,6 +658,100 @@ impl TurnManager {
         );
     }
 
+    /// Reuse the live projection and its delivery cursors for persisted
+    /// history. The caller starts observation only after the load response
+    /// has been enqueued. No new request is submitted by this operation.
+    pub(super) async fn replay_session(
+        &self,
+        session_id: &str,
+        rows: &[gents_protocol::row::AgentRequestRow],
+        sender: &PromptSender,
+        projections: &ProjectionEngine,
+    ) -> Result<Option<String>> {
+        let replay = PromptSender::Replay {
+            inner: Arc::new(sender.clone()),
+        };
+        let mut running = None;
+        for row in rows {
+            let started_at = row
+                .created_at
+                .as_deref()
+                .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                .map(|time| time.timestamp_millis())
+                .unwrap_or(0);
+            let live_prompt_id = format!("notifications-{}", row.request_id);
+            // The stock client hides auto-wake prompts by their ID family.
+            // Preserve the submitted identity when replaying a human turn;
+            // labeling every historical prompt notifications-* hides history.
+            let metadata = row
+                .metadata
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+            let prompt_id = metadata
+                .as_ref()
+                .and_then(|meta| meta.get("promptId"))
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    if row.runtime_source_kind.is_some() {
+                        live_prompt_id.clone()
+                    } else {
+                        row.request_id.clone()
+                    }
+                });
+            let mut progress = ObservedRequest::new(live_prompt_id.clone(), started_at, false);
+            if let Some(content) = row.content.as_deref().filter(|value| !value.is_empty()) {
+                projections.session_updates().send(session_id, |event_id, total_tokens| {
+                    Ok(super::projection::session_notification_for_method(SESSION_UPDATE_METHOD, session_id,
+                        json!({"sessionUpdate":"user_message_chunk", "content":{"type":"text", "text":content},
+                            "_meta":{"hideFromScrollback":row.runtime_source_kind.is_some()}}),
+                        super::projection::stamp_update_meta(event_id, total_tokens, Some(&prompt_id), Some(true),
+                            UpdateTimestamps { agent_timestamp_ms: Some(started_at), ..Default::default() }),
+                    ))
+                }, PromptSenderLine(&replay)).await?;
+            }
+            // Read terminal state before flushing, as in live delivery:
+            // completion must never overtake final persisted output.
+            let terminal = self.request_stop_reason(&row.request_id).await?;
+            self.stream_projection_updates(
+                session_id,
+                &row.request_id,
+                Some(&prompt_id),
+                &replay,
+                projections,
+                &progress.cursor,
+                &mut progress.timing,
+                true,
+                0,
+            )
+            .await?;
+            if let Some(reason) = terminal {
+                projections.session_updates().send(session_id, |event_id, total_tokens| {
+                    Ok(super::projection::session_notification_for_method("x.ai/session_notification", session_id,
+                        json!({"sessionUpdate":"turn_completed", "prompt_id":prompt_id, "stop_reason":reason.wire_name()}),
+                        super::projection::stamp_update_meta(event_id, total_tokens, Some(&prompt_id), Some(true), UpdateTimestamps::default()),
+                    ))
+                }, PromptSenderLine(&replay)).await?;
+                progress.completion_sent = true;
+                progress.prompt_id = None;
+            } else if running.is_none() {
+                running = Some((row.request_id.clone(), live_prompt_id));
+            }
+            self.observed.lock().await.insert(
+                (session_id.to_owned(), row.request_id.clone()),
+                Arc::new(Mutex::new(progress)),
+            );
+        }
+        if let Some((request_id, _)) = &running {
+            self.autonomous_delivery
+                .lock()
+                .await
+                .insert(session_id.to_owned(), request_id.clone());
+        }
+        Ok(running.map(|(_, prompt)| prompt))
+    }
+
     async fn observe_session_tick(
         &self,
         session_id: &str,
@@ -644,12 +762,22 @@ impl TurnManager {
         projections: &ProjectionEngine,
     ) -> Result<()> {
         const PAGE_SIZE: usize = 128;
+        // Request submission persists second-precision timestamps. An
+        // attachment with fractional seconds must include its whole second
+        // or it can miss a request submitted later in that same second.
+        let attached_at = chrono::DateTime::parse_from_rfc3339(attached_at)?
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+        // Session IDs are grouping keys, not authorization. Root sessions
+        // use the bound principal as requester, just like submission and
+        // AgentSession creation; foreign rows must never become UI turns.
+        let principal = escape_graphql_string(&self.config.agent_did);
         let query = format!(
             r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }},
+                agent_did: {{ _eq: "{principal}" }}, requester_did: {{ _eq: "{principal}" }},
                 created_at: {{ _gte: "{}" }}, request_id: {{ _gt: "{}" }} }},
                 order: {{ request_id: ASC }}, limit: {PAGE_SIZE}) {{ request_id created_at }} }}"#,
             escape_graphql_string(session_id),
-            escape_graphql_string(attached_at),
+            escape_graphql_string(&attached_at),
             escape_graphql_string(after),
         );
         let response = self.node.execute(&query).await;
@@ -802,7 +930,6 @@ impl TurnManager {
                 let ObservedRequest {
                     prompt_id,
                     cursor,
-                    token_high_water,
                     timing,
                     ..
                 } = &mut *progress;
@@ -812,7 +939,6 @@ impl TurnManager {
                     prompt_id.as_deref(),
                     sender,
                     projections,
-                    token_high_water,
                     cursor,
                     timing,
                     false,
@@ -835,7 +961,6 @@ impl TurnManager {
             let ObservedRequest {
                 prompt_id,
                 cursor,
-                token_high_water,
                 timing,
                 ..
             } = &mut *progress;
@@ -845,7 +970,6 @@ impl TurnManager {
                 prompt_id.as_deref(),
                 sender,
                 projections,
-                token_high_water,
                 cursor,
                 timing,
                 !continuing_autonomous,
@@ -1482,7 +1606,6 @@ impl TurnManager {
         // (smaller) observation can never decrease it.
         let ObservedRequest {
             cursor,
-            token_high_water,
             timing: update_timing,
             ..
         } = progress;
@@ -1551,7 +1674,6 @@ impl TurnManager {
                     Some(prompt_id),
                     sender,
                     projections,
-                    token_high_water,
                     cursor,
                     update_timing,
                     false,
@@ -1639,7 +1761,6 @@ impl TurnManager {
         prompt_id: Option<&str>,
         sender: &PromptSender,
         projections: &ProjectionEngine,
-        token_high_water: &mut u64,
         cursor: &tokio::sync::Mutex<RequestCursor>,
         update_timing: &mut RequestUpdateTiming,
         include_notifications: bool,
@@ -1651,7 +1772,6 @@ impl TurnManager {
             prompt_id,
             sender,
             projections,
-            token_high_water,
             cursor,
             update_timing,
             include_notifications,
@@ -1671,7 +1791,6 @@ impl TurnManager {
         prompt_id: Option<&str>,
         sender: &PromptSender,
         projections: &ProjectionEngine,
-        token_high_water: &mut u64,
         cursor: &tokio::sync::Mutex<RequestCursor>,
         update_timing: &mut RequestUpdateTiming,
         include_notifications: bool,
@@ -1684,7 +1803,7 @@ impl TurnManager {
         let batch = {
             let mut cursor = cursor.lock().await;
             projections
-                .project_request_updates(session_id, request_id, token_high_water, &mut cursor)
+                .project_request_updates(session_id, request_id, &mut cursor)
                 .await?
         };
         let mut deferred_notifications = false;
@@ -1883,22 +2002,16 @@ impl TurnManager {
                     if terminal.is_none() {
                         deferred.insert(session_id.to_owned());
                     }
-                    let ObservedRequest {
-                        cursor,
-                        token_high_water,
-                        timing,
-                        ..
-                    } = &mut *progress;
+                    let ObservedRequest { cursor, timing, .. } = &mut *progress;
                     Box::pin(self.stream_projection_updates(
                         session_id,
                         &request_id,
                         None,
                         sender,
                         projections,
-                        token_high_water,
                         cursor,
                         timing,
-                        terminal.is_some(),
+                        terminal.is_some() || matches!(sender, PromptSender::Replay { .. }),
                         depth + 1,
                     ))
                     .await?;
@@ -2643,7 +2756,7 @@ mod tests {
         );
         assert_eq!(value["params"]["_meta"]["promptId"], json!("prompt-1"));
         assert_eq!(value["params"]["_meta"]["isReplay"], json!(false));
-        // The echo reports the session-cumulative tokens (zero on the first
+        // The echo reports the last observed context (zero on the first
         // turn, before any projected observation has applied).
         assert_eq!(value["params"]["_meta"]["totalTokens"], json!(0));
         // The echo shares the pager's eventId dedup space with the projected
@@ -3285,6 +3398,126 @@ mod tests {
     /// Only one autonomous turn can own the pager's live cards. Notices and
     /// later wakes wait for its terminal delivery; ordinary Esc cancels it.
     #[tokio::test]
+    async fn resume_hands_off_active_and_during_replay_requests_without_repeating_history() {
+        let (_dir, node, principal) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &principal));
+        let engine = test_engine(node.clone());
+        let (buffer, sender) = buffer_sender();
+        let prompt = parse_prompt_request(
+            &json!({"sessionId":"session-1", "prompt":[text_block("Original prompt")]}),
+            None,
+        )
+        .unwrap();
+        let first = manager.submit_request(&prompt, "first").await.unwrap();
+        seed_assistant_message(&node, &first, 1, "Before reconnect.").await;
+        let attached = chrono::Utc::now().to_rfc3339();
+        let rows = super::super::sessions::requests(&node, &principal, Some("session-1"))
+            .await
+            .unwrap();
+        let running = manager
+            .replay_session("session-1", &rows, &sender, &engine)
+            .await
+            .unwrap();
+        assert_eq!(running, Some(format!("notifications-{first}")));
+        let historical = parse_buffered_updates(&buffer).await;
+        assert!(historical
+            .iter()
+            .all(|event| event["params"]["_meta"]["isReplay"] == true));
+        buffer.lock().await.clear();
+        seed_assistant_message(&node, &first, 2, "After reconnect.").await;
+        terminalize_request(&node, &first, "completed").await;
+        // This request was not in the replay manifest. Discovery must begin
+        // at the pre-replay attachment time, not the later response time.
+        let second = manager.submit_request(&prompt, "second").await.unwrap();
+        seed_assistant_message(&node, &second, 3, "Created during replay.").await;
+        terminalize_request(&node, &second, "completed").await;
+        let mut after = String::new();
+        let mut delivery_after = String::new();
+        for _ in 0..3 {
+            manager
+                .observe_session_tick(
+                    "session-1",
+                    &attached,
+                    &mut after,
+                    &mut delivery_after,
+                    &sender,
+                    &engine,
+                )
+                .await
+                .unwrap();
+        }
+        let updates = parse_buffered_updates(&buffer).await;
+        let text = updates
+            .iter()
+            .filter_map(|event| {
+                event
+                    .pointer("/params/update/content/text")
+                    .and_then(Value::as_str)
+            })
+            .collect::<String>();
+        assert!(!text.contains("Before reconnect."));
+        assert_eq!(text.matches("After reconnect.").count(), 1);
+        assert_eq!(text.matches("Created during replay.").count(), 1);
+        assert!(updates
+            .iter()
+            .all(|event| event["params"]["_meta"]["isReplay"] != true));
+        assert!(manager.autonomous_delivery.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn session_discovery_excludes_foreign_principals_and_requesters() {
+        let (_tempdir, node, agent_did) = test_node().await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let manager = TurnManager::new(node.clone(), test_config(graphql, &agent_did));
+        let engine = test_engine(node.clone());
+        let (_, sender) = buffer_sender();
+        for (id, agent, requester) in [
+            (
+                "foreign-agent",
+                "did:test:foreign",
+                Some(agent_did.as_str()),
+            ),
+            (
+                "foreign-requester",
+                agent_did.as_str(),
+                Some("did:test:foreign"),
+            ),
+            ("missing-requester", agent_did.as_str(), None),
+            ("owned", agent_did.as_str(), Some(agent_did.as_str())),
+        ] {
+            let requester = requester
+                .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+                .unwrap_or_else(|| "null".into());
+            let result = node
+                .execute(&format!(
+                    r#"mutation {{ create_AgentRequest(input: {{
+                request_id: "{id}", session_id: "session-1", agent_did: "{}",
+                requester_did: {requester}, lifecycle_state: "completed",
+                created_at: "2026-06-04T12:00:00Z"
+            }}) {{ _docID }} }}"#,
+                    escape_graphql_string(agent)
+                ))
+                .await;
+            ensure_no_errors(&result, "seed scoped session discovery").unwrap();
+        }
+        manager
+            .observe_session_tick(
+                "session-1",
+                "1970-01-01T00:00:00Z",
+                &mut String::new(),
+                &mut String::new(),
+                &sender,
+                &engine,
+            )
+            .await
+            .unwrap();
+        let observed = manager.observed.lock().await;
+        assert_eq!(observed.len(), 1);
+        assert!(observed.contains_key(&("session-1".into(), "owned".into())));
+    }
+
+    #[tokio::test]
     async fn autonomous_turn_defers_late_notices_and_plain_escape_cancels_its_owner() {
         let (_tempdir, node, agent_did) = test_node().await;
         let graphql = spawn_mock_graphql(node.clone()).await;
@@ -3512,7 +3745,6 @@ mod tests {
         ensure_no_errors(&response, "scope child tool").unwrap();
         seed_assistant_message(&node, "pane-root", 7, "PARENT MUST WAIT").await;
         let cursor = Mutex::new(RequestCursor::new());
-        let mut tokens = 0;
         let mut timing = RequestUpdateTiming::new(0);
         manager
             .stream_projection_updates_mode(
@@ -3521,7 +3753,6 @@ mod tests {
                 Some("parent-prompt"),
                 &sender,
                 &engine,
-                &mut tokens,
                 &cursor,
                 &mut timing,
                 false,
@@ -3575,7 +3806,6 @@ mod tests {
                 None,
                 &sender,
                 &engine,
-                &mut tokens,
                 &cursor,
                 &mut timing,
                 true,
@@ -3595,7 +3825,6 @@ mod tests {
                 None,
                 &sender,
                 &engine,
-                &mut tokens,
                 &cursor,
                 &mut timing,
                 true,
@@ -4004,7 +4233,7 @@ mod tests {
             vec![
                 &json!({
                     "sessionUpdate": "tool_call_update", "toolCallId": "call-1",
-                    "content": [{"type": "text", "text": "file contents"}],
+                    "content": [{"type": "content", "content": {"type": "text", "text": "file contents"}}],
                     "rawOutput": {"output": "file contents"},
                 }),
                 &json!({
