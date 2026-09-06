@@ -2236,8 +2236,6 @@ async fn operator_resume_rejects_busy_session_and_old_predecessor() {
     }
 }
 
-// Replace the existing resume_resets_blocked_audit_identity_and_count test with
-// this function (same name) rather than leave the status-only setter bypass.
 #[tokio::test]
 async fn resume_resets_blocked_audit_identity_and_count() {
     let db = test_db("goal-resume-audit-reset").await;
