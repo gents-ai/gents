@@ -678,6 +678,20 @@ fn pack_catalog_and_install_parse() {
         }
         _ => panic!("expected graph install"),
     }
+
+    match parse_pack(&["prune", "mailbox", "--home", "/tmp/gents-home"]) {
+        PackCommand::Prune(args) => {
+            assert_eq!(args.package, "mailbox");
+            assert_eq!(
+                args.home.as_deref(),
+                Some(std::path::Path::new("/tmp/gents-home"))
+            );
+        }
+        _ => panic!("expected pack prune"),
+    }
+    assert!(
+        matches!(parse_pack(&["prune", "pipeline"]), PackCommand::Prune(args) if args.home.is_none())
+    );
 }
 
 #[test]

@@ -202,8 +202,8 @@ pub(crate) fn graph_manifest_from_pack(
     serde_json::from_value(serde_json::Value::Object(fields)).context("invalid graph manifest")
 }
 
-fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
-    let distribution = crate::pack::resolve_pack(package_name)?;
+fn load_package(distribution: &crate::pack::ResolvedPack) -> Result<BundledGraphPackage> {
+    let package_name = distribution.manifest.name.as_str();
     anyhow::ensure!(
         matches!(
             distribution.manifest.metadata.kind,
@@ -279,13 +279,25 @@ pub fn load_bundled_graph_package(name: &str) -> Result<BundledGraphPackage> {
     if !BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name) {
         anyhow::bail!("unknown bundled graph package {name:?}");
     }
-    load_package(name)
+    let distribution = crate::pack::resolve_pack(name)?;
+    load_package(&distribution)
+}
+
+pub fn load_resolved_graph_package(
+    distribution: &crate::pack::ResolvedPack,
+) -> Result<BundledGraphPackage> {
+    anyhow::ensure!(
+        BUNDLED_GRAPH_PACKAGE_NAMES.contains(&distribution.manifest.name.as_str()),
+        "unknown bundled graph package {:?}",
+        distribution.manifest.name
+    );
+    load_package(distribution)
 }
 
 pub fn graph_package_catalog() -> Result<Vec<GraphPackageCatalogEntry>> {
     BUNDLED_GRAPH_PACKAGE_NAMES
         .iter()
-        .map(|name| Ok(load_package(name)?.catalog_entry()))
+        .map(|name| Ok(load_bundled_graph_package(name)?.catalog_entry()))
         .collect()
 }
 

@@ -22,7 +22,8 @@ use serde_json::{json, Value};
 use super::cli_process::{path_arg, run_cli_json};
 use super::secscan;
 use super::server::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
-use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
+use crate::cli::args::{GraphScopeArgs, PackInitArgs, PackInstallArgs, PackRunArgs, PackSeedArgs};
+use crate::cli::output_format::OutputFormat;
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
@@ -341,30 +342,69 @@ struct SourceEdgeExpectation {
     source_collection: String,
 }
 
-/// Resolve a pack by path, or by name under `packs/`.
-fn resolve_scenario_dir(target: &str) -> Result<PathBuf> {
+fn validate_source_pack_path(path: &Path) -> Result<()> {
+    anyhow::ensure!(
+        !path.components().any(|component| matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )),
+        "source pack path must be lexically normalized"
+    );
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .context("source pack path needs a UTF-8 directory name")?;
+    anyhow::ensure!(
+        gents::pack::is_valid_pack_name(name),
+        "source pack directory name must be snake_case"
+    );
+    Ok(())
+}
+
+fn read_distribution_manifest(root: &Path) -> Result<gents::pack::PackManifest> {
+    let path = root.join("manifest.json");
+    serde_json::from_slice(
+        &std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?,
+    )
+    .with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Resolve an explicitly selected source directory or a bundled pack name.
+/// The returned file is a shared cache lease and must live for the operation.
+fn resolve_scenario_dir(
+    target: &str,
+) -> Result<(PathBuf, Option<std::fs::File>, gents::pack::PackManifest)> {
     let direct = PathBuf::from(target);
     if direct.join("experiment.json").is_file() {
-        return Ok(direct);
+        validate_source_pack_path(&direct)?;
+        let distribution = read_distribution_manifest(&direct)?;
+        return Ok((direct, None, distribution));
     }
-    let under_packs = PathBuf::from("packs").join(target);
-    if under_packs.join("experiment.json").is_file() {
-        return Ok(under_packs);
+    if gents::pack::is_valid_pack_name(target) {
+        let under_packs = PathBuf::from("packs").join(target);
+        if under_packs.join("experiment.json").is_file() {
+            let distribution = read_distribution_manifest(&under_packs)?;
+            return Ok((under_packs, None, distribution));
+        }
     }
-    let bundled = crate::commands::pack::materialize_named_pack(target)?;
+    let (bundled, lease, distribution) = crate::commands::pack::materialize_named_pack(target)?;
     anyhow::ensure!(
         bundled.join("experiment.json").is_file(),
         "pack {target} has no scenario; use graph run for installed graphs"
     );
-    Ok(bundled)
+    Ok((bundled, Some(lease), distribution))
 }
 
-fn load_manifest(pack: &Path) -> Result<ScenarioManifest> {
-    load_manifest_with(pack, &|name| std::env::var(name).ok())
+fn load_manifest(
+    pack: &Path,
+    distribution: &gents::pack::PackManifest,
+) -> Result<ScenarioManifest> {
+    load_manifest_with(pack, distribution, &|name| std::env::var(name).ok())
 }
 
 fn load_manifest_with(
     pack: &Path,
+    distribution: &gents::pack::PackManifest,
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<ScenarioManifest> {
     let path = pack.join("experiment.json");
@@ -379,17 +419,11 @@ fn load_manifest_with(
     })?;
     let mut manifest: ScenarioManifest =
         serde_json::from_str(&expanded).with_context(|| format!("parsing {}", path.display()))?;
-    let distribution_path = pack.join("manifest.json");
-    let distribution: gents::pack::PackManifest = serde_json::from_slice(
-        &std::fs::read(&distribution_path)
-            .with_context(|| format!("reading {}", distribution_path.display()))?,
-    )
-    .with_context(|| format!("parsing {}", distribution_path.display()))?;
     anyhow::ensure!(
         distribution.name == manifest.name,
         "scenario name must match the distribution manifest"
     );
-    manifest.graph_dependencies = distribution.metadata.dependencies;
+    manifest.graph_dependencies = distribution.metadata.dependencies.clone();
     validate_manifest(&manifest).with_context(|| format!("validating {}", path.display()))?;
     validate_prompt_tool_contracts_with(pack, &manifest, lookup)
         .with_context(|| format!("validating prompt/tool contracts in {}", path.display()))?;
@@ -931,7 +965,6 @@ fn validate_manifest(manifest: &ScenarioManifest) -> Result<()> {
 }
 
 async fn install_bundled_graph_dependencies(
-    bin: &Path,
     home: &Path,
     graphql: &str,
     agent_did: &str,
@@ -1022,45 +1055,25 @@ async fn install_bundled_graph_dependencies(
             .with_context(|| format!("writing bundled graph bindings {}", path.display()))?;
             binding_path = Some(path);
         }
-        let args = graph_dependency_install_args(
-            package,
-            home,
-            graphql,
-            agent_did,
-            binding_path.as_deref(),
-        );
-        run_cli_json(bin, &args)
-            .await
-            .with_context(|| format!("installing bundled graph dependency {package}"))?;
+        crate::commands::graph::install(
+            PackInstallArgs {
+                package: package.clone(),
+                bindings: binding_path,
+                scope: GraphScopeArgs {
+                    home: Some(home.to_owned()),
+                    graphql: Some(graphql.to_owned()),
+                    agent_did: Some(agent_did.to_owned()),
+                },
+                output: OutputFormat::Json,
+                force_rebind_concrete_did: false,
+            },
+            false,
+        )
+        .await
+        .with_context(|| format!("installing bundled graph dependency {package}"))?;
         tracing::info!(%package, "installed bundled graph dependency");
     }
     Ok(())
-}
-
-fn graph_dependency_install_args(
-    package: &str,
-    home: &Path,
-    graphql: &str,
-    agent_did: &str,
-    bindings: Option<&Path>,
-) -> Vec<String> {
-    let mut args = vec![
-        "pack".to_string(),
-        "install".to_string(),
-        package.to_string(),
-        "--home".to_string(),
-        path_arg(home),
-        "--graphql".to_string(),
-        graphql.to_string(),
-        "--agent-did".to_string(),
-        agent_did.to_string(),
-        "--output".to_string(),
-        "json".to_string(),
-    ];
-    if let Some(path) = bindings {
-        args.extend(["--bindings".to_string(), path_arg(path)]);
-    }
-    args
 }
 
 fn validate_tool_package(package: &str) -> Result<()> {
@@ -3142,8 +3155,8 @@ fn resolve_manifest_tool_root(pack: &Path, manifest: &ScenarioManifest) -> Resul
 
 pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
-    let pack = resolve_scenario_dir(&args.pack)?;
-    let manifest = load_manifest(&pack)?;
+    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let manifest = load_manifest(&pack, &distribution)?;
     tracing::info!(pack = %manifest.name, description = %manifest.description, "initializing pack scenario");
     let home = args.home;
     if home.join("init.json").is_file() && !args.overwrite {
@@ -3173,8 +3186,8 @@ pub(crate) async fn init_pack(args: PackInitArgs) -> Result<()> {
 }
 
 pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
-    let pack = resolve_scenario_dir(&args.pack)?;
-    let manifest = load_manifest(&pack)?;
+    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let manifest = load_manifest(&pack, &distribution)?;
 
     let port = args.http_port;
     let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
@@ -3248,8 +3261,8 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
 
 pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
     let bin = std::env::current_exe().context("resolving the gents binary path")?;
-    let pack = resolve_scenario_dir(&args.pack)?;
-    let mut manifest = load_manifest(&pack)?;
+    let (pack, _cache_lease, distribution) = resolve_scenario_dir(&args.pack)?;
+    let mut manifest = load_manifest(&pack, &distribution)?;
     let observed_collections = trigger_source_collections(&pack, &manifest.expect.trigger_ids)?;
     let job_id = args.job_id.clone().unwrap_or_else(default_job_id);
     let prompt = args
@@ -3328,7 +3341,6 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         .await?;
         wait_runtime_ready(&graphql, &agent_did, &mut server).await?;
         install_bundled_graph_dependencies(
-            &bin,
             &home,
             &graphql,
             &agent_did,
@@ -3672,8 +3684,27 @@ fn spawn_server_with_pack(
 mod tests {
     use super::*;
 
+    #[test]
+    fn source_pack_paths_require_normalized_snake_case_directories() {
+        for path in ["pipeline", "packs/pipeline", "/tmp/my_pack"] {
+            validate_source_pack_path(Path::new(path)).unwrap();
+        }
+        for path in [
+            "packs/../pipeline",
+            "./packs/pipeline",
+            "packs/CodeReview",
+            "packs/code-review",
+        ] {
+            assert!(
+                validate_source_pack_path(Path::new(path)).is_err(),
+                "{path}"
+            );
+        }
+    }
+
     fn load_manifest_defaults(pack: &Path) -> Result<ScenarioManifest> {
-        load_manifest_with(pack, &|_| None)
+        let distribution = read_distribution_manifest(pack)?;
+        load_manifest_with(pack, &distribution, &|_| None)
     }
 
     #[test]
@@ -3683,32 +3714,6 @@ mod tests {
         experiment["bundled_graph_packages"] = json!(["code_review"]);
         let error = serde_json::from_value::<ScenarioManifest>(experiment).unwrap_err();
         assert!(error.to_string().contains("bundled_graph_packages"));
-    }
-
-    #[test]
-    fn graph_dependency_install_uses_the_current_pack_cli() {
-        use crate::cli::{Cli, Command, PackCommand};
-        use clap::Parser;
-        for bindings in [None, Some(Path::new("/tmp/bindings.json"))] {
-            let args = graph_dependency_install_args(
-                "code_review",
-                Path::new("/tmp/pack-node"),
-                "http://127.0.0.1:19191/api/v0/graphql",
-                "did:key:test",
-                bindings,
-            );
-            let cli =
-                Cli::try_parse_from(std::iter::once("gents".to_string()).chain(args)).unwrap();
-            let Command::Pack {
-                command: PackCommand::Install(install),
-            } = cli.command
-            else {
-                panic!("dependency setup must invoke pack install");
-            };
-            assert_eq!(install.package, "code_review");
-            assert_eq!(install.bindings.as_deref(), bindings);
-            assert_eq!(install.scope.agent_did.as_deref(), Some("did:key:test"));
-        }
     }
 
     fn read_pack_json_defaults(path: &Path) -> Result<Value> {

@@ -45,6 +45,13 @@ pub struct ResolvedPack {
     pub digest: String,
 }
 
+/// Return whether `name` is admissible at the pack catalog and source-pack
+/// boundaries. Keep callers on this owner instead of growing parallel name
+/// validators in adapters.
+pub fn is_valid_pack_name(name: &str) -> bool {
+    asset_path::is_snake_case_name(name)
+}
+
 impl ResolvedPack {
     pub fn asset(&self, path: &str) -> Result<&'static [u8]> {
         anyhow::ensure!(
@@ -79,10 +86,7 @@ pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
         !manifest.description.trim().is_empty() && !manifest.metadata.authors.is_empty(),
         "pack needs description and authors"
     );
-    anyhow::ensure!(
-        asset_path::is_snake_case_name(name),
-        "pack name must be snake_case"
-    );
+    anyhow::ensure!(is_valid_pack_name(name), "pack name must be snake_case");
     let mut unique = BTreeSet::new();
     for path in &manifest.metadata.assets {
         anyhow::ensure!(

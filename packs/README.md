@@ -10,6 +10,7 @@ gents pack show code_review
 gents pack install code_review --home <initialized-home>
 gents graph run code_review --repo . --base origin/main --head HEAD
 gents pack install mailbox --home <initialized-home>
+gents pack prune mailbox
 gents pack run pipeline --http-port 19191 --keep-home
 ```
 
@@ -36,12 +37,13 @@ explicit `--force-rebind-concrete-did`. Review tool declarations and host
 authority before installing untrusted content. External dependency commands
 are documentation, never automatically executed.
 
-`pack run`, `init`, and `seed` operate `experiment.json` scenarios. A source
-directory can be used while authoring; bundled names are materialized into the
-local pack cache when no source directory is selected. Run artifacts are under
-the resolved pack's `runs/<job_id>/`. Repository-specific scenarios still need
-their documented checkout, tools and bindings; bundling does not provision a
-compiler or an external model endpoint.
+`pack run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
+normalized source directory with a snake_case leaf name can be used while
+authoring; bundled names are materialized into the local pack cache when no
+source directory is selected. Run artifacts are under the resolved pack's
+`runs/<job_id>/`. Repository-specific scenarios still need their documented
+checkout, tools and bindings; bundling does not provision a compiler or an
+external model endpoint.
 
 `manifest.json` is the sole package dependency declaration, including for
 scenario runs. `experiment.json` may configure scenario-specific graph model
@@ -52,7 +54,14 @@ with `pack run --home`: it lives under the default Gents home's `packs/` tree.
 The distribution digest covers all declared assets, including documentation;
 the graph execution digest covers only the graph's referenced inputs. Both use
 the existing graph asset hashing routine. Filesystem cache names use the hex
-portion of the shared `sha256:` digest format.
+portion of the shared `sha256:` digest format. `pack prune <name> [--home <home>]`
+removes superseded generated versions with no `runs/`. It takes the exclusive
+per-pack cache lock; scenario operations retain a shared lock for their full
+lifetime. Versions holding run history and directories without Gents'
+ownership marker are retained.
+Omit `--home` to prune the same default cache used by named scenario runs; pass
+the same explicit `--home` used to install an asset pack when pruning that
+cache.
 
 `gents graph run/watch/result/cancel/enable/disable` remain graph operations.
 The former `graph install/catalog` and `demo` pack subcommands are removed.

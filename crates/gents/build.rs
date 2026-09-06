@@ -65,6 +65,22 @@ fn generate_bundled_packs(workspace_root: &Path) {
         packages.windows(2).all(|pair| pair[0] != pair[1]),
         "duplicate pack registration"
     );
+    let mut source_packages = std::fs::read_dir(&root)
+        .expect("read packs directory")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_dir() && entry.path().join("manifest.json").is_file())
+        .map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .expect("pack directory name must be UTF-8")
+        })
+        .collect::<Vec<_>>();
+    source_packages.sort();
+    assert_eq!(
+        packages, source_packages,
+        "packs/catalog.json must register every directory containing manifest.json exactly once"
+    );
 
     let mut names = Vec::new();
     let mut graph_names = Vec::new();

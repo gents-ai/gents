@@ -990,7 +990,7 @@ type ScanReport {
 }
 ```
 
-**Tool selections.** Copy `packs/code_review/tool_selections/review-scan-tools/object.json` as the base for each and change only what's listed (all other keys keep code-review's values, e.g. the `enable_lsp`/`lsp_config` pair copied verbatim where LSP is on):
+**Tool selections.** Copy `packs/code_review/tool_selections/review_scan_tools/object.json` as the base for each and change only what's listed (all other keys keep code-review's values, e.g. the `enable_lsp`/`lsp_config` pair copied verbatim where LSP is on):
 
 - `scan-plan-tools`: `selection_id: "scan-plan-tools"`, display_name `"Plan: batch candidates and write assignments"`, `enable_file_tools: true`, `file_tools_mode: "ReadOnly"`, `file_tool_root: "${GENTS_SCAN_ROOT:-.}"`, `enable_bash: false`, `command_network_mode: "disabled"`, `enable_lsp: false` (omit `lsp_config`), `backgroundable_tool_names: []`, `datastore_tool_surface_ids: ["scan-plan-writes"]`, `enable_defra_query: false`.
 - `scan-investigate-tools`: like review-scan-tools (file ReadOnly at `${GENTS_SCAN_ROOT:-.}`, bash Unrestricted, network `enabled` for cargo/dependency fetches, `enable_lsp: true` + code-review's `lsp_config`, `backgroundable_tool_names: ["bash_unrestricted"]`), `datastore_tool_surface_ids: ["scan-investigate-writes"]`.

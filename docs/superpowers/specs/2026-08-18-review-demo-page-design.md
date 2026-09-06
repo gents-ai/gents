@@ -1,4 +1,18 @@
-# Review demo page (design)
+# Review demo page (historical design; not implemented)
+
+Status: superseded. The proposed `make review*` targets and a code-review
+`experiment.json` scenario were never implemented. The shipped pack is a graph,
+so the supported unattended workflow is:
+
+```sh
+gents graph run code_review --repo . --base origin/main --head HEAD --watch
+```
+
+There is currently no stock talk-page/seed-only workflow for this graph. The
+remainder of this document records the original proposal and is not an operator
+runbook.
+
+## Archived proposal
 
 Company talk companion for the `packs/code_review` pack: a page that is already
 open while we explain the graph, then hydrates a live document DAG when

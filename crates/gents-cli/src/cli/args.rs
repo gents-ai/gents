@@ -232,12 +232,21 @@ pub(crate) enum PackCommand {
     Show(PackShowArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
+    /// Remove superseded generated asset-cache versions without run history.
+    Prune(PackPruneArgs),
     /// Exercise a scenario in a dedicated home: apply, seed, await, report.
     Run(PackRunArgs),
     /// Initialize a dedicated scenario home.
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackPruneArgs {
+    pub(crate) package: String,
+    #[arg(long, help = "Home containing the local pack asset cache")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]
