@@ -39,7 +39,7 @@ env:
   SCCACHE_DIR: ${{ vars.SCCACHE_DIR || '/Users/admin/.cache/sccache' }}
 
 jobs:
-  rename-guard:
+  repository-guard:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -67,15 +67,6 @@ jobs:
             exit 1
           fi
 
-      - name: Check rename tool syntax
-        run: bash -n scripts/rename-to-gents.sh
-
-      - name: Run rename tool self-test
-        run: scripts/rename-to-gents.sh self-test
-
-      - name: Reject stale product identifiers
-        run: scripts/rename-to-gents.sh guard all
-
       - name: Check Harbor runner syntax
         run: |
           bash -n scripts/harbor/run_gents.sh
@@ -100,7 +91,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.stack == null ||
       github.event.pull_request.stack.position == github.event.pull_request.stack.size
-    needs: rename-guard
+    needs: repository-guard
     runs-on:
       [
         self-hosted,
@@ -362,7 +353,7 @@ jobs:
       github.event.pull_request.stack == null ||
       github.event.pull_request.stack.position == github.event.pull_request.stack.size
     # Reuse the warm proof cache on studio-1's light support slot. This keeps
-    # the runtime slot free once rename-guard releases the Rust matrix.
+    # the runtime slot free once repository-guard releases the Rust matrix.
     runs-on: [self-hosted, macOS, ARM64, studio, studio-1, ci-support]
     timeout-minutes: 60
     steps:
