@@ -230,6 +230,7 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
             &agent_name,
             "--model-name",
             &model_name,
+            "--inference-url",
             mock_endpoint.endpoint(),
         ],
     )?;
