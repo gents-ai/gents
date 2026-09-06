@@ -25,6 +25,7 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     )
     .unwrap();
     let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![]).unwrap(),
         workspace_id: "recovery-workspace".into(),
         work_unit_id: "work-unit".into(),
         repository_id: "repository".into(),

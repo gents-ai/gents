@@ -635,6 +635,8 @@ async fn insert_ready_workspace(
 ) {
     let mutation = crate::workspace::isolated_workspace_upsert_mutation(
         &crate::workspace::IsolatedWorkspaceDoc {
+            path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])
+                .unwrap(),
             workspace_id: workspace_id.into(),
             work_unit_id: "unit-1".into(),
             repository_id: "repo-1".into(),

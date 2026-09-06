@@ -27,3 +27,5 @@ missing or duplicate id. Do not also emit the normal `<cluster_id>:patch` id
 for any row participating in a duplicate. N remains the number of interpolated
 contract rows, so a corrupt join closes visibly without unique-id collisions
 or a stranded barrier.
+
+Include `owned_files` on every assignment as a JSON-array string of exact repository-relative file paths supported by that cluster and contract review, including intended new files and deletions. Directory names, globs, absolute paths, and traversal are invalid. This immutable manifest is the patch workspace file-write scope; execution cannot expand it. If the evidence does not determine the concrete files, emit a skipped assignment with a concrete reason rather than guessing or granting the whole repository. Skipped assignments use the explicit string `[]`.

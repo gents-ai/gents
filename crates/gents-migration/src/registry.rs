@@ -319,6 +319,7 @@ const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
 ]"#;
 
 const EVENT_TRIGGER_BASELINE_SDL: &str = include_str!("baseline/event_trigger.graphql");
+const ISOLATED_WORKSPACE_BASELINE_SDL: &str = include_str!("baseline/isolated_workspace.graphql");
 const WORKSPACE_RECEIPT_BASELINE_SDL: &str = include_str!("baseline/workspace_receipt.graphql");
 
 const EVENT_TRIGGER_ADD_WORKSPACE_AUTHORITY_PATCH: &str = r#"[
@@ -334,6 +335,16 @@ const CALLBACK_RESULT_ADD_WORK_UNIT_ID_PATCH: &str = r#"[
 const WORKSPACE_RECEIPT_ADD_LINEAGE_FIELDS_PATCH: &str = r#"[
   {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"work_unit_id","Kind":"String"}},
   {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"caused_by_correlation","Kind":"String"}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const ISOLATED_WORKSPACE_ADD_PATH_CAPABILITY_PATCH: &str = r#"[
+  {"op":"add","path":"/IsolatedWorkspace/Fields/-","value":{"Name":"path_capability","Kind":"String","Immutable":true}},
+  {"op":"replace","path":"/IsActive","value":false}
+]"#;
+
+const WORKSPACE_RECEIPT_ADD_PATH_CAPABILITY_DIGEST_PATCH: &str = r#"[
+  {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"path_capability_digest","Kind":"String","Immutable":true}},
   {"op":"replace","path":"/IsActive","value":false}
 ]"#;
 
@@ -422,7 +433,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::ISOLATED_WORKSPACE_NAME,
-        gents_protocol::schemas::ISOLATED_WORKSPACE,
+        ISOLATED_WORKSPACE_BASELINE_SDL,
         "bafyreiet4b2ljharppkzevalc4krhgzby3sron4fx5ttzng7h26dus3yka"
     ),
     baseline_entry!(
@@ -828,6 +839,32 @@ pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
         expected_version: Some("bafyreihrwpefsqgyqikoou4vvd2e5s73lv4y36j2uwjd35uqpge6rn7cjm"),
         expected_transform: None,
         expected_state: CollectionExpectation::fields(&["work_unit_id", "caused_by_correlation"]),
+    },
+    // These lenses apply only to predecessor-version rows. Current-version
+    // missing fields do not acquire compatibility through a runtime fallback.
+    MigrationStep::PatchVersioned {
+        id: "isolated-workspace-add-path-capability",
+        collection: gents_protocol::schemas::ISOLATED_WORKSPACE_NAME,
+        patch: ISOLATED_WORKSPACE_ADD_PATH_CAPABILITY_PATCH,
+        lens: Some(LensSpec {
+            wasm: include_bytes!(env!("GENTS_LENS_WORKSPACE_CAPABILITY_WASM_PATH")),
+            args_json: None,
+        }),
+        expected_version: Some("bafyreie5rouy5bdaidhrp3pf6oohfm3rhxva75lfwfbbncahgjotnavj5m"),
+        expected_transform: Some("baf3ce596b81fd1d4d238306d7fe37cb669"),
+        expected_state: CollectionExpectation::fields(&["path_capability"]),
+    },
+    MigrationStep::PatchVersioned {
+        id: "workspace-receipt-add-path-capability-digest",
+        collection: gents_protocol::schemas::WORKSPACE_RECEIPT_NAME,
+        patch: WORKSPACE_RECEIPT_ADD_PATH_CAPABILITY_DIGEST_PATCH,
+        lens: Some(LensSpec {
+            wasm: include_bytes!(env!("GENTS_LENS_WORKSPACE_RECEIPT_CAPABILITY_WASM_PATH")),
+            args_json: None,
+        }),
+        expected_version: Some("bafyreigqpu3bfxaowmfc4h35a62shgmizjnbnhb3ednof2t3ypvd76b3jy"),
+        expected_transform: Some("baf1bc0014532c6ccdce492e37b453b017c"),
+        expected_state: CollectionExpectation::fields(&["path_capability_digest"]),
     },
 ];
 

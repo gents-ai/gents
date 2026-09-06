@@ -8,6 +8,7 @@ type WorkspaceReceipt @branchable {
     kind: String @index @immutable
     base_sha: String @immutable
     seal_hash: String @immutable
+    path_capability_digest: String @immutable
     work_unit_id: String @index @immutable
     caused_by_correlation: String @index @immutable
     head_sha: String

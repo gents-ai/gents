@@ -8,6 +8,7 @@ type DefensePatchAssignment {
   contract_disposition: String @immutable
   skip_reason: String @immutable
   repository_id: String @immutable
+  owned_files: String @immutable
   repository_path: String @immutable
   base_revision: String @immutable
   base_tree_state: String @immutable

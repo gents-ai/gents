@@ -3,6 +3,7 @@ type MaintenanceReport {
   status: String @immutable
   work_unit_id: String @immutable
   repository_id: String @immutable
+  owned_files: String @immutable
   base_sha: String @immutable
   branch: String @immutable
   high_priority_count: String

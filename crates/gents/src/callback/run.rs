@@ -100,7 +100,17 @@ pub fn plan_from_binding(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     match (builtin, module_id) {
-        (Some(BUILTIN_CREATE_WORKSPACE), None) => emit_create_workspace_from_source(&source),
+        (Some(BUILTIN_CREATE_WORKSPACE), None) => {
+            let admitted = binding
+                .projected_fields()
+                .map_err(|error| error.to_string())?;
+            for field in ["path_capability", "owned_files"] {
+                if source.get(field).is_some() && !admitted.iter().any(|name| name == field) {
+                    return Err(format!("workspace capability source `{field}` is not admitted by this callback binding"));
+                }
+            }
+            emit_create_workspace_from_source(&source)
+        }
         (Some(other), None) => Err(format!("unknown builtin_emitter `{other}`")),
         (None, Some(id)) => {
             let module = module
@@ -171,8 +181,10 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
                 .collect::<Vec<_>>()
         })
     });
+    let path_capability = workspace_path_capability_from_source(source)?;
     Ok(emit_create_workspace_plan(CreateWorkspaceAction {
         workspace_id,
+        path_capability,
         work_unit_id,
         repository_id,
         base_sha,
@@ -181,6 +193,45 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
         adapter,
         clone_artifacts,
     }))
+}
+
+fn workspace_path_capability_from_source(
+    source: &Value,
+) -> Result<crate::workspace::WorkspacePathCapability, String> {
+    use crate::workspace::WorkspacePathCapability;
+    let decode = |value: &Value| -> Result<Value, String> {
+        match value {
+            Value::String(raw) => serde_json::from_str(raw)
+                .map_err(|error| format!("invalid workspace path manifest JSON: {error}")),
+            other => Ok(other.clone()),
+        }
+    };
+    match (source.get("path_capability"), source.get("owned_files")) {
+        (Some(_), Some(_)) => {
+            Err("workspace source must choose path_capability or owned_files, not both".into())
+        }
+        (Some(value), None) => {
+            let capability: WorkspacePathCapability = serde_json::from_value(decode(value)?)
+                .map_err(|error| format!("invalid workspace path capability: {error}"))?;
+            match capability {
+                WorkspacePathCapability::ExactPaths { paths } => {
+                    WorkspacePathCapability::exact_paths(paths).map_err(|error| error.to_string())
+                }
+                WorkspacePathCapability::UnrestrictedCompatibility => {
+                    Err("new callback workspace requires exact paths".into())
+                }
+            }
+        }
+        (None, Some(value)) => {
+            let paths: Vec<String> = serde_json::from_value(decode(value)?).map_err(|error| {
+                format!("owned_files must be a JSON array of relative file paths: {error}")
+            })?;
+            WorkspacePathCapability::exact_paths(paths).map_err(|error| error.to_string())
+        }
+        (None, None) => Err(
+            "workspace source requires an explicit path_capability or owned_files manifest".into(),
+        ),
+    }
 }
 
 fn required_string(source: &Value, field: &str) -> Result<String, String> {
@@ -700,4 +751,70 @@ pub async fn finish_succeeded_if_docs_ready(
     )
     .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod path_capability_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn builtin_requires_one_explicit_exact_manifest() {
+        for source in [
+            json!({}),
+            json!({"owned_files": null}),
+            json!({"owned_files": "not-json"}),
+            json!({"owned_files": ["src/a.rs", 4]}),
+            json!({"owned_files": ["../escape"]}),
+            json!({"path_capability": {"mode": "unrestrictedCompatibility"}}),
+            json!({"owned_files": [], "path_capability": {"mode": "exactPaths", "paths": []}}),
+        ] {
+            assert!(
+                workspace_path_capability_from_source(&source).is_err(),
+                "{source}"
+            );
+        }
+        let empty = workspace_path_capability_from_source(&json!({"owned_files": "[]"})).unwrap();
+        assert_eq!(
+            empty,
+            crate::workspace::WorkspacePathCapability::exact_paths(Vec::new()).unwrap()
+        );
+        let paths = workspace_path_capability_from_source(
+            &json!({"owned_files": "[\"src/b.rs\",\"src/a.rs\"]"}),
+        )
+        .unwrap();
+        assert_eq!(
+            paths,
+            crate::workspace::WorkspacePathCapability::exact_paths(vec![
+                "src/a.rs".into(),
+                "src/b.rs".into()
+            ])
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn builtin_cannot_use_manifest_outside_binding_source_fields() {
+        let mut binding: CallbackBindingDoc = serde_json::from_value(json!({
+            "binding_id": "path-contract", "source_collection": "WorkUnit", "event_kind": "created",
+            "principal_did": "did:key:writer", "owner_deployment_id": "local", "builtin_emitter": "create_workspace",
+            "source_fields": "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\"]"
+        })).unwrap();
+        let source = json!({"work_unit_id": "unit", "repository_id": "repo", "base_sha": "base", "branch": "branch", "owned_files": "[\"src/a.rs\"]"});
+        assert!(plan_from_binding(&binding, &source, None)
+            .unwrap_err()
+            .contains("not admitted"));
+        binding.source_fields = Some(
+            "[\"work_unit_id\",\"repository_id\",\"base_sha\",\"branch\",\"owned_files\"]".into(),
+        );
+        let plan = plan_from_binding(&binding, &source, None).unwrap();
+        let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
+            panic!("expected create workspace");
+        };
+        assert_eq!(
+            action.path_capability,
+            crate::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
+                .unwrap()
+        );
+    }
 }

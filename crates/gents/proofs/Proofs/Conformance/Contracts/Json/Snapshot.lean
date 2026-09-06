@@ -1,3 +1,4 @@
+import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
 import Proofs.Conformance.Contracts.Json.Scheduling
@@ -267,6 +268,10 @@ def snapshotJson : String :=
     ++ "\"cancel_propagation_cases\":"
       ++ jsonArray
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
+    ++ "\"workspace_path_capability_cases\":"
+      ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"workspace_capability_migration_cases\":"
+      ++ Conformance.WorkspacePathCapabilityContracts.migrationCasesJson ++ ","
     ++ "\"workspace_cases\":"
       ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"

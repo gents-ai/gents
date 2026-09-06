@@ -28,6 +28,7 @@ use crate::toolset::normalize_workspace_lifecycle_state;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogicalWorkspaceIdentity {
+    pub path_capability: super::WorkspacePathCapability,
     pub workspace_id: String,
     pub work_unit_id: String,
     pub repository_id: String,
@@ -236,6 +237,27 @@ fn create_workspace_action(
 
     let artifacts = action.effective_clone_artifacts();
     let state = journal::current_state(journal, 0).unwrap_or(ActionJournalState::Validated);
+    let existing = ctx
+        .documents
+        .load_isolated_workspace(&identity.workspace_id)
+        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    if let Some(existing) = &existing {
+        if existing.identity() != identity || existing.owner_deployment_id != ctx.deployment_id {
+            return Err(HostExecuteError::failed(
+                "workspace creation identity/capability does not match the admitted workspace",
+                true,
+                None,
+            ));
+        }
+    }
+    let legacy = existing
+        .as_ref()
+        .is_some_and(|row| !row.path_capability.is_exact());
+    if !identity.path_capability.is_exact() && !legacy {
+        return Err(HostExecuteError::denied(
+            "fresh workspace creation requires an exact path capability",
+        ));
+    }
 
     if matches!(state, ActionJournalState::ResultDocsWritten) {
         return load_written_docs(&identity.workspace_id, ctx.documents)
@@ -247,8 +269,16 @@ fn create_workspace_action(
     }
 
     // Recovery from Executing always observes; never blindly re-runs create.
-    let observed = observe_effect(&source, &dest, &identity, &resolved_base, &artifacts)
-        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    let observed = observe_effect(
+        &source,
+        &dest,
+        &identity,
+        &resolved_base,
+        &artifacts,
+        legacy,
+        legacy || state == ActionJournalState::Executing,
+    )
+    .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
 
     let (observation, tree_hash, dirty_base) = match observed {
         ObservedEffect::Absent
@@ -315,7 +345,8 @@ fn create_workspace_action(
             tree_hash,
             dirty_base,
         } => {
-            let _ = write_identity(&dest, &identity);
+            write_identity(&dest, &identity)
+                .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
             if action.adapter.clones_artifacts() {
                 if let Err(err) = clone_artifacts(&source, &dest, &artifacts) {
                     journal::advance(journal, 0, ActionJournalState::EffectObserved);
@@ -524,8 +555,14 @@ fn seal_workspace_action(
         journal::current_state(journal, 0),
         Some(ActionJournalState::ResultDocsWritten)
     ) {
-        return load_written_seal(&action.workspace_id, action, ctx.documents)
-            .map_err(|err| HostExecuteError::failed(err.to_string(), false, None));
+        let outcome = load_written_seal(&action.workspace_id, action, ctx.documents)
+            .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+        if outcome.workspace.owner_deployment_id != ctx.deployment_id {
+            return Err(HostExecuteError::denied(
+                "receipt replay belongs to another host",
+            ));
+        }
+        return Ok(outcome);
     }
 
     if matches!(
@@ -564,8 +601,40 @@ fn seal_workspace_action(
         )));
     }
 
+    let receipt_id = writer_receipt_id(&workspace.workspace_id, &action.produced_by_request_id);
+    if let Some(receipt) = ctx
+        .documents
+        .load_receipts(&workspace.workspace_id)
+        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?
+        .into_iter()
+        .find(|receipt| receipt.receipt_id == receipt_id)
+    {
+        validate_receipt_binding(
+            &workspace,
+            &receipt,
+            RECEIPT_KIND_WRITER,
+            &action.produced_by_request_id,
+            &action.produced_by_request_doc_id,
+        )
+        .map_err(|err| HostExecuteError::denied(err.to_string()))?;
+        if !Path::new(&placement.host_path).exists() {
+            journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
+            return Ok(SealWorkspaceOutcome {
+                workspace,
+                placement,
+                receipt,
+            });
+        }
+    }
+
     let dest = PathBuf::from(&placement.host_path);
-    let snapshot = capture_seal_snapshot(&dest)
+    super::adapter::verify_workspace_identity(
+        &ctx.repository.host_path,
+        &dest,
+        &workspace.identity(),
+    )
+    .map_err(|err| HostExecuteError::failed(err.to_string(), true, None))?;
+    let snapshot = capture_seal_snapshot(&dest, &workspace.identity())
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     let seal_hash = snapshot.tree_hash.clone();
 
@@ -634,9 +703,17 @@ fn persist_seal_docs(
                 existing.seal_hash
             );
         }
+        validate_receipt_binding(
+            &workspace,
+            &existing,
+            RECEIPT_KIND_WRITER,
+            &action.produced_by_request_id,
+            &action.produced_by_request_doc_id,
+        )?;
         existing
     } else {
         WorkspaceReceiptDoc {
+            path_capability_digest: workspace.path_capability.digest(),
             receipt_id,
             workspace_id: workspace.workspace_id.clone(),
             produced_by_request_id: action.produced_by_request_id.clone(),
@@ -671,6 +748,27 @@ fn persist_seal_docs(
     })
 }
 
+fn validate_receipt_binding(
+    workspace: &IsolatedWorkspaceDoc,
+    receipt: &WorkspaceReceiptDoc,
+    kind: &str,
+    request_id: &str,
+    request_doc_id: &str,
+) -> Result<()> {
+    workspace.path_capability.validate()?;
+    if receipt.workspace_id != workspace.workspace_id
+        || receipt.base_sha != workspace.base_sha
+        || Some(receipt.seal_hash.as_str()) != workspace.seal_hash.as_deref()
+        || receipt.path_capability_digest != workspace.path_capability.digest()
+        || receipt.kind != kind
+        || receipt.produced_by_request_id != request_id
+        || receipt.produced_by_request_doc_id != request_doc_id
+    {
+        bail!("workspace receipt does not match immutable workspace/base/capability/seal/request binding");
+    }
+    Ok(())
+}
+
 fn load_written_seal(
     workspace_id: &str,
     action: &SealWorkspaceAction,
@@ -692,6 +790,13 @@ fn load_written_seal(
         .ok_or_else(|| {
             anyhow!("journal ResultDocsWritten but WorkspaceReceipt {receipt_id} missing")
         })?;
+    validate_receipt_binding(
+        &workspace,
+        &receipt,
+        RECEIPT_KIND_WRITER,
+        &action.produced_by_request_id,
+        &action.produced_by_request_doc_id,
+    )?;
     Ok(SealWorkspaceOutcome {
         workspace,
         placement,
@@ -787,18 +892,6 @@ fn integrate_workspace_action(
 ) -> Result<IntegrateWorkspaceOutcome, HostExecuteError> {
     let trunk = ctx.repository.host_path.clone();
 
-    if matches!(
-        journal::current_state(journal, 0),
-        Some(ActionJournalState::ResultDocsWritten)
-    ) {
-        if let Ok(outcome) = load_written_integrate(&action.workspace_id, action, ctx.documents) {
-            return Ok(outcome);
-        }
-        // Local marker claimed ResultDocsWritten but the receipt is gone
-        // (flush never landed). Observe the pending commit instead of failing.
-        journal::advance(journal, 0, ActionJournalState::Executing);
-    }
-
     if journal::current_state(journal, 0).is_none()
         || matches!(
             journal::current_state(journal, 0),
@@ -806,14 +899,6 @@ fn integrate_workspace_action(
         )
     {
         journal::advance(journal, 0, ActionJournalState::Executing);
-        persist_integrate_journal(
-            journal,
-            &trunk,
-            &action.workspace_id,
-            None,
-            "",
-            &action.produced_by_request_id,
-        );
     }
 
     let workspace = ctx
@@ -905,6 +990,14 @@ fn integrate_workspace_action(
         .into_iter()
         .find(|receipt| receipt.receipt_id == receipt_id)
     {
+        validate_receipt_binding(
+            &workspace,
+            &existing,
+            RECEIPT_KIND_INTEGRATOR,
+            &action.produced_by_request_id,
+            &action.produced_by_request_doc_id,
+        )
+        .map_err(|err| HostExecuteError::denied(err.to_string()))?;
         if existing.seal_hash != seal_hash {
             return Err(HostExecuteError::failed(
                 format!(
@@ -915,35 +1008,70 @@ fn integrate_workspace_action(
                 None,
             ));
         }
-        journal::advance(journal, 0, ActionJournalState::EffectObserved);
-        let pending = existing
+        let head = existing
             .head_sha
-            .clone()
-            .filter(|sha| commit_exists(&trunk, sha));
-        persist_integrate_journal(
-            journal,
+            .as_deref()
+            .ok_or_else(|| HostExecuteError::denied("integrator receipt is missing head_sha"))?;
+        let has_effect = super::adapter::verify_integrate_commit(
             &trunk,
-            &action.workspace_id,
-            pending.as_deref(),
+            head,
+            &workspace.identity(),
             &seal_hash,
-            &action.produced_by_request_id,
-        );
-        let mut outcome = persist_integrate_docs(workspace, placement, existing, ctx.documents)
-            .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
-        outcome.pending_head_sha = pending;
+        )
+        .map_err(|err| HostExecuteError::denied(err.to_string()))?;
+        let marker = load_integrate_marker(&trunk, &action.workspace_id);
+        let pending = if !has_effect
+            || (marker.is_none() && super::adapter::commit_is_in_trunk(&trunk, head))
+        {
+            None
+        } else {
+            if let Some(marker) = &marker {
+                if marker.seal_hash != seal_hash
+                    || marker.request_id != action.produced_by_request_id
+                {
+                    return Err(HostExecuteError::denied(
+                        "integration journal belongs to a different seal/request",
+                    ));
+                }
+            }
+            workspace
+                .path_capability
+                .validate_paths_at(&trunk)
+                .map_err(|err| HostExecuteError::denied(err.to_string()))?;
+            Some(head.to_owned())
+        };
         journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
-        persist_integrate_journal(
-            journal,
-            &trunk,
-            &action.workspace_id,
-            outcome.pending_head_sha.as_deref(),
-            &seal_hash,
-            &action.produced_by_request_id,
-        );
-        return Ok(outcome);
+        // An already-applied receipt is a pure acknowledgment. Do not recreate
+        // a pending journal or touch the old checkout on this path.
+        if pending.is_some() {
+            persist_integrate_journal(
+                journal,
+                &trunk,
+                &action.workspace_id,
+                pending.as_deref(),
+                &seal_hash,
+                &action.produced_by_request_id,
+            );
+        }
+        return Ok(IntegrateWorkspaceOutcome {
+            workspace,
+            placement,
+            receipt: existing,
+            pending_head_sha: pending,
+        });
     }
 
-    let completing = load_integrate_marker(&trunk, &action.workspace_id)
+    let marker = load_integrate_marker(&trunk, &action.workspace_id);
+    if let Some(marker) = &marker {
+        if marker.pending_head_sha.is_some()
+            && (marker.seal_hash != seal_hash || marker.request_id != action.produced_by_request_id)
+        {
+            return Err(HostExecuteError::denied(
+                "integration journal belongs to a different seal/request",
+            ));
+        }
+    }
+    let completing = marker
         .and_then(|marker| marker.pending_head_sha)
         .filter(|sha| commit_exists(&trunk, sha));
     if completing.is_none() {
@@ -951,9 +1079,16 @@ fn integrate_workspace_action(
             .map_err(HostExecuteError::denied)?;
     }
 
+    super::adapter::verify_workspace_identity(&trunk, &dest_canon, &workspace.identity())
+        .map_err(|err| HostExecuteError::failed(err.to_string(), true, None))?;
+    let snapshot = capture_seal_snapshot(&dest_canon, &workspace.identity())
+        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    if snapshot.tree_hash != seal_hash {
+        return Err(HostExecuteError::denied(
+            "live snapshot does not match the sealed tree",
+        ));
+    }
     let effect = if let Some(sha) = completing {
-        let snapshot = capture_seal_snapshot(&dest_canon)
-            .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
         super::adapter::IntegrateEffect {
             head_sha: sha,
             changed_files: snapshot.changed_files,
@@ -961,19 +1096,35 @@ fn integrate_workspace_action(
             pending_head: true,
         }
     } else {
-        prepare_integrate_commit(&trunk, &dest_canon, &seal_hash, &workspace.base_sha).map_err(
-            |err| {
-                HostExecuteError::failed(
-                    format!("typed integrate_workspace failed: {err}"),
-                    false,
-                    None,
-                )
-            },
-        )?
+        prepare_integrate_commit(
+            &trunk,
+            &dest_canon,
+            &seal_hash,
+            &workspace.base_sha,
+            snapshot,
+        )
+        .map_err(|err| {
+            HostExecuteError::failed(
+                format!("typed integrate_workspace failed: {err}"),
+                false,
+                None,
+            )
+        })?
     };
 
+    let has_effect = super::adapter::verify_integrate_commit(
+        &trunk,
+        &effect.head_sha,
+        &workspace.identity(),
+        &seal_hash,
+    )
+    .map_err(|err| HostExecuteError::denied(err.to_string()))?;
+    workspace
+        .path_capability
+        .validate_paths_at(&trunk)
+        .map_err(|err| HostExecuteError::denied(err.to_string()))?;
     journal::advance(journal, 0, ActionJournalState::EffectObserved);
-    let pending = effect.pending_head.then(|| effect.head_sha.clone());
+    let pending = (has_effect && effect.pending_head).then(|| effect.head_sha.clone());
     persist_integrate_journal(
         journal,
         &trunk,
@@ -983,6 +1134,7 @@ fn integrate_workspace_action(
         &action.produced_by_request_id,
     );
     let receipt = WorkspaceReceiptDoc {
+        path_capability_digest: workspace.path_capability.digest(),
         receipt_id,
         workspace_id: workspace.workspace_id.clone(),
         produced_by_request_id: action.produced_by_request_id.clone(),
@@ -1067,35 +1219,6 @@ fn persist_integrate_docs(
         placement,
         receipt,
         pending_head_sha: None,
-    })
-}
-
-fn load_written_integrate(
-    workspace_id: &str,
-    action: &IntegrateWorkspaceAction,
-    documents: &dyn WorkspaceDocuments,
-) -> Result<IntegrateWorkspaceOutcome> {
-    let workspace = documents
-        .load_isolated_workspace(workspace_id)?
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but IsolatedWorkspace {workspace_id} missing")
-        })?;
-    let placement = documents.load_placement(workspace_id)?.ok_or_else(|| {
-        anyhow!("journal ResultDocsWritten but WorkspacePlacement {workspace_id} missing")
-    })?;
-    let receipt_id = integrator_receipt_id(workspace_id, &action.produced_by_request_id);
-    let receipt = documents
-        .load_receipts(workspace_id)?
-        .into_iter()
-        .find(|receipt| receipt.receipt_id == receipt_id)
-        .ok_or_else(|| {
-            anyhow!("journal ResultDocsWritten but WorkspaceReceipt {receipt_id} missing")
-        })?;
-    Ok(IntegrateWorkspaceOutcome {
-        workspace,
-        placement,
-        receipt: receipt.clone(),
-        pending_head_sha: receipt.head_sha,
     })
 }
 
