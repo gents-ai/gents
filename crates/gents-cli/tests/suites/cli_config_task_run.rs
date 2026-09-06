@@ -74,7 +74,7 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
     let task_path = root
         .join("tasks")
-        .join(task_id.replace('-', "_"))
+        .join(crate::support::document_handle(&task_id))
         .join("object.json");
     write_json_file(
         &task_path,
@@ -285,7 +285,7 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
     let task_path = root
         .join("tasks")
-        .join(task_id.replace('-', "_"))
+        .join(crate::support::document_handle(&task_id))
         .join("object.json");
     write_json_file(
         &task_path,

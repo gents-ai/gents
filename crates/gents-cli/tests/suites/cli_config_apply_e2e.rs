@@ -57,15 +57,15 @@ async fn config_apply_reconciles_tool_services_tasks_and_schedules_end_to_end() 
     let schedule_id = format!("nightly-audit-schedule-{}", Uuid::new_v4().simple());
     let service_path = root
         .join("tool_services")
-        .join(service_id.replace('-', "_"))
+        .join(crate::support::document_handle(&service_id))
         .join("object.json");
     let task_path = root
         .join("tasks")
-        .join(task_id.replace('-', "_"))
+        .join(crate::support::document_handle(&task_id))
         .join("object.json");
     let schedule_path = root
         .join("schedules")
-        .join(schedule_id.replace('-', "_"))
+        .join(crate::support::document_handle(&schedule_id))
         .join("object.json");
 
     write_json_file(
@@ -623,7 +623,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
     let behavior = read_json_file(
         &root
             .join("agent_behaviors")
-            .join(behavior_id.replace('-', "_"))
+            .join(crate::support::document_handle(&behavior_id))
             .join("object.json"),
     )?;
     let selection_id = behavior
@@ -633,7 +633,7 @@ async fn config_apply_accepts_explicit_empty_tool_selection_lists_twice() -> Res
         .to_string();
     let selection_path = root
         .join("tool_selections")
-        .join(selection_id.replace('-', "_"))
+        .join(crate::support::document_handle(&selection_id))
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("Empty list regression".to_string());
@@ -815,11 +815,11 @@ async fn config_apply_reconciles_event_triggers_end_to_end() -> Result<()> {
     let trigger_id = format!("on-signup-created-{}", Uuid::new_v4().simple());
     let task_path = root
         .join("tasks")
-        .join(task_id.replace('-', "_"))
+        .join(crate::support::document_handle(&task_id))
         .join("object.json");
     let trigger_path = root
         .join("event_triggers")
-        .join(trigger_id.replace('-', "_"))
+        .join(crate::support::document_handle(&trigger_id))
         .join("object.json");
 
     write_json_file(
@@ -1196,11 +1196,11 @@ async fn prepare_live_validation_fixture(suffix: &str) -> Result<LiveValidationF
     let trigger_id = format!("on-created-{suffix}");
     let task_path = root
         .join("tasks")
-        .join(task_id.replace('-', "_"))
+        .join(crate::support::document_handle(&task_id))
         .join("object.json");
     let trigger_path = root
         .join("event_triggers")
-        .join(trigger_id.replace('-', "_"))
+        .join(crate::support::document_handle(&trigger_id))
         .join("object.json");
 
     write_json_file(
@@ -1359,7 +1359,7 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
     let behavior = read_json_file(
         &root
             .join("agent_behaviors")
-            .join(behavior_id.replace('-', "_"))
+            .join(crate::support::document_handle(&behavior_id))
             .join("object.json"),
     )?;
     let selection_id = behavior
@@ -1369,7 +1369,7 @@ async fn config_apply_round_trips_write_tools_without_drift() -> Result<()> {
         .to_string();
     let selection_path = root
         .join("tool_selections")
-        .join(selection_id.replace('-', "_"))
+        .join(crate::support::document_handle(&selection_id))
         .join("object.json");
     let mut selection = read_json_file(&selection_path)?;
     selection["display_name"] = Value::String("write_tools round-trip".to_string());

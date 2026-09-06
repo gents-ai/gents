@@ -4020,7 +4020,7 @@ mod tests {
             let document = read_pack_json_defaults(
                 &pack
                     .join("tool_selections")
-                    .join(selection.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&selection))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4061,7 +4061,7 @@ mod tests {
             let document = read_pack_json_defaults(
                 &pack
                     .join("tool_selections")
-                    .join(selection.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&selection))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4594,7 +4594,7 @@ mod tests {
         ] {
             let prompt = std::fs::read_to_string(
                 pack.join("tasks")
-                    .join(task.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&task))
                     .join("prompt.md"),
             )
             .unwrap_or_else(|error| panic!("{task} prompt should load: {error}"));
@@ -4609,7 +4609,7 @@ mod tests {
             let datastore = read_pack_json_defaults(
                 &pack
                     .join("datastore_tool_surfaces")
-                    .join(surface.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&surface))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{surface} should load: {error:#}"));
@@ -4635,7 +4635,7 @@ mod tests {
             let document = read_pack_json_defaults(
                 &pack
                     .join("tool_selections")
-                    .join(selection.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&selection))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -4696,7 +4696,7 @@ mod tests {
             let document = read_pack_json_defaults(
                 &pack
                     .join("agent_behaviors")
-                    .join(behavior.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&behavior))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{behavior} should load: {error:#}"));
@@ -4916,7 +4916,7 @@ mod tests {
             let binding = read_pack_json_defaults(
                 &pack
                     .join("callback_bindings")
-                    .join(binding_id.replace('-', "_"))
+                    .join(crate::desired_state::document_handle(&binding_id))
                     .join("object.json"),
             )
             .unwrap_or_else(|error| panic!("{pack_name} callback binding should load: {error:#}"));
@@ -4966,7 +4966,9 @@ mod tests {
                     let task = read_pack_json_defaults(
                         &pack
                             .join("tasks")
-                            .join(format!("port_{stage}_task").replace('-', "_"))
+                            .join(crate::desired_state::document_handle(&format!(
+                                "port_{stage}_task"
+                            )))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("port-{stage} task should load: {error:#}"));
@@ -4978,7 +4980,9 @@ mod tests {
                     let tools = read_pack_json_defaults(
                         &pack
                             .join("tool_selections")
-                            .join(format!("port_{stage}_tools").replace('-', "_"))
+                            .join(crate::desired_state::document_handle(&format!(
+                                "port_{stage}_tools"
+                            )))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| {
@@ -4991,7 +4995,9 @@ mod tests {
 
                     let prompt = std::fs::read_to_string(
                         pack.join("tasks")
-                            .join(format!("port_{stage}_task").replace('-', "_"))
+                            .join(crate::desired_state::document_handle(&format!(
+                                "port_{stage}_task"
+                            )))
                             .join("prompt.md"),
                     )
                     .unwrap_or_else(|error| panic!("port-{stage} prompt should load: {error:#}"));
@@ -5328,7 +5334,7 @@ mod tests {
                     let tools = read_pack_json_defaults(
                         &pack
                             .join("tool_selections")
-                            .join(selection.replace('-', "_"))
+                            .join(crate::desired_state::document_handle(&selection))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));
@@ -5404,7 +5410,7 @@ mod tests {
                     let tools = read_pack_json_defaults(
                         &pack
                             .join("tool_selections")
-                            .join(selection.replace('-', "_"))
+                            .join(crate::desired_state::document_handle(&selection))
                             .join("object.json"),
                     )
                     .unwrap_or_else(|error| panic!("{selection} should load: {error:#}"));

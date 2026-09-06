@@ -278,7 +278,7 @@ async fn tool_selection_upsert_persists_file_tool_root() -> Result<()> {
     let selection_doc = read_json_file(
         &export_root
             .join("tool_selections")
-            .join(selection_id.replace('-', "_"))
+            .join(crate::support::document_handle(&selection_id))
             .join("object.json"),
     )?;
     assert_eq!(

@@ -303,7 +303,9 @@ fn write_per_doc_collection(
             .get(unique_field)
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("row missing {unique_field}: {row}"))?;
-        let dir = root.join(dir_name).join(handle.replace('-', "_"));
+        let dir = root
+            .join(dir_name)
+            .join(crate::support::document_handle(&handle));
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         write_json_file(&dir.join("object.json"), &object)?;
     }

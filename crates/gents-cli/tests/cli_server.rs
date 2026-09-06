@@ -252,7 +252,7 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
         .context("reading exported backend directory")?
         .next()
         .ok_or_else(|| anyhow!("exported pack has no backend"))??;
-    let applied_backend_dir = backends_dir.join(APPLIED_BACKEND.replace('-', "_"));
+    let applied_backend_dir = backends_dir.join(crate::support::document_handle(&APPLIED_BACKEND));
     fs::create_dir_all(&applied_backend_dir)?;
     for entry in fs::read_dir(existing_backend.path()).context("reading exported backend")? {
         let entry = entry?;
@@ -274,7 +274,7 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
         .context("reading exported behavior directory")?
         .next()
         .ok_or_else(|| anyhow!("exported pack has no behavior"))??;
-    let grok_behavior_dir = behaviors_dir.join(GROK_BEHAVIOR.replace('-', "_"));
+    let grok_behavior_dir = behaviors_dir.join(crate::support::document_handle(&GROK_BEHAVIOR));
     fs::create_dir_all(&grok_behavior_dir)?;
     for entry in fs::read_dir(existing.path()).context("reading exported behavior")? {
         let entry = entry?;

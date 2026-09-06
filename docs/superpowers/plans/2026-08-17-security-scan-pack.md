@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Env vars and defaults, verbatim: `${GENTS_SCAN_ROOT:-.}`, `${GENTS_SCAN_MODEL:-GLM-5.2}`, `${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}`, `${GENTS_SCAN_MIN_BATCHES:-4}`, `${GENTS_SCAN_MAX_BATCHES:-24}`.
+- Env vars and defaults, verbatim: `${GENTS_SCAN_ROOT:-.}`, `${GENTS_SCAN_MODEL:-GLM-5.2}`, `${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}`, `${GENTS_SCAN_MIN_BATCHES:-4}`, `${GENTS_SCAN_MAX_BATCHES:-24}`.
 - One inference backend, `max_concurrent: 8`, shared by all four behaviors.
 - No `defra_query` anywhere in the pack: `enable_defra_query: false` in every selection; reads happen only through bound `"kind": "query"` surface entries.
 - All pack schema fields are `String`-typed (the seed mutation emits strings only).
@@ -777,7 +777,7 @@ type ScanReport {
   "name": "Security scan backend",
   "provider_kind": "OpenAiCompatible",
   "openai_wire_api": "chat_completions",
-  "endpoint": "${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}",
+  "endpoint": "${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}",
   "api_key": null,
   "api_key_env_var": null,
   "max_concurrent": 8,
@@ -1068,7 +1068,7 @@ type ScanReport {
   "name": "security_scan",
   "description": "Whole-codebase security scan: free regex pre-scan -> batch planner -> investigator fan-out -> adversarial revalidation -> report",
   "init": {
-    "inference_url": "${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}",
+    "inference_url": "${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}",
     "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
     "tool_package": "write",
     "tool_root": "${GENTS_SCAN_ROOT:-.}",
@@ -1161,8 +1161,8 @@ Expected: JSON output with `"status": "validated"`, `"ok": true`. Fix any refere
 
 - [ ] **Step 3: Confirm pack discovery**
 
-Run: `cargo run -p gents-cli --bin gents -- demo list`
-Expected: `security-scan` appears alongside `pipeline`, `code-review`, `repo-maintenance`, `background-continuation`, `lsp-rust`.
+Run: `cargo run -p gents-cli --bin gents -- pack list`
+Expected: `security_scan` appears alongside `pipeline`, `code_review`, `repo_maintenance`, `background_continuation`, `lsp_rust`.
 
 - [ ] **Step 4: Commit**
 

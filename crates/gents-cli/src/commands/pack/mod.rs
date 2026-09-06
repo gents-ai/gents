@@ -43,6 +43,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn concurrent_materialization_publishes_complete_assets() {
+        let pack = resolve_pack("mailbox").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    materialize(&pack, root.path()).unwrap();
+                });
+            }
+        });
+        for path in std::iter::once("manifest.json")
+            .chain(pack.manifest.metadata.assets.iter().map(String::as_str))
+        {
+            assert_eq!(
+                std::fs::read(root.path().join(path)).unwrap(),
+                pack.asset(path).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn abandoned_staging_file_does_not_poison_install_or_allow_overwrite() {
+        use std::io::Write;
+        let pack = resolve_pack("mailbox").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        // Model process death before publication: a partial temporary file
+        // remains, but no destination has been exposed.
+        let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        staged.write_all(b"partial").unwrap();
+        let (_file, abandoned) = staged.keep().unwrap();
+        materialize(&pack, root.path()).unwrap();
+        materialize(&pack, root.path()).unwrap();
+        assert_eq!(std::fs::read(abandoned).unwrap(), b"partial");
+        std::fs::write(root.path().join("README.md"), "operator edit").unwrap();
+        assert!(materialize(&pack, root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("installed asset was modified"));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("README.md")).unwrap(),
+            "operator edit"
+        );
+    }
+
+    #[test]
     fn every_bundled_document_pack_materializes_a_valid_configuration() {
         for manifest in pack_catalog().unwrap() {
             if manifest.metadata.kind != PackKind::Documents {
@@ -70,20 +117,25 @@ fn materialize(pack: &ResolvedPack, root: &std::path::Path) -> Result<()> {
         let destination = root.join(path);
         std::fs::create_dir_all(destination.parent().context("asset parent")?)?;
         let bytes = pack.asset(path)?;
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&destination)
-        {
-            Ok(mut file) => file.write_all(bytes)?,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+        // Stage beside the destination and publish without replacing it. Readers
+        // never see a partial body, and an interrupted staging write cannot
+        // poison the digest-addressed destination or overwrite operator edits.
+        let mut staged = tempfile::NamedTempFile::new_in(destination.parent().unwrap())?;
+        staged.write_all(bytes)?;
+        staged.as_file().sync_all()?;
+        match staged.persist_noclobber(&destination) {
+            Ok(_) => {
+                #[cfg(unix)]
+                std::fs::File::open(destination.parent().unwrap())?.sync_all()?;
+            }
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
                 anyhow::ensure!(
                     std::fs::read(&destination)? == bytes,
                     "installed asset was modified: {}",
                     destination.display()
                 );
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error.error.into()),
         }
     }
     Ok(())

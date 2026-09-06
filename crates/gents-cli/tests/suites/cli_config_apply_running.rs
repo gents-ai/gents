@@ -60,7 +60,7 @@ async fn config_apply_reconciles_running_runtime_without_restart() -> Result<()>
         .to_string();
     let behaviors_path = root
         .join("agent_behaviors")
-        .join(behavior_id.replace('-', "_"))
+        .join(crate::support::document_handle(&behavior_id))
         .join("object.json");
     let mut behavior = read_json_file(&behaviors_path)?;
     let updated_prompt = "Keep responses terse. Mention that desired state was applied.";

@@ -83,3 +83,33 @@ check did not reproduce in a focused test. The final shape avoids that question
 entirely: the graph type is strict and flatten-free, with a regression test at
 the distribution-to-graph boundary. Review is not a substitute for the full
 runtime, CLI and workspace gates.
+
+## Live code-review qualification
+
+The review of commit `c9429f8` completed through recon, four parallel scanners,
+verification and triage in run `3c434e7d-ed21-4d3f-bf60-54fdf61ea527`.
+GLM-5.3-Flash-NVFP4 used temperature 1, top_p 0.95, high reasoning,
+524288 context tokens and 65536 maximum output tokens. Captured provider
+requests, not just profile documents, confirmed these settings. The run used
+117 model calls, about 12.2M input tokens (including repeated context) and
+114.4k output tokens. Five tool failures were recovered; all stages completed.
+Eleven candidates yielded ten confirmed rows (seven distinct issues after
+deduplication) and one refutation of an intentional breaking change.
+
+The resulting fixes stage cache assets beside their destination and publish
+with `persist_noclobber`, protecting both concurrent readers and operator edits.
+Tests cover concurrent installation and abandoned partial staging files. Old
+partial destination files remain fail-closed: they cannot safely be distinguished
+from operator edits and are not silently repaired. The JavaScript documentation
+checker no longer substitutes for Rust asset admission or environment
+interpolation. Fixtures use the production document-handle function, and stale
+display paths, removed flags and private endpoint examples are corrected.
+
+An earlier run failed after a scanner exhausted 65536 output tokens on each of
+four identical temperature-zero calls. Its reasoning-only responses were treated
+as empty output and retried with the transport policy; provider finish metadata
+was unavailable. A subsequent live profile update persisted but did not reach
+the provider until the isolated node restarted. These runtime diagnostic and
+reconciliation observations are separate from the pack fixes; this change does
+not claim to repair them. The successful run is evidence for the graph flow,
+not a guarantee that every inference run will complete.

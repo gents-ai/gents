@@ -303,7 +303,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
         .context("reading agent_behaviors dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no agent-behavior subdirs after export"))??;
-    let late_dir = behaviors_dir.join(LATE_BEHAVIOR.replace('-', "_"));
+    let late_dir = behaviors_dir.join(crate::support::document_handle(&LATE_BEHAVIOR));
     fs::create_dir_all(&late_dir)?;
     for entry in fs::read_dir(existing.path()).context("reading exported behavior dir")? {
         let entry = entry?;

@@ -52,7 +52,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
         .to_string();
     let backends_path = root
         .join("inference_backends")
-        .join(backend_id.replace('-', "_"))
+        .join(crate::support::document_handle(&backend_id))
         .join("object.json");
     let mut backend = read_json_file(&backends_path)?;
     let updated_endpoint = "http://127.0.0.1:9100/v1";
@@ -108,7 +108,7 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
     let reexported_backend = read_json_file(
         &reexport_root
             .join("inference_backends")
-            .join(backend_id.replace('-', "_"))
+            .join(crate::support::document_handle(&backend_id))
             .join("object.json"),
     )?;
     assert_eq!(
@@ -180,8 +180,12 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
 
     let task_id = format!("prune-task-{}", Uuid::new_v4().simple());
     let schedule_id = format!("prune-schedule-{}", Uuid::new_v4().simple());
-    let task_dir = root.join("tasks").join(task_id.replace('-', "_"));
-    let schedule_dir = root.join("schedules").join(schedule_id.replace('-', "_"));
+    let task_dir = root
+        .join("tasks")
+        .join(crate::support::document_handle(&task_id));
+    let schedule_dir = root
+        .join("schedules")
+        .join(crate::support::document_handle(&schedule_id));
     write_json_file(
         &task_dir.join("object.json"),
         &serde_json::json!({
@@ -491,17 +495,17 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
 
     let mut backend = read_json_file(
         &backends_dir
-            .join(old_backend_id.replace('-', "_"))
+            .join(crate::support::document_handle(&old_backend_id))
             .join("object.json"),
     )?;
     backend["backend_id"] = Value::String(new_backend_id.clone());
     write_json_file(
         &backends_dir
-            .join(new_backend_id.replace('-', "_"))
+            .join(crate::support::document_handle(&new_backend_id))
             .join("object.json"),
         &backend,
     )?;
-    fs::remove_dir_all(backends_dir.join(old_backend_id.replace('-', "_")))
+    fs::remove_dir_all(backends_dir.join(crate::support::document_handle(&old_backend_id)))
         .context("removing renamed backend dir")?;
 
     let principal = read_json_file(&root.join("agent_principal.json"))?;
@@ -512,7 +516,7 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
         .to_string();
     let behavior_path = root
         .join("agent_behaviors")
-        .join(behavior_id.replace('-', "_"))
+        .join(crate::support::document_handle(&behavior_id))
         .join("object.json");
     let mut behavior = read_json_file(&behavior_path)?;
     behavior["backend_id"] = Value::String(new_backend_id.clone());
@@ -827,7 +831,9 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
         .to_string();
 
     let task_id = format!("recreate-task-{}", Uuid::new_v4().simple());
-    let task_dir = root.join("tasks").join(task_id.replace('-', "_"));
+    let task_dir = root
+        .join("tasks")
+        .join(crate::support::document_handle(&task_id));
     let task_object = serde_json::json!({
         "task_id": task_id.clone(),
         "name": "Recreate Me",

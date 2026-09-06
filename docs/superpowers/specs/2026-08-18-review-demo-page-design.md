@@ -77,8 +77,7 @@ is captured when the server starts. Seeding does not re-apply.
 
 ### `make review`
 
-1. `gents pack seed packs/code_review --http-port $(REVIEW_PORT)
-   --home $(REVIEW_HOME)`. The command waits for `/healthz` and an enabled
+1. `gents pack seed packs/code_review --http-port $(REVIEW_PORT)`. The command waits for `/healthz` and an enabled
    EventTrigger on `ReviewJob`; if the node is down:
    `start the pack node first: make review-serve`.
 2. Allocate a unique `run_id` (`REVIEW_JOB_ID` or the pack runner's
@@ -141,10 +140,10 @@ Then four stacked edges. Ids **are** the folder names under
 
 | Write | Trigger | Behavior | Task | Tree |
 | --- | --- | --- | --- | --- |
-| seed `ReviewJob` | `review-recon` per_document | `review-recon` | `review-recon-task` | `schemas/review_job.graphql` · `event_triggers/review-recon/` · `agent_behaviors/review-recon/` · `tasks/review-recon-task/` |
-| `write_review_area` → `ReviewArea` × N | `review-scan` parallel | `review-scan` | `review-scan-task` | `schemas/review_area.graphql` · `event_triggers/review-scan/` · `agent_behaviors/review-scan/` · `tasks/review-scan-task/` |
-| `write_scan_result` → `ScanResult` × N | `review-verify` **per_group** | `review-verify` | `review-verify-task` | `schemas/scan_result.graphql` · `event_triggers/review-verify/` · `agent_behaviors/review-verify/` · `tasks/review-verify-task/` |
-| `write_verification_summary` → `VerificationSummary` | `review-triage` per_document | `review-triage` | `review-triage-task` | `schemas/verification_summary.graphql` · `event_triggers/review-triage/` · `agent_behaviors/review-triage/` · `tasks/review-triage-task/` |
+| seed `ReviewJob` | `review-recon` per_document | `review-recon` | `review-recon-task` | `schemas/review_job.graphql` · `graph.json` · `agent_behaviors/review_recon/` · `tasks/review_recon_task/` |
+| `write_review_area` → `ReviewArea` × N | `review-scan` parallel | `review-scan` | `review-scan-task` | `schemas/review_area.graphql` · `graph.json` · `agent_behaviors/review_scan/` · `tasks/review_scan_task/` |
+| `write_scan_result` → `ScanResult` × N | `review-verify` **per_group** | `review-verify` | `review-verify-task` | `schemas/scan_result.graphql` · `graph.json` · `agent_behaviors/review_verify/` · `tasks/review_verify_task/` |
+| `write_verification_summary` → `VerificationSummary` | `review-triage` per_document | `review-triage` | `review-triage-task` | `schemas/verification_summary.graphql` · `graph.json` · `agent_behaviors/review_triage/` · `tasks/review_triage_task/` |
 
 Side writes that are **not** trigger edges, shown as badges on the producing
 node when present:

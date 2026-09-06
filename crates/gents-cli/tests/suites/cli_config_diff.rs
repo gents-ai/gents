@@ -134,7 +134,7 @@ async fn config_diff_reports_updates_for_changed_backend_manifest() -> Result<()
         .to_string();
     let backends_path = root
         .join("inference_backends")
-        .join(backend_id.replace('-', "_"))
+        .join(crate::support::document_handle(&backend_id))
         .join("object.json");
     let mut backend = read_json_file(&backends_path)?;
     backend["endpoint"] = Value::String("http://127.0.0.1:9000/v1".to_string());

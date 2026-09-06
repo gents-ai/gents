@@ -30,7 +30,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     {
         let dir = root
             .join("agent_behaviors")
-            .join(default_behavior_id.replace('-', "_"));
+            .join(crate::support::document_handle(&default_behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -52,7 +52,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     {
         let dir = root
             .join("tool_selections")
-            .join(tool_selection_id.replace('-', "_"));
+            .join(crate::support::document_handle(&tool_selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -345,7 +345,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     {
         let dir = root
             .join("agent_behaviors")
-            .join(default_behavior_id.replace('-', "_"));
+            .join(crate::support::document_handle(&default_behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -367,7 +367,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     {
         let dir = root
             .join("tool_selections")
-            .join(tool_selection_id.replace('-', "_"));
+            .join(crate::support::document_handle(&tool_selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -768,7 +768,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
     write_json_file(
         &root
             .join("agent_behaviors")
-            .join(default_behavior_id.replace('-', "_"))
+            .join(crate::support::document_handle(&default_behavior_id))
             .join("object.json"),
         &serde_json::json!({
             "behavior_id": default_behavior_id,
@@ -801,7 +801,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
     write_json_file(
         &root
             .join("tool_selections")
-            .join(tool_selection_id.replace('-', "_"))
+            .join(crate::support::document_handle(&tool_selection_id))
             .join("object.json"),
         &serde_json::json!({
             "selection_id": tool_selection_id,

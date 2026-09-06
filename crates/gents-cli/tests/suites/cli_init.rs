@@ -25,7 +25,7 @@ fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
         write_json_file(
             &root
                 .join("skills")
-                .join(skill_id.replace('-', "_"))
+                .join(crate::support::document_handle(&skill_id))
                 .join("object.json"),
             &serde_json::json!({
                 "skill_id": skill_id,
@@ -251,10 +251,10 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
     let applied_behavior_id = format!("{agent_did}:applied-default");
     let original_behavior_dir = pack_root
         .join("agent_behaviors")
-        .join(original_behavior_id.replace('-', "_"));
+        .join(crate::support::document_handle(&original_behavior_id));
     let applied_behavior_dir = pack_root
         .join("agent_behaviors")
-        .join(applied_behavior_id.replace('-', "_"));
+        .join(crate::support::document_handle(&applied_behavior_id));
     fs::create_dir_all(&applied_behavior_dir)?;
     for entry in fs::read_dir(&original_behavior_dir)? {
         let entry = entry?;
@@ -416,7 +416,7 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
     write_json_file(
         &pack_root
             .join("tasks")
-            .join(task_id.replace('-', "_"))
+            .join(crate::support::document_handle(&task_id))
             .join("object.json"),
         &serde_json::json!({
             "task_id": task_id,

@@ -118,7 +118,7 @@ fn write_simple_manifest_root(
     {
         let dir = root
             .join("agent_behaviors")
-            .join(behavior_id.replace('-', "_"));
+            .join(crate::support::document_handle(&behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -137,7 +137,7 @@ fn write_simple_manifest_root(
     {
         let dir = root
             .join("tool_selections")
-            .join(selection_id.replace('-', "_"));
+            .join(crate::support::document_handle(&selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -158,7 +158,7 @@ fn write_simple_manifest_root(
     {
         let dir = root
             .join("inference_backends")
-            .join(backend_id.replace('-', "_"));
+            .join(crate::support::document_handle(&backend_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -218,7 +218,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     {
         let dir = initial_root
             .join("tool_services")
-            .join(service_id.replace('-', "_"));
+            .join(crate::support::document_handle(&service_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -237,7 +237,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     {
         let dir = initial_root
             .join("projection_acp_bindings")
-            .join(binding_id.replace('-', "_"));
+            .join(crate::support::document_handle(&binding_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -257,7 +257,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
-        let dir = initial_root.join("tasks").join(task_id.replace('-', "_"));
+        let dir = initial_root
+            .join("tasks")
+            .join(crate::support::document_handle(&task_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -275,7 +277,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     {
         let dir = initial_root
             .join("tasks")
-            .join(second_task_id.replace('-', "_"));
+            .join(crate::support::document_handle(&second_task_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -293,7 +295,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     {
         let dir = initial_root
             .join("schedules")
-            .join(schedule_id.replace('-', "_"));
+            .join(crate::support::document_handle(&schedule_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -309,7 +311,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     {
         let dir = initial_root
             .join("schedules")
-            .join(second_schedule_id.replace('-', "_"));
+            .join(crate::support::document_handle(&second_schedule_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -378,7 +380,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     let ts_object = read_json_file(
         &export_root
             .join("tool_services")
-            .join(service_id.replace('-', "_"))
+            .join(crate::support::document_handle(&service_id))
             .join("object.json"),
     )?;
     assert!(
@@ -442,7 +444,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     if prompt_template == "./prompt.md" {
         let sidecar_path = export_root
             .join("tasks")
-            .join(task_id.replace('-', "_"))
+            .join(crate::support::document_handle(&task_id))
             .join("prompt.md");
         let sidecar = fs::read_to_string(&sidecar_path)
             .with_context(|| format!("reading sidecar {}", sidecar_path.display()))?;

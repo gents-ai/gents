@@ -35,7 +35,7 @@ fn write_principal_with_behavior(root: &std::path::Path) -> Result<()> {
 
     let dir = root
         .join("agent_behaviors")
-        .join(default_behavior_id.replace('-', "_"));
+        .join(crate::support::document_handle(&default_behavior_id));
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),
@@ -105,7 +105,7 @@ fn validate_rejects_missing_sidecar() -> Result<()> {
     let dir = tmp
         .path()
         .join("agent_behaviors")
-        .join(default_behavior_id.replace('-', "_"));
+        .join(crate::support::document_handle(&default_behavior_id));
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),

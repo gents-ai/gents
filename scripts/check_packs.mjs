@@ -1,12 +1,14 @@
-// Manifest/naming/documentation fence. --write-diagrams refreshes the generated
+// Naming/documentation fence only. Rust build.rs and pack::resolve_pack own
+// manifest validity and asset admission; desired_state owns interpolation.
+// Read literal JSON here: topology identifiers must not depend on environment.
+// --write-diagrams refreshes the generated
 // topology section; normal invocation checks it without modifying files.
 import fs from 'node:fs';
-import path from 'node:path';
 import assert from 'node:assert/strict';
 const root = new URL('../packs/', import.meta.url);
 const write = process.argv.includes('--write-diagrams');
 const read = p => fs.readFileSync(p, 'utf8');
-const json = p => JSON.parse(read(p).replace(/\$\{[^}:]+:-([^}]+)\}/g, '$1'));
+const json = p => JSON.parse(read(p));
 const catalog = json(new URL('catalog.json', root));
 assert.equal(catalog.catalog_version,1);
 assert.deepEqual([...catalog.packs].sort(), fs.readdirSync(root,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>e.name).sort(), 'register every pack once in catalog.json');
@@ -17,20 +19,14 @@ for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
  assert.match(name, /^[a-z][a-z0-9_]*$/);
  const manifest = json(new URL('manifest.json', dir));
  assert.equal(manifest.name,name);
- assert.equal(manifest.manifest_version,1);
- assert.match(manifest.version,/^\d+\.\d+\.\d+$/);
  assert.ok(manifest.description && manifest.authors.length && manifest.tags.length);
- assert.ok(['graph','documents','assets'].includes(manifest.kind));
- assert.equal(new Set(manifest.assets).size,manifest.assets.length);
  assert.ok(manifest.assets.includes('README.md'));
  for(const asset of manifest.assets) {
-   assert.ok(!path.isAbsolute(asset) && !asset.split('/').some(p=>p.startsWith('.') || p==='runs'));
    for(const component of asset.split('/').slice(0,-1))assert.match(component,/^[a-z][a-z0-9_]*$/);
    const filename = asset.split('/').at(-1);
    if(!['README.md','Cargo.toml','Cargo.lock'].includes(filename))assert.match(filename,/^[a-z0-9_]+(\.[a-z0-9_]+)*$/);
    assert.ok(fs.statSync(new URL(asset,dir)).isFile(), `${name}/${asset}`);
  }
- for(const dependency of manifest.dependencies || [])assert.ok(fs.existsSync(new URL(dependency+'/manifest.json',root)));
  const labels = new Map(), edges = [];
  const id = label => {if(!labels.has(label))labels.set(label,'n'+labels.size);return labels.get(label);};
  if(manifest.kind==='graph') {
@@ -58,4 +54,4 @@ for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
  assert.ok(text.includes('## '),`${name}: needs documented configuration/usage`);
  count++;
 }
-console.log(`Validated ${count} pack manifests, assets and topology diagrams.`);
+console.log(`Checked ${count} packs' naming, documentation and topology diagrams (Rust owns contract validation).`);
