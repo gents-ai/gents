@@ -135,8 +135,8 @@ Copy:
 > `make review` creates a `ReviewJob`; each create fires a trigger that
 > materializes that stage’s Task on that stage’s Behavior.
 
-Then four stacked edges. Ids **are** the folder names under
-`packs/code_review/`.
+Then four stacked edges. Database IDs retain kebab-case; their canonical folder
+handles under `packs/code_review/` use underscores.
 
 | Write | Trigger | Behavior | Task | Tree |
 | --- | --- | --- | --- | --- |

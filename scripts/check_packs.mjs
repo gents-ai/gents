@@ -1,5 +1,5 @@
-// Naming/documentation fence only. Rust build.rs and pack::resolve_pack own
-// manifest validity and asset admission; desired_state owns interpolation.
+// Documentation/topology fence only. Rust build.rs and pack::resolve_pack own
+// manifest validity, naming and asset admission; desired_state owns interpolation.
 // Read literal JSON here: topology identifiers must not depend on environment.
 // --write-diagrams refreshes the generated
 // topology section; normal invocation checks it without modifying files.
@@ -16,15 +16,11 @@ let count = 0;
 for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
  if (!entry.isDirectory()) continue;
  const name = entry.name, dir = new URL(name+'/', root);
- assert.match(name, /^[a-z][a-z0-9_]*$/);
  const manifest = json(new URL('manifest.json', dir));
  assert.equal(manifest.name,name);
  assert.ok(manifest.description && manifest.authors.length && manifest.tags.length);
  assert.ok(manifest.assets.includes('README.md'));
  for(const asset of manifest.assets) {
-   for(const component of asset.split('/').slice(0,-1))assert.match(component,/^[a-z][a-z0-9_]*$/);
-   const filename = asset.split('/').at(-1);
-   if(!['README.md','Cargo.toml','Cargo.lock'].includes(filename))assert.match(filename,/^[a-z0-9_]+(\.[a-z0-9_]+)*$/);
    assert.ok(fs.statSync(new URL(asset,dir)).isFile(), `${name}/${asset}`);
  }
  const labels = new Map(), edges = [];

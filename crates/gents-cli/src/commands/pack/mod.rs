@@ -158,20 +158,18 @@ fn asset_cache_root(home: &std::path::Path, pack: &ResolvedPack) -> Result<std::
 }
 
 async fn install(args: PackInstallArgs) -> Result<()> {
-    args.output.ensure_supported(
-        "pack install",
-        &[
-            crate::cli::output_format::OutputFormat::Text,
-            crate::cli::output_format::OutputFormat::Json,
-        ],
-    )?;
     let pack = resolve_pack(&args.package)?;
-    if pack.manifest.metadata.kind != PackKind::Graph {
-        args.output.ensure_supported(
-            "pack install",
-            &[crate::cli::output_format::OutputFormat::Json],
-        )?;
-    }
+    let supported_outputs: &[crate::cli::output_format::OutputFormat] =
+        if pack.manifest.metadata.kind == PackKind::Graph {
+            &[
+                crate::cli::output_format::OutputFormat::Text,
+                crate::cli::output_format::OutputFormat::Json,
+            ]
+        } else {
+            &[crate::cli::output_format::OutputFormat::Json]
+        };
+    args.output
+        .ensure_supported("pack install", supported_outputs)?;
     match pack.manifest.metadata.kind {
         PackKind::Graph => {
             anyhow::ensure!(

@@ -50,8 +50,6 @@ pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
 }
 
 pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<()> {
-    args.output
-        .ensure_supported("pack install", &[OutputFormat::Text, OutputFormat::Json])?;
     let package = load_bundled_graph_package(&args.package)?;
     let (access, owner_did) = access_and_actor(&args.scope).await?;
     let bindings = if let Some(path) = args.bindings.as_deref() {
@@ -87,10 +85,7 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
     if !emit_report {
         return Ok(());
     }
-    match args
-        .output
-        .ensure_supported("pack install", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    match args.output {
         OutputFormat::Json => print_json(&json!({
             "install": receipt,
             "activation": activation,

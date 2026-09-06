@@ -62,15 +62,15 @@ pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
     );
     let bytes = bundled_pack_asset(name, "manifest.json").context("missing manifest")?;
     let manifest: PackManifest = serde_json::from_slice(bytes)?;
+    anyhow::ensure!(
+        manifest.manifest_version == 1 && manifest.name == name,
+        "invalid pack identity/version"
+    );
     if manifest.metadata.kind == PackKind::Graph {
         crate::graph_package::graph_manifest_from_pack(&manifest)?;
     } else {
         anyhow::ensure!(manifest.graph.is_empty(), "unexpected manifest fields");
     }
-    anyhow::ensure!(
-        manifest.manifest_version == 1 && manifest.name == name,
-        "invalid pack identity/version"
-    );
     anyhow::ensure!(
         manifest.metadata.kind == PackKind::Documents || manifest.metadata.dependencies.is_empty(),
         "only document packs support package dependencies; nested graph/asset dependencies are unsupported"
@@ -80,8 +80,7 @@ pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
         "pack needs description and authors"
     );
     anyhow::ensure!(
-        name.bytes()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_'),
+        asset_path::is_snake_case_name(name),
         "pack name must be snake_case"
     );
     let mut unique = BTreeSet::new();
@@ -89,6 +88,10 @@ pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {
         anyhow::ensure!(
             asset_path::is_distributable_asset(path),
             "unsafe/private pack asset: {path}"
+        );
+        anyhow::ensure!(
+            asset_path::has_canonical_asset_spelling(path),
+            "non-canonical pack asset spelling: {path}"
         );
         anyhow::ensure!(unique.insert(path), "duplicate asset {path}");
     }

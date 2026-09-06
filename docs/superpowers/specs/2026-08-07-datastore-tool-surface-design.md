@@ -221,7 +221,7 @@ documents and making the discrete transitions we allow** — everything else
 off. One surface + one selection. Prefer a bound query entry over
 `defra_query` when the stage only needs one collection:
 
-`datastore_tool_surfaces/experiment-io/object.json`:
+`datastore_tool_surfaces/experiment_io/object.json`:
 
 ```json
 {

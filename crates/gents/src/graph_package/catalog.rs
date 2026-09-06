@@ -212,15 +212,6 @@ fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
         "pack is not a graph"
     );
     let manifest = graph_manifest_from_pack(&distribution.manifest)?;
-    if manifest.name != package_name {
-        anyhow::bail!(
-            "bundled package directory {package_name:?} disagrees with manifest name {:?}",
-            manifest.name
-        );
-    }
-    if manifest.manifest_version != 1 {
-        anyhow::bail!("unsupported bundled package manifest version");
-    }
     if manifest.compiler_version != COMPILER_VERSION {
         anyhow::bail!(
             "package compiler {} does not match runtime {}",
@@ -350,7 +341,7 @@ mod tests {
 
     #[test]
     fn code_review_tasks_have_bounded_goals_without_creation_authority() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         assert_eq!(package.capabilities.len(), 4);
         for capability in &package.capabilities {
             let task: serde_json::Value =

@@ -17,15 +17,6 @@ triage report and bound the finding set; zero findings is distinct from missing
 completion evidence. Task goals retain work across early provider completion.
 Use `gents graph watch`, `result`, and `cancel` to operate durable runs.
 
-## Graph
-
-```mermaid
-flowchart LR
-    recon -->|areas: per document| scan
-    scan -->|scan results: complete group| verify
-    verify -->|summary| triage
-```
-
 ## Verification and history
 
 The runtime package catalog/compiler tests validate the bundled assets and

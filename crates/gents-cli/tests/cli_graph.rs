@@ -100,7 +100,7 @@ fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
     anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
     anyhow::ensure!(
         packages[0].get("name").and_then(Value::as_str) == Some("code_review"),
-        "catalog did not return code-review: {catalog}"
+        "catalog did not return code_review: {catalog}"
     );
     anyhow::ensure!(
         std::fs::read_dir(tempdir.path())?.next().is_none(),

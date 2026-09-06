@@ -71,10 +71,7 @@ fn generate_bundled_packs(workspace_root: &Path) {
     let mut arms = Vec::new();
     for name in packages {
         assert!(
-            !name.is_empty()
-                && name
-                    .bytes()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_'),
+            pack_asset_path::is_snake_case_name(&name),
             "snake_case pack name"
         );
         let package = root.join(&name);
@@ -100,6 +97,10 @@ fn generate_bundled_packs(workspace_root: &Path) {
             assert!(
                 pack_asset_path::is_distributable_asset(relative),
                 "private/run assets must not be bundled"
+            );
+            assert!(
+                pack_asset_path::has_canonical_asset_spelling(relative),
+                "pack asset path must use canonical snake_case handles"
             );
             let absolute = package
                 .join(relative)

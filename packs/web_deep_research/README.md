@@ -20,15 +20,6 @@ feeds the final research result. The graph result contracts, not model prose,
 define successful completion. Watch, inspect results, or cancel through the
 ordinary `gents graph` commands.
 
-## Graph
-
-```mermaid
-flowchart LR
-    plan --> investigate
-    investigate --> adjudicate
-    adjudicate --> report
-```
-
 ## Verification and history
 
 Bundled catalog and compiler tests validate the assets and graph contracts.
