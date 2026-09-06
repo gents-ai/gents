@@ -684,3 +684,643 @@ fn missing_or_ambiguous_host_deployment_fails_closed() {
     .unwrap();
     assert_eq!(id, "dep-1");
 }
+
+/// Actual Git workspace, runtime schemas, signed request and held execution lease.
+/// Source files are authored before sealing; consumers must not mutate source.
+pub(crate) struct ArtifactTestFixture {
+    pub grant: crate::workspace::ArtifactGrant,
+    pub owner: crate::lifecycle::RequestLifecycle,
+    pub node: std::sync::Arc<defra_node::EmbeddedNode>,
+    pub _dir: tempfile::TempDir,
+}
+
+pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTestFixture {
+    use crate::identity::AgentIdentity;
+    use crate::workspace::*;
+    use std::{collections::BTreeSet, sync::Arc};
+    fn git(root: &std::path::Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .args(args)
+            .current_dir(root)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{:?}: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+    async fn execute(node: &defra_node::EmbeddedNode, query: &str) {
+        let result = node.execute(query).await;
+        assert!(!result.has_errors(), "{query}: {:?}", result.errors);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    let repo = root.join("repo");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "user.email", "artifact@example.com"]);
+    git(&repo, &["config", "user.name", "Artifact Test"]);
+    std::fs::write(repo.join("README.md"), "sealed source\n").unwrap();
+    for (path, contents) in files {
+        let path = repo.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, contents).unwrap();
+    }
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "fixture"]);
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(root.join("agent.key"), None).unwrap();
+    let did = identity.did().to_owned();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(root.join("db"))
+            .with_node_identity_did(&did)
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut documents = MemoryWorkspaceDocuments::default();
+    let mut context = HostExecutorContext {
+        deployment_id: "artifact-deployment".into(),
+        repository: RepositoryPlacementRef {
+            repository_id: "artifact-repo".into(),
+            deployment_id: "artifact-deployment".into(),
+            host_path: repo.clone(),
+            enabled: true,
+        },
+        ceiling: Some(&repo),
+        capabilities: BTreeSet::from([
+            CAP_CREATE_WORKSPACE.to_owned(),
+            CAP_OBSERVE_DIRTY_BASE.to_owned(),
+            CAP_SEAL_WORKSPACE.to_owned(),
+        ]),
+        writer_principal: did.clone(),
+        integrator_principal: did.clone(),
+        caused_by_invocation_id: "artifact-invocation".into(),
+        caused_by_correlation: "artifact-correlation".into(),
+        documents: &mut documents,
+    };
+    let created = execute_create_workspace_plan(
+        &emit_create_workspace_plan(CreateWorkspaceAction {
+            path_capability: WorkspacePathCapability::exact_paths(Vec::new()).unwrap(),
+            workspace_id: "artifact-workspace".into(),
+            work_unit_id: "artifact-unit".into(),
+            repository_id: "artifact-repo".into(),
+            base_sha: git(&repo, &["rev-parse", "HEAD"]),
+            branch: "artifact-review".into(),
+            creation_policy: CreationPolicy::GitWorktreeDiff,
+            adapter: WorkspaceAdapterKind::GitWorktree,
+            clone_artifacts: None,
+        }),
+        &mut Vec::new(),
+        &mut context,
+    )
+    .unwrap();
+    let sealed = execute_seal_workspace_plan(
+        &emit_seal_workspace_plan(SealWorkspaceAction {
+            workspace_id: "artifact-workspace".into(),
+            produced_by_request_id: "artifact-writer".into(),
+            produced_by_request_doc_id: "artifact-writer-doc".into(),
+        }),
+        &mut Vec::new(),
+        &mut context,
+    )
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut placement = created.placement;
+    placement.observed_tree_hash = sealed.workspace.seal_hash.clone().unwrap();
+    execute(
+        &node,
+        &isolated_workspace_upsert_mutation(&sealed.workspace),
+    )
+    .await;
+    execute(
+        &node,
+        &workspace_placement_upsert_mutation(&placement, &now),
+    )
+    .await;
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        "artifact-reader",
+        &did,
+        &did,
+        "general",
+        "artifact-session",
+        "Review sealed source",
+        "interactive",
+        &now,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+    );
+    create.workspace_id = Some("artifact-workspace".into());
+    create.workspace_authority = Some("readOnly".into());
+    create.workspace_owner_deployment_id = Some("artifact-deployment".into());
+    create.workspace_seal_hash = sealed.workspace.seal_hash.clone();
+    crate::request_admission::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    execute(&node, &create.graphql_mutation().unwrap()).await;
+    let result = node
+        .execute(&format!(
+            "{{ AgentRequest {{ {} }} }}",
+            crate::request_admission::SIGNED_REQUEST_FIELDS
+        ))
+        .await;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&result, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+    let mut owner = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        &did,
+        request,
+        300,
+    );
+    owner.claim().await.unwrap();
+    let workspace = super::load_isolated_workspace_record(&node, "artifact-workspace")
+        .await
+        .unwrap()
+        .unwrap();
+    super::ensure_request_binding(
+        &node,
+        owner.request(),
+        &workspace,
+        "artifact-deployment",
+        WorkspaceAuthority::ReadOnly,
+    )
+    .await
+    .unwrap();
+    let grant = crate::workspace::ArtifactGrant::create(
+        node.clone(),
+        owner.request(),
+        owner.execution_generation().unwrap(),
+        std::path::Path::new(&placement.host_path),
+        "artifact-deployment",
+        sealed.workspace.seal_hash.as_deref().unwrap(),
+    )
+    .await
+    .unwrap();
+    ArtifactTestFixture {
+        grant,
+        owner,
+        node,
+        _dir: dir,
+    }
+}
+
+#[tokio::test]
+async fn artifact_grant_fences_current_lease_and_source_seal() {
+    let fx = artifact_test_fixture(&[]).await;
+    fx.grant.validate_for_launch().await.unwrap();
+    assert!(!fx.grant.root().starts_with(fx.grant.source_root()));
+    assert!(fx.grant.root().join("target").is_dir());
+    assert!(fx.grant.root().join("tmp").is_dir());
+    let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
+    let result = fx.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ execution_lease_expires_at: "2000-01-01T00:00:00Z" }}) {{ _docID }} }}"#)).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    assert!(fx
+        .grant
+        .validate_for_launch()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("expired"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn artifact_grant_rejects_replaced_output_directory() {
+    let fx = artifact_test_fixture(&[]).await;
+    let target = fx.grant.root().join("target");
+    std::fs::remove_dir(&target).unwrap();
+    std::os::unix::fs::symlink(fx.grant.source_root(), &target).unwrap();
+    assert!(fx.grant.validate_for_launch().await.is_err());
+}
+
+#[tokio::test]
+async fn artifact_grant_rechecks_binding_generation_and_sealed_bytes() {
+    let fx = artifact_test_fixture(&[]).await;
+    let doc = crate::graphql::escape_graphql_string(fx.grant.request_doc_id());
+    let generation = crate::graphql::escape_graphql_string(fx.grant.execution_generation());
+    for (input, restore) in [
+        (
+            "execution_generation: \"foreign-owner\"".to_owned(),
+            format!("execution_generation: \"{generation}\""),
+        ),
+        (
+            "lifecycle_state: \"interrupted\"".to_owned(),
+            "lifecycle_state: \"claimed\"".to_owned(),
+        ),
+    ] {
+        for (fields, should_allow) in [(input, false), (restore, true)] {
+            let response = fx.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#)).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            assert_eq!(fx.grant.validate_for_launch().await.is_ok(), should_allow);
+        }
+    }
+    // Fixture-only lifecycle resets above isolate each launch guard; production
+    // terminal ownership is tested by the execution lease suite, not this seeder.
+    let response = fx.node.execute(&format!(r#"mutation {{ update_WorkspaceBinding(filter: {{ request_doc_id: {{ _eq: "{doc}" }} }}, input: {{ lifecycle_state: "released" }}) {{ _docID }} }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert!(fx
+        .grant
+        .validate_for_launch()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("active ReadOnly binding"));
+}
+
+#[tokio::test]
+async fn artifact_grant_rejects_source_drift_and_allocates_disjoint_outputs() {
+    let fx = artifact_test_fixture(&[]).await;
+    let second = crate::workspace::ArtifactGrant::create(
+        fx.node.clone(),
+        fx.owner.request(),
+        fx.owner.execution_generation().unwrap(),
+        fx.grant.source_root(),
+        "artifact-deployment",
+        fx.owner.request().workspace_seal_hash.as_deref().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_ne!(fx.grant.root(), second.root());
+    assert_eq!(fx.grant.source_root(), second.source_root());
+    std::fs::write(fx.grant.source_root().join("README.md"), "changed source\n").unwrap();
+    assert!(fx
+        .grant
+        .validate_for_launch()
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("seal"));
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy() {
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_workspace_overlay, ToolWorkspaceScope,
+    };
+    use crate::toolset::{CommandConstraints, CommandNetworkMode};
+
+    async fn execute(node: &defra_node::EmbeddedNode, mutation: &str) {
+        let result = node.execute(mutation).await;
+        assert!(!result.has_errors(), "{mutation}: {:?}", result.errors);
+    }
+
+    let cases = &crate::lean_vocab_test::lean_contract_snapshot().artifact_admission_cases;
+    assert_eq!(cases.len(), 13);
+    for case in cases {
+        let name = case["name"].as_str().unwrap();
+        let binding = &case["binding"];
+        let mode = CommandExecutionMode::parse(case["mode"].as_str().unwrap()).unwrap();
+        let fx = artifact_test_fixture(&[]).await;
+        if name == "unsupported_platform" {
+            // Exercise the actual selector's host observation input; this is not
+            // an assertion that the current macOS host lacks Seatbelt.
+            assert_eq!(case["expected_admitted"], false);
+            assert!(case["expected_bound_mode"].is_null());
+            assert!(crate::toolset::select_sandbox_for_policy(mode, false).is_err());
+            continue;
+        }
+        execute(&fx.node, r#"mutation { create_HostDeployment(input: { deployment_id: "artifact-deployment", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#).await;
+        let alternate = artifact_alternate_owner(&fx, name, binding).await;
+        let (request_owner, claim_outcome) = alternate.unwrap();
+        if !matches!(claim_outcome, crate::lifecycle::ClaimOutcome::Claimed) {
+            assert_eq!(
+                name, "wrong_owner",
+                "unexpected preclaim denial: {claim_outcome:?}"
+            );
+            assert_eq!(
+                case["expected_admitted"], false,
+                "{name}: {claim_outcome:?}"
+            );
+            assert!(
+                case["expected_bound_mode"].is_null(),
+                "{name}: {claim_outcome:?}"
+            );
+        }
+        if name == "unsealed" {
+            execute(&fx.node, r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#).await;
+        }
+        let generation = if name == "stale_incarnation" {
+            "stale-execution"
+        } else {
+            // An intentionally rejected owner remains unclaimed; do not forge
+            // an execution tuple merely to reach the later launch guard.
+            request_owner.execution_generation().unwrap_or("")
+        };
+        let resolved = super::resolve_request_workspace_overlay(
+            &fx.node,
+            request_owner.request(),
+            generation,
+            mode == CommandExecutionMode::ArtifactWrite,
+            Some(fx._dir.path()),
+        )
+        .await;
+        // Resolver failure is evidence of invalid context, not by itself proof
+        // that execution fails: always drive actual command launch preparation.
+        if matches!(
+            name,
+            "missing_binding"
+                | "integrate_not_artifact"
+                | "readwrite_not_artifact"
+                | "unsealed"
+                | "wrong_seal"
+                | "stale_incarnation"
+        ) {
+            assert!(
+                resolved.is_err(),
+                "{name}: invalid artifact context must stop at resolver, before tools"
+            );
+        }
+        let overlay = resolved.ok().flatten();
+        let authority = overlay.as_ref().map(|o| o.authority).or_else(|| {
+            binding["authority"]
+                .as_str()
+                .map(|value| WorkspaceAuthority::parse(value).unwrap())
+        });
+        let grant = overlay.as_ref().and_then(|o| o.workspace_artifact.clone());
+        if name == "foreign_root" {
+            let target = grant
+                .as_ref()
+                .expect("valid resolver before root replacement")
+                .root()
+                .join("target");
+            std::fs::remove_dir(&target).unwrap();
+            std::os::unix::fs::symlink(fx.grant.source_root(), &target).unwrap();
+        }
+        let requested = CommandExecutionPolicy::write_capable().with_mode(mode);
+        let effective = if mode == CommandExecutionMode::ArtifactWrite {
+            requested
+        } else {
+            apply_workspace_authority(&requested, authority.expect("ordinary bound case"))
+        };
+        let root = fx.grant.source_root().to_owned();
+        let constraints = CommandConstraints {
+            allowed_argv_prefixes: vec![vec!["/bin/echo".into()]],
+            forbidden_argv_prefixes: Vec::new(),
+            network_mode: CommandNetworkMode::Disabled,
+            execution_mode: effective.mode,
+            sandbox: effective.mode,
+            deny_all_argv: false,
+            deny_git_metadata_writes: true,
+        };
+        let result = scope_request_tool_execution_with_workspace_overlay(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            ToolWorkspaceScope {
+                workspace_cwd: Some(root.clone()),
+                workspace_root: Some(root.clone()),
+                workspace_authority: authority,
+                workspace_artifact: grant,
+            },
+            None,
+            None,
+            None,
+            Default::default(),
+            false,
+            crate::toolset::prepare_managed_command(&root, "/bin/echo", &[], &constraints),
+        )
+        .await;
+        let observed_mode = result.as_ref().ok().map(|_| effective.mode.as_str());
+        assert_eq!(
+            observed_mode,
+            case["expected_bound_mode"].as_str(),
+            "{name}: {result:?}"
+        );
+        assert_eq!(
+            observed_mode == Some("artifact_write"),
+            case["expected_admitted"].as_bool().unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("README.md")).unwrap(),
+            "sealed source\n"
+        );
+    }
+}
+
+#[tokio::test]
+async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authority() {
+    let ArtifactTestFixture {
+        grant,
+        mut owner,
+        node,
+        _dir,
+    } = artifact_test_fixture(&[]).await;
+    let artifact_root = grant.root().to_owned();
+    let source = grant.source_root().to_owned();
+    let git_dir = artifact_root.parent().unwrap().parent().unwrap().to_owned();
+    std::fs::write(
+        artifact_root.join("target/compiled-output"),
+        "compiler artifact",
+    )
+    .unwrap();
+    drop(grant);
+    assert!(
+        artifact_root.join("target/compiled-output").is_file(),
+        "dropping the last grant must not become another cleanup owner"
+    );
+    let root = std::fs::canonicalize(_dir.path()).unwrap();
+    let repository = crate::workspace::RepositoryPlacementRef {
+        repository_id: "artifact-repo".into(),
+        deployment_id: "artifact-deployment".into(),
+        host_path: root.join("repo"),
+        enabled: true,
+    };
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mutation =
+        crate::workspace::repository_placement_upsert_mutation(&repository, &timestamp).unwrap();
+    let result = node.execute(&mutation).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let error = crate::workspace::cleanup_workspace(&node, "artifact-workspace", Some(&root))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Active binding"), "{error}");
+    assert!(artifact_root.exists());
+    owner
+        .terminalize_owned_without_stream(
+            crate::lifecycle::RequestTerminalOutcome::Failed,
+            Some("artifact cleanup fixture completed"),
+        )
+        .await
+        .unwrap();
+    crate::workspace::release_writer_binding(&node, owner.request())
+        .await
+        .unwrap();
+    crate::workspace::cleanup_workspace(&node, "artifact-workspace", Some(&root))
+        .await
+        .unwrap();
+    assert!(
+        !source.exists(),
+        "the existing executor removes its worktree"
+    );
+    assert!(
+        !git_dir.exists(),
+        "Git worktree cleanup removes its metadata directory"
+    );
+    assert!(
+        !artifact_root.exists(),
+        "private artifacts share the worktree cleanup owner"
+    );
+    assert!(
+        repository.host_path.join("README.md").is_file(),
+        "source repository remains"
+    );
+    let response = node.execute(r#"{ IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }) { lifecycle_state } }"#).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    assert_eq!(
+        response.data.unwrap()["IsolatedWorkspace"][0]["lifecycle_state"],
+        "cleaned"
+    );
+}
+
+#[cfg(target_os = "macos")]
+async fn artifact_alternate_owner(
+    fx: &ArtifactTestFixture,
+    name: &str,
+    binding: &serde_json::Value,
+) -> anyhow::Result<(
+    crate::lifecycle::RequestLifecycle,
+    crate::lifecycle::ClaimOutcome,
+)> {
+    use crate::identity::AgentIdentity;
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(fx._dir.path().join("agent.key"), None)
+            .unwrap();
+    let did = identity.did();
+    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        name,
+        did,
+        did,
+        "general",
+        &format!("artifact-session-{name}"),
+        "Review source",
+        "interactive",
+        &now,
+        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
+    );
+    if !binding.is_null() {
+        create.workspace_id = Some("artifact-workspace".into());
+        create.workspace_authority = Some(binding["authority"].as_str().unwrap().into());
+        create.workspace_owner_deployment_id = Some(
+            if binding["owner_matches"] == false {
+                "foreign-deployment"
+            } else {
+                "artifact-deployment"
+            }
+            .into(),
+        );
+        create.workspace_seal_hash = if binding["seal_matches"] == false {
+            Some("wrong-seal".into())
+        } else {
+            fx.owner.request().workspace_seal_hash.clone()
+        };
+    }
+    crate::request_admission::sign_agent_request_create(&identity, &mut create).await?;
+    let mutation = fx.node.execute(&create.graphql_mutation().unwrap()).await;
+    assert!(!mutation.has_errors(), "{:?}", mutation.errors);
+    let id = crate::graphql::escape_graphql_string(name);
+    let result = fx
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ {} }} }}"#,
+            crate::request_admission::SIGNED_REQUEST_FIELDS
+        ))
+        .await;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&result, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+    let mut owner = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        fx.node.clone(),
+        "general",
+        did,
+        request,
+        300,
+    );
+    let outcome = owner.claim().await.unwrap();
+    Ok((owner, outcome))
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn artifact_resolver_rejects_missing_or_ready_context_before_binding() {
+    for authority in [None, Some("readOnly"), Some("readWrite")] {
+        let fx = artifact_test_fixture(&[]).await;
+        let binding = authority
+            .map(|authority| {
+                serde_json::json!({
+                    "authority": authority, "owner_matches": true, "seal_matches": true
+                })
+            })
+            .unwrap_or(serde_json::Value::Null);
+        let name = authority.unwrap_or("unbound");
+        let (owner, claim) = artifact_alternate_owner(&fx, name, &binding).await.unwrap();
+        assert!(matches!(claim, crate::lifecycle::ClaimOutcome::Claimed));
+        for mutation in [
+            r#"mutation { create_HostDeployment(input: { deployment_id: "artifact-deployment", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#,
+            r#"mutation { update_IsolatedWorkspace(filter: { workspace_id: { _eq: "artifact-workspace" } }, input: { lifecycle_state: "ready" }) { _docID } }"#,
+        ] {
+            let result = fx.node.execute(mutation).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+        }
+        let query = format!(
+            r#"{{ WorkspaceBinding(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ binding_id lifecycle_state }} }}"#,
+            crate::graphql::escape_graphql_string(name)
+        );
+        let before = fx.node.execute(&query).await;
+        assert!(!before.has_errors());
+        assert!(before.data.as_ref().unwrap()["WorkspaceBinding"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        let denied = super::resolve_request_workspace_overlay(
+            &fx.node,
+            owner.request(),
+            owner.execution_generation().unwrap(),
+            true,
+            Some(fx._dir.path()),
+        )
+        .await;
+        assert!(
+            denied
+                .unwrap_err()
+                .to_string()
+                .contains("sealed ReadOnly workspace"),
+            "{name}"
+        );
+        let after = fx.node.execute(&query).await;
+        assert!(!after.has_errors());
+        assert_eq!(
+            after.data, before.data,
+            "{name}: rejected artifact request created a binding"
+        );
+        // No artifact selection preserves the existing independent tool policy.
+        let ordinary = super::resolve_request_workspace_overlay(
+            &fx.node,
+            owner.request(),
+            owner.execution_generation().unwrap(),
+            false,
+            Some(fx._dir.path()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ordinary.is_some(), authority.is_some(), "{name}");
+        assert!(ordinary
+            .as_ref()
+            .is_none_or(|overlay| overlay.workspace_artifact.is_none()));
+    }
+}

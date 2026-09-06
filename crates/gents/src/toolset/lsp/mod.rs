@@ -8,7 +8,7 @@ mod edits;
 mod encoding;
 mod pool;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 mod uri;
 mod writethrough;
 
@@ -125,6 +125,14 @@ pub fn constraints_from_effective_bash(
         deny_git_metadata_writes: bash.deny_git_metadata_writes,
     }
 }
+
+// Persistent clients are shared across request lifetimes. Until they support
+// per-request artifact authority, neither starting nor borrowing one is legal.
+fn artifact_scope_denied() -> bool {
+    crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+        .is_some_and(|scope| scope.workspace_artifact.is_some())
+}
+const ARTIFACT_SCOPE_DENIAL: &str = "persistent LSP and supplementary linters are unavailable in artifact-scoped requests; use the sandboxed Bash compiler path";
 
 #[derive(Clone)]
 pub(crate) struct LspTool {
@@ -253,6 +261,12 @@ impl Tool for LspTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if artifact_scope_denied() {
+            return Err(ToolError::reported_failure(
+                FailureClass::PolicyDenied,
+                ARTIFACT_SCOPE_DENIAL.into(),
+            ));
+        }
         let mut action = LspAction::parse(&args.action).ok_or_else(|| {
             ToolError::reported_failure(
                 FailureClass::ArgumentInvalid,

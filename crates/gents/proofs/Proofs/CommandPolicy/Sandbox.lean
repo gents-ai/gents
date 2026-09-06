@@ -14,4 +14,10 @@ def selectSandbox
       else
         .denied .workspaceWriteSandboxUnavailable
 
+  | .artifactWrite =>
+      if support.workspaceWriteSandboxEnforced then
+        .selected .macosSeatbelt
+      else
+        .denied .artifactWriteSandboxUnavailable
+
 end CommandPolicy

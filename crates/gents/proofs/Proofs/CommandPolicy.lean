@@ -4,3 +4,5 @@ import Proofs.CommandPolicy.Sandbox
 import Proofs.CommandPolicy.Env
 import Proofs.CommandPolicy.Theorems
 import Proofs.CommandPolicy.Cases
+
+import Proofs.CommandPolicy.ArtifactAuthority

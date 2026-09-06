@@ -29,7 +29,7 @@ fn bash_tool_from_exec_rank(rank: u8) -> BashMode {
     match rank {
         0 => BashMode::Off,
         1 => BashMode::ReadOnly,
-        2 => BashMode::Unrestricted,
+        2 | 3 => BashMode::Unrestricted,
         other => panic!("unknown bash execution rank {other}"),
     }
 }
@@ -39,15 +39,18 @@ fn exec_from_rank(rank: u8) -> CommandExecutionMode {
         0 => CommandExecutionMode::ReadOnly,
         1 => CommandExecutionMode::WorkspaceWrite,
         2 => CommandExecutionMode::Unrestricted,
+        3 => CommandExecutionMode::ArtifactWrite,
         other => panic!("unknown command execution rank {other}"),
     }
 }
 
+// Numeric values are wire discriminators, never authority ordering.
 fn exec_rank(mode: CommandExecutionMode) -> u8 {
     match mode {
         CommandExecutionMode::ReadOnly => 0,
         CommandExecutionMode::WorkspaceWrite => 1,
         CommandExecutionMode::Unrestricted => 2,
+        CommandExecutionMode::ArtifactWrite => 3,
     }
 }
 

@@ -40,6 +40,7 @@ const CORE_ENV_VARS: &[&str] = &[
 pub enum CommandExecutionMode {
     ReadOnly,
     WorkspaceWrite,
+    ArtifactWrite,
     Unrestricted,
 }
 
@@ -50,6 +51,7 @@ impl CommandExecutionMode {
             "workspace_write" | "WorkspaceWrite" | "managed_write" | "ManagedWrite" => {
                 Ok(Self::WorkspaceWrite)
             }
+            "artifact_write" | "ArtifactWrite" => Ok(Self::ArtifactWrite),
             "unrestricted" | "Unrestricted" => Ok(Self::Unrestricted),
             other => bail!("unknown command execution policy mode {other}"),
         }
@@ -59,24 +61,19 @@ impl CommandExecutionMode {
         match self {
             Self::ReadOnly => "read_only",
             Self::WorkspaceWrite => "workspace_write",
+            Self::ArtifactWrite => "artifact_write",
             Self::Unrestricted => "unrestricted",
         }
     }
 
-    /// More restrictive mode wins: ReadOnly < WorkspaceWrite < Unrestricted.
+    /// Intersect effects: source writes and private artifact writes are incomparable.
     pub fn meet(self, other: Self) -> Self {
-        if self.rank() <= other.rank() {
-            self
-        } else {
-            other
+        if self == other {
+            return self;
         }
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Self::ReadOnly => 0,
-            Self::WorkspaceWrite => 1,
-            Self::Unrestricted => 2,
+        match (self, other) {
+            (Self::Unrestricted, mode) | (mode, Self::Unrestricted) => mode,
+            _ => Self::ReadOnly,
         }
     }
 }
@@ -179,6 +176,12 @@ pub(crate) fn apply_workspace_authority(
 }
 
 pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> CommandExecutionPolicy {
+    // This mode has already survived selection/operator ceilings. Its separate
+    // contextual grant is checked asynchronously at every launch, never converted
+    // from a source-write selection and never silently downgraded when missing.
+    if policy.mode == CommandExecutionMode::ArtifactWrite {
+        return policy.clone();
+    }
     match crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
         .and_then(|scope| scope.workspace_authority)
     {
@@ -373,6 +376,7 @@ pub fn default_lsp_network_mode() -> CommandNetworkMode {
 pub fn lsp_sandbox_for_effective(execution_mode: CommandExecutionMode) -> CommandExecutionMode {
     match execution_mode {
         CommandExecutionMode::WorkspaceWrite => CommandExecutionMode::WorkspaceWrite,
+        CommandExecutionMode::ArtifactWrite => CommandExecutionMode::ArtifactWrite,
         CommandExecutionMode::Unrestricted => CommandExecutionMode::Unrestricted,
         CommandExecutionMode::ReadOnly => {
             if workspace_write_sandbox_enforced() {
@@ -524,7 +528,7 @@ fn which_on_host_path(name: &str) -> Option<PathBuf> {
 }
 
 /// Shared PATH / prefix / network / sandbox preparation for bash and LSP.
-pub(crate) fn prepare_managed_command(
+pub(crate) async fn prepare_managed_command(
     root: &Path,
     command: &str,
     args: &[String],
@@ -533,15 +537,22 @@ pub(crate) fn prepare_managed_command(
     let admitted = admit_host_executable(command, root)
         .map_err(|reason| policy_denial(&constraints.to_spawn_policy(), reason))?;
     let spawn_policy = constraints.to_spawn_policy();
+    if spawn_policy.mode == CommandExecutionMode::ArtifactWrite
+        && constraints.execution_mode != CommandExecutionMode::ArtifactWrite
+    {
+        return Err(artifact_policy_denial(
+            "artifact sandbox cannot elevate the effective execution mode",
+        ));
+    }
     validate_command_policy_with_resolved_executable(
         command,
         args,
         &admitted.to_string_lossy(),
         &spawn_policy,
     )?;
-    let (program, argv, sandbox) =
-        sandboxed_command_for_policy(root, &admitted.to_string_lossy(), args, &spawn_policy)?;
-    Ok((PathBuf::from(program), argv, build_shell_env(), sandbox))
+    let (program, argv, env, sandbox) =
+        prepare_command_launch(root, &admitted.to_string_lossy(), args, &spawn_policy).await?;
+    Ok((PathBuf::from(program), argv, env, sandbox))
 }
 
 pub(crate) async fn run_command(
@@ -561,8 +572,8 @@ pub(crate) async fn run_command(
         .collect::<Vec<_>>();
     let command_line = shell_join(&argv);
     let root = context.root();
-    let (program, command_args, sandbox) =
-        sandboxed_command_for_policy(&root, command_name, args, &policy)?;
+    let (program, command_args, environment, sandbox) =
+        prepare_command_launch(&root, command_name, args, &policy).await?;
     let bounds = tool_execution_bounds(timeout);
     let request_deadline = bounds.request_deadline_at;
     let started = Instant::now();
@@ -575,7 +586,7 @@ pub(crate) async fn run_command(
         cancellation_token: bounds.cancellation_token,
         max_output_bytes: usize::MAX,
         stdin: Vec::new(),
-        environment: Some(build_shell_env()),
+        environment: Some(environment),
         tool_name: Some(tool_name.to_string()),
         live_output: bounds.live_output,
     })
@@ -953,7 +964,7 @@ fn validate_network_mode(
     }
 
     match policy.mode {
-        CommandExecutionMode::WorkspaceWrite => Ok(()),
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite => Ok(()),
         CommandExecutionMode::Unrestricted => Err(policy_denial(
             policy,
             DenialReason::DisabledNetworkUnenforceable,
@@ -991,15 +1002,20 @@ fn validate_read_only_network_disabled(
 }
 
 #[cfg(test)]
-pub(in crate::toolset) fn select_sandbox_for_policy(
+pub(crate) fn select_sandbox_for_policy(
     mode: CommandExecutionMode,
     workspace_write_sandbox_enforced: bool,
 ) -> Result<&'static str> {
     match mode {
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
         CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
-        CommandExecutionMode::WorkspaceWrite if workspace_write_sandbox_enforced => {
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+            if workspace_write_sandbox_enforced =>
+        {
             Ok("macos_seatbelt")
+        }
+        CommandExecutionMode::ArtifactWrite => {
+            bail!("artifact_write requires macOS sandbox-exec enforcement")
         }
         CommandExecutionMode::WorkspaceWrite => {
             if cfg!(target_os = "macos") {
@@ -1021,6 +1037,72 @@ pub(crate) fn workspace_write_sandbox_enforced() -> bool {
     false
 }
 
+/// Sole environment and filesystem-sandbox preparation for bash and managed tools.
+fn artifact_policy_denial(message: impl Into<String>) -> ToolError {
+    ToolError::reported_failure(FailureClass::PolicyDenied, message.into())
+}
+
+async fn prepare_command_launch(
+    source_root: &Path,
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> std::result::Result<(String, Vec<String>, HashMap<String, String>, &'static str), ToolError> {
+    let mut environment = build_shell_env();
+    let artifact = if policy.mode == CommandExecutionMode::ArtifactWrite {
+        let scope = crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+            .ok_or_else(|| {
+                artifact_policy_denial("artifact_write requires a live sealed workspace request")
+            })?;
+        if scope.workspace_authority != Some(WorkspaceAuthority::ReadOnly) {
+            return Err(artifact_policy_denial(
+                "artifact_write requires a ReadOnly workspace binding",
+            ));
+        }
+        let grant = scope.workspace_artifact.ok_or_else(|| {
+            artifact_policy_denial("artifact_write requires a runtime-owned artifact grant")
+        })?;
+        grant.validate_for_launch().await.map_err(|error| {
+            artifact_policy_denial(format!("artifact execution grant rejected: {error:#}"))
+        })?;
+        let source_root = std::fs::canonicalize(source_root).map_err(|error| {
+            artifact_policy_denial(format!("artifact source unavailable: {error}"))
+        })?;
+        if source_root != grant.source_root() {
+            return Err(artifact_policy_denial(
+                "artifact grant source does not match the command tool root",
+            ));
+        }
+        environment.insert(
+            "CARGO_TARGET_DIR".into(),
+            grant.root().join("target").to_string_lossy().into_owned(),
+        );
+        // Host Cargo configuration can select a compiler-cache daemon whose
+        // socket and cache are outside this grant. Cargo's explicit empty
+        // environment overrides disable both configured compiler wrappers.
+        // This does not expand the filesystem or network sandbox.
+        for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+            environment.insert(name.into(), String::new());
+        }
+        for name in ["TMPDIR", "TMP", "TEMP"] {
+            environment.insert(
+                name.into(),
+                grant.root().join("tmp").to_string_lossy().into_owned(),
+            );
+        }
+        Some(grant)
+    } else {
+        None
+    };
+    let writable_root = artifact
+        .as_ref()
+        .map(|grant| grant.root())
+        .unwrap_or(source_root);
+    let (program, argv, sandbox) =
+        sandboxed_command_for_policy(writable_root, command, args, policy)?;
+    Ok((program, argv, environment, sandbox))
+}
+
 fn sandboxed_command_for_policy(
     root: &Path,
     command_name: &str,
@@ -1033,14 +1115,17 @@ fn sandboxed_command_for_policy(
         CommandExecutionMode::Unrestricted => {
             Ok((command_name.to_string(), args.to_vec(), sandbox))
         }
-        CommandExecutionMode::WorkspaceWrite => sandboxed_workspace_write_command(
-            root,
-            command_name,
-            args,
-            policy.network_mode,
-            sandbox,
-        )
-        .map_err(Into::into),
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite => {
+            sandboxed_workspace_write_command(
+                root,
+                command_name,
+                args,
+                policy.network_mode,
+                sandbox,
+                policy.mode == CommandExecutionMode::ArtifactWrite,
+            )
+            .map_err(Into::into)
+        }
     }
 }
 
@@ -1050,9 +1135,15 @@ fn select_sandbox_for_execution(
     match policy.mode {
         CommandExecutionMode::ReadOnly => Ok("policy_read_only"),
         CommandExecutionMode::Unrestricted => Ok("unsandboxed_unrestricted"),
-        CommandExecutionMode::WorkspaceWrite if workspace_write_sandbox_enforced() => {
+        CommandExecutionMode::WorkspaceWrite | CommandExecutionMode::ArtifactWrite
+            if workspace_write_sandbox_enforced() =>
+        {
             Ok("macos_seatbelt")
         }
+        CommandExecutionMode::ArtifactWrite => Err(policy_denial(
+            policy,
+            DenialReason::ArtifactWriteSandboxUnavailable,
+        )),
         CommandExecutionMode::WorkspaceWrite => Err(policy_denial(
             policy,
             DenialReason::WorkspaceWriteSandboxUnavailable,
@@ -1067,8 +1158,12 @@ fn sandboxed_workspace_write_command(
     args: &[String],
     network_mode: CommandNetworkMode,
     sandbox: &'static str,
+    artifact_only: bool,
 ) -> Result<(String, Vec<String>, &'static str)> {
-    let policy = macos_workspace_write_policy(network_mode);
+    let mut policy = macos_workspace_write_policy(network_mode);
+    if artifact_only {
+        policy.push_str("\n(deny file-link)\n");
+    }
     let mut sandbox_args = vec![
         "-p".to_string(),
         policy,
@@ -1087,6 +1182,7 @@ fn sandboxed_workspace_write_command(
     _args: &[String],
     _network_mode: CommandNetworkMode,
     _sandbox: &'static str,
+    _artifact_only: bool,
 ) -> Result<(String, Vec<String>, &'static str)> {
     bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
 }

@@ -2433,3 +2433,65 @@ fn explain_expands_eth_tool_ids_from_documents() {
         explanation.tool_names
     );
 }
+
+#[test]
+fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
+    use crate::toolset::CommandExecutionMode;
+    let root = temp_root("artifact-selection-ceilings");
+    for (bash_mode, readonly_ceiling, expected) in [
+        ("Unrestricted", false, CommandExecutionMode::ArtifactWrite),
+        ("Unrestricted", true, CommandExecutionMode::ReadOnly),
+        ("ReadOnly", false, CommandExecutionMode::ReadOnly),
+    ] {
+        let selection =
+            ToolSelection::from_document(&crate::document_config::ToolSelectionDocument {
+                tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
+                enable_bash: Some(true),
+                bash_mode: Some(bash_mode.into()),
+                command_execution_policy: Some("artifact_write".into()),
+                command_network_mode: Some("disabled".into()),
+                ..Default::default()
+            })
+            .unwrap();
+        let ceiling = if readonly_ceiling {
+            ToolCeiling::readonly_at(&root)
+        } else {
+            ToolCeiling::readwrite(&root)
+        };
+        let config =
+            BehaviorToolConfig::from_selection("artifact-test", selection, &ceiling, Vec::new())
+                .unwrap();
+        assert_eq!(config.static_policy().bash.execution_mode, expected);
+        assert_eq!(
+            config.static_policy().bash.network_mode,
+            crate::toolset::CommandNetworkMode::Disabled
+        );
+        for tool in config.host_tools().native_tools() {
+            match tool {
+                crate::toolset::NativeTool::BashUnrestricted { policy, .. }
+                | crate::toolset::NativeTool::BashReadOnly { policy, .. } => {
+                    assert_eq!(policy.mode, expected);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_readonly_selection_cannot_advertise_an_artifact_static_grant() {
+    let selection = ToolSelection {
+        bash: BashMode::ReadOnly,
+        command_policy: Some(
+            crate::toolset::CommandExecutionPolicy::write_capable()
+                .with_mode(crate::toolset::CommandExecutionMode::ArtifactWrite),
+        ),
+        ..Default::default()
+    };
+    assert_eq!(
+        ToolPolicySurface::from_selection(&selection, &Default::default())
+            .bash
+            .execution_mode,
+        crate::toolset::CommandExecutionMode::ReadOnly
+    );
+}

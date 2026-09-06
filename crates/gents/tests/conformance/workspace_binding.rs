@@ -98,15 +98,6 @@ fn git_metadata_write_ok(policy: &str, authority: &str) -> bool {
     !(policy == "git_worktree_diff" && authority == "readWrite")
 }
 
-fn command_mode_rank(mode: &str) -> u8 {
-    match mode {
-        "read_only" => 0,
-        "workspace_write" => 1,
-        "unrestricted" => 2,
-        _ => 0,
-    }
-}
-
 fn authority_command_mode(authority: &str) -> &'static str {
     match authority {
         "readWrite" => "workspace_write",
@@ -115,17 +106,10 @@ fn authority_command_mode(authority: &str) -> &'static str {
 }
 
 fn authority_meet(behavior: &str, authority: &str) -> &'static str {
-    let cap = authority_command_mode(authority);
-    if command_mode_rank(behavior) <= command_mode_rank(cap) {
-        match behavior {
-            "read_only" => "read_only",
-            "workspace_write" => "workspace_write",
-            "unrestricted" => "unrestricted",
-            other => panic!("unknown behavior command mode {other}"),
-        }
-    } else {
-        cap
-    }
+    let behavior = gents::toolset::CommandExecutionMode::parse(behavior).unwrap();
+    let cap =
+        gents::toolset::CommandExecutionMode::parse(authority_command_mode(authority)).unwrap();
+    behavior.meet(cap).as_str()
 }
 
 fn authority_meet_ok(behavior: &str, authority: &str) -> bool {
