@@ -559,6 +559,16 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.artifact_spawn_cases,
         ),
         (
+            "graph_workspace_lineage_cases",
+            "GraphWorkspaceLineageCases",
+            &snapshot.graph_workspace_lineage_cases,
+        ),
+        (
+            "operator_base_freeze_cases",
+            "OperatorBaseFreezeCases",
+            &snapshot.operator_base_freeze_cases,
+        ),
+        (
             "workspace_path_capability_cases",
             "WorkspacePathCapabilityCases",
             &snapshot.workspace_path_capability_cases,
@@ -1374,6 +1384,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",
         "graph_pipeline_run_terminal_cases",
+        "graph_workspace_lineage_cases",
+        "operator_base_freeze_cases",
         "workspace_path_capability_cases",
         "workspace_path_alias_cases",
         "logical_output_obligation_cases",

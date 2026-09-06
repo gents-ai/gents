@@ -34,7 +34,7 @@ fn request_view(row: &AgentRequestRow, node_id: Option<String>) -> GraphRunReque
     }
 }
 
-fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
+pub(super) fn authentic_root(row: &AgentRequestRow, owner_did: &str) -> bool {
     let Some(target) = row.agent_did.as_deref().filter(|s| !s.is_empty()) else {
         return false;
     };

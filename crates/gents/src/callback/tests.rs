@@ -333,6 +333,7 @@ fn recovery_reuses_stored_action_plan() {
             assert_eq!(action.branch, "topic");
         }
         crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
         | crate::workspace::HostAction::IntegrateWorkspace(_)
         | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
@@ -394,6 +395,7 @@ fn wasm_recovery_reuses_stored_plan_without_reloading_module() {
             );
         }
         crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
         | crate::workspace::HostAction::IntegrateWorkspace(_)
         | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
@@ -456,6 +458,7 @@ fn builtin_emitter_builds_create_workspace_plan() {
             assert_eq!(action.work_unit_id, "unit-1");
         }
         crate::workspace::HostAction::SealWorkspace(_)
+        | crate::workspace::HostAction::FreezeWorkspaceBase(_)
         | crate::workspace::HostAction::IntegrateWorkspace(_)
         | crate::workspace::HostAction::CleanupWorkspace(_) => {
             panic!("expected create_workspace")
@@ -1016,7 +1019,8 @@ fn fixture_wasm_emits_valid_create_workspace_plan() {
             assert_eq!(action.work_unit_id, "unit-1");
             assert_eq!(action.adapter.as_str(), "git_worktree");
         }
-        HostAction::SealWorkspace(_)
+        HostAction::FreezeWorkspaceBase(_)
+        | HostAction::SealWorkspace(_)
         | HostAction::IntegrateWorkspace(_)
         | HostAction::CleanupWorkspace(_) => panic!("expected create_workspace"),
     }

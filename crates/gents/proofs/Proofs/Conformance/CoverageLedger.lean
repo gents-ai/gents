@@ -847,6 +847,11 @@ def caseCoverage : List CoverageEntry :=
       "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "graph_workspace_lineage_cases"
+      "GraphWorkspaceLineageCases"
+      "graph_pipeline::run::workspace_lineage_contract_tests::generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts")
+      "graph-pipeline" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "artifact_mode_meet_cases"
       "ArtifactModeMeetCases"
       "toolset::tests::generated_artifact_mode_meet_cases_drive_command_effect_intersection")
@@ -869,6 +874,11 @@ def caseCoverage : List CoverageEntry :=
       boundaryCommandPolicyHostExecutionAssumptionsId
       "toolset::tests::generated_artifact_spawn_cases_drive_live_foreground_and_background_launches")
       "command-policy" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "operator_base_freeze_cases"
+      "OperatorBaseFreezeCases"
+      "workspace::tests::operator_base_freeze::generated_operator_base_freeze_cases_drive_real_git_executor")
+      "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "workspace_path_capability_cases"
       "WorkspacePathCapabilityCases"

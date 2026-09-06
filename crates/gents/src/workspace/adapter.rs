@@ -804,6 +804,15 @@ fn seal_marker_path(dest: &Path) -> Result<PathBuf> {
     Ok(PathBuf::from(git_dir).join(SEAL_FILE_NAME))
 }
 
+/// Resolve a validated immutable base commit to its tree, never compare a commit ID to a tree ID.
+pub(crate) fn base_tree_hash(source: &Path, base_sha: &str) -> Result<String> {
+    let commit = resolve_base_sha(source, base_sha)?;
+    git_output(
+        source,
+        &["rev-parse", "--verify", &format!("{commit}^{{tree}}")],
+    )
+}
+
 pub(crate) fn resolve_base_sha(source: &Path, base_sha: &str) -> Result<String> {
     git_output(
         source,

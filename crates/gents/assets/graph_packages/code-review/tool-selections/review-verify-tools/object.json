@@ -7,8 +7,8 @@
   "file_tools_mode": "ReadOnly",
   "file_tool_root": null,
   "enable_bash": true,
-  "bash_mode": "ReadOnly",
-  "command_execution_policy": "read_only",
+  "bash_mode": "Unrestricted",
+  "command_execution_policy": "artifact_write",
   "command_network_mode": "disabled",
   "cli_tool_names": [],
   "enable_meta_tools": false,
@@ -22,7 +22,7 @@
   "defra_query_collections": [],
   "subagent_targets": [],
   "backgroundable_tool_names": [
-    "bash"
+    "bash_unrestricted"
   ],
   "write_tools": [],
   "datastore_tool_surface_ids": [

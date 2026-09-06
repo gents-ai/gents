@@ -1543,7 +1543,9 @@ fn integrate_does_not_commit_until_receipt_and_retries_from_journal() {
     );
     assert_eq!(first.receipt.kind, "integrator");
 
-    docs.receipts.clear();
+    // Crash loses this new integration receipt, not the previously durable
+    // writer seal witness that authorizes integration.
+    docs.receipts.remove(&first.receipt.receipt_id);
     // Commit objects include second-resolution timestamps. Cross a timestamp
     // boundary so regenerating the commit cannot accidentally look like
     // successful recovery of the persisted pending SHA.
@@ -2539,3 +2541,11 @@ mod capability_runtime;
 
 #[path = "tests/path_alias_contract.rs"]
 mod path_alias_contract;
+
+#[path = "tests/quickstart_base_freeze.rs"]
+mod quickstart_base_freeze;
+
+mod operator_base_freeze;
+
+#[path = "tests/integrate_writer_receipt.rs"]
+mod integrate_writer_receipt;

@@ -77,6 +77,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_artifact_spawn_cases_drive_live_foreground_and_background_launches",
         },
         ConformanceConsumer::RustTest {
+            id: "graph_pipeline::run::workspace_lineage_contract_tests::generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts",
+            package: "gents",
+            source_path: "crates/gents/src/graph_pipeline/workspace_lineage_contract_tests.rs",
+            module_path: "graph_pipeline::run::workspace_lineage_contract_tests",
+            function: "generated_graph_workspace_cases_drive_installed_plan_and_signed_receipts",
+        },
+        ConformanceConsumer::RustTest {
+            id: "workspace::tests::operator_base_freeze::generated_operator_base_freeze_cases_drive_real_git_executor",
+            package: "gents",
+            source_path: "crates/gents/src/workspace/tests/operator_base_freeze.rs",
+            module_path: "workspace::tests::operator_base_freeze",
+            function: "generated_operator_base_freeze_cases_drive_real_git_executor",
+        },
+        ConformanceConsumer::RustTest {
             id: "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor",
             package: "gents",
             source_path: "crates/gents/src/workspace/tests.rs",

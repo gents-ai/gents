@@ -685,12 +685,9 @@ struct WorkspaceRootRow {
     enabled: Option<bool>,
 }
 
-pub(crate) async fn load_isolated_workspace_record(
-    node: &EmbeddedNode,
-    workspace_id: &str,
-) -> Result<Option<IsolatedWorkspaceRecord>> {
+pub(crate) fn isolated_workspace_record_query(workspace_id: &str) -> String {
     let escaped = escape_graphql_string(workspace_id);
-    let query = format!(
+    format!(
         r#"{{
             IsolatedWorkspace(
                 filter: {{ workspace_id: {{ _eq: "{escaped}" }} }},
@@ -705,11 +702,25 @@ pub(crate) async fn load_isolated_workspace_record(
                 instruction_manifest
             }}
         }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace").await?;
-    let Some(row) = first_row::<IsolatedWorkspaceRow>(&response, "IsolatedWorkspace")? else {
-        return Ok(None);
-    };
+    )
+}
+
+pub(crate) fn decode_isolated_workspace_record_response(
+    response: &serde_json::Value,
+) -> Result<Option<IsolatedWorkspaceRecord>> {
+    let rows = response
+        .pointer("/data/IsolatedWorkspace")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow!("workspace observation omitted IsolatedWorkspace"))?;
+    rows.first()
+        .cloned()
+        .map(serde_json::from_value::<IsolatedWorkspaceRow>)
+        .transpose()?
+        .map(decode_isolated_workspace_record)
+        .transpose()
+}
+
+fn decode_isolated_workspace_record(row: IsolatedWorkspaceRow) -> Result<IsolatedWorkspaceRecord> {
     let workspace_id = optional_id(row.workspace_id.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace is missing workspace_id"))?
         .to_string();
@@ -725,7 +736,7 @@ pub(crate) async fn load_isolated_workspace_record(
     let integrator_principal = optional_id(row.integrator_principal.as_deref())
         .ok_or_else(|| anyhow!("IsolatedWorkspace {workspace_id} is missing integrator_principal"))?
         .to_string();
-    Ok(Some(IsolatedWorkspaceRecord {
+    Ok(IsolatedWorkspaceRecord {
         workspace_id,
         owner_deployment_id,
         writer_principal,
@@ -735,7 +746,18 @@ pub(crate) async fn load_isolated_workspace_record(
         instruction_manifest: optional_id(row.instruction_manifest.as_deref())
             .unwrap_or("{}")
             .to_string(),
-    }))
+    })
+}
+
+pub(crate) async fn load_isolated_workspace_record(
+    node: &EmbeddedNode,
+    workspace_id: &str,
+) -> Result<Option<IsolatedWorkspaceRecord>> {
+    let query = isolated_workspace_record_query(workspace_id);
+    let response = graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace").await?;
+    first_row::<IsolatedWorkspaceRow>(&response, "IsolatedWorkspace")?
+        .map(decode_isolated_workspace_record)
+        .transpose()
 }
 
 async fn load_workspace_placement(

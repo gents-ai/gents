@@ -10,11 +10,12 @@ use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
 use super::{
-    emit_create_workspace_plan, execute_create_workspace_plan, isolated_workspace_upsert_mutation,
+    emit_create_workspace_plan, emit_freeze_workspace_base_plan, execute_create_workspace_plan,
+    execute_freeze_workspace_base_plan, isolated_workspace_upsert_mutation,
     repository_placement_upsert_mutation, workspace_placement_upsert_mutation, ActionJournalEntry,
-    CreateWorkspaceAction, CreateWorkspaceOutcome, CreationPolicy, HostExecutorContext,
-    MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind, CAP_CREATE_WORKSPACE,
-    CAP_OBSERVE_DIRTY_BASE,
+    CreateWorkspaceAction, CreateWorkspaceOutcome, CreationPolicy, FreezeWorkspaceBaseAction,
+    HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind,
+    CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
 };
 use crate::config_client::ConfigAccess;
 
@@ -141,10 +142,14 @@ pub async fn provision_read_only_workspace(
     });
     let mut documents = MemoryWorkspaceDocuments::default();
     let mut journal = Vec::<ActionJournalEntry>::new();
-    let capabilities = [CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
+    let capabilities = [
+        CAP_CREATE_WORKSPACE,
+        CAP_OBSERVE_DIRTY_BASE,
+        CAP_SEAL_WORKSPACE,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<BTreeSet<_>>();
     let outcome = {
         let mut context = HostExecutorContext {
             deployment_id: deployment_id.to_owned(),
@@ -162,7 +167,15 @@ pub async fn provision_read_only_workspace(
             caused_by_correlation: workspace_id,
             documents: &mut documents,
         };
-        execute_create_workspace_plan(&plan, &mut journal, &mut context)
+        execute_create_workspace_plan(&plan, &mut journal, &mut context).and_then(|created| {
+            let freeze = emit_freeze_workspace_base_plan(FreezeWorkspaceBaseAction {
+                workspace_id: created.workspace.workspace_id,
+                base_sha: created.workspace.base_sha,
+            });
+            // Each single-action plan has its own journal; no result from create
+            // is mistaken for a previously persisted freeze.
+            execute_freeze_workspace_base_plan(&freeze, &mut Vec::new(), &mut context)
+        })
     };
     flush_workspace_documents(access, &documents).await?;
     outcome.map_err(|error| anyhow::anyhow!(error.to_string()))

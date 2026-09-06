@@ -5,8 +5,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::action_plan::{
-    ActionPlan, CleanupWorkspaceAction, CreateWorkspaceAction, HostAction,
-    IntegrateWorkspaceAction, SealWorkspaceAction,
+    ActionPlan, CleanupWorkspaceAction, CreateWorkspaceAction, FreezeWorkspaceBaseAction,
+    HostAction, IntegrateWorkspaceAction, SealWorkspaceAction,
 };
 use super::adapter::{
     absolute_git_dir, advance_trunk_to_integrate_commit, artifacts_complete,
@@ -516,6 +516,195 @@ pub struct SealWorkspaceOutcome {
     pub receipt: WorkspaceReceiptDoc,
 }
 
+/// Freeze an operator-provisioned, unchanged base through the ordinary workspace
+/// action journal. This emits no writer receipt or producer request identity.
+pub fn execute_freeze_workspace_base_plan(
+    plan: &ActionPlan,
+    journal: &mut Vec<ActionJournalEntry>,
+    ctx: &mut HostExecutorContext<'_>,
+) -> Result<CreateWorkspaceOutcome, HostExecuteError> {
+    if !journal::action_journal_prefix_legal(journal) {
+        return Err(HostExecuteError::denied("illegal action journal prefix"));
+    }
+    plan.validate_against(&ctx.capabilities)
+        .map_err(|error| HostExecuteError::denied(error.to_string()))?;
+    let [HostAction::FreezeWorkspaceBase(action)] = plan.actions.as_slice() else {
+        return Err(HostExecuteError::denied(
+            "base freeze requires one freeze_workspace_base action",
+        ));
+    };
+    if journal::current_state(journal, 0).is_none() {
+        journal::advance(journal, 0, ActionJournalState::Validated);
+    }
+    freeze_workspace_base_action(action, journal, ctx)
+}
+
+fn freeze_workspace_base_action(
+    action: &FreezeWorkspaceBaseAction,
+    journal: &mut Vec<ActionJournalEntry>,
+    ctx: &mut HostExecutorContext<'_>,
+) -> Result<CreateWorkspaceOutcome, HostExecuteError> {
+    let failed = |error: anyhow::Error| HostExecuteError::failed(error.to_string(), false, None);
+    let denied = |error: anyhow::Error| HostExecuteError::denied(error.to_string());
+    let mut workspace = ctx
+        .documents
+        .load_isolated_workspace(&action.workspace_id)
+        .map_err(failed)?
+        .ok_or_else(|| HostExecuteError::denied("base freeze workspace is missing"))?;
+    let mut placement = ctx
+        .documents
+        .load_placement(&action.workspace_id)
+        .map_err(failed)?
+        .ok_or_else(|| HostExecuteError::denied("base freeze placement is missing"))?;
+    if !(workspace.owner_deployment_id == ctx.deployment_id
+        && ctx.repository.enabled
+        && ctx.repository.deployment_id == ctx.deployment_id
+        && workspace.repository_id == ctx.repository.repository_id
+        && placement.workspace_id == workspace.workspace_id
+        && placement.deployment_id == ctx.deployment_id
+        && placement.repository_placement_id == ctx.repository.repository_id
+        && placement.adapter == workspace.adapter)
+    {
+        return Err(HostExecuteError::denied(
+            "base freeze owner/repository/placement mismatch",
+        ));
+    }
+    if !matches!(&workspace.path_capability, super::WorkspacePathCapability::ExactPaths { paths } if paths.is_empty())
+    {
+        return Err(HostExecuteError::denied(
+            "base freeze requires an empty exact-path capability",
+        ));
+    }
+    if workspace.base_sha != action.base_sha {
+        return Err(HostExecuteError::denied(
+            "base freeze expected commit differs from workspace identity",
+        ));
+    }
+    let source = &ctx.repository.host_path;
+    let canonical_base = resolve_base_sha(source, &action.base_sha).map_err(denied)?;
+    if canonical_base != action.base_sha {
+        return Err(HostExecuteError::denied(
+            "base freeze requires the immutable resolved base commit",
+        ));
+    }
+    let base_tree = super::adapter::base_tree_hash(source, &canonical_base).map_err(failed)?;
+    let expected = workspace_host_path(
+        source,
+        &workspace.workspace_id,
+        &workspace.branch,
+        ctx.ceiling,
+    )
+    .map_err(denied)?;
+    let dest = PathBuf::from(&placement.host_path);
+    let expected_canon = expected.canonicalize().unwrap_or_else(|_| expected.clone());
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
+    if dest_canon != expected_canon {
+        return Err(HostExecuteError::denied(
+            "base freeze placement differs from host-chosen workspace path",
+        ));
+    }
+    let state = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
+    if state == Some(LIFECYCLE_SEALED) {
+        if workspace.seal_hash.as_deref() != Some(base_tree.as_str()) {
+            return Err(HostExecuteError::denied(
+                "base freeze replay differs from persisted seal",
+            ));
+        }
+        // Workspace is the durable seal owner. Placement's tree observation is
+        // derived from it and may lag after partial result-document persistence.
+        // Recover through the same journal and document writer, including after
+        // restart with a fresh journal; no producer receipt is synthesized.
+        if placement.observed_tree_hash != base_tree {
+            placement.observed_tree_hash = base_tree.clone();
+            journal::advance(journal, 0, ActionJournalState::EffectObserved);
+            persist_sealed_workspace_documents(&workspace, &placement, ctx.documents)
+                .map_err(failed)?;
+        }
+        // Recovery of an already persisted seal is not a new checkout capture.
+        // Read/artifact admission still independently verifies the live tree.
+        journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
+        return Ok(CreateWorkspaceOutcome {
+            workspace,
+            placement,
+        });
+    }
+    if state != Some(LIFECYCLE_READY) {
+        return Err(HostExecuteError::denied(
+            "only a Ready base workspace can be frozen",
+        ));
+    }
+    if journal::current_state(journal, 0) == Some(ActionJournalState::ResultDocsWritten) {
+        return Err(HostExecuteError::denied(
+            "base freeze journal result has no persisted seal",
+        ));
+    }
+    if ctx
+        .documents
+        .load_bindings(&action.workspace_id)
+        .map_err(failed)?
+        .iter()
+        .any(|binding| binding.is_active_read_write())
+    {
+        return Err(HostExecuteError::denied(
+            "base freeze requires no active writer binding",
+        ));
+    }
+    super::adapter::verify_workspace_identity(source, &dest, &workspace.identity())
+        .map_err(denied)?;
+    if !(resolve_base_sha(&dest, "HEAD").map_err(denied)? == canonical_base) {
+        return Err(HostExecuteError::denied(
+            "base freeze checkout HEAD differs from immutable base commit",
+        ));
+    }
+    if observe_dirty_base(&dest).map_err(failed)?.dirty {
+        return Err(HostExecuteError::denied(
+            "base freeze requires a clean index and checkout",
+        ));
+    }
+    let snapshot = capture_seal_snapshot(&dest, &workspace.identity()).map_err(denied)?;
+    if !(snapshot.tree_hash == base_tree
+        && snapshot.diff.is_empty()
+        && snapshot.changed_files.is_empty())
+    {
+        return Err(HostExecuteError::denied(
+            "base freeze requires an unchanged base tree",
+        ));
+    }
+    journal::advance(journal, 0, ActionJournalState::Executing);
+    apply_seal_snapshot(&mut workspace, &mut placement, &dest, &base_tree).map_err(failed)?;
+    journal::advance(journal, 0, ActionJournalState::EffectObserved);
+    persist_sealed_workspace_documents(&workspace, &placement, ctx.documents).map_err(failed)?;
+    journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
+    Ok(CreateWorkspaceOutcome {
+        workspace,
+        placement,
+    })
+}
+
+/// Shared host seal effect; caller establishes its writer/base-freeze evidence.
+fn apply_seal_snapshot(
+    workspace: &mut IsolatedWorkspaceDoc,
+    placement: &mut WorkspacePlacementDoc,
+    dest: &Path,
+    seal_hash: &str,
+) -> Result<()> {
+    write_seal_marker(dest, seal_hash, &workspace.base_sha)?;
+    workspace.seal_hash = Some(seal_hash.to_owned());
+    workspace.lifecycle_state = LIFECYCLE_SEALED.to_owned();
+    placement.observed_tree_hash = seal_hash.to_owned();
+    Ok(())
+}
+
+fn persist_sealed_workspace_documents(
+    workspace: &IsolatedWorkspaceDoc,
+    placement: &WorkspacePlacementDoc,
+    documents: &mut dyn WorkspaceDocuments,
+) -> Result<()> {
+    documents.write_isolated_workspace(workspace.clone())?;
+    documents.write_placement(placement.clone())?;
+    Ok(())
+}
+
 pub fn execute_seal_workspace_plan(
     plan: &ActionPlan,
     journal: &mut Vec<ActionJournalEntry>,
@@ -666,13 +855,10 @@ fn seal_workspace_action(
         )));
     }
 
-    write_seal_marker(&dest, &seal_hash, &workspace.base_sha)
+    apply_seal_snapshot(&mut workspace, &mut placement, &dest, &seal_hash)
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
 
     journal::advance(journal, 0, ActionJournalState::EffectObserved);
-    workspace.seal_hash = Some(seal_hash.clone());
-    workspace.lifecycle_state = LIFECYCLE_SEALED.to_string();
-    placement.observed_tree_hash = seal_hash;
     let outcome = persist_seal_docs(action, workspace, placement, &snapshot, ctx.documents)
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     journal::advance(journal, 0, ActionJournalState::ResultDocsWritten);
@@ -738,8 +924,7 @@ fn persist_seal_docs(
             documents.write_binding(release_binding(binding))?;
         }
     }
-    documents.write_isolated_workspace(workspace.clone())?;
-    documents.write_placement(placement.clone())?;
+    persist_sealed_workspace_documents(&workspace, &placement, documents)?;
     documents.write_receipt(receipt.clone())?;
     Ok(SealWorkspaceOutcome {
         workspace,
@@ -982,13 +1167,15 @@ fn integrate_workspace_action(
         ));
     }
 
-    let receipt_id = integrator_receipt_id(&workspace.workspace_id, &action.produced_by_request_id);
-    if let Some(existing) = ctx
+    let receipts = ctx
         .documents
         .load_receipts(&workspace.workspace_id)
-        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?
-        .into_iter()
+        .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
+    let receipt_id = integrator_receipt_id(&workspace.workspace_id, &action.produced_by_request_id);
+    if let Some(existing) = receipts
+        .iter()
         .find(|receipt| receipt.receipt_id == receipt_id)
+        .cloned()
     {
         validate_receipt_binding(
             &workspace,
@@ -1059,6 +1246,28 @@ fn integrate_workspace_action(
             receipt: existing,
             pending_head_sha: pending,
         });
+    }
+
+    // New integration needs the writer's existing immutable seal witness.
+    // Writer and integrator are different requests; the producer IDs are checked
+    // for canonical receipt identity, not equated to this integrator action.
+    let writer_matches = receipts.iter().any(|receipt| {
+        !receipt.produced_by_request_id.trim().is_empty()
+            && !receipt.produced_by_request_doc_id.trim().is_empty()
+            && receipt.receipt_id
+                == writer_receipt_id(&workspace.workspace_id, &receipt.produced_by_request_id)
+            && validate_receipt_binding(
+                &workspace,
+                receipt,
+                RECEIPT_KIND_WRITER,
+                &receipt.produced_by_request_id,
+                &receipt.produced_by_request_doc_id,
+            )
+            .is_ok()
+    });
+    if !writer_matches {
+        return Err(HostExecuteError::denied(
+            "integration requires a matching writer receipt for the sealed workspace/base/capability/tree"));
     }
 
     let marker = load_integrate_marker(&trunk, &action.workspace_id);

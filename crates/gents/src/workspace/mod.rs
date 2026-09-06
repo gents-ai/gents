@@ -28,12 +28,12 @@ pub(crate) use action_plan::{
     action_plan_canonical_json, canonical_json_string, parse_action_plan_json, ACTION_PLAN_ABI,
 };
 pub use action_plan::{
-    emit_cleanup_workspace_plan, emit_create_workspace_plan, emit_integrate_workspace_plan,
-    emit_seal_workspace_plan, ActionPlan, CleanupWorkspaceAction, CreateWorkspaceAction,
-    CreationPolicy, HostAction, IntegrateMode, IntegrateWorkspaceAction, SealWorkspaceAction,
-    WorkspaceAdapterKind, CAP_CLEANUP_WORKSPACE, CAP_CLONE_ARTIFACTS, CAP_CREATE_WORKSPACE,
-    CAP_INTEGRATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE, CAP_SEAL_WORKSPACE,
-    DEFAULT_MAKE_WORKTREE_ARTIFACTS,
+    emit_cleanup_workspace_plan, emit_create_workspace_plan, emit_freeze_workspace_base_plan,
+    emit_integrate_workspace_plan, emit_seal_workspace_plan, ActionPlan, CleanupWorkspaceAction,
+    CreateWorkspaceAction, CreationPolicy, FreezeWorkspaceBaseAction, HostAction, IntegrateMode,
+    IntegrateWorkspaceAction, SealWorkspaceAction, WorkspaceAdapterKind, CAP_CLEANUP_WORKSPACE,
+    CAP_CLONE_ARTIFACTS, CAP_CREATE_WORKSPACE, CAP_INTEGRATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
+    CAP_SEAL_WORKSPACE, DEFAULT_MAKE_WORKTREE_ARTIFACTS,
 };
 pub use documents::{
     isolated_workspace_upsert_mutation, repository_placement_upsert_mutation,
@@ -44,10 +44,11 @@ pub use documents::{
 };
 pub use executor::{
     execute_cleanup_workspace_plan, execute_create_workspace_plan,
-    execute_integrate_workspace_plan, execute_seal_workspace_plan, finalize_integrate_trunk,
-    workspace_host_path, CleanupWorkspaceOutcome, CreateWorkspaceOutcome, HostExecuteError,
-    HostExecutorContext, IntegrateWorkspaceOutcome, LogicalWorkspaceIdentity,
-    RepositoryPlacementRef, SealWorkspaceOutcome,
+    execute_freeze_workspace_base_plan, execute_integrate_workspace_plan,
+    execute_seal_workspace_plan, finalize_integrate_trunk, workspace_host_path,
+    CleanupWorkspaceOutcome, CreateWorkspaceOutcome, HostExecuteError, HostExecutorContext,
+    IntegrateWorkspaceOutcome, LogicalWorkspaceIdentity, RepositoryPlacementRef,
+    SealWorkspaceOutcome,
 };
 pub use instructions::{
     instruction_body_for_request, instruction_context_section, live_instruction_context_section,
@@ -78,3 +79,9 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use overlay::overlay_tests::{artifact_test_fixture, ArtifactTestFixture};
+
+// Query/decoder and stamping remain owned by Workspace for native graph publication.
+pub(crate) use overlay::{
+    decode_isolated_workspace_record_response, isolated_workspace_record_query,
+};
+pub(crate) use runtime::apply_workspace_lineage_stamp;

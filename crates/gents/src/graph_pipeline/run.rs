@@ -23,11 +23,19 @@ use super::{
     ResultCardinality,
 };
 
+#[path = "workspace_lineage.rs"]
+mod workspace_lineage;
+pub(super) use workspace_lineage::fence_root_workspace_in_txn;
+pub(crate) use workspace_lineage::{derive_graph_workspace, finalize_graph_workspace};
+
 const GRAPH_RUN_VIEW_VERSION: u32 = 1;
 
 #[path = "logical_invocation.rs"]
 mod logical_invocation;
 const MAX_CANCEL_REASON_BYTES: usize = 1_024;
+#[cfg(test)]
+#[path = "workspace_lineage_contract_tests.rs"]
+mod workspace_lineage_contract_tests;
 
 #[cfg(test)]
 #[path = "attribution_contract_tests.rs"]
@@ -165,7 +173,7 @@ fn required_string<'a>(row: &'a Value, field: &str) -> Result<&'a str> {
 }
 
 #[async_trait::async_trait]
-trait GraphRunQuery: Sync {
+pub(crate) trait GraphRunQuery: Sync {
     async fn execute_graph_query(&self, query: &str) -> Result<Value>;
 }
 
@@ -194,7 +202,10 @@ impl GraphRunQuery for ConfigApplyTxn<'_> {
     }
 }
 
-async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Result<Value> {
+async fn query_run_rows(
+    executor: &(impl GraphRunQuery + ?Sized),
+    run_id: &str,
+) -> Result<Vec<Value>> {
     let response = executor
         .execute_graph_query(&format!(
             r#"{{
@@ -208,12 +219,17 @@ async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Re
         ))
         .await?;
     let found = rows(&response, "GraphRun");
+    Ok(found.to_vec())
+}
+
+async fn query_run(executor: &(impl GraphRunQuery + ?Sized), run_id: &str) -> Result<Value> {
+    let found = query_run_rows(executor, run_id).await?;
     if found.len() > 1 {
         anyhow::bail!("multiple GraphRun rows share run_id {run_id:?}");
     }
     found
-        .first()
-        .cloned()
+        .into_iter()
+        .next()
         .with_context(|| format!("GraphRun {run_id:?} does not exist"))
 }
 
@@ -273,27 +289,6 @@ fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
         anyhow::bail!("pinned graph plan has no materialized trigger routes");
     }
     Ok(nodes_by_trigger)
-}
-
-pub(super) async fn validate_graph_root_owner_in_txn(
-    txn: &ConfigApplyTxn<'_>,
-    request: &gents_protocol::request_admission::AgentRequestCreate,
-    run_id: &str,
-    digest: &str,
-) -> Result<()> {
-    let run = query_run(txn, run_id).await?;
-    let owner = required_string(&run, "owner_did")?;
-    anyhow::ensure!(
-        request.agent_did == owner,
-        "graph request principal is not its pinned owner"
-    );
-    let plan = load_plan(txn, digest, owner).await?;
-    let routes = planned_trigger_nodes(&plan)?;
-    anyhow::ensure!(
-        routes.contains_key(request.caused_by_trigger_id.as_deref().unwrap_or_default()),
-        "graph request trigger is not a pinned route"
-    );
-    Ok(())
 }
 
 async fn load_groups(

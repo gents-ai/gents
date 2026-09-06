@@ -25,6 +25,8 @@ pub struct ActionPlan {
 pub enum HostAction {
     #[serde(rename = "create_workspace")]
     CreateWorkspace(CreateWorkspaceAction),
+    #[serde(rename = "freeze_workspace_base")]
+    FreezeWorkspaceBase(FreezeWorkspaceBaseAction),
     #[serde(rename = "seal_workspace")]
     SealWorkspace(SealWorkspaceAction),
     #[serde(rename = "integrate_workspace")]
@@ -102,6 +104,14 @@ pub struct SealWorkspaceAction {
     pub produced_by_request_doc_id: String,
 }
 
+/// Operator-only freeze of an unchanged base. No producer request is implied.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct FreezeWorkspaceBaseAction {
+    pub workspace_id: String,
+    pub base_sha: String,
+}
+
 /// How the host applies a sealed workspace onto trunk. v1 `git_worktree_diff`
 /// only implements `apply_diff` — workers have no commit to cherry-pick/merge.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,6 +157,13 @@ pub fn emit_create_workspace_plan(action: CreateWorkspaceAction) -> ActionPlan {
     }
 }
 
+pub fn emit_freeze_workspace_base_plan(action: FreezeWorkspaceBaseAction) -> ActionPlan {
+    ActionPlan {
+        abi: ACTION_PLAN_ABI,
+        actions: vec![HostAction::FreezeWorkspaceBase(action)],
+    }
+}
+
 pub fn emit_seal_workspace_plan(action: SealWorkspaceAction) -> ActionPlan {
     ActionPlan {
         abi: ACTION_PLAN_ABI,
@@ -172,6 +189,7 @@ impl HostAction {
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Self::CreateWorkspace(_) => "create_workspace",
+            Self::FreezeWorkspaceBase(_) => "freeze_workspace_base",
             Self::SealWorkspace(_) => "seal_workspace",
             Self::IntegrateWorkspace(_) => "integrate_workspace",
             Self::CleanupWorkspace(_) => "cleanup_workspace",
@@ -181,6 +199,7 @@ impl HostAction {
     pub(crate) fn workspace_id(&self) -> &str {
         match self {
             Self::CreateWorkspace(action) => &action.workspace_id,
+            Self::FreezeWorkspaceBase(action) => &action.workspace_id,
             Self::SealWorkspace(action) => &action.workspace_id,
             Self::IntegrateWorkspace(action) => &action.workspace_id,
             Self::CleanupWorkspace(action) => &action.workspace_id,
@@ -306,6 +325,7 @@ impl HostAction {
     pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
         match self {
             Self::CreateWorkspace(action) => action.validate_against(capabilities),
+            Self::FreezeWorkspaceBase(action) => action.validate_against(capabilities),
             Self::SealWorkspace(action) => action.validate_against(capabilities),
             Self::IntegrateWorkspace(action) => action.validate_against(capabilities),
             Self::CleanupWorkspace(action) => action.validate_against(capabilities),
@@ -367,6 +387,14 @@ impl CreateWorkspaceAction {
             branch: self.branch.clone(),
             path_capability: self.path_capability.clone(),
         }
+    }
+}
+
+impl FreezeWorkspaceBaseAction {
+    pub(crate) fn validate_against(&self, capabilities: &BTreeSet<String>) -> Result<()> {
+        require_non_empty("workspace_id", &self.workspace_id)?;
+        require_non_empty("base_sha", &self.base_sha)?;
+        require_capability(capabilities, CAP_SEAL_WORKSPACE)
     }
 }
 
