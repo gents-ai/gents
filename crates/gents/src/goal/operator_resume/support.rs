@@ -14,6 +14,11 @@ pub(super) struct ResumeCase {
     pub commit: bool,
     pub expected: Value,
     pub outcome: String,
+    #[serde(default)]
+    // This fixture is also compiled by claimed_publication; only the operator
+    // resume consumer checks this emitted receipt observation.
+    #[allow(dead_code)]
+    pub goal_status: Option<String>,
 }
 
 pub(super) const SESSION: &str = "contract-session";

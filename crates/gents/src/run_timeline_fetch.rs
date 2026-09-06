@@ -623,7 +623,7 @@ mod tests {
                         priority: 7
                         queue_depth_at_enqueue: 3
                         controller_generation: 11
-                        backend_config_fingerprint: "sha256:abc"
+                        backend_config_fingerprint: "InferenceBackend synthetic-inline-secret"
                         prompt_tokens: 10
                         completion_tokens: 5
                         cached_input_tokens: 2
@@ -676,10 +676,10 @@ mod tests {
         assert_eq!(inference.priority, Some(7));
         assert_eq!(inference.queue_depth_at_enqueue, Some(3));
         assert_eq!(inference.controller_generation, Some(11));
-        assert_eq!(
-            inference.backend_config_fingerprint.as_deref(),
-            Some("sha256:abc")
-        );
+        assert_eq!(inference.backend_config_fingerprint, None);
+        assert!(!serde_json::to_string(&timeline)
+            .unwrap()
+            .contains("synthetic-inline-secret"));
 
         node.shutdown().await;
     }

@@ -1,12 +1,39 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 use anyhow::Result;
-use sha2::{Digest, Sha256};
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use crate::backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS};
 
 /// Domain and version of the canonical resource identity encoding.
 const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
+const PUBLIC_FINGERPRINT_PREFIX: &str = "hmac-sha256:process-v1:";
+
+// Equality is needed only within a live registry. Never persist this key: a
+// public salt or unkeyed digest would let readers test candidate credentials.
+// Restarting changes attribution fingerprints; runtime_instance_id already
+// scopes the associated controller ownership to that runtime.
+static FINGERPRINT_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn keyed_fingerprint(encoded: &[u8], key: &[u8; 32]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts a 32-byte key");
+    mac.update(encoded);
+    format!(
+        "{PUBLIC_FINGERPRINT_PREFIX}{:x}",
+        mac.finalize().into_bytes()
+    )
+}
+
+/// Only the current non-secret attribution format may leave the timeline.
+/// Legacy Debug values contain inline credentials; older SHA-256 values permit
+/// candidate-key confirmation. Repair of persisted history is tracked in #1394.
+pub(crate) fn exportable_backend_fingerprint(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let digest = value.strip_prefix(PUBLIC_FINGERPRINT_PREFIX)?;
+    (digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())).then(|| value.to_owned())
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendAdmissionConfig {
@@ -45,7 +72,8 @@ impl BackendAdmissionConfig {
         // Reuse the effective provider mapping and hash its resource fields
         // in a versioned, unambiguous encoding. Display/catalog metadata does
         // not replace controllers; availability remains separately owned.
-        // Only the digest, never credential values, enters persisted call rows.
+        // Only a process-keyed digest enters persisted call rows. Preserve key
+        // rotation in equality without exposing an offline credential oracle.
         let fields = backend.backend_fields();
         let fingerprint_inputs = (
             BACKEND_CONFIG_FINGERPRINT_TAG,
@@ -59,8 +87,10 @@ impl BackendAdmissionConfig {
             backend.max_queue_depth,
         );
         let encoded = serde_json::to_vec(&fingerprint_inputs)?;
-        let digest = Sha256::digest(&encoded);
-        let config_fingerprint = format!("sha256:{digest:x}");
+        let config_fingerprint = keyed_fingerprint(
+            &encoded,
+            FINGERPRINT_KEY.get_or_init(rand::random::<[u8; 32]>),
+        );
 
         Ok(Self {
             backend_id: backend.backend_id.clone(),
@@ -144,6 +174,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn attribution_is_process_keyed_and_legacy_values_are_not_exported() {
+        let bytes = b"synthetic-credential-and-config";
+        let first = keyed_fingerprint(bytes, &[1; 32]);
+        assert_eq!(first, keyed_fingerprint(bytes, &[1; 32]));
+        assert_ne!(first, keyed_fingerprint(bytes, &[2; 32]));
+        assert_ne!(
+            first,
+            keyed_fingerprint(b"rotated-synthetic-credential", &[1; 32])
+        );
+        assert_eq!(exportable_backend_fingerprint(Some(&first)), Some(first));
+        for legacy in [
+            "InferenceBackend { api_key: Some(\"synthetic-secret\") }",
+            "sha256:abc",
+            "hmac-sha256:process-v1:synthetic-secret",
+            "",
+        ] {
+            assert_eq!(exportable_backend_fingerprint(Some(legacy)), None);
+        }
+    }
+
+    #[test]
     fn resource_identity_normalizes_wire_defaults_and_protects_credentials() {
         let mut backend = InferenceBackend::from_value(&serde_json::json!({
             "backend_id": "resource-identity",
@@ -169,6 +220,13 @@ mod tests {
         let rotated = BackendAdmissionConfig::from_backend(&backend).unwrap();
         assert_ne!(implicit.config_fingerprint, rotated.config_fingerprint);
         assert!(!rotated.config_fingerprint.contains("fixture-only-secret"));
+
+        // Lean Registry.Config.key includes queue capacity. Its separately
+        // modeled capacity is the semaphore, not the entire resource identity.
+        backend.max_queue_depth = 3;
+        let resized_queue = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        assert_ne!(rotated.config_fingerprint, resized_queue.config_fingerprint);
+        assert_eq!(rotated.max_concurrent, resized_queue.max_concurrent);
     }
 
     fn config(

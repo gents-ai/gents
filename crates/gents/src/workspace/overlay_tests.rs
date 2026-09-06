@@ -985,11 +985,21 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
         let mode = CommandExecutionMode::parse(case["mode"].as_str().unwrap()).unwrap();
         let fx = artifact_test_fixture(&[]).await;
         if name == "unsupported_platform" {
-            // Exercise the actual selector's host observation input; this is not
-            // an assertion that the current macOS host lacks Seatbelt.
+            // Inject only the host observation into the actual admission path;
+            // do not substitute a launch-only selector for admission evidence.
             assert_eq!(case["expected_admitted"], false);
             assert!(case["expected_bound_mode"].is_null());
-            assert!(crate::toolset::select_sandbox_for_policy(mode, false).is_err());
+            let error = super::resolve_request_workspace_overlay_on_host(
+                &fx.node,
+                fx.owner.request(),
+                fx.owner.execution_generation().unwrap(),
+                true,
+                Some(fx._dir.path()),
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("enforceable artifact sandbox"));
             continue;
         }
         execute(&fx.node, r#"mutation { create_HostDeployment(input: { deployment_id: "artifact-deployment", display_name: "local", created_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-01T00:00:00Z" }) { _docID } }"#).await;

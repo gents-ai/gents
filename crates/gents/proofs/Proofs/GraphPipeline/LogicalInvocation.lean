@@ -6,6 +6,25 @@ import Proofs.GraphPipeline.FailureAttribution
    identity or Goal policy is introduced. Finite safety, not scheduler liveness. -/
 namespace GraphPipeline.LogicalInvocation
 abbrev Doc := Nat
+/-- Existing graph ownership: receipt verification and a pinned route must
+resolve to the GraphRun/revision owner DID. DefraDB ACP and existing request
+admission own task/behavior permissions; this is not another ACL projector. -/
+structure RootAuthorization where
+  receiptValid : Bool
+  routePinned : Bool
+  principalMatches : Bool
+  deriving DecidableEq, Repr
+
+def RootAuthorization.admitted (a : RootAuthorization) : Bool :=
+  a.receiptValid && a.routePinned && a.principalMatches
+
+theorem foreign_signed_root_denied (route : Bool) :
+    RootAuthorization.admitted ⟨true, route, false⟩ = false := by
+  cases route <;> rfl
+
+theorem unpinned_owner_signed_root_denied :
+    RootAuthorization.admitted ⟨true, false, true⟩ = false := rfl
+
 structure Attempt where
   doc : Doc
   pinnedRoot : Bool
@@ -75,7 +94,7 @@ def project (rows : List Attempt) (edges : List Edge) (root : Doc)
       else .failed tip.doc
   | _ => .invalid
 
-/-- Historical ancestry survives Goal replacement. Only matching current head
+/-- Historical ancestry survives Goal replacement. Only matching invocation-local causal head
 binding grants the canonical Goal's continuation obligation. -/
 def associatedGoal (goal : Option GoalEvidence) (headBindingMatches : Bool) : Option GoalEvidence :=
   if headBindingMatches then goal else none
@@ -114,6 +133,12 @@ private def complete : GoalEvidence := { active with status := .complete }
 
 theorem active_goal_defers_failed_root :
     project [root] [] 10 (some active) false = .outstanding := by decide
+
+/-- Actual rooted projection excludes an unrelated interactive physical row;
+its presence does not discharge the existing active Goal obligation. -/
+theorem unrelated_interactive_row_preserves_active_goal :
+    project [root, ⟨30, false, some .completed⟩] [] 10 (some active) false =
+      project [root] [] 10 (some active) false := by decide
 
 theorem claimed_gap_stays_outstanding :
     project [root] [] 10 (some {active with phase := .claimed}) false = .outstanding := by decide

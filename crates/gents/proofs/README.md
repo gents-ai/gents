@@ -1120,6 +1120,13 @@ later Goal progress. Seven configuration cases prevent the ordinary setter
 from reactivating a Goal without its continuation. Usage and budget remain
 unchanged; status and sequence fence stale controller writes.
 
+Resume receipts also report the Goal status observed in their transaction.
+Recovering an old child while the Goal is paused returns that child with
+`created: false` and `goal_status: paused`; it does not silently claim reactivation.
+Separate native overlapping-write tests bypass the process-local mutation gate.
+InputRequired and WorkspaceBindingPending remain unfinished requests: a resume
+cannot duplicate work that already waits for input or workspace placement.
+
 `GoalAutomation/RequestHead.lean` preserves canonical request ordering among
 causal heads while excluding an authenticated continuation's physical parent.
 Fifteen generated cases drive the production selector with signed request
@@ -1148,6 +1155,13 @@ does not duplicate GoalSource retry/activity/budget decisions. An unsuccessful
 tip cannot succeed merely because results exist. Physical descendants still
 count individually. Authentication booleans in the model must be discharged by
 real signed-row consumers, including physical parent, owner and pinned route.
+
+DefraDB ACP remains the access-control owner. Root attribution reuses the
+verified GraphRun/revision owner DID and existing signed receipt; it does not
+recompute Task/behavior permissions from mutable configuration. Foreign roots
+cannot contribute counts or failure witnesses. Unrelated interactive session
+rows do not erase an invocation's Goal obligation; authenticated replacement
+Goal chains retain their distinct association semantics.
 
 Publication and terminal/failure transactions write the existing GraphRun key.
 This refinement assumes same-native-store write conflict validation; scans do
@@ -1205,6 +1219,12 @@ Operation cases cover legacy fresh denial, identity recovery, empty exact sets, 
 symlink/gitlink denial, immutable-base/snapshot mismatch, denied receipt repair,
 authorized integration, absent-checkout receipt recovery and capability tampering.
 
+Five additional generated alias cases drive actual Git trees. Only changed paths
+need valid grant syntax; unrelated historical spellings do not become grants.
+Changed component spellings are checked against both full trees, including valid
+ancestor prefixes of opaque filenames. Case/Unicode aliases involving a changed
+path still fail closed.
+
 Migration always stamps predecessor-schema rows with explicit compatibility,
 even if untrusted input injects an exact capability field absent from that source
 schema. Current-schema values are preserved. This is a source-version migration
@@ -1236,6 +1256,9 @@ workspace binding, managed launch and pre-pool LSP denial. The ledger records th
 injected unavailable-host observation and explicitly scoped background task as
 bounded coverage, separately from durable background-bridge and OS behavior.
 Sandbox cases additionally cover available and unavailable artifact enforcement.
+The unavailable-host admission case drives the production workspace resolver
+with an injected host observation, rather than only testing a later launch
+selector. Unsupported hosts reject before binding or provider dispatch.
 The contextual requested mode is already met with behavior and operator ceilings;
 an active binding and current live, uncanceled execution are constructor
 preconditions. Persistent LSP starts are initially denied before pool lookup in

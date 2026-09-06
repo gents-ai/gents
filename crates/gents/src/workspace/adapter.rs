@@ -269,13 +269,6 @@ pub(crate) fn validate_tree_delta(
     if !capability.is_exact() {
         return Ok(());
     }
-    // Check component aliases in both trees, including unchanged entries. A new
-    // spelling must not acquire authority over an existing filesystem alias.
-    for revision in [base, tree] {
-        let args = ["ls-tree", "-r", "-z", "--name-only", revision];
-        let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
-        super::WorkspacePathCapability::exact_paths(nul_paths(&bytes)?)?;
-    }
     let args = [
         "diff",
         "--raw",
@@ -291,12 +284,14 @@ pub(crate) fn validate_tree_delta(
     if fields.len() % 2 != 0 {
         bail!("malformed Git raw delta");
     }
+    let mut changed_paths = Vec::new();
     for pair in fields.chunks_exact(2) {
         let header: Vec<_> = pair[0].split_ascii_whitespace().collect();
         if header.len() != 5 {
             bail!("malformed Git raw delta header");
         }
         let path = &pair[1];
+        changed_paths.push(path.as_str());
         super::path_capability::validate_relative_path(path)?;
         if !capability.authorizes(path) {
             bail!("workspace path capability denies changed path {path:?}");
@@ -309,6 +304,31 @@ pub(crate) fn validate_tree_delta(
                 bail!("workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}");
             }
         }
+    }
+    // Unchanged entries are observations, not new capability grants. Check
+    // only aliases involving changed prefixes, against BOTH complete trees.
+    // Opaque components cannot alias admitted UTF-8 components, but their
+    // valid ancestors still participate in the alias check.
+    for revision in [base, tree] {
+        let args = ["ls-tree", "-r", "-z", "--name-only", revision];
+        let bytes = git_output_bytes_inner(git_command(repo, &args), repo, &args)?;
+        if !bytes.is_empty() && bytes.last() != Some(&0) {
+            bail!("malformed Git tree path list");
+        }
+        let paths = bytes
+            .split(|byte| *byte == 0)
+            .filter(|path| !path.is_empty())
+            .filter_map(|path| match std::str::from_utf8(path) {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    // Keep complete UTF-8 ancestors before the first opaque
+                    // component (e.g. Src/<opaque> still observes Src).
+                    let valid = &path[..error.valid_up_to()];
+                    let separator = valid.iter().rposition(|byte| *byte == b'/')?;
+                    std::str::from_utf8(&valid[..separator]).ok()
+                }
+            });
+        super::path_capability::validate_changed_path_aliases(&changed_paths, paths)?;
     }
     Ok(())
 }

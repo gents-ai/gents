@@ -274,6 +274,8 @@ def snapshotJson : String :=
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"workspace_path_capability_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
+    ++ "\"workspace_path_alias_cases\":"
+      ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
     ++ "\"workspace_capability_migration_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.migrationCasesJson ++ ","
     ++ "\"workspace_cases\":"

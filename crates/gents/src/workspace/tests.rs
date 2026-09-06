@@ -2536,3 +2536,6 @@ fn generated_workspace_path_capability_cases_drive_real_git_executor() {
 
 #[path = "tests/capability_runtime.rs"]
 mod capability_runtime;
+
+#[path = "tests/path_alias_contract.rs"]
+mod path_alias_contract;

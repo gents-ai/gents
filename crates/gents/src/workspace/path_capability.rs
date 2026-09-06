@@ -141,9 +141,11 @@ impl WorkspacePathCapability {
                 })? {
                     let entry = entry?;
                     let filename = entry.file_name();
-                    let spelling = filename
-                        .to_str()
-                        .context("workspace directory contains a non-UTF-8 filename")?;
+                    let Some(spelling) = filename.to_str() else {
+                        // Admitted components are UTF-8. An unrelated opaque
+                        // filename cannot alias this literal component.
+                        continue;
+                    };
                     if alias_key(spelling) != wanted_alias {
                         continue;
                     }
@@ -180,6 +182,48 @@ impl WorkspacePathCapability {
         }
         Ok(())
     }
+}
+
+/// Refine the changed-prefix observations against a complete Git tree without
+/// imposing new path-admission requirements on unrelated historical entries.
+pub(crate) fn validate_changed_path_aliases<'a>(
+    changed: &[&str],
+    tree_paths: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    let mut changed_prefixes = BTreeMap::new();
+    for path in changed {
+        validate_relative_path(path)?;
+        let mut prefix = String::new();
+        for component in path.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            let key = alias_key(&prefix);
+            if let Some(previous) = changed_prefixes.insert(key, prefix.clone()) {
+                ensure!(
+                    previous == prefix,
+                    "changed workspace path aliases conflict: {previous} and {prefix}"
+                );
+            }
+        }
+    }
+    for path in tree_paths {
+        let mut prefix = String::new();
+        for component in path.split('/') {
+            if !prefix.is_empty() {
+                prefix.push('/');
+            }
+            prefix.push_str(component);
+            if let Some(changed) = changed_prefixes.get(&alias_key(&prefix)) {
+                ensure!(
+                    changed == &prefix,
+                    "changed workspace path component aliases conflict: {changed} and {prefix}"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Compatibility caseless key, following caseless::compatibility_caseless_match
@@ -254,6 +298,25 @@ mod tests {
     use super::*;
     fn exact(paths: &[&str]) -> Result<WorkspacePathCapability> {
         WorkspacePathCapability::exact_paths(paths.iter().map(|p| (*p).into()).collect())
+    }
+
+    // macOS rejects opaque byte filenames at creation (EILSEQ); its Git-object
+    // cases still exercise opaque tree entries without impossible host files.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn unrelated_non_utf8_sibling_does_not_reject_owned_path() {
+        use std::os::unix::ffi::OsStringExt;
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join(std::ffi::OsString::from_vec(vec![0xff])),
+            b"unchanged",
+        )
+        .unwrap();
+        std::fs::write(root.path().join("owned.rs"), b"owned").unwrap();
+        exact(&["owned.rs"])
+            .unwrap()
+            .validate_paths_at(root.path())
+            .unwrap();
     }
 
     #[test]

@@ -948,7 +948,14 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
             included_request_ids.insert(request.request_id.clone());
         }
     }
-    let inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
+    let mut inference_calls = sorted_inference_calls(rows.inference_calls, &included_request_ids);
+    // The timeline serializes both these rows and derived events. Sanitize once
+    // before either representation is built, not only the event projection.
+    for call in &mut inference_calls {
+        call.backend_config_fingerprint = crate::admission::exportable_backend_fingerprint(
+            call.backend_config_fingerprint.as_deref(),
+        );
+    }
     apply_retry_summaries(&mut rows.request, &mut rows.requests, &inference_calls);
 
     let mut events = Vec::new();
@@ -1852,7 +1859,7 @@ mod tests {
                 priority: Some(7),
                 queue_depth_at_enqueue: Some(3),
                 controller_generation: Some(11),
-                backend_config_fingerprint: Some("sha256:abc".to_string()),
+                backend_config_fingerprint: Some("hmac-sha256:process-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()),
                 queued_at: Some("2026-08-14T12:00:01Z".to_string()),
                 ..Default::default()
             }],
@@ -1895,7 +1902,7 @@ mod tests {
         assert_eq!(inference.controller_generation, Some(11));
         assert_eq!(
             inference.backend_config_fingerprint.as_deref(),
-            Some("sha256:abc")
+            Some("hmac-sha256:process-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
         );
 
         let approval = timeline.events.iter().find_map(|event| match event {

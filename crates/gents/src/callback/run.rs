@@ -105,7 +105,12 @@ pub fn plan_from_binding(
                 .projected_fields()
                 .map_err(|error| error.to_string())?;
             for field in ["path_capability", "owned_files"] {
-                if source.get(field).is_some() && !admitted.iter().any(|name| name == field) {
+                // Empty projection means the schema's full safe field set in
+                // fetch_source_doc; an explicit list remains restrictive.
+                if !admitted.is_empty()
+                    && source.get(field).is_some()
+                    && !admitted.iter().any(|name| name == field)
+                {
                     return Err(format!("workspace capability source `{field}` is not admitted by this callback binding"));
                 }
             }
@@ -791,6 +796,33 @@ mod path_capability_tests {
             ])
             .unwrap()
         );
+    }
+
+    #[test]
+    fn builtin_empty_source_projection_retains_explicit_manifest_requirement() {
+        for projection in [None, Some(""), Some("[]")] {
+            let mut binding: CallbackBindingDoc = serde_json::from_value(json!({
+                "binding_id": "path-contract", "source_collection": "WorkUnit", "event_kind": "created",
+                "principal_did": "did:key:writer", "owner_deployment_id": "local", "builtin_emitter": "create_workspace"
+            })).unwrap();
+            binding.source_fields = projection.map(str::to_owned);
+            assert!(binding.projected_fields().unwrap().is_empty());
+            let source = json!({"work_unit_id": "unit", "repository_id": "repo", "base_sha": "base", "branch": "branch", "owned_files": "[\"src/a.rs\"]"});
+            let plan = plan_from_binding(&binding, &source, None).unwrap();
+            let HostAction::CreateWorkspace(action) = &plan.actions[0] else {
+                panic!("expected workspace")
+            };
+            assert_eq!(
+                action.path_capability,
+                crate::workspace::WorkspacePathCapability::exact_paths(vec!["src/a.rs".into()])
+                    .unwrap()
+            );
+            let mut missing = source.clone();
+            missing.as_object_mut().unwrap().remove("owned_files");
+            assert!(plan_from_binding(&binding, &missing, None).is_err());
+            missing["path_capability"] = json!({"mode":"unrestrictedCompatibility"});
+            assert!(plan_from_binding(&binding, &missing, None).is_err());
+        }
     }
 
     #[test]

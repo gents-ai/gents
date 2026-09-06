@@ -247,6 +247,13 @@ impl ArtifactGrant {
         if checked_worktree_git_dir(&owner.source_root, &owner.workspace_id)? != owner.git_dir {
             bail!("artifact Git placement changed");
         }
+        // Hash before observing the execution lease: on a large tree this may
+        // take hundreds of milliseconds. Keep the generation/expiry observation
+        // as close to launch as possible. Fresh hashing deliberately avoids a
+        // cache whose invalidation would become another source-integrity premise.
+        if super::adapter::working_tree_hash(&owner.source_root)? != owner.seal_hash {
+            bail!("artifact source no longer matches its seal");
+        }
         let doc = escape_graphql_string(&owner.request_doc_id);
         let workspace = escape_graphql_string(&owner.workspace_id);
         let deployment = escape_graphql_string(&owner.deployment_id);
@@ -281,9 +288,6 @@ impl ArtifactGrant {
                 .ok_or_else(|| anyhow!("missing artifact query data"))?,
             Utc::now(),
         )?;
-        if super::adapter::working_tree_hash(&owner.source_root)? != owner.seal_hash {
-            bail!("artifact source no longer matches its seal");
-        }
         Ok(())
     }
 }
