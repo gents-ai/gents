@@ -26,6 +26,10 @@ use super::{
 const GRAPH_RUN_VIEW_VERSION: u32 = 1;
 const MAX_CANCEL_REASON_BYTES: usize = 1_024;
 
+#[cfg(test)]
+#[path = "attribution_contract_tests.rs"]
+mod attribution_contract_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphResultRef {
     pub name: String,
@@ -610,11 +614,32 @@ async fn load_graph_run_view_with(
         .map(serde_json::from_str)
         .transpose()?
         .unwrap_or_default();
-    let error = run
+    let error: Option<Value> = run
         .get("error")
         .and_then(Value::as_str)
         .map(serde_json::from_str)
         .transpose()?;
+    if let Some(primary) = &error {
+        anyhow::ensure!(
+            primary.get("version").and_then(Value::as_u64) == Some(1)
+                && primary.get("message").and_then(Value::as_str).is_some()
+                && matches!(
+                    primary.get("code").and_then(Value::as_str),
+                    Some(
+                        "group_quiesced"
+                            | "contract_drift"
+                            | "invocation_limit_exceeded"
+                            | "run_deadline_exceeded"
+                            | "required_request_failed"
+                            | "result_contract_unsatisfied"
+                    )
+                ),
+            "invalid persisted graph failure evidence"
+        );
+    }
+    // The first committed failure is durable even while siblings drain.
+    // Later observations cannot replace it or turn the run into a success.
+    let failure_evidence = error.clone().or(failure_evidence);
 
     Ok(GraphRunView {
         view_version: GRAPH_RUN_VIEW_VERSION,
@@ -914,6 +939,43 @@ async fn commit_terminal_with_access(
     commit_terminal_txn(txn, view, status).await
 }
 
+/// Capture inside the existing GraphRun transaction before causing sibling
+/// interruptions. A losing generation writes nothing and emits no interrupts.
+async fn capture_failure_txn(txn: ConfigApplyTxn<'_>, view: &GraphRunView) -> Result<()> {
+    let result = async {
+        let fresh = load_graph_run_view_with(&txn, &view.owner_did, &view.run_id).await?;
+        if fresh.status != "running" || fresh.update_generation != view.update_generation {
+            anyhow::bail!("graph failure capture CAS lost; reload the durable run");
+        }
+        if fresh.cancellation_requested_at.is_some() || fresh.error.is_some() {
+            return Ok(());
+        }
+        let Some(primary) = fresh.failure_evidence else {
+            return Ok(());
+        };
+        let current = query_run(&txn, &view.run_id).await?;
+        let input = json!({
+            "error": serde_json::to_string(&primary)?,
+            "update_generation": fresh.update_generation.saturating_add(1),
+        });
+        txn.execute(&format!(
+            "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
+            escape_graphql_string(required_string(&current, "_docID")?),
+            graphql_input_literal(&input)?,
+        ))
+        .await?;
+        Result::<()>::Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => txn.commit().await.context("commit graph failure cause"),
+        Err(error) => {
+            let _ = txn.discard().await;
+            Err(error)
+        }
+    }
+}
+
 async fn commit_terminal_txn(
     txn: ConfigApplyTxn<'_>,
     view: &GraphRunView,
@@ -1011,7 +1073,14 @@ async fn interrupt_active_requests(
 
 fn should_interrupt_active_work(view: &GraphRunView) -> bool {
     view.active_request_count > 0
-        && (view.cancellation_requested_at.is_some() || view.failure_evidence.is_some())
+        && (view.cancellation_requested_at.is_some() || view.error.is_some())
+}
+
+fn needs_failure_capture(view: &GraphRunView) -> bool {
+    view.active_request_count > 0
+        && view.cancellation_requested_at.is_none()
+        && view.error.is_none()
+        && view.failure_evidence.is_some()
 }
 
 /// Re-evaluate durable run state and, when a terminal predicate holds, race
@@ -1023,9 +1092,17 @@ pub async fn reconcile_graph_run(
     actor_did: &str,
     run_id: &str,
 ) -> Result<GraphRunView> {
-    let view = load_graph_run_view(node, actor_did, run_id).await?;
+    let mut view = load_graph_run_view(node, actor_did, run_id).await?;
     if view.is_terminal() {
         return Ok(view);
+    }
+    if needs_failure_capture(&view) {
+        let txn = ConfigApplyTxn::begin_local(node, identity.clone()).await?;
+        capture_failure_txn(txn, &view).await?;
+        view = load_graph_run_view(node, actor_did, run_id).await?;
+        if view.is_terminal() {
+            return Ok(view);
+        }
     }
     if should_interrupt_active_work(&view) {
         interrupt_active_requests(node, &view.requests).await?;
@@ -1051,9 +1128,16 @@ pub async fn reconcile_graph_run_with_access(
     actor_did: &str,
     run_id: &str,
 ) -> Result<GraphRunView> {
-    let view = load_graph_run_view_with_access(access, actor_did, run_id).await?;
+    let mut view = load_graph_run_view_with_access(access, actor_did, run_id).await?;
     if view.is_terminal() {
         return Ok(view);
+    }
+    if needs_failure_capture(&view) {
+        capture_failure_txn(access.begin_apply_txn().await?, &view).await?;
+        view = load_graph_run_view_with_access(access, actor_did, run_id).await?;
+        if view.is_terminal() {
+            return Ok(view);
+        }
     }
     if should_interrupt_active_work(&view) {
         for request in &view.requests {
@@ -1258,6 +1342,10 @@ mod tests {
             terminal_projection(&active).is_none(),
             "failure must wait for correlated work to quiesce"
         );
+        assert!(needs_failure_capture(&active));
+        assert!(!should_interrupt_active_work(&active));
+        active.error = Some(evidence);
+        assert!(!needs_failure_capture(&active));
         assert!(should_interrupt_active_work(&active));
     }
 

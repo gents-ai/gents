@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/graph_pipeline/attribution_contract_tests.rs",
+            module_path: "graph_pipeline::run::attribution_contract_tests",
+            function: "generated_graph_failure_attribution_traces_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
             id: "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits",
             package: "gents",
             source_path: "crates/gents/src/admission/registry_contract_tests.rs",
