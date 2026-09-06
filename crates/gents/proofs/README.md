@@ -191,6 +191,8 @@ and either tested at the Rust boundary or treated as an external assumption.
 
 ## Structure
 
+Provider-input assembly for Claude: the body's `system[]` order and tools omission, and SSE tool-block accumulation, are modelled and witnessed; byte framing, usage and headers are Rust-tested.
+
 | File | Contents |
 |------|----------|
 | `Proofs/Basic.lean` | Shared opaque ids, `Time`, and terminal-state helpers |
@@ -222,6 +224,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
 | `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Fifteen projection cases and five publication traces are consumed by real signed-row and transaction tests. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
+| `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
