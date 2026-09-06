@@ -1,37 +1,58 @@
 use super::*;
 
-use crate::lifecycle::materialize::{
-    build_request, sign_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
-};
+use crate::lifecycle::materialize::{build_request, ParentLink, RequestIdentity, RequestSpec};
 use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
-pub(crate) async fn enqueue_goal_continuation(
-    node: &EmbeddedNode,
-    parent: &AgentRequest,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoalContinuationIdentity {
+    pub(crate) request_id: String,
+    pub(crate) retry_key: String,
+    pub(crate) queue_key: String,
+}
+
+/// Preserve the existing goal/parent retry identity and stable sequence IDs.
+pub(crate) fn goal_continuation_identity(
     goal_id: &str,
-    content: &str,
+    parent_request_id: &str,
     continuation_sequence: i64,
-    wrapup: bool,
-) -> Result<EnqueuedAgentRequest> {
+) -> Result<GoalContinuationIdentity> {
     use sha2::{Digest, Sha256};
 
-    let behavior_id = parent_behavior_id(node, parent).await?;
-    let digest = Sha256::digest(format!("{goal_id}\0{}", parent.request_id).as_bytes());
+    anyhow::ensure!(
+        continuation_sequence > 0,
+        "goal continuation sequence must be positive"
+    );
+    let digest = Sha256::digest(format!("{goal_id}\0{parent_request_id}").as_bytes());
     let digest_hex = digest[..16]
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    // Signed request timestamps are canonicalized to whole seconds, so several
-    // fast continuations can legitimately share `created_at`. Keep the durable
-    // controller sequence in the request ID so the request query's documented
-    // `(created_at, request_id)` ordering remains causal within that second.
-    let request_id = format!("goal-cont-{continuation_sequence:020}-{}", digest_hex);
-    let retry_key = format!("goal-continuation:{digest_hex}");
-    let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    // The sequence distinguishes continuation IDs. The shared Goal head selector
+    // follows physical ancestry when whole-second timestamps coincide.
+    Ok(GoalContinuationIdentity {
+        request_id: format!("goal-cont-{continuation_sequence:020}-{digest_hex}"),
+        retry_key: format!("goal-continuation:{digest_hex}"),
+        queue_key: format!("goal:{digest_hex}"),
+    })
+}
+
+/// Prepare the existing continuation DTO without reads, signing, or publication.
+/// Transaction owners resolve behavior and time before staging this request.
+pub(crate) fn prepare_goal_continuation(
+    parent: &AgentRequest,
+    behavior_id: String,
+    goal_id: &str,
+    content: &str,
+    continuation_sequence: i64,
+    wrapup: bool,
+    created_at: &str,
+) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
+    let continuation =
+        goal_continuation_identity(goal_id, &parent.request_id, continuation_sequence)?;
     let queue_hints = QueueHints {
         source: QueueSource::Goal,
         policy: QueuePolicy::Coalesce,
-        key: Some(format!("goal:{digest_hex}")),
+        key: Some(continuation.queue_key),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
     };
@@ -52,13 +73,13 @@ pub(crate) async fn enqueue_goal_continuation(
         );
     let identity = RequestIdentity {
         requester_did: None,
-        request_id: request_id.clone(),
+        request_id: continuation.request_id,
         agent_did: parent.agent_did.clone(),
         behavior_id,
         session_id: parent.session_id.clone(),
         content: content.to_string(),
         execution_origin: ExecutionOrigin::Scheduled,
-        created_at: now,
+        created_at: created_at.to_owned(),
     };
     let spec = RequestSpec {
         trigger_lineage: TriggerLineage {
@@ -66,6 +87,7 @@ pub(crate) async fn enqueue_goal_continuation(
             trigger_kind: Some("goal".to_string()),
             correlation: parent.caused_by_correlation.clone(),
             trigger_context: parent.caused_by_trigger_context.clone(),
+            source_doc_id: parent.caused_by_source_doc_id.clone(),
             ..Default::default()
         },
         workspace: Some(WorkspaceLineage {
@@ -81,55 +103,53 @@ pub(crate) async fn enqueue_goal_continuation(
             ..Default::default()
         }),
         metadata: Some(metadata),
-        retry_key: Some(retry_key.clone()),
+        retry_key: Some(continuation.retry_key),
         ..RequestSpec::new(identity, admission)
     };
-    // Peek at the unsigned DTO before paying for a signature: the dedupe
-    // lookup below only needs a fingerprint of the pre-signature fields.
-    let mut create = build_request(spec)?;
-    let expected = crate::goal::GoalBackedRequestFingerprint::from_create(&create)?;
-    if let Some(doc_id) =
-        crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await?
-    {
-        return Ok(EnqueuedAgentRequest {
-            doc_id,
-            request_id,
-            session_id: parent.session_id.clone(),
-        });
-    }
-    sign_request(&mut create, RequestSigner::RegisteredTarget).await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    let response =
-        session::execute_mutation_with_retry(node, &mutation, "enqueue_goal_continuation").await;
-    let doc_id = match response {
-        Ok(response) => match extract_single_doc_id(&response, "create_AgentRequest") {
-            Some(doc_id) => Some(doc_id),
-            None => {
-                crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await?
-            }
-        },
-        Err(create_error) => {
-            // `retry_key` is unique. A concurrent reconciler or a lost create
-            // acknowledgement therefore resolves to the same durable child.
-            // Only surface the original error when no such child exists.
-            match crate::goal::load_agent_request_by_retry_key(node, &retry_key, &expected).await? {
-                Some(doc_id) => Some(doc_id),
-                None => return Err(create_error),
-            }
-        }
-    }
-    .context("goal continuation create returned no _docID")?;
-
-    Ok(EnqueuedAgentRequest {
-        doc_id,
-        request_id,
-        session_id: parent.session_id.clone(),
-    })
+    build_request(spec)
 }
 
-// SAFETY (#664): `agent_did` scopes the candidate query AND the supersede
-// mutation to the owning principal. Under P2P replication a foreign-DID
-// `AgentRequest` sharing this `session_id` can be replicated onto this node;
-// without the owner guard the session-only filter would supersede that foreign
-// replica locally. Defense in depth: the foreign row never becomes a candidate,
-// and the write is DID-scoped even if it somehow did.
+/// Resolve the historical conversation fallback through the caller's transaction.
+/// This helper prepares request binding only; Goal owns publication.
+pub(crate) async fn goal_continuation_behavior(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    parent: &AgentRequest,
+) -> Result<String> {
+    if let Some(behavior) = parent
+        .behavior_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(behavior.to_owned());
+    }
+    let agent_did = escape_graphql_string(&parent.agent_did);
+    let session_id = escape_graphql_string(&parent.session_id);
+    let response = txn
+        .execute(&format!(
+            r#"{{ AgentConversation(filter: {{
+        agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}
+    }}, limit: 2) {{ behavior_id }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentConversation")
+        .and_then(serde_json::Value::as_array)
+        .context("parent conversation query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "parent conversation scope resolved to multiple rows"
+    );
+    rows.first()
+        .and_then(|row| row.get("behavior_id"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
+        .with_context(|| {
+            format!(
+                "cannot enqueue same-session request: parent request {} has no behavior_id",
+                parent.request_id
+            )
+        })
+}

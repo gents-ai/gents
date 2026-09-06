@@ -1039,6 +1039,60 @@ fn require_pending_deadline_absent(deadline: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Verify the original immutable request payload and its declared admission
+/// branch. Historical receipt authentication does not re-admit execution or
+/// require today's enrollment, TTL, lifecycle, or backend readiness. The
+/// operation's owner separately checks its expected principal/source scope.
+pub(crate) fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
+    let admission = row_admission(row)?;
+    admission.validate_canonical_fields()?;
+    admission
+        .validate_branch_fields()
+        .map_err(anyhow::Error::msg)?;
+    let fields = row_signing_fields(row)?;
+    validate_signing_fields(&fields)?;
+    anyhow::ensure!(
+        crate::identity::verify_did_signature(
+            &admission.signer_did,
+            &admission.signing_payload(&fields),
+            &admission.signature,
+        )?,
+        "immutable request receipt signature is invalid"
+    );
+    Ok(())
+}
+
+/// Authenticate an already-authored runtime local-control receipt. This is
+/// not fresh execution admission: terminal/expired children remain receipts.
+/// The caller separately binds the exact goal, parent docID and sequence and
+/// authorizes its own operation; no execution capability is returned here.
+pub(crate) fn verify_runtime_local_control_receipt(
+    row: &AgentRequestRow,
+    expected_target_did: &str,
+    expected_source_request_id: &str,
+) -> Result<()> {
+    let admission = row_admission(row)?;
+    verify_request_receipt_signature(row)?;
+    anyhow::ensure!(
+        admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
+            && admission.signer_did == expected_target_did
+            && admission.runtime_issuer_did.as_deref() == Some(expected_target_did)
+            && row.agent_did.as_deref() == Some(expected_target_did)
+            && row.requester_did.as_deref() == Some(expected_target_did)
+            && admission.runtime_source_request_id.as_deref() == Some(expected_source_request_id)
+            && row.caused_by_parent_request_id.as_deref() == Some(expected_source_request_id)
+            && row
+                .caused_by_parent_request_doc_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+            && row.caused_by_parent_tool_call_id.is_none()
+            && row.caused_by_parent_tool_call_doc_id.is_none(),
+        "runtime local-control receipt does not match expected target/source binding"
+    );
+    Ok(())
+}
+
 fn row_admission(row: &AgentRequestRow) -> Result<AgentRequestAdmissionRecord> {
     AgentRequestAdmissionRecord::from_wire_fields(
         row.admission_kind.as_deref(),
@@ -1131,15 +1185,11 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
     })
 }
 
-async fn load_signed_request(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> AdmissionResult<AgentRequestRow> {
-    let doc_id = escape_graphql_string(doc_id);
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id agent_did requester_did behavior_id session_id
+/// Complete immutable request signature projection shared by fresh admission
+/// and transaction-scoped historical receipt readers. Lifecycle is included
+/// for callers decoding the row, but is not part of the signed payload.
+pub(crate) const SIGNED_REQUEST_FIELDS: &str = r#"
+_docID lifecycle_state request_id agent_did requester_did behavior_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
                 content temperature top_p top_k seed max_tokens max_total_tokens metadata
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
@@ -1153,6 +1203,17 @@ async fn load_signed_request(
                 enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence
                 enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id
                 runtime_source_kind runtime_bridge_author_did
+"#;
+
+async fn load_signed_request(
+    node: &EmbeddedNode,
+    doc_id: &str,
+) -> AdmissionResult<AgentRequestRow> {
+    let doc_id = escape_graphql_string(doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
+                {SIGNED_REQUEST_FIELDS}
             }} }}"#,
         ))
         .await;
@@ -1200,6 +1261,72 @@ mod tests {
         assert!(error
             .to_string()
             .contains("caller-authored execution deadline"));
+    }
+
+    #[tokio::test]
+    async fn runtime_receipt_authenticates_terminal_expired_child_and_rejects_forgery() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("receipt.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let mut create = AgentRequestCreate::base(
+            "receipt-child",
+            identity.did(),
+            identity.did(),
+            "behavior-1",
+            "receipt-session",
+            "original continuation",
+            "scheduled",
+            "2020-01-01T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_local_control(identity.did(), "receipt-parent"),
+        );
+        create.caused_by_parent_request_id = Some("receipt-parent".into());
+        create.caused_by_parent_request_doc_id = Some("receipt-parent-doc".into());
+        create.valid_until = Some("2020-01-01T00:00:01Z".into());
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let query = format!("{{ AgentRequest {{ {} }} }}", super::SIGNED_REQUEST_FIELDS);
+        let response = node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let mut row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&response, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        row.lifecycle_state =
+            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Completed);
+        row.deadline = Some("2020-01-01T00:00:01Z".into());
+        super::verify_runtime_local_control_receipt(&row, identity.did(), "receipt-parent")
+            .expect("terminal and expired original receipt remains authenticated");
+        assert!(super::verify_runtime_local_control_receipt(
+            &row,
+            identity.did(),
+            "different-parent"
+        )
+        .is_err());
+        let foreign = KeyIdentity::load_or_create(temp.path().join("foreign.key"), None).unwrap();
+        assert!(
+            super::verify_runtime_local_control_receipt(&row, foreign.did(), "receipt-parent")
+                .is_err()
+        );
+        row.content = Some("forged continuation".into());
+        assert!(super::verify_runtime_local_control_receipt(
+            &row,
+            identity.did(),
+            "receipt-parent"
+        )
+        .is_err());
+        row.content = Some("original continuation".into());
+        row.admission_signature = Some("not-a-valid-signature".into());
+        assert!(super::verify_runtime_local_control_receipt(
+            &row,
+            identity.did(),
+            "receipt-parent"
+        )
+        .is_err());
+        node.shutdown().await;
     }
 
     #[tokio::test]
@@ -1253,6 +1380,8 @@ mod tests {
         let row = super::load_signed_request(node.as_ref(), &doc_id)
             .await
             .unwrap();
+        super::verify_request_receipt_signature(&row)
+            .expect("original local-self immutable receipt signature");
         let mut queued = super::row_into_agent_request(row, &doc_id).unwrap();
         queued.content = "stale queued content".to_string();
 

@@ -56,6 +56,41 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector",
+            package: "gents",
+            source_path: "crates/gents/src/goal/request_head_tests.rs",
+            module_path: "goal::request_head::tests",
+            function: "generated_goal_request_head_cases_drive_signed_row_selector",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::claimed_publication::contract_tests::generated_goal_claimed_publication_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/claimed_publication/contract_tests.rs",
+            module_path: "goal::claimed_publication::contract_tests",
+            function: "generated_goal_claimed_publication_cases_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::operator_resume::contract_tests::generated_goal_operator_resume_cases_drive_real_transactions",
+            package: "gents",
+            source_path: "crates/gents/src/goal/operator_resume/contract_tests.rs",
+            module_path: "goal::operator_resume::contract_tests",
+            function: "generated_goal_operator_resume_cases_drive_real_transactions",
+        },
+        ConformanceConsumer::RustTest {
+            id: "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter",
+            package: "gents",
+            source_path: "crates/gents/src/goal/operator_resume/contract_tests.rs",
+            module_path: "goal::operator_resume::contract_tests",
+            function: "generated_goal_config_reactivation_cases_drive_transactional_setter",
+        },
+        ConformanceConsumer::RustTest {
+            id: "cli_goal::goal_resume_request_reuses_signed_predecessor_and_returns_same_child",
+            package: "gents-cli",
+            source_path: "crates/gents-cli/tests/suites/cli_goal.rs",
+            module_path: "cli_goal",
+            function: "goal_resume_request_reuses_signed_predecessor_and_returns_same_child",
+        },
+        ConformanceConsumer::RustTest {
             id: "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions",
             package: "gents",
             source_path: "crates/gents/src/graph_pipeline/attribution_contract_tests.rs",
@@ -168,11 +203,11 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "durable_goal_continues_with_real_inference_until_model_completes",
         },
         ConformanceConsumer::RustTest {
-            id: "cli_goal::goal_set_get_pause_resume_and_clear_are_durable",
+            id: "cli_goal::goal_configuration_rejects_implicit_resume_and_clear_is_durable",
             package: "gents-cli",
             source_path: "crates/gents-cli/tests/suites/cli_goal.rs",
             module_path: "cli_goal",
-            function: "goal_set_get_pause_resume_and_clear_are_durable",
+            function: "goal_configuration_rejects_implicit_resume_and_clear_is_durable",
         },
         ConformanceConsumer::RustTest {
             id: "cli_codex_shim::thread_goal_round_trip_survives_shim_restart",

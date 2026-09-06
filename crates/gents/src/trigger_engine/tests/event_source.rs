@@ -1826,3 +1826,6 @@ async fn event_source_reconcile_excludes_invalid_source_collection_identifiers()
          desired set; identifier-invalid names must be excluded",
     );
 }
+
+#[path = "event_source/resumed_goal.rs"]
+mod resumed_goal;

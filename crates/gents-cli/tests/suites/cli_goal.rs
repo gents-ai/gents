@@ -8,7 +8,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
+async fn goal_configuration_rejects_implicit_resume_and_clear_is_durable() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -78,7 +78,7 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
         Some(objective)
     );
 
-    let resumed = run_cli_json(
+    let rejected = run_cli_failure_stderr(
         &home_dir,
         &[
             "goal",
@@ -91,10 +91,7 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
             "active",
         ],
     )?;
-    assert_eq!(
-        resumed.get("status").and_then(Value::as_str),
-        Some("active")
-    );
+    assert!(rejected.contains("resume-request"), "{rejected}");
 
     let shown = run_cli_json(
         &home_dir,
@@ -110,6 +107,11 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
     assert_eq!(
         shown.get("objective").and_then(Value::as_str),
         Some(objective)
+    );
+    assert_eq!(shown.get("status").and_then(Value::as_str), Some("paused"));
+    assert_eq!(
+        shown.get("continuation_sequence"),
+        paused.get("continuation_sequence")
     );
 
     let unbudgeted = run_cli_json(
@@ -174,5 +176,149 @@ async fn goal_set_get_pause_resume_and_clear_are_durable() -> Result<()> {
             .map(Vec::len),
         Some(0)
     );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+    let model_name = format!("mock-resume-cli-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockChatEndpoint::start(&model_name, "Durable predecessor complete.")?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let agent_name = format!("cli-resume-{}", Uuid::new_v4().simple());
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            &agent_name,
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    let session_id = format!("resume-session-{}", Uuid::new_v4().simple());
+
+    // The real CLI signs and submits the predecessor; the running daemon owns
+    // its completion. No unsigned request or forged terminal row is seeded.
+    let submitted = run_cli_json(
+        &home_dir,
+        &[
+            "request",
+            "submit",
+            "--graphql",
+            &graphql,
+            "--agent-did",
+            &agent_did,
+            "--session-id",
+            &session_id,
+            "--content",
+            "Finish this predecessor before operator recovery.",
+            "--timeout-secs",
+            "30",
+            "--poll-secs",
+            "1",
+        ],
+    )?;
+    assert_eq!(
+        submitted
+            .pointer("/response/status")
+            .and_then(Value::as_str),
+        Some("complete")
+    );
+    let predecessor = submitted
+        .get("request_id")
+        .and_then(Value::as_str)
+        .context("signed submission request ID")?;
+    let paused = run_cli_json(
+        &home_dir,
+        &[
+            "goal",
+            "set",
+            "--graphql",
+            &graphql,
+            "--session",
+            &session_id,
+            "--objective",
+            "Resume from this completed signed predecessor.",
+            "--status",
+            "paused",
+            "--token-budget",
+            "1",
+        ],
+    )?;
+    assert_eq!(paused.get("status").and_then(Value::as_str), Some("paused"));
+    let resume_args = [
+        "goal",
+        "resume-request",
+        "--graphql",
+        &graphql,
+        "--session",
+        &session_id,
+        "--from",
+        predecessor,
+    ];
+    let first = run_cli_json(&home_dir, &resume_args)?;
+    assert_eq!(first.get("created").and_then(Value::as_bool), Some(true));
+    let child_id = first
+        .get("request_id")
+        .and_then(Value::as_str)
+        .context("resume receipt request ID")?;
+    let second = run_cli_json(&home_dir, &resume_args)?;
+    assert_eq!(second.get("created").and_then(Value::as_bool), Some(false));
+    assert_eq!(second.get("request_id"), first.get("request_id"));
+    assert_eq!(second.get("doc_id"), first.get("doc_id"));
+    assert_eq!(second.get("goal_id"), first.get("goal_id"));
+
+    let response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+        AgentRequest(filter: {{ caused_by_parent_request_id: {{ _eq: "{}" }} }}) {{
+            _docID request_id session_id agent_did caused_by_trigger_kind
+            caused_by_parent_request_id caused_by_parent_request_doc_id
+        }}
+    }}"#,
+            escape_graphql_string(predecessor)
+        ),
+    )
+    .await?;
+    let children = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("physical resume children")?;
+    assert_eq!(
+        children.len(),
+        1,
+        "one child of this predecessor: {response}"
+    );
+    let child = &children[0];
+    assert_eq!(
+        child.get("request_id").and_then(Value::as_str),
+        Some(child_id)
+    );
+    assert_eq!(
+        child.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    assert_eq!(
+        child.get("agent_did").and_then(Value::as_str),
+        Some(agent_did.as_str())
+    );
+    assert_eq!(
+        child.get("caused_by_trigger_kind").and_then(Value::as_str),
+        Some("goal")
+    );
+    assert!(child
+        .get("caused_by_parent_request_doc_id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty()));
     Ok(())
 }
