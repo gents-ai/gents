@@ -56,3 +56,30 @@ tracked separately in #1402. The fixture now retains server output, identifies
 the boot phase, and includes its last authoritative readiness observation.
 These are diagnostic improvements, not a claim that the underlying timeout is
 fixed; a passing repetition must not close that issue without a causal fix.
+
+## Independent review and demo removal
+
+Reviewed with `claude --model fable` using read-only source access and a full
+diff against main. The follow-up review found no remaining P1/P2 defects after:
+
+- Deleting the interactive `gents demo` command, shell, setup/backend picker,
+  desktop launcher, demo-only tests, and its last-caller-only chat wrapper.
+  Live scenario helpers moved into `commands/pack`, without copies left behind.
+- Correcting a missed subprocess invocation of removed `graph install` and
+  testing its generated `pack install` arguments through the real CLI parser.
+- Making `manifest.json` the sole dependency declaration and rejecting the
+  old scenario dependency field and unsupported nested dependencies.
+- Replacing private-lab defaults with loopback endpoints and deleting the
+  unused `pack seed --home` option.
+- Sharing build/runtime asset-path admission and the existing graph digest
+  routine. Distribution bytes and graph execution inputs remain different
+  asset sets, not competing lifecycle or installation owners.
+- Removing distribution metadata flattening from the original strict graph
+  manifest type and deleting the handwritten graph-field whitelist. The
+  existing typed graph validator now validates graph-specific fields.
+
+The initial review's claim that Serde ignored the flattened type's unknown-field
+check did not reproduce in a focused test. The final shape avoids that question
+entirely: the graph type is strict and flatten-free, with a regression test at
+the distribution-to-graph boundary. Review is not a substitute for the full
+runtime, CLI and workspace gates.

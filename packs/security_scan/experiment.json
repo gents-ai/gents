@@ -2,7 +2,7 @@
   "name": "security_scan",
   "description": "Whole-codebase security scan: free regex pre-scan -> batch planner -> investigator fan-out -> adversarial revalidation -> report",
   "init": {
-    "inference_url": "${GENTS_SCAN_ENDPOINT:-http://100.87.27.25:8000/v1}",
+    "inference_url": "${GENTS_SCAN_ENDPOINT:-http://127.0.0.1:8080/v1}",
     "model_name": "${GENTS_SCAN_MODEL:-GLM-5.2}",
     "tool_package": "write",
     "tool_root": "${GENTS_SCAN_ROOT:-.}",

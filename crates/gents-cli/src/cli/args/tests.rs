@@ -651,7 +651,11 @@ fn pack_catalog_and_install_parse() {
         matches!(parse_pack(&["show", "code_review"]), PackCommand::Show(args) if args.package == "code_review")
     );
     assert!(Cli::try_parse_from(["gents", "graph", "install", "code_review"]).is_err());
+    assert!(Cli::try_parse_from(["gents", "demo"]).is_err());
     assert!(Cli::try_parse_from(["gents", "demo", "run", "pipeline"]).is_err());
+    assert!(
+        Cli::try_parse_from(["gents", "pack", "seed", "pipeline", "--home", "/tmp/node"]).is_err()
+    );
 
     match parse_pack(&[
         "install",
@@ -731,22 +735,20 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
 fn parse_pack(argv: &[&str]) -> PackCommand {
     let mut args = vec!["gents", "pack"];
     args.extend_from_slice(argv);
-    let cli = Cli::try_parse_from(args).expect("demo should parse");
+    let cli = Cli::try_parse_from(args).expect("pack should parse");
     match cli.command {
         Command::Pack { command } => command,
-        _ => panic!("expected `demo`"),
+        _ => panic!("expected `pack`"),
     }
 }
 
 #[test]
-fn demo_seed_parses_pack_port_home_and_page() {
+fn pack_seed_parses_pack_port_and_page() {
     let args = parse_pack(&[
         "seed",
         "packs/pipeline",
         "--http-port",
         "19191",
-        "--home",
-        "/tmp/review-home",
         "--page-port",
         "19190",
         "--prompt",
@@ -758,20 +760,16 @@ fn demo_seed_parses_pack_port_home_and_page() {
         PackCommand::Seed(seed) => {
             assert_eq!(seed.pack, "packs/pipeline");
             assert_eq!(seed.http_port, 19191);
-            assert_eq!(
-                seed.home.as_deref(),
-                Some(std::path::Path::new("/tmp/review-home"))
-            );
             assert_eq!(seed.page_port, Some(19190));
             assert_eq!(seed.prompt.as_deref(), Some("review the diff"));
             assert_eq!(seed.job_id.as_deref(), Some("review-1"));
         }
-        _ => panic!("expected demo seed"),
+        _ => panic!("expected pack seed"),
     }
 }
 
 #[test]
-fn demo_init_parses_pack_and_home() {
+fn pack_init_parses_pack_and_home() {
     let args = parse_pack(&["init", "packs/pipeline", "--home", "/tmp/review-home"]);
     match args {
         PackCommand::Init(init) => {
@@ -779,7 +777,7 @@ fn demo_init_parses_pack_and_home() {
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);
         }
-        _ => panic!("expected demo init"),
+        _ => panic!("expected pack init"),
     }
 }
 

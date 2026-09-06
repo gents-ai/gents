@@ -44,7 +44,7 @@ graph DSL still supplies the event topology; it does not own goal creation.
 1. Init once (example uses DeepSeek V4 Flash on workstation-1):
 
    ```bash
-   gents init --home <home> --inference-url http://100.73.235.38:8000/v1 \
+   gents init --home <home> --inference-url http://127.0.0.1:8080/v1 \
      --backend-preset vllm --openai-wire-api chat-completions --model-name d4f \
      --tool-package minimal
    ```

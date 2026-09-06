@@ -90,7 +90,7 @@ hidden from model input, as in `code-review`.
 
 ## Scan engine port
 
-New module `crates/gents-cli/src/commands/demo/secscan/`, a Rust port of
+New module `crates/gents-cli/src/commands/pack/secscan/`, a Rust port of
 deepsec's scan stage (`packages/scanner`):
 
 - **Matcher registry** with deepsec's structure: slug, description, noise

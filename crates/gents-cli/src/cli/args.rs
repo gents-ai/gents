@@ -191,8 +191,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
-    #[command(about = "Interactive, self-contained fleet demo (single node -> paired fleet)")]
-    Demo(DemoArgs),
 }
 
 #[derive(clap::Subcommand)]
@@ -252,7 +250,8 @@ pub(crate) struct PackInstallArgs {
     pub(crate) bindings: Option<PathBuf>,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
-    #[arg(long, value_enum, default_value_t = OutputFormat::Text)]
+    #[arg(long, value_enum, default_value_t = OutputFormat::Json,
+        help = "Report format; document/asset installs require json, graph installs also support text")]
     pub(crate) output: OutputFormat,
     #[arg(
         long,
@@ -339,49 +338,6 @@ pub(crate) struct GraphToggleArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct DemoArgs {
-    #[arg(
-        long,
-        help = "Demo state directory. Defaults to ~/.gents-demo (persists)"
-    )]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Wipe the demo home and start fresh"
-    )]
-    pub(crate) reset: bool,
-    #[arg(
-        long,
-        help = "Inference backend base URL, e.g. http://127.0.0.1:8080/v1"
-    )]
-    pub(crate) inference_url: Option<String>,
-    #[arg(
-        long,
-        help = "Backend preset (openai, openrouter, ollama, llama-cpp, vllm)"
-    )]
-    pub(crate) backend_preset: Option<String>,
-    #[arg(
-        long,
-        help = "Model name to bind. Defaults to the detected/preset model"
-    )]
-    pub(crate) model: Option<String>,
-    #[arg(
-        long,
-        help = "API key (stored in the backend document). Prefer OPENAI_API_KEY"
-    )]
-    pub(crate) api_key: Option<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Launch the native desktop app as soon as the demo runtime is ready"
-    )]
-    pub(crate) desktop: bool,
-    #[arg(long, default_value_t = 19501, help = "HTTP port for the first node")]
-    pub(crate) http_port: u16,
-}
-
-#[derive(clap::Args)]
 pub(crate) struct PackRunArgs {
     #[arg(help = "Pack directory, or a name resolved under packs/")]
     pub(crate) pack: String,
@@ -419,8 +375,6 @@ pub(crate) struct PackInitArgs {
 pub(crate) struct PackSeedArgs {
     #[arg(help = "Pack directory, or a name resolved under packs/")]
     pub(crate) pack: String,
-    #[arg(long, help = "Pack node home used to resolve the initialized identity")]
-    pub(crate) home: Option<PathBuf>,
     #[arg(long, help = "Seed prompt. Defaults to the pack's default_prompt")]
     pub(crate) prompt: Option<String>,
     #[arg(long = "job-id", help = "Run id stamped on the seed document")]

@@ -8,13 +8,16 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "src/pack_asset_path.rs"]
+mod pack_asset_path;
+
 const FIXTURE_PACKAGE: &str = "gents-callback-fixture-create-workspace";
 const FIXTURE_ARTIFACT: &str = "gents_callback_fixture_create_workspace.wasm";
 const FIXTURE_ENV: &str = "GENTS_CALLBACK_FIXTURE_CREATE_WORKSPACE_WASM_PATH";
 
 fn main() {
     let workspace_root = workspace_root();
-    generate_bundled_graph_packages(&workspace_root);
+    generate_bundled_packs(&workspace_root);
     let fixture_dir = workspace_root
         .join("crates")
         .join("gents-callbacks")
@@ -42,7 +45,8 @@ fn main() {
     );
 }
 
-fn generate_bundled_graph_packages(workspace_root: &Path) {
+fn generate_bundled_packs(workspace_root: &Path) {
+    println!("cargo:rerun-if-changed=src/pack_asset_path.rs");
     let root = workspace_root.join("packs");
     let catalog_path = root.join("catalog.json");
     println!("cargo:rerun-if-changed={}", catalog_path.display());
@@ -94,15 +98,7 @@ fn generate_bundled_graph_packages(workspace_root: &Path) {
         for asset in manifest["assets"].as_array().expect("declared pack assets") {
             let relative = asset.as_str().expect("asset path string");
             assert!(
-                Path::new(relative)
-                    .components()
-                    .all(|c| matches!(c, std::path::Component::Normal(_))),
-                "asset must be a relative normal path"
-            );
-            assert!(
-                !relative
-                    .split('/')
-                    .any(|p| p.starts_with('.') || p == "runs"),
+                pack_asset_path::is_distributable_asset(relative),
                 "private/run assets must not be bundled"
             );
             let absolute = package
@@ -128,15 +124,14 @@ fn generate_bundled_graph_packages(workspace_root: &Path) {
     let generated = format!(
         "pub(crate) const BUNDLED_PACK_NAMES: &[&str] = &{names:?};\n\
          pub(crate) const BUNDLED_GRAPH_PACKAGE_NAMES: &[&str] = &{graph_names:?};\n\
-         pub(crate) fn bundled_graph_package_asset(package: &str, path: &str) -> Option<&'static [u8]> {{\n\
+         pub(crate) fn bundled_pack_asset(package: &str, path: &str) -> Option<&'static [u8]> {{\n\
              match (package, path) {{\n{}\n\
                  _ => None,\n\
              }}\n\
          }}\n",
         arms.join("\n"),
     );
-    let output =
-        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bundled_graph_packages.rs");
+    let output = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bundled_packs.rs");
     std::fs::write(output, generated).expect("write bundled graph package inventory");
 }
 

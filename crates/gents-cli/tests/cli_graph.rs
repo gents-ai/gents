@@ -35,6 +35,14 @@ fn all_pack_kinds_are_available_without_a_checkout() -> Result<()> {
     }
     let root = temp.path().join("assets");
     let root_arg = root.to_str().context("path")?;
+    let denial = run_cli_failure_stderr(
+        temp.path(),
+        &[
+            "pack", "install", "mailbox", "--home", root_arg, "--output", "text",
+        ],
+    )?;
+    anyhow::ensure!(denial.contains("unsupported --output text"), "{denial}");
+    anyhow::ensure!(!root.exists(), "invalid output format wrote pack assets");
     for flag in ["--force-rebind-concrete-did", "--agent-did"] {
         let mut invalid = vec!["pack", "install", "mailbox", "--home", root_arg, flag];
         if flag == "--agent-did" {

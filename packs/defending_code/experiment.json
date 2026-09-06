@@ -2,7 +2,7 @@
   "name": "defending_code",
   "description": "Threat-model-driven static defense campaign: discover -> verify -> cluster -> contract review -> patch -> validate -> maintainer review -> re-attack -> report",
   "init": {
-    "inference_url": "${GENTS_DEFENDING_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "inference_url": "${GENTS_DEFENDING_ENDPOINT:-http://127.0.0.1:8080/v1}",
     "model_name": "${GENTS_DEFENDING_MODEL:-GLM-5.2}",
     "tool_package": "write",
     "tool_root": "${GENTS_DEFENDING_ROOT:-.}",

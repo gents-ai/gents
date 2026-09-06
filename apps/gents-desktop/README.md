@@ -118,15 +118,10 @@ and logs all resolve under that directory:
 GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop npm run tauri -- dev
 ```
 
-From a release binary, `gents demo` drives the same fleet: `pair` brings up
-two runtimes (**Orchestrator** and **Worker**) with a tightened tool surface (no
-`defra_query`), `delegate` lets the Orchestrator delegate to the Worker on node B
-via a cross-node subagent (the child runs on the Worker and its result replicates
-back), and `desktop` seeds that isolated desktop home and opens the Fleet
-Dashboard. Live chat needs a real backend reachable on both nodes — keep
-`llama-server` running on `http://127.0.0.1:8080/v1`, or use a hosted preset
-(`gents demo --desktop --backend-preset openai --model gpt-5.4-mini`, with
-`OPENAI_API_KEY` in the environment).
+Start runtimes with `gents init` and `gents server`, then enroll the desktop
+client through the authenticated flow in [the operations guide](../../docs/operations.md).
+Reusable configurations and worked scenarios live in the
+[pack catalog](../../packs/README.md). Live chat needs a real configured backend.
 
 ## Tests
 

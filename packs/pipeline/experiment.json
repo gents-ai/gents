@@ -2,7 +2,7 @@
   "name": "pipeline",
   "description": "Job -> finding (written by a DatastoreToolSurface create tool) -> stage-2",
   "init": {
-    "inference_url": "${GENTS_EXP_ENDPOINT:-http://100.73.235.38:8000/v1}",
+    "inference_url": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
     "model_name": "${GENTS_EXP_MODEL:-d4f}",
     "backend_preset": "vllm",
     "openai_wire_api": "chat-completions"

@@ -122,7 +122,7 @@ From this repository, the Make target exposes the same controls:
 ```bash
 make defend \
   DEFENDING_ROOT=/path/to/repository \
-  DEFENDING_ENDPOINT=http://100.73.235.38:8000/v1 \
+  DEFENDING_ENDPOINT=http://127.0.0.1:8080/v1 \
   DEFENDING_MODEL=GLM-5.2 \
   DEFENDING_MAX_CONCURRENT=8
 ```

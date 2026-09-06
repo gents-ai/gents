@@ -408,7 +408,7 @@ git commit -m "test(gents): fixtures write lifecycle_state only"
 **Files (under `crates/gents-cli/src`):**
 - `request_helpers.rs:165` — delete `is_terminal_lifecycle_state`; callers use `RequestLifecycleState::is_terminal_str`.
 - `commands/subagent.rs:382`, `commands/codex_shim/continuation_stream.rs:441`, `http/prometheus.rs:1196` (request part only), `http/subagent_tree.rs:23-31,334-340` — delete the local predicates and lists; use the owner.
-- `commands/codex_shim/{history_projection,progress,subagent_projection,turn/active,thread_projection/storage,thread_projection/json,thread_projection/usage}.rs`, `commands/{request,session,trace,graph,background}.rs`, `commands/chat/streaming.rs`, `commands/demo/pack.rs`, `http/{fleet_slots,fleet,r5_dispatch,sessions,liveness}.rs`, `cli_adapter_interop_roundtrip` test suite — remove `status` from AgentRequest selections, row structs, and comparisons; add a `WorkspaceBindingPending` arm to any exhaustive `match` on `RequestLifecycleState` (treat like `Pending`).
+- `commands/codex_shim/{history_projection,progress,subagent_projection,turn/active,thread_projection/storage,thread_projection/json,thread_projection/usage}.rs`, `commands/{request,session,trace,graph,background}.rs`, `commands/chat/streaming.rs`, `commands/pack/scenario.rs`, `http/{fleet_slots,fleet,r5_dispatch,sessions,liveness}.rs`, `cli_adapter_interop_roundtrip` test suite — remove `status` from AgentRequest selections, row structs, and comparisons; add a `WorkspaceBindingPending` arm to any exhaustive `match` on `RequestLifecycleState` (treat like `Pending`).
 - `crates/gents-cli/tests/suites/*` fixtures that write `status:` on AgentRequest.
 
 - [ ] **Step 1: Sweep, compile, grep gate**

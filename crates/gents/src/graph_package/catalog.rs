@@ -10,7 +10,7 @@ use crate::graph_pipeline::{
     COMPILER_VERSION,
 };
 
-use crate::pack::{bundled_graph_package_asset, BUNDLED_GRAPH_PACKAGE_NAMES};
+use crate::pack::{bundled_pack_asset, BUNDLED_GRAPH_PACKAGE_NAMES};
 
 #[derive(Deserialize)]
 struct BundledToolSurface {
@@ -36,8 +36,6 @@ pub struct PackageExternalDependency {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GraphPackageManifest {
-    #[serde(flatten)]
-    pub metadata: crate::pack::PackMetadata,
     pub manifest_version: u32,
     pub name: String,
     pub version: String,
@@ -100,7 +98,7 @@ impl BundledGraphPackage {
                 self.manifest.name
             );
         }
-        bundled_graph_package_asset(&self.manifest.name, path)
+        bundled_pack_asset(&self.manifest.name, path)
             .with_context(|| format!("bundled asset {path:?} is missing"))
     }
 
@@ -125,10 +123,10 @@ impl BundledGraphPackage {
     }
 }
 
-fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
+pub(crate) fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
     let mut hasher = Sha256::new();
     for path in paths {
-        let bytes = bundled_graph_package_asset(package_name, path)
+        let bytes = bundled_pack_asset(package_name, path)
             .with_context(|| format!("bundled package references missing asset {path:?}"))?;
         hasher.update((path.len() as u64).to_be_bytes());
         hasher.update(path.as_bytes());
@@ -139,7 +137,7 @@ fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
 }
 
 fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_graph_package_asset(package_name, path)
+    let bytes = bundled_pack_asset(package_name, path)
         .with_context(|| format!("bundled package references missing asset {path:?}"))?;
     let surface: BundledToolSurface = serde_json::from_slice(bytes)
         .with_context(|| format!("bundled tool surface asset {path:?} is malformed"))?;
@@ -152,7 +150,7 @@ fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
 }
 
 fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_graph_package_asset(package_name, path)
+    let bytes = bundled_pack_asset(package_name, path)
         .with_context(|| format!("bundled package references missing asset {path:?}"))?;
     let selection: serde_json::Value = serde_json::from_slice(bytes)
         .with_context(|| format!("bundled tool selection asset {path:?} is malformed"))?;
@@ -184,6 +182,26 @@ fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Strip distribution-only metadata at the boundary; the existing strict
+/// graph manifest remains the sole owner of graph field validation.
+pub(crate) fn graph_manifest_from_pack(
+    pack: &crate::pack::PackManifest,
+) -> Result<GraphPackageManifest> {
+    let mut fields: serde_json::Map<String, serde_json::Value> =
+        pack.graph.clone().into_iter().collect();
+    fields.insert(
+        "manifest_version".to_owned(),
+        serde_json::json!(pack.manifest_version),
+    );
+    fields.insert("name".to_owned(), serde_json::json!(pack.name));
+    fields.insert("version".to_owned(), serde_json::json!(pack.version));
+    fields.insert(
+        "description".to_owned(),
+        serde_json::json!(pack.description),
+    );
+    serde_json::from_value(serde_json::Value::Object(fields)).context("invalid graph manifest")
+}
+
 fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
     let distribution = crate::pack::resolve_pack(package_name)?;
     anyhow::ensure!(
@@ -193,9 +211,7 @@ fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
         ),
         "pack is not a graph"
     );
-    let manifest_bytes = bundled_graph_package_asset(package_name, "manifest.json")
-        .with_context(|| format!("bundled package {package_name:?} has no manifest"))?;
-    let manifest: GraphPackageManifest = serde_json::from_slice(manifest_bytes)?;
+    let manifest = graph_manifest_from_pack(&distribution.manifest)?;
     if manifest.name != package_name {
         anyhow::bail!(
             "bundled package directory {package_name:?} disagrees with manifest name {:?}",
@@ -213,11 +229,11 @@ fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
         );
     }
     let intent: GraphIntent = serde_json::from_slice(
-        bundled_graph_package_asset(package_name, &manifest.intent)
+        bundled_pack_asset(package_name, &manifest.intent)
             .with_context(|| format!("bundled package intent {:?} is missing", manifest.intent))?,
     )?;
     let capabilities: Vec<PackageCapabilityTemplate> = serde_json::from_slice(
-        bundled_graph_package_asset(package_name, &manifest.capabilities).with_context(|| {
+        bundled_pack_asset(package_name, &manifest.capabilities).with_context(|| {
             format!(
                 "bundled package capabilities {:?} are missing",
                 manifest.capabilities

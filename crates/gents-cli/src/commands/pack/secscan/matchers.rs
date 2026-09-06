@@ -131,7 +131,7 @@ pub(crate) fn registry() -> &'static [Matcher] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::demo::secscan::match_content;
+    use crate::commands::pack::secscan::match_content;
 
     #[test]
     fn every_matcher_example_fires() {

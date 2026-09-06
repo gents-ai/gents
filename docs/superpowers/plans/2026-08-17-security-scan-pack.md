@@ -62,9 +62,9 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 1: `secscan` engine — walk, match, collect
 
 **Files:**
-- Create: `crates/gents-cli/src/commands/demo/secscan/mod.rs`
-- Create: `crates/gents-cli/src/commands/demo/secscan/matchers.rs`
-- Modify: `crates/gents-cli/src/commands/demo/mod.rs` (add `pub(crate) mod secscan;` next to the existing module declarations)
+- Create: `crates/gents-cli/src/commands/pack/secscan/mod.rs`
+- Create: `crates/gents-cli/src/commands/pack/secscan/matchers.rs`
+- Modify: `crates/gents-cli/src/commands/pack/mod.rs` (add `pub(crate) mod secscan;` next to the existing module declarations)
 - Modify: `crates/gents-cli/Cargo.toml` (add `ignore = "0.4"` beneath the existing `regex = "1"` dependency)
 
 **Interfaces:**
@@ -204,7 +204,7 @@ Expected: 3 tests PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/gents-cli/src/commands/demo/secscan crates/gents-cli/src/commands/demo/mod.rs crates/gents-cli/Cargo.toml Cargo.lock
+git add crates/gents-cli/src/commands/pack/secscan crates/gents-cli/src/commands/pack/mod.rs crates/gents-cli/Cargo.toml Cargo.lock
 git commit -m "feat(demo): secscan matcher engine walk and match core
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -215,7 +215,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 2: The curated matcher set + example discovery test
 
 **Files:**
-- Modify: `crates/gents-cli/src/commands/demo/secscan/matchers.rs`
+- Modify: `crates/gents-cli/src/commands/pack/secscan/matchers.rs`
 
 **Interfaces:**
 - Consumes: `Matcher`, `NoiseTier`, `registry()` from Task 1.
@@ -375,7 +375,7 @@ Add nothing to the code; from repo root run a one-off:
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/gents-cli/src/commands/demo/secscan/matchers.rs
+git add crates/gents-cli/src/commands/pack/secscan/matchers.rs
 git commit -m "feat(demo): curated secscan matcher set with example discovery test
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -386,8 +386,8 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 3: Payload formatter — complete inventory, truncated evidence
 
 **Files:**
-- Create: `crates/gents-cli/src/commands/demo/secscan/payload.rs`
-- Modify: `crates/gents-cli/src/commands/demo/secscan/mod.rs` (add `mod payload; pub(crate) use payload::{format_payload, ScanOutput};`)
+- Create: `crates/gents-cli/src/commands/pack/secscan/payload.rs`
+- Modify: `crates/gents-cli/src/commands/pack/secscan/mod.rs` (add `mod payload; pub(crate) use payload::{format_payload, ScanOutput};`)
 
 **Interfaces:**
 - Consumes: `FileCandidates`, `NoiseTier` from Task 1.
@@ -487,7 +487,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/gents-cli/src/commands/demo/secscan
+git add crates/gents-cli/src/commands/pack/secscan
 git commit -m "feat(demo): secscan payload formatter with inventory-preserving cap
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -498,7 +498,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 4: Runner `scan` manifest section
 
 **Files:**
-- Modify: `crates/gents-cli/src/commands/demo/pack.rs`
+- Modify: `crates/gents-cli/src/commands/pack/scenario.rs`
 
 **Interfaces:**
 - Consumes: `secscan::{scan_root, format_payload, ScanOutput}`.
@@ -595,7 +595,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/gents-cli/src/commands/demo/pack.rs
+git add crates/gents-cli/src/commands/pack/scenario.rs
 git commit -m "feat(demo): optional pre-seed scan section in pack manifests
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -1475,7 +1475,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ### Task 8: Live e2e entry and final gates
 
 **Files:**
-- Create: `crates/gents-cli/tests/cli_demo_secscan_live.rs`
+- Create: `crates/gents-cli/tests/cli_pack_secscan_live.rs`
 
 **Interfaces:**
 - Consumes: the complete pack from Tasks 5–7 and the runner extension from Task 4.
@@ -1488,7 +1488,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 //! GENTS_SCAN_ENDPOINT / GENTS_SCAN_MODEL point at).
 //!
 //! ```bash
-//! GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_demo_secscan_live \
+//! GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_pack_secscan_live \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 
@@ -1534,7 +1534,7 @@ fn demo_run_security_scan_live() {
 
 - [ ] **Step 2: Compile-check the test without running it**
 
-Run: `cargo test -p gents-cli --test cli_demo_secscan_live --no-run`
+Run: `cargo test -p gents-cli --test cli_pack_secscan_live --no-run`
 Expected: compiles.
 
 - [ ] **Step 3: Run the full gates**
@@ -1545,7 +1545,7 @@ Expected: all PASS. (The live test stays ignored; everything else runs.)
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/gents-cli/tests/cli_demo_secscan_live.rs
+git add crates/gents-cli/tests/cli_pack_secscan_live.rs
 git commit -m "test(demo): live e2e entry for the security-scan pack
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
@@ -1553,5 +1553,5 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 
 - [ ] **Step 5: Live run (operator step — requires the GLM-5.2 box or a retarget)**
 
-Run: `GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_demo_secscan_live -- --ignored --test-threads=1 --nocapture`
+Run: `GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_pack_secscan_live -- --ignored --test-threads=1 --nocapture`
 Expected: run completes; inspect `packs/security_scan/runs/<job_id>/` — `meta.json` stage states, `results.json` with `ScanReport` + `Finding` rows, projections. If the run fails on a prompt-contract or fan-in expectation, fix the prompt or config (not the expectation) and re-run. Use `--keep-home` via a direct `gents pack run security_scan --keep-home` invocation when a failure needs the node re-opened for querying.

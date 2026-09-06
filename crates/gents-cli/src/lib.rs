@@ -443,7 +443,6 @@ async fn async_main() -> Result<()> {
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
-        Command::Demo(args) => commands::demo::demo(args).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();

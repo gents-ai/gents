@@ -3,7 +3,7 @@
 //! GENTS_SCAN_ENDPOINT / GENTS_SCAN_MODEL point at).
 //!
 //! ```bash
-//! GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_demo_secscan_live \
+//! GENTS_LIVE_SECSCAN=1 cargo test -p gents-cli --test cli_pack_secscan_live \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 
@@ -19,7 +19,7 @@ fn repo_root() -> PathBuf {
 
 #[test]
 #[ignore]
-fn demo_run_security_scan_live() {
+fn pack_run_security_scan_live() {
     if std::env::var("GENTS_LIVE_SECSCAN").as_deref() != Ok("1") {
         eprintln!("GENTS_LIVE_SECSCAN != 1; skipping");
         return;
@@ -31,7 +31,7 @@ fn demo_run_security_scan_live() {
         .args(["pack", "run", "security_scan"])
         .status()
         .expect("spawn gents pack run");
-    assert!(status.success(), "demo run security-scan exited {status}");
+    assert!(status.success(), "pack run security_scan exited {status}");
 
     // The runner writes runs/<job_id>/meta.json; the newest run must exist
     // and record a results artifact.

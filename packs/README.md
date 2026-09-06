@@ -24,6 +24,9 @@ Asset-only packs are materialized beneath `<home>/packs/`.
 Declared graph dependencies are installed before the document pack; this is
 not an atomic multi-package transaction. Failures remain visible and installs
 can be retried through the existing owners.
+Only document packs currently declare package dependencies, and those must be
+graph packs. Graph/asset dependency lists are rejected; recursive installation
+is not silently implied.
 
 Graph role bindings inherit the target principal's default behavior; use
 `--bindings` for explicit graph bindings. Document packs use their authored
@@ -40,9 +43,20 @@ the resolved pack's `runs/<job_id>/`. Repository-specific scenarios still need
 their documented checkout, tools and bindings; bundling does not provision a
 compiler or an external model endpoint.
 
+`manifest.json` is the sole package dependency declaration, including for
+scenario runs. `experiment.json` may configure scenario-specific graph model
+bindings, but cannot declare another dependency list.
+
+The bundled scenario asset cache is separate from the runtime home selected
+with `pack run --home`: it lives under the default Gents home's `packs/` tree.
+The distribution digest covers all declared assets, including documentation;
+the graph execution digest covers only the graph's referenced inputs. Both use
+the existing graph asset hashing routine. Filesystem cache names use the hex
+portion of the shared `sha256:` digest format.
+
 `gents graph run/watch/result/cancel/enable/disable` remain graph operations.
 The former `graph install/catalog` and `demo` pack subcommands are removed.
-`gents demo` remains the interactive fleet demonstration only.
+`gents demo` is removed; there is no alternate demo shell or compatibility command.
 
 ## Authoring standard
 
@@ -61,6 +75,8 @@ Use snake_case directories and filenames, except conventional ecosystem names
 such as `README.md` and `Cargo.toml`. No old-name aliases are provided. Changing
 filesystem handles does not require renaming Task IDs or database collections.
 Desired-state roots and export use snake_case collection directories too.
+Use loopback defaults or required environment inputs for local inference;
+do not ship enabled backends defaulting to private lab addresses.
 
 A README must explain purpose, installation, bindings/prerequisites, tool and
 workspace authority, inputs/outputs, completion/failure semantics, validation,

@@ -36,18 +36,8 @@ The plan for packaging the desktop chat, fleet, and Tauri bridge surfaces for
 downstream apps (#877) is specified in
 [docs/reusable-desktop-packages.md](docs/reusable-desktop-packages.md).
 
-For the interactive fleet demo, run `gents demo` — it ships in the binary,
-no checkout, `make`, or mock required. It boots a single curated agent (read-only
-tools + demo skills) on a backend you pick on first run, then drops into a
-`demo>` shell: `chat` with the agent, `pair` a 2nd node (a **Worker**),
-`delegate` a cross-node subagent that runs on the worker over P2P (the result
-replicates back), `desktop` to open the same fleet through the native Fleet
-Dashboard UI, and `reconfigure` to switch backends.
-New chat turns use the configured model backend, reachable on both nodes. Keep
-the local `llama-server` above running, or launch with a hosted preset and
-model, e.g. `OPENAI_API_KEY=... gents demo --backend-preset openai --model
-gpt-5.4-mini`. Add `--desktop` to launch the native app as soon as the runtime
-is ready.
+For worked document-driven scenarios, use `gents pack list` and see the
+[pack catalog and authoring guide](packs/README.md).
 
 The binary also carries an immutable catalog of useful graphs. Cataloging is
 read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex

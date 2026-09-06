@@ -59,7 +59,7 @@ as an overflow count in the same document.
 ## Matchers
 
 The pre-scan is a Rust port of deepsec's regex matcher registry
-(`crates/gents-cli/src/commands/demo/secscan/matchers.rs`), curated for a
+(`crates/gents-cli/src/commands/pack/secscan/matchers.rs`), curated for a
 Rust/polyglot repo. Each matcher has a noise tier — `precise` sorts first
 into the candidate payload, `noisy` last — and its own discovery test that
 asserts its example snippet fires.
@@ -123,7 +123,7 @@ export GENTS_SCAN_MAX_PAYLOAD_CHARS=49152
 `GENTS_SCAN_ROOT` roots the pre-scan, the file tools, and bash for the
 investigate/revalidate stages, and defaults to `.`. `GENTS_SCAN_ENDPOINT`
 and `GENTS_SCAN_MODEL` retarget the one shared inference backend (default
-`GLM-5.2` at `http://100.87.27.25:8000/v1`, `concurrency: 8`) that all
+`GLM-5.2` at `http://127.0.0.1:8080/v1`, `concurrency: 8`) that all
 four stages use, so batch fan-out never exceeds eight in-flight requests
 regardless of batch count. `GENTS_SCAN_MIN_BATCHES` /
 `GENTS_SCAN_MAX_BATCHES` bound how many `InvestigationBatch` rows the

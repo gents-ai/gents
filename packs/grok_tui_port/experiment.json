@@ -258,7 +258,6 @@
     ]
   },
   "await_timeout_secs": ${GENTS_GROK_PORT_AWAIT_TIMEOUT_SECS:-86400},
-  "bundled_graph_packages": ["code_review"],
   "bundled_graph_bindings": {
     "code_review": {
       "backend_id": "grok-port-backend-ws1",

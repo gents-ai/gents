@@ -2353,7 +2353,7 @@ fn pipeline_pack_interpolates_endpoint_and_model() {
         .find(|b| b.backend_id == "exp-deepseek")
         .expect("exp-deepseek backend");
     assert_eq!(
-        backend.endpoint, "http://100.73.235.38:8000/v1",
+        backend.endpoint, "http://127.0.0.1:8080/v1",
         "unset GENTS_EXP_ENDPOINT must fall back to the checked-in default"
     );
     assert!(

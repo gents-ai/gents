@@ -1,4 +1,8 @@
 //! One package-facing CLI; install writes stay with their existing owners.
+mod cli_process;
+mod scenario;
+mod secscan;
+mod server;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, ResolvedPack};
@@ -28,9 +32,9 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
             )
         }
         PackCommand::Install(args) => install(args).await,
-        PackCommand::Run(args) => super::demo::pack::run(args).await,
-        PackCommand::Init(args) => super::demo::pack::init_pack(args).await,
-        PackCommand::Seed(args) => super::demo::pack::seed(args).await,
+        PackCommand::Run(args) => scenario::run(args).await,
+        PackCommand::Init(args) => scenario::init_pack(args).await,
+        PackCommand::Seed(args) => scenario::seed(args).await,
     }
 }
 
@@ -87,12 +91,18 @@ fn materialize(pack: &ResolvedPack, root: &std::path::Path) -> Result<()> {
 
 pub(crate) fn materialize_named_pack(name: &str) -> Result<std::path::PathBuf> {
     let pack = resolve_pack(name)?;
-    let root = crate::home_state::resolve_home_dir(None)
-        .join("packs")
-        .join(name)
-        .join(&pack.digest);
+    let root = asset_cache_root(&crate::home_state::resolve_home_dir(None), &pack)?;
     materialize(&pack, &root)?;
     Ok(root)
+}
+
+fn asset_cache_root(home: &std::path::Path, pack: &ResolvedPack) -> Result<std::path::PathBuf> {
+    // Keep the shared sha256: digest representation out of filesystem names.
+    let hash = pack
+        .digest
+        .strip_prefix("sha256:")
+        .context("invalid pack digest")?;
+    Ok(home.join("packs").join(&pack.manifest.name).join(hash))
 }
 
 async fn install(args: PackInstallArgs) -> Result<()> {
@@ -104,6 +114,12 @@ async fn install(args: PackInstallArgs) -> Result<()> {
         ],
     )?;
     let pack = resolve_pack(&args.package)?;
+    if pack.manifest.metadata.kind != PackKind::Graph {
+        args.output.ensure_supported(
+            "pack install",
+            &[crate::cli::output_format::OutputFormat::Json],
+        )?;
+    }
     match pack.manifest.metadata.kind {
         PackKind::Graph => {
             anyhow::ensure!(
@@ -173,10 +189,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 "asset packs install locally with --home; identity and graph binding flags do not apply"
             );
             let home = args.scope.home.context("asset packs require --home")?;
-            let root = home
-                .join("packs")
-                .join(&pack.manifest.name)
-                .join(&pack.digest);
+            let root = asset_cache_root(&home, &pack)?;
             materialize(&pack, &root)?;
             crate::print_json(
                 &json!({"pack":pack.manifest.name,"digest":pack.digest,"installed_assets":root}),
