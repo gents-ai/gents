@@ -211,7 +211,9 @@ def decide
   | .active =>
       match terminal with
       | .interrupted | .superseded => .pause
-      | .failed | .dead => if infrastructureRetries < 2 then .retry else .pause
+      | .failed | .dead =>
+          if budgetReached then .wrapup
+          else if infrastructureRetries < 2 then .retry else .pause
       | .completed =>
           if !hasActivity then .pause
           else if budgetReached then .wrapup else .continue
@@ -223,6 +225,21 @@ def decide
       | .failed | .dead | .interrupted | .superseded =>
           if infrastructureRetries < 2 then .retry else .abandonWrapup
   | .paused | .blocked | .usageLimited | .complete => .none
+
+-- Exhaustion prevents another ordinary recovery attempt. Budget-limited
+-- wrap-up retries remain governed by their existing, separate bounded rule.
+theorem exhausted_active_never_retries
+    (terminal : RequestTerminal) (idle child activity wrapup : Bool)
+    (retries : Nat) (requested completed : Bool) :
+    decide .active terminal idle child true activity wrapup retries requested completed ≠ .retry := by
+  cases terminal <;> cases idle <;> cases child <;> cases activity <;> simp [decide]
+
+theorem exhausted_failure_requests_wrapup
+    (terminal : RequestTerminal) (activity wrapup : Bool)
+    (retries : Nat) (requested completed : Bool)
+    (hfailure : terminal = .failed ∨ terminal = .dead) :
+    decide .active terminal true false true activity wrapup retries requested completed = .wrapup := by
+  rcases hfailure with rfl | rfl <;> simp [decide]
 
 theorem busy_session_never_continues
     (status : Status) (terminal : RequestTerminal) (child budget activity wrapup : Bool)

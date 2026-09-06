@@ -1203,6 +1203,114 @@ async fn interrupted_terminal_pauses_instead_of_self_continuing() {
 }
 
 #[tokio::test]
+async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_retry() {
+    for terminal in ["failed", "dead"] {
+        let db = test_db(&format!("goal-budget-after-{terminal}")).await;
+        let parent = "parent-over-budget";
+        create_request_for_agent_with_signed_fields(
+            db.node.as_ref(),
+            db.node_identity.did(),
+            parent,
+            SESSION,
+            terminal,
+            "2026-07-15T00:00:00Z",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        let usage = format!(
+            r#"mutation {{ add_InferenceCall(input: {{
+                call_id: "over-budget-failed-call",
+                request_id: "{parent}",
+                agent_did: "{}",
+                call_seq: 1,
+                attempt: 1,
+                call_state: "failed",
+                failure_reason: "provider stream interrupted after reporting usage",
+                prompt_tokens: 100,
+                completion_tokens: 5
+            }}) {{ _docID }} }}"#,
+            gents::graphql::escape_graphql_string(db.node_identity.did()),
+        );
+        let response = db.node.execute(&usage).await;
+        assert!(!response.has_errors(), "seed usage: {:?}", response.errors);
+        assert_eq!(
+            session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+                .await
+                .unwrap(),
+            105,
+        );
+        set_goal(
+            db.node.as_ref(),
+            db.node_identity.did(),
+            SESSION,
+            Some("Respect the budget even when execution fails"),
+            Some(GoalStatus::Active),
+            Some(Some(10)),
+        )
+        .await
+        .unwrap();
+
+        let (mut source, _snapshot_tx) = source(&db);
+        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+            .await
+            .expect("goal source timed out")
+            .expect("wrapup intent");
+        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            goal.parsed_status(),
+            Some(GoalStatus::BudgetLimited),
+            "{terminal}"
+        );
+        assert_eq!(goal.tokens_used, Some(105), "{terminal}");
+        assert_eq!(goal.wrapup_requested, Some(true), "{terminal}");
+        assert!(!goal.wrapup_completed.unwrap_or(false), "{terminal}");
+        assert_eq!(
+            goal.infrastructure_retry_count.unwrap_or_default(),
+            0,
+            "{terminal}"
+        );
+        let children = goal_children(&db).await;
+        assert_eq!(children.len(), 1, "{terminal}");
+        assert_eq!(
+            children[0].caused_by_parent_request_id.as_deref(),
+            Some(parent)
+        );
+        let metadata: serde_json::Value =
+            serde_json::from_str(children[0].metadata.as_deref().unwrap()).unwrap();
+        assert_eq!(metadata["goal"]["wrapup"], true, "{terminal}");
+
+        // A restart while this wrapup is pending must not publish another child
+        // or charge an ordinary infrastructure retry for the failed parent.
+        drop(source);
+        let (mut restarted, _restart_tx) = self::source(&db);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
+                .await
+                .is_err(),
+            "{terminal}: duplicate continuation"
+        );
+        let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
+        assert_eq!(current.tokens_used, Some(105));
+        assert_eq!(current.continuation_sequence, goal.continuation_sequence);
+        assert_eq!(current.infrastructure_retry_count.unwrap_or_default(), 0);
+        let persisted = goal_children(&db).await;
+        assert_eq!(persisted.len(), 1);
+        assert_eq!(persisted[0].doc_id, children[0].doc_id);
+        drop(restarted);
+    }
+}
+
+#[tokio::test]
 async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     let db = test_db("goal-budget-wrapup").await;
     seed_completed_request(&db, "parent-budget").await;

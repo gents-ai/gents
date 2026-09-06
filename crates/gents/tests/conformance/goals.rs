@@ -31,7 +31,7 @@ fn rust_goal_status_vocabulary_and_machine_match_lean_contract() {
 #[test]
 fn generated_goal_decision_cases_fence_runtime_controller() {
     let cases = lean_goal_decision_cases();
-    assert_eq!(cases.len(), 18, "the durable-goal decision matrix drifted");
+    assert_eq!(cases.len(), 24, "the durable-goal decision matrix drifted");
     for case in cases {
         let status = GoalStatus::parse(&case.status)
             .unwrap_or_else(|| panic!("unknown status in Lean case {}", case.name));
