@@ -1,6 +1,6 @@
 use super::*;
 use crate::identity::AgentIdentity;
-use crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES;
+use crate::lifecycle::{extract_single_doc_id, DEFAULT_REQUEST_MAX_RETRIES};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -237,13 +237,14 @@ async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     )
     .await;
 
-    let error = lookup_request_doc_id_optional(&db.node, "duplicate-logical-id")
+    let error = crate::request_binding::resolve_request_doc_id(&db.node, "duplicate-logical-id")
         .await
         .expect_err("duplicate logical ids must not resolve to an arbitrary document");
     assert!(error.to_string().contains("ambiguous across 2 documents"));
 }
 
 mod background_completion;
+mod background_goal_repair;
 mod coalescing;
 mod metadata;
 

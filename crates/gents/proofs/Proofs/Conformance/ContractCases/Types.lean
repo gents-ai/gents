@@ -557,6 +557,10 @@ structure R6BackgroundingCase where
   postRetryCount : Option Nat := none
   retryDelaySeconds : Option Nat := none
   isLatest : Option Bool := none
+  goalStatus : Option String := none
+  notificationPersisted : Option Bool := none
+  wakeCreated : Option Bool := none
+  redriveAllowed : Option Bool := none
   deriving Repr
 
 structure R5CrossDeploymentCase where

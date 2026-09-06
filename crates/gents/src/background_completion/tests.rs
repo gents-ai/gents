@@ -28,6 +28,78 @@ async fn test_node() -> Arc<EmbeddedNode> {
     node
 }
 
+#[tokio::test]
+async fn goal_owned_legacy_notification_repair_keeps_input_without_waking() {
+    for status in [
+        crate::goal::GoalStatus::Paused,
+        crate::goal::GoalStatus::Complete,
+    ] {
+        let node = test_node().await;
+        let parent_id = "legacy-goal-parent";
+        let doc_id = write_parent_request(&node, parent_id, LOCAL_DID).await;
+        let parent = crate::request_binding::load_agent_request(&node, parent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        crate::goal::set_goal(
+            &node,
+            LOCAL_DID,
+            &parent.session_id,
+            Some("Do not wake this Goal"),
+            Some(status),
+            None,
+        )
+        .await
+        .unwrap();
+        let content =
+            render_tool_completion("legacy-tool", "bash", "completed", "legacy output", None);
+        exec(
+            &node,
+            &crate::session::create_message_mutation(
+                &parent.session_id,
+                LOCAL_DID,
+                None,
+                1,
+                "user",
+                &content,
+                None,
+                Some(parent_id),
+                Some(&doc_id),
+                None,
+            ),
+        )
+        .await;
+        for _ in 0..2 {
+            let existing =
+                existing_tool_completion_notification(&node, &parent.session_id, "legacy-tool")
+                    .await
+                    .unwrap()
+                    .expect("legacy receipt");
+            let effects = notification_delivery::ensure_notification_delivery(
+                &node,
+                &parent,
+                Some(existing),
+                &content,
+                &background_completion_notification_message_key("legacy-tool", "tool"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(effects.notification_sequence, 1);
+            assert!(effects.wake_request_id.is_none());
+            assert!(!effects.created_notification && !effects.created_wake);
+        }
+        let observed = node
+            .execute("{ AgentRequest { request_id } AgentMessage { content request_doc_id } }")
+            .await;
+        assert!(!observed.has_errors(), "{:?}", observed.errors);
+        let data = observed.data.unwrap();
+        assert_eq!(data["AgentRequest"].as_array().unwrap().len(), 1);
+        assert_eq!(data["AgentMessage"].as_array().unwrap().len(), 1);
+        assert_eq!(data["AgentMessage"][0]["content"], content);
+        assert_eq!(data["AgentMessage"][0]["request_doc_id"], doc_id);
+    }
+}
+
 async fn exec(node: &EmbeddedNode, statement: &str) {
     let response = node.execute(statement).await;
     assert!(

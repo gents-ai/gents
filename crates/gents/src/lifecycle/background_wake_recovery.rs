@@ -307,6 +307,16 @@ async fn redrive_in_transaction(
     candidate: &AgentRequestRow,
     request_id: &str,
 ) -> Result<RedriveOutcome> {
+    if crate::goal::load_canonical_goal_in_txn(
+        txn,
+        required_str(candidate.agent_did.as_deref(), "agent_did")?,
+        required_str(candidate.session_id.as_deref(), "session_id")?,
+    )
+    .await?
+    .is_some()
+    {
+        return Ok(RedriveOutcome::Ineligible);
+    }
     let retry_key = format!(
         "retry:doc:{}",
         required_str(candidate.doc_id.as_deref(), "_docID")?

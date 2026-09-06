@@ -22,7 +22,7 @@ struct BackgroundCompletionGateKey {
 /// reads could otherwise create disjoint requests and return before duplicate
 /// reconciliation converges them. The weak registry does not retain either
 /// nodes or idle gates; stale entries are pruned when a new gate is created.
-fn background_completion_gate(
+pub(super) fn background_completion_gate(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
@@ -52,17 +52,19 @@ fn background_completion_gate(
     gate
 }
 
-/// Atomically bind a background-completion notification to the pending wake
-/// request that will consume it. The transaction either reuses the coalesced
-/// pending wake it read or creates a new one; a concurrent claim conflicts and
-/// retries, so no visible wake can race ahead of its input message.
-pub(crate) async fn enqueue_background_completion_with_message(
+/// Atomically persist background input. Goal-owned sessions bind it to its
+/// parent without waking; otherwise reuse or create the coalesced pending wake.
+/// A concurrent claim conflicts and retries, so a wake cannot precede its input.
+/// The single transaction owner for fresh input and repair of a legacy receipt.
+/// An observed receipt ID is reloaded and validated inside this transaction.
+pub(crate) async fn persist_background_completion_with_message(
     node: &EmbeddedNode,
     parent: &AgentRequest,
     notification_content: &str,
     message_key: &str,
     wake_content: &str,
     queue_hints: QueueHints,
+    existing_notification_doc_id: Option<&str>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     anyhow::ensure!(
         queue_hints.source == QueueSource::BackgroundCompletion
@@ -95,6 +97,7 @@ pub(crate) async fn enqueue_background_completion_with_message(
             &behavior_id,
             wake_content,
             &metadata,
+            existing_notification_doc_id,
         )
         .await;
         let result = match attempt {
@@ -130,8 +133,12 @@ pub(crate) async fn enqueue_background_completion_with_message(
         }
     };
 
-    if enqueued.created_request {
-        let created_request_doc_id = enqueued.request.doc_id.clone();
+    if let Some(created) = enqueued
+        .request
+        .as_ref()
+        .filter(|_| enqueued.created_request)
+    {
+        let created_request_doc_id = created.doc_id.clone();
         let active_request = reconcile_coalesced_pending_request(
             node,
             &parent.session_id,
@@ -140,10 +147,10 @@ pub(crate) async fn enqueue_background_completion_with_message(
             &queue_key,
         )
         .await?
-        .unwrap_or_else(|| enqueued.request.clone());
+        .unwrap_or_else(|| created.clone());
         enqueued.created_request = active_request.doc_id == created_request_doc_id;
 
-        enqueued.request = active_request;
+        enqueued.request = Some(active_request);
     }
 
     Ok(enqueued)
@@ -158,12 +165,23 @@ async fn background_completion_transaction_attempt(
     behavior_id: &str,
     wake_content: &str,
     metadata: &str,
+    existing_notification_doc_id: Option<&str>,
 ) -> Result<EnqueuedBackgroundCompletionInput> {
     use sha2::{Digest, Sha256};
 
+    let goal_owned =
+        crate::goal::load_canonical_goal_in_txn(txn, &parent.agent_did, &parent.session_id)
+            .await?
+            .is_some();
     let escaped_session_id = escape_graphql_string(&parent.session_id);
     let escaped_agent_did = escape_graphql_string(&parent.agent_did);
-    let escaped_message_key = escape_graphql_string(message_key);
+    let notification_filter = match existing_notification_doc_id {
+        Some(doc_id) => format!("_docID: {{ _eq: \"{}\" }}", escape_graphql_string(doc_id)),
+        None => format!(
+            "message_key: {{ _eq: \"{}\" }}",
+            escape_graphql_string(message_key)
+        ),
+    };
     let mut scope_hasher = Sha256::new();
     for component in [&parent.agent_did, &parent.session_id, queue_key] {
         scope_hasher.update((component.len() as u64).to_be_bytes());
@@ -176,9 +194,12 @@ async fn background_completion_transaction_attempt(
         .execute(&format!(
             r#"{{
                 notification: AgentMessage(
-                    filter: {{ message_key: {{ _eq: "{escaped_message_key}" }} }},
+                    filter: {{ {notification_filter} }},
                     limit: 2
                 ) {{
+                    _docID
+                    message_key
+                    timestamp
                     session_id
                     agent_did
                     request_id
@@ -220,66 +241,134 @@ async fn background_completion_transaction_attempt(
         notifications.len() <= 1,
         "background completion notification key resolved to multiple rows"
     );
+    anyhow::ensure!(
+        existing_notification_doc_id.is_none() || notifications.len() == 1,
+        "observed background notification disappeared"
+    );
+    let mut existing_sequence = None;
     if let Some(notification) = notifications.first() {
-        let persisted_session = notification["session_id"].as_str().unwrap_or_default();
-        let persisted_did = notification["agent_did"].as_str().unwrap_or_default();
-        let persisted_role = notification["role"].as_str().unwrap_or_default();
-        let persisted_content = notification["content"].as_str().unwrap_or_default();
-        let persisted_request_id = notification["request_id"].as_str().unwrap_or_default();
-        let persisted_request_doc_id = notification["request_doc_id"].as_str().unwrap_or_default();
-        let persisted_sequence = notification["sequence"]
+        let sequence = notification["sequence"]
             .as_u64()
-            .and_then(|value| u32::try_from(value).ok());
+            .and_then(|value| u32::try_from(value).ok())
+            .context("background notification sequence is invalid")?;
+        let canonical = notification["message_key"].as_str() == Some(message_key);
         anyhow::ensure!(
-            persisted_session == parent.session_id
-                && persisted_did == parent.agent_did
-                && persisted_role == "user"
-                && persisted_content == content
-                && !persisted_request_id.is_empty()
-                && !persisted_request_doc_id.is_empty()
-                && persisted_sequence.is_some(),
-            "background completion notification key conflicts with its persisted binding"
+            notification["session_id"].as_str() == Some(parent.session_id.as_str())
+                && notification["agent_did"].as_str() == Some(parent.agent_did.as_str())
+                && notification["role"].as_str() == Some("user")
+                && (!canonical || notification["content"].as_str() == Some(content)),
+            "background notification conflicts with its persisted scope or content"
         );
-        let binding_response = txn
+        let request_id = notification["request_id"].as_str().unwrap_or_default();
+        let doc_id = notification["request_doc_id"].as_str().unwrap_or_default();
+        let parent_bound = request_id == parent.request_id && doc_id == parent.doc_id;
+        let binding = txn
             .execute(&format!(
-                r#"{{
-                    AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{}" }} }},
-                        limit: 2
-                    ) {{
-                        _docID
-                        request_id
-                        agent_did
-                        session_id
-                        metadata
-                    }}
-                }}"#,
-                escape_graphql_string(persisted_request_doc_id)
+                r#"{{ AgentRequest(
+            filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2
+        ) {{ _docID request_id agent_did session_id metadata }} }}"#,
+                escape_graphql_string(doc_id)
             ))
             .await?;
-        let bindings = binding_response["data"]["AgentRequest"]
+        let bindings = binding["data"]["AgentRequest"]
             .as_array()
-            .cloned()
-            .unwrap_or_default();
+            .context("request binding rows missing")?;
+        let scoped_binding = bindings.len() == 1
+            && bindings[0]["request_id"].as_str() == Some(request_id)
+            && bindings[0]["agent_did"].as_str() == Some(parent.agent_did.as_str())
+            && bindings[0]["session_id"].as_str() == Some(parent.session_id.as_str());
+        let wake_bound = scoped_binding
+            && queue_source_and_key_match(
+                bindings[0]["metadata"].as_str(),
+                QueueSource::BackgroundCompletion,
+                queue_key,
+            );
         anyhow::ensure!(
-            bindings.len() == 1
-                && bindings[0]["request_id"].as_str() == Some(persisted_request_id)
-                && bindings[0]["agent_did"].as_str() == Some(parent.agent_did.as_str())
-                && bindings[0]["session_id"].as_str() == Some(parent.session_id.as_str())
-                && queue_source_and_key_match(
-                    bindings[0]["metadata"].as_str(),
-                    QueueSource::BackgroundCompletion,
-                    queue_key,
-                ),
-            "background completion notification key references an invalid wake binding"
+            !canonical || (scoped_binding && (parent_bound || wake_bound)),
+            "canonical background notification references an invalid request binding"
         );
+        // Canonical parent-bound receipts record input-only delivery permanently.
+        // Legacy rows may lack a binding; preserve them, never rewrite them.
+        if goal_owned || (canonical && parent_bound) || wake_bound {
+            return Ok(EnqueuedBackgroundCompletionInput {
+                request: (!goal_owned && !(canonical && parent_bound) && wake_bound).then(|| {
+                    EnqueuedAgentRequest {
+                        doc_id: doc_id.to_owned(),
+                        request_id: request_id.to_owned(),
+                        session_id: parent.session_id.clone(),
+                    }
+                }),
+                message_sequence: sequence,
+                created_request: false,
+            });
+        }
+        let timestamp = chrono::DateTime::parse_from_rfc3339(
+            notification["timestamp"]
+                .as_str()
+                .context("legacy notification timestamp missing")?,
+        )
+        .context("legacy notification timestamp is invalid")?;
+        // Preserve the old acknowledgement rule, but observe it with Goal
+        // presence and publication inside the same transaction.
+        let wakes = txn.execute(&format!(r#"{{ AgentRequest(filter: {{
+            session_id: {{ _eq: "{escaped_session_id}" }},
+            agent_did: {{ _eq: "{escaped_agent_did}" }},
+            execution_origin: {{ _eq: "scheduled" }}
+        }}, order: {{ created_at: ASC }}) {{ _docID request_id session_id metadata created_at }} }}"#)).await?;
+        let rows: Vec<AgentRequestRow> =
+            serde_json::from_value(wakes["data"]["AgentRequest"].clone())?;
+        for row in rows {
+            if !queue_source_and_key_match(
+                row.metadata.as_deref(),
+                QueueSource::BackgroundCompletion,
+                queue_key,
+            ) {
+                continue;
+            }
+            let created_at = chrono::DateTime::parse_from_rfc3339(
+                row.created_at
+                    .as_deref()
+                    .context("background wake created_at missing")?,
+            )?;
+            if created_at >= timestamp {
+                return Ok(EnqueuedBackgroundCompletionInput {
+                    request: Some(
+                        queue_row_to_enqueued_request(&row)
+                            .context("background wake binding missing")?,
+                    ),
+                    message_sequence: sequence,
+                    created_request: false,
+                });
+            }
+        }
+        existing_sequence = Some(sequence);
+    }
+
+    if goal_owned {
+        // GoalSource owns automatic continuation for this session, including when
+        // its Goal is terminal or paused. The durable input belongs to the
+        // request whose background work actually produced it.
+        anyhow::ensure!(
+            !parent.doc_id.trim().is_empty() && !parent.request_id.trim().is_empty(),
+            "Goal-owned background notification requires a parent request binding"
+        );
+        let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+        let message_mutation = session::create_message_mutation(
+            &parent.session_id,
+            &parent.agent_did,
+            parent.requester_did.as_deref(),
+            message_sequence,
+            "user",
+            content,
+            None,
+            Some(&parent.request_id),
+            Some(&parent.doc_id),
+            Some(message_key),
+        );
+        txn.execute(&message_mutation).await?;
         return Ok(EnqueuedBackgroundCompletionInput {
-            request: EnqueuedAgentRequest {
-                doc_id: persisted_request_doc_id.to_string(),
-                request_id: persisted_request_id.to_string(),
-                session_id: persisted_session.to_string(),
-            },
-            message_sequence: persisted_sequence.expect("validated sequence"),
+            request: None,
+            message_sequence,
             created_request: false,
         });
     }
@@ -297,7 +386,10 @@ async fn background_completion_transaction_attempt(
             )
         })
         .and_then(|row| queue_row_to_enqueued_request(&row));
-    let message_sequence = next_append_sequence_in_transaction(txn, &parent.session_id).await?;
+    let message_sequence = match existing_sequence {
+        Some(sequence) => sequence,
+        None => next_append_sequence_in_transaction(txn, &parent.session_id).await?,
+    };
     let mut max_generation = None::<u64>;
     for row in response["data"]["generations"]
         .as_array()
@@ -350,22 +442,24 @@ async fn background_completion_transaction_attempt(
             )
         }
     };
-    let message_mutation = session::create_message_mutation(
-        &parent.session_id,
-        &parent.agent_did,
-        parent.requester_did.as_deref(),
-        message_sequence,
-        "user",
-        content,
-        None,
-        Some(&request.request_id),
-        Some(&request.doc_id),
-        Some(message_key),
-    );
-    txn.execute(&message_mutation).await?;
+    if existing_sequence.is_none() {
+        let message_mutation = session::create_message_mutation(
+            &parent.session_id,
+            &parent.agent_did,
+            parent.requester_did.as_deref(),
+            message_sequence,
+            "user",
+            content,
+            None,
+            Some(&request.request_id),
+            Some(&request.doc_id),
+            Some(message_key),
+        );
+        txn.execute(&message_mutation).await?;
+    }
 
     Ok(EnqueuedBackgroundCompletionInput {
-        request,
+        request: Some(request),
         message_sequence,
         created_request,
     })
