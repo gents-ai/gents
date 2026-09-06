@@ -9,13 +9,13 @@
 A fully gents-native whole-codebase security scan, modeled on
 [vercel-labs/deepsec](https://github.com/vercel-labs/deepsec) (Apache-2.0;
 prompts and matcher taxonomy adapted with attribution). It differs from the
-existing packs in scope: `code-review` reviews a PR diff, `repo-maintenance`
+existing packs in scope: `code_review` reviews a PR diff, `repo_maintenance`
 does a cleanup round — this pack scans the **entire tree**, using deepsec's
 economics: a free mechanical regex pre-scan decides *what* gets investigated,
 and paid model stages decide *how deep*.
 
 deepsec's pipeline (scan → process → revalidate → report) maps onto the
-established trigger-edge graph shape from `code-review`: closed cardinality
+established trigger-edge graph shape from `code_review`: closed cardinality
 stamped at fan-out, sentinel-gated barrier, write-last summary contract,
 exact candidate→verdict bijection enforced by the runner.
 
@@ -31,7 +31,7 @@ Each consumer stage is granted only the query tool for the collection it
 needs (`query_candidate_finding`, `query_finding_verdict`). The collection
 is bound on the tool; `run_id` is runtime-filled from correlation. Sentinels
 stay thin (`InvestigationResult`, `RevalidationSummary`) the same way
-`code-review` keeps `ScanResult` thin.
+`code_review` keeps `ScanResult` thin.
 
 Payload discipline: **complete inventory, truncated evidence.** Caps never
 silently drop items — a path+slug inventory line is always complete; only
@@ -86,7 +86,7 @@ globally unique, preserved verbatim through verdict and confirmed rows.
 
 `run_id` is runtime-filled via `fill: correlation` on every write surface;
 `expected_total` on `InvestigationResult` via `source_field` fill. Both are
-hidden from model input, as in `code-review`.
+hidden from model input, as in `code_review`.
 
 ## Scan engine port
 
@@ -220,7 +220,7 @@ config, per the pack convention.
 
 ## Acceptance (`experiment.json` expect block)
 
-Mirrors `code-review`'s contract vocabulary:
+Mirrors `code_review`'s contract vocabulary:
 
 - `trigger_ids`: `scan-plan`, `scan-investigate`, `scan-revalidate`,
   `scan-report`.
@@ -263,7 +263,7 @@ the matcher taxonomy are adapted from vercel-labs/deepsec (Apache-2.0,
 - deepsec's incremental/resumable FileRecord merge semantics — pack runs
   use a fresh home; a run is one-shot.
 - Diff-scoped modes (`--diff-working`, `--diff origin/main`) — that niche
-  is `code-review`'s.
+  is `code_review`'s.
 - The enrich stage (git committer / ownership attribution), notifiers,
   and plugin architecture.
 - Matcher generation by a setup agent (deepsec's coverage loop). The

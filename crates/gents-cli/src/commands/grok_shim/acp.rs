@@ -1829,7 +1829,9 @@ mod tests {
         for (command, expected) in [
             ("status", Some("active")),
             ("pause", Some("paused")),
-            ("resume", Some("active")),
+            // This display-only fixture has no signed causal predecessor. A
+            // host turn must not fabricate a lineage-free continuation.
+            ("resume", Some("paused")),
             ("clear", None),
         ] {
             let dispatch = service.handle_acp_payload(&request_payload("session/prompt", json!({

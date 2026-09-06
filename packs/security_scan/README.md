@@ -1,7 +1,7 @@
 # Whole-codebase security scan pack
 
 This pack scans the **entire tree**, not a diff. It differs from
-`code-review` (reviews a PR diff) and `repo-maintenance` (a cleanup round)
+`code_review` (reviews a PR diff) and `repo_maintenance` (a cleanup round)
 in scope, and it borrows deepsec's economics: a free mechanical regex
 pre-scan decides *what* gets investigated, and paid model stages decide
 *how deep*.
@@ -30,7 +30,7 @@ Four triggers, all `event_kind: created`: `scan-plan` (on `ScanJob`),
 parallel), `scan-revalidate` (on `InvestigationResult`, `fire_mode:
 per_group`, `correlation_field: run_id`, `expected_count_field:
 expected_total`), `scan-report` (on `RevalidationSummary`). This is the
-same trigger-edge shape `code-review` established: closed cardinality
+same trigger-edge shape `code_review` established: closed cardinality
 stamped at fan-out, a sentinel-gated barrier, a write-last summary
 contract, and an exact candidate-to-verdict bijection enforced by the
 runner.
@@ -47,7 +47,7 @@ copies stuffed into sentinels. `scan-revalidate` gets `query_candidate_finding`
 stage needs, with `run_id` runtime-filled from correlation and hidden
 from model input — the model can call the tool but never sees or sets the
 run identity. Sentinels stay thin (`InvestigationResult`,
-`RevalidationSummary`) the same way `code-review` keeps `ScanResult`
+`RevalidationSummary`) the same way `code_review` keeps `ScanResult`
 thin: they carry counts, not payload, and the next stage loads the real
 rows itself.
 

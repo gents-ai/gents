@@ -29,10 +29,10 @@ Three terminals, in this order:
 | Command | When | What |
 | --- | --- | --- |
 | `make review-page` | Before people sit down | Vite app on `:19190`. Empty DAG. Polls `:19191`. |
-| `make review-serve` | Before the talk, or as "the node" | Durable home + `gents server --apply-root packs/code_review` on `:19191`. Stays up. |
+| `make review-serve` | Before the talk, or as "the node" | Durable home + server on `:19191`, then `gents pack install code_review`. Stays up. |
 | `make review` | The kick | Seeds one new `ReviewJob`. Does **not** start or stop the server. The page hydrates. |
 
-`gents pack run packs/code_review` remains the unattended / CI path (await,
+`gents pack run code_review` remains the unattended / CI path (await,
 acceptance checks, kill server). The talk does not use it.
 
 ## Architecture
@@ -67,8 +67,10 @@ Defaults stay `REVIEW_PORT=19191`, `REVIEW_ROOT=$(CURDIR)`, same
 2. If the home has no identity, run the same `gents init` the pack runner uses
    (`write` tool package, `GENTS_REVIEW_ROOT`, backend/model from
    `experiment.json`).
-3. Foreground: `gents server --home <home> --http-port $(REVIEW_PORT)
-   --apply-root packs/code_review --p2p-transport none --no-codex-shim`.
+3. Start `gents server --home <home> --http-port $(REVIEW_PORT)
+   --tool-ceiling readwrite --tool-root $(REVIEW_ROOT) --p2p-transport none
+   --no-codex-shim`, wait for readiness, then install the graph with
+   `gents pack install code_review --home <home> --graphql <graphql>`.
 4. Print `page http://127.0.0.1:19190` and `graphql http://127.0.0.1:19191/...`.
 5. `REVIEW_RESET=1` deletes the home first.
 

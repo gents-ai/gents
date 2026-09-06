@@ -146,8 +146,8 @@ help:
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
-	@echo "Bundled graphs:"
-	@echo "  gents pack list        Inspect graphs shipped in the binary"
+	@echo "Bundled packs:"
+	@echo "  gents pack list        Inspect packs shipped in the binary"
 	@echo "  gents pack install code_review"
 	@echo "  gents graph run code_review --repo DIR --base origin/main --head HEAD"
 	@echo
