@@ -7,8 +7,7 @@
 //! and rig's at that single boundary and will be removed once Layer A is owned.
 //!
 //! Shapes intentionally mirror rig 1:1 for now (mechanical conversion); they can
-//! be simplified once rig is gone. See
-//! `docs/design/native-llm-types-shed-rig.md` (removed from the tree; see git history).
+//! be simplified once rig is gone.
 
 /// Native message family — lives in `gents-protocol` (the persisted
 /// format is protocol vocabulary shared by every peer); re-exported here so

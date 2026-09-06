@@ -534,7 +534,7 @@ mod tests {
         // Compare what each channel actually PERSISTS, not init's in-memory
         // struct: the shared write path (`write_tool_selection_document`)
         // never emits `[]` for an empty list field (typed as `JsonArray`,
-        // corrupts nillable array columns — see CLAUDE.md), so an
+        // corrupts nillable array columns — see AGENTS.md), so an
         // in-memory `Some(vec![])` and a round-tripped `None` are the same
         // persisted value. Writing `init_minted` through the identical path
         // before comparing keeps the assertion honest about that.

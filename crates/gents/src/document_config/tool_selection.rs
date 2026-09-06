@@ -537,7 +537,7 @@ pub struct ToolSelectionDocument {
     ///
     /// Prefer this field to **extend** the surface with argv-precise families.
     /// Prefer [`Self::read_only_command_allowlist`] to **replace or narrow** the
-    /// whole-executable base list. See `docs/macos-bash-sandbox.md`.
+    /// whole-executable base list.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"
@@ -560,7 +560,7 @@ pub struct ToolSelectionDocument {
     ///
     /// Unique vs [`Self::command_allowed_argv_prefixes`]: can **narrow** the
     /// default set (drop `sudo` / `curl`) without re-expressing every kept
-    /// command as an argv prefix. See `docs/macos-bash-sandbox.md`.
+    /// command as an argv prefix.
     #[serde(
         default,
         deserialize_with = "super::serde_helpers::deserialize_optional_string_vec"

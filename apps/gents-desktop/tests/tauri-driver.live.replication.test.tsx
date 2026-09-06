@@ -14,7 +14,7 @@ import { createFixtureHelpers } from "./live-bridge-runner/adapter";
  *
  * Each `it()` block is annotated with the Lean theorem it witnesses.
  * If a theorem's statement changes, this file MUST be updated to match —
- * see CLAUDE.md "Development Flow": spec changes are authoritative.
+ * see AGENTS.md "Foundation": spec changes are authoritative.
  *
  * P2P replication itself (defradb.rs add_replicator + iroh gossip) is
  * not Lean-modeled in this repo — the persisted-on-A → persisted-on-B

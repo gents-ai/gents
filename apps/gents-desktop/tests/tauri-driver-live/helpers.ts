@@ -19,7 +19,7 @@ export const describeRealInferenceLive =
 export const FIRST_PROMPT =
   "Read workspace/README.md, then summarize what Gents is in two short bullets.";
 export const SECOND_PROMPT =
-  "Read workspace/CLAUDE.md, then summarize the document-driven request model in two short bullets.";
+  "Read workspace/AGENTS.md, then summarize the document-driven request model in two short bullets.";
 export const THIRD_PROMPT =
   "Without calling more tools, give one concise desktop integration-test risk and one coverage idea.";
 
