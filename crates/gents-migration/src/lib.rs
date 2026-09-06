@@ -14,8 +14,6 @@
 //! verifies every managed collection's lineage, and (when upstream supports
 //! it) eagerly materializes documents. There is no public "register schemas
 //! only" path — any bypass forks the version lineage.
-//!
-//! See `docs/superpowers/specs/2026-07-28-lens-first-migration-design.md`.
 
 mod engine;
 mod error;

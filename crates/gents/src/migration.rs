@@ -1,8 +1,7 @@
 //! Schema migration entry points — thin re-export of `gents-migration`.
 //!
 //! The lens-first engine owns baseline registration, chain replay, lineage
-//! verification, and (when upstream supports it) materialization. See
-//! `docs/superpowers/specs/2026-07-28-lens-first-migration-design.md`.
+//! verification, and (when upstream supports it) materialization.
 
 use std::sync::Arc;
 

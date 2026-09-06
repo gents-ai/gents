@@ -14,10 +14,6 @@ keeps it alive in the system tray when the main window closes. The CLI and
 desktop host share the `gents_server::server_host` implementation, so no CLI
 binary or sidecar is bundled.
 
-The design for extracting this app's Tauri bridge and chat/fleet/operations
-workflows into reusable packages (#877) lives in
-[docs/reusable-desktop-packages.md](../../docs/reusable-desktop-packages.md).
-
 ## Development
 
 Prerequisites:

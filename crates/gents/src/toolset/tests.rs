@@ -1149,9 +1149,8 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     .is_err());
 }
 
-/// Fence the operator docs in `docs/macos-bash-sandbox.md` (#629): the two
-/// ToolSelection knobs are not aliases — prefixes gate/extend by argv; the
-/// allowlist field replaces the whole-executable base.
+/// The two ToolSelection knobs are not aliases: prefixes gate/extend by argv;
+/// the allowlist field replaces the whole-executable base.
 #[test]
 fn read_only_allowlist_knobs_match_operator_docs() {
     let defaults = default_read_only_commands();

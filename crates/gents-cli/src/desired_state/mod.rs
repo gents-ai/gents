@@ -203,7 +203,7 @@ pub(crate) struct DesiredToolSelection {
     /// Argv-prefix allow gate (extend / subcommand-precise). Empty = no gate;
     /// non-empty requires every command to match a prefix. Prefer over
     /// `read_only_command_allowlist` when adding diagnostic families without
-    /// replacing the base. See `docs/macos-bash-sandbox.md`.
+    /// replacing the base.
     #[serde(default)]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
     #[serde(default)]

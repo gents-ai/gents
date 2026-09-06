@@ -18,7 +18,7 @@ fn grounding_doc_paths_resolve() {
     let root = repo_root();
     let mut missing = Vec::new();
 
-    for doc in ["CLAUDE.md", "README.md"] {
+    for doc in ["AGENTS.md", "README.md"] {
         let text = read(&root.join(doc));
         for token in text.split('`').skip(1).step_by(2) {
             let looks_like_path = token.contains('/')
@@ -43,16 +43,9 @@ fn grounding_doc_paths_resolve() {
 }
 
 #[test]
-fn markdown_links_resolve() {
+fn readme_links_resolve() {
     let root = repo_root();
-    let mut docs = vec![root.join("README.md")];
-    if let Ok(entries) = std::fs::read_dir(root.join("docs")) {
-        for entry in entries.flatten() {
-            if entry.path().extension().is_some_and(|ext| ext == "md") {
-                docs.push(entry.path());
-            }
-        }
-    }
+    let docs = [root.join("README.md")];
 
     let mut broken = Vec::new();
     for doc in docs {
@@ -95,7 +88,7 @@ fn proofs_contain_no_sorrys() {
     visit_lean(&proofs, &mut offenders);
     assert!(
         offenders.is_empty(),
-        "`sorry` found in proofs (CLAUDE.md claims zero):\n{}",
+        "`sorry` found in proofs (AGENTS.md requires zero):\n{}",
         offenders.join("\n")
     );
 }
@@ -176,7 +169,7 @@ fn rig_vocabulary_confined_to_the_seam() {
 
     assert!(
         violations.is_empty(),
-        "rig type vocabulary escaped the documented seams (CLAUDE.md confines them; \
+        "rig type vocabulary escaped the documented seams (AGENTS.md confines them; \
          either route through llm::rig_compat/provider_input or update the allowlist AND the doc):\n{}",
         violations.join("\n")
     );
@@ -222,7 +215,7 @@ fn visit_rust(
     }
 }
 
-/// CLAUDE.md claims the protocol crate's persisted vocabulary is rig-free at
+/// AGENTS.md requires the protocol crate's persisted vocabulary to be rig-free at
 /// runtime. Fence it: rig-core must not appear in its [dependencies].
 #[test]
 fn protocol_crate_runtime_is_rig_free() {
@@ -239,6 +232,6 @@ fn protocol_crate_runtime_is_rig_free() {
     assert!(
         !has_runtime_rig,
         "gents-protocol gained a runtime rig-core dependency; \
-         the persisted vocabulary must stay rig-free (CLAUDE.md claim)"
+         the persisted vocabulary must stay rig-free (AGENTS.md rule)"
     );
 }

@@ -9,8 +9,7 @@ use crate::oauth_credential::{OAuthAuthProblem, RefreshedTokens};
 /// Token endpoint from live OIDC discovery at `https://auth.x.ai/.well-known/openid-configuration`.
 const TOKEN_URL: &str = "https://auth.x.ai/oauth2/token";
 
-/// Public Grok CLI OAuth client id (no secret). Provenance: Grok Build CLI / peer tools; see
-/// `docs/design-notes/xai-grok-oauth-spike.md`.
+/// Public Grok CLI OAuth client id (no secret).
 pub const XAI_OAUTH_CLIENT_ID: &str = "b1a00492-073a-47ea-816f-4c329264a828";
 
 pub const XAI_OAUTH_TOKEN_URL_OVERRIDE_ENV: &str = "GENTS_XAI_OAUTH_TOKEN_URL";

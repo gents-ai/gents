@@ -14,7 +14,7 @@ import { describeLive, logTurn } from "./tauri-driver-live/helpers";
  *
  * Each `it()` block is annotated with the Lean theorem(s) it witnesses.
  * If a theorem's statement changes, this file MUST be updated to match —
- * see CLAUDE.md "Development Flow": spec changes are authoritative.
+ * see AGENTS.md "Foundation": spec changes are authoritative.
  *
  * This suite is intentionally excluded from the default live sweep because it
  * requires live inference and can take several minutes per run. Run it explicitly:
@@ -38,7 +38,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
       await driver.openChat();
 
       await driver.typeComposer(
-        'Use the configured local subagent target. Call spawn_subagent with await_mode "background" and give the child this exact task: "Step 1: read workspace/CLAUDE.md. Step 2: read workspace/README.md. Step 3: read workspace/Cargo.toml. Step 4: read workspace/Cargo.lock. Step 5: read workspace/scripts/run-live-test.mjs if it exists, otherwise read workspace/release/README.md. Step 6: Slowly and carefully write an exhaustive analysis of each file you read, quoting every section verbatim and adding commentary. Do not rush — take your time with each file." After spawning the child, immediately call wait_subagent for that child request.',
+        'Use the configured local subagent target. Call spawn_subagent with await_mode "background" and give the child this exact task: "Step 1: read workspace/AGENTS.md. Step 2: read workspace/README.md. Step 3: read workspace/Cargo.toml. Step 4: read workspace/Cargo.lock. Step 5: read workspace/scripts/run-live-test.mjs if it exists, otherwise read workspace/release/README.md. Step 6: Slowly and carefully write an exhaustive analysis of each file you read, quoting every section verbatim and adding commentary. Do not rush — take your time with each file." After spawning the child, immediately call wait_subagent for that child request.',
       );
       await driver.pressEnter();
       await waitFor(() => {
