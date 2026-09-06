@@ -281,7 +281,7 @@ pub(crate) struct GraphRunArgs {
     pub(crate) head: String,
     #[arg(long)]
     pub(crate) focus: Option<String>,
-    #[arg(long, help = "Research question (required by web-deep-research)")]
+    #[arg(long, help = "Research question (required by web_deep_research)")]
     pub(crate) question: Option<String>,
     #[arg(
         long = "research-scope",

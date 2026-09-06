@@ -676,7 +676,7 @@ fn pack_catalog_and_install_parse() {
                 Some(std::path::Path::new("/tmp/gents-home"))
             );
         }
-        _ => panic!("expected graph install"),
+        _ => panic!("expected pack install"),
     }
 
     match parse_pack(&["prune", "mailbox", "--home", "/tmp/gents-home"]) {
