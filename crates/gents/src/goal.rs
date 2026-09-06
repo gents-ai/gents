@@ -416,7 +416,9 @@ pub fn decide_goal_continuation(
                 GoalDecision::Pause
             }
             GoalRequestTerminal::Failed | GoalRequestTerminal::Dead => {
-                if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
+                if budget_reached {
+                    GoalDecision::Wrapup
+                } else if infrastructure_retries.max(0) < MAX_INFRASTRUCTURE_RETRIES {
                     GoalDecision::Retry
                 } else {
                     GoalDecision::Pause

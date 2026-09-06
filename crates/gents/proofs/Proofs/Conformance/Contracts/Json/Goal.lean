@@ -68,6 +68,30 @@ def goalDecisionCases : List GoalDecisionCase :=
       sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
       requestIsWrapup := false, infrastructureRetries := 2,
       wrapupRequested := false, wrapupCompleted := false }
+  , { name := "dead_below_budget_retries", status := .active, terminal := .dead,
+      sessionIdle := true, childExists := false, budgetReached := false, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false }
+  , { name := "failed_exhausted_requests_wrapup", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false }
+  , { name := "dead_exhausted_requests_wrapup", status := .active, terminal := .dead,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false }
+  , { name := "exhausted_failure_at_retry_bound_requests_wrapup", status := .active, terminal := .failed,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 2,
+      wrapupRequested := false, wrapupCompleted := false }
+  , { name := "exhausted_interrupt_still_pauses", status := .active, terminal := .interrupted,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false }
+  , { name := "exhausted_supersede_still_pauses", status := .active, terminal := .superseded,
+      sessionIdle := true, childExists := false, budgetReached := true, hasActivity := true,
+      requestIsWrapup := false, infrastructureRetries := 0,
+      wrapupRequested := false, wrapupCompleted := false }
   , { name := "no_activity_pauses", status := .active, terminal := .completed,
       sessionIdle := true, childExists := false, budgetReached := false, hasActivity := false,
       requestIsWrapup := false, infrastructureRetries := 0,

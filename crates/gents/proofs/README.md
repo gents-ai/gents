@@ -1113,6 +1113,13 @@ operational diagnostics, TLA+ specs, or platform-specific tests.
 
 ### Goal resume and continuation publication
 
+`Goals.decide` checks the observed budget before retrying a failed or dead
+request. Exhausted active Goals enter the existing budget-limited wrap-up path;
+interruption still pauses and wrap-up retries retain their existing bound.
+The 24 generated decision cases fence the runtime decision function, and the
+GoalSource database regression checks persisted usage and wrap-up publication.
+This is a between-request budget rule, not an in-request token cap.
+
 `GoalAutomation/OperatorResume.lean` composes the existing Goal resume action
 with one signed child publication. Eleven generated cases exercise real
 transactions, including discard and recovery of an existing receipt after
