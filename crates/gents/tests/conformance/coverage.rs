@@ -542,6 +542,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "GoalClaimedPublicationCases".to_string(),
         ));
     }
+    if !snapshot.graph_logical_invocation_cases.is_empty() {
+        emitted.insert((
+            "graph_logical_invocation_cases".to_string(),
+            "GraphLogicalInvocationCases".to_string(),
+        ));
+    }
+    if !snapshot.graph_invocation_publication_cases.is_empty() {
+        emitted.insert((
+            "graph_invocation_publication_cases".to_string(),
+            "GraphInvocationPublicationCases".to_string(),
+        ));
+    }
     if !snapshot.goal_request_head_cases.is_empty() {
         emitted.insert((
             "goal_request_head_cases".to_string(),
@@ -1307,6 +1319,8 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         "goal_request_head_cases",
         "goal_operator_resume_cases",
         "goal_config_reactivation_cases",
+        "graph_logical_invocation_cases",
+        "graph_invocation_publication_cases",
         "graph_failure_attribution_traces",
         "graph_pipeline_validation_cases",
         "graph_pipeline_revision_gate_cases",

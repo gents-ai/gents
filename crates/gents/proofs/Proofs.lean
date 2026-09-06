@@ -66,6 +66,7 @@ import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.GraphPipeline
 import Proofs.GraphPipeline.FailureAttribution
+import Proofs.GraphPipeline.LogicalInvocation
 import Proofs.EthSubmission
 import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.PersonaRequest

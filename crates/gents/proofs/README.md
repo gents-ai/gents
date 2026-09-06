@@ -220,6 +220,7 @@ and either tested at the Rust boundary or treated as an external assumption.
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/GraphPipeline.lean` | Model-callable graph publication and run lifecycle: validation/materialization gates, active-pointer alignment, immutable revision identity, atomic seed/run start, cancellation suppression, result-commit-gated success, and terminal CAS safety |
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
+| `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Fifteen projection cases and five publication traces are consumed by real signed-row and transaction tests. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
@@ -1138,3 +1139,41 @@ and child in the same existing transaction, even though the modeled Goal fields
 remain unchanged. Eight explicit conformance cases accompany the general laws.
 The older claimed-phase convergence theorem assumes publication remains
 authorized; a historical claim alone cannot override a later pause.
+
+### Graph logical invocation boundary (#1357)
+
+The logical identity is the authenticated pinned root; no invocation row is added.
+Active Goals and unfinished BudgetLimited wrap-up defer graph completion. Graph
+does not duplicate GoalSource retry/activity/budget decisions. An unsuccessful
+tip cannot succeed merely because results exist. Physical descendants still
+count individually. Authentication booleans in the model must be discharged by
+real signed-row consumers, including physical parent, owner and pinned route.
+
+Publication and terminal/failure transactions write the existing GraphRun key.
+This refinement assumes same-native-store write conflict validation; scans do
+not establish predicate/phantom protection, and independent replicas do not gain
+consensus. Fresh unassociated Goal/first-root discovery and Goal-creation
+association policy remain explicit unresolved boundaries, not proven fixed by
+this model. Finite path/case proofs establish safety for admitted identities and
+edges, not provider progress or scheduler fairness.
+
+Ambiguous multiple-root input remains a fail-closed abstract theorem. It is not
+an emitted DB fixture: one immutable child row cannot authenticate two distinct
+physical parents. The branching-tip case uses two independently signed historical
+Goal identities; distinct retry keys make both physical children representable.
+
+The generated `graph_logical_invocation_cases` consumer exercises persisted
+signed roots/children and reads the actual GraphRun projection. Its historical
+head case verifies that canonical Goal replacement cannot relabel a root ahead
+of its same-second child; the emitted association guard abstracts that validated
+binding and does not prove signature verification itself. The generated
+`graph_invocation_publication_cases` consumer drives the existing publication,
+capture, cancellation and terminal transaction owners and reads durable state.
+
+`overlapping_native_graph_publication_and_closure_conflict_atomically` additionally
+opens two native handles before either commits, bypassing only the local gents
+mutation gate. Both match the same GraphRun generation; in both commit orders
+the loser reports a storage transaction conflict and only the winner's child
+effect survives. This establishes the tested same-store owner-key conflict
+mechanism, not absent-range protection or cross-replica consensus. Caller tests
+separately cover typed resume, automatic continuation and fresh Goal opening.

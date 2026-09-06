@@ -383,7 +383,7 @@ pub(crate) async fn graph_materialization_denial(
         .execute(&format!(
             r#"{{
                 GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, limit: 2) {{
-                    revision_digest status cancel_requested_at
+                    revision_digest status cancel_requested_at error
                 }}
             }}"#,
             escape_graphql_string(correlation),
@@ -396,29 +396,93 @@ pub(crate) async fn graph_materialization_denial(
         );
     }
     let data = json!({ "data": response.data.unwrap_or(Value::Null) });
-    let found = rows(&data, "GraphRun");
-    if found.len() != 1 {
-        return Ok(Some(
-            "graph trigger correlation does not resolve to exactly one durable run".to_owned(),
-        ));
-    }
-    let run = &found[0];
-    if run.get("revision_digest").and_then(Value::as_str) != Some(trigger_digest.as_str()) {
-        return Ok(Some(
-            "graph trigger revision does not match the pinned run revision".to_owned(),
-        ));
+    Ok(graph_publication_denial(rows(&data, "GraphRun"), &trigger_digest).map(str::to_owned))
+}
+
+/// Preflight and transactional publication consume the same admission policy.
+/// Only the transaction's read plus generation write authorizes publication.
+fn graph_publication_denial(runs: &[Value], revision_digest: &str) -> Option<&'static str> {
+    let [run] = runs else {
+        return Some("graph publication requires exactly one durable run");
+    };
+    if run.get("revision_digest").and_then(Value::as_str) != Some(revision_digest) {
+        return Some("graph publication revision does not match the pinned run");
     }
     if run.get("status").and_then(Value::as_str) != Some("running") {
-        return Ok(Some("graph run is terminal".to_owned()));
+        return Some("graph run is terminal");
     }
     if run
         .get("cancel_requested_at")
-        .and_then(Value::as_str)
-        .is_some()
+        .is_some_and(|value| !value.is_null())
     {
-        return Ok(Some("graph run cancellation is requested".to_owned()));
+        return Some("graph run cancellation is requested");
     }
-    Ok(None)
+    if run.get("error").is_some_and(|value| !value.is_null()) {
+        return Some("graph run has a definitive failure latch");
+    }
+    None
+}
+
+/// Root publication knows its immutable graph route before the request exists.
+/// Continuations instead resolve their authenticated physical predecessor.
+pub(crate) async fn fence_graph_root_request_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request: &gents_protocol::request_admission::AgentRequestCreate,
+) -> Result<()> {
+    let Some(digest) = request
+        .caused_by_trigger_id
+        .as_deref()
+        .and_then(graph_artifact_revision_digest)
+    else {
+        return Ok(());
+    };
+    let run_id = request
+        .caused_by_correlation
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .context("graph root publication requires a durable run correlation")?;
+    fence_graph_publication_in_txn(txn, run_id, &digest).await
+}
+
+/// Serialize publication with the existing GraphRun completion owner. The caller
+/// stages its request/Goal writes in this same native transaction; rollback
+/// therefore removes both publication and this generation change.
+pub(crate) async fn fence_graph_publication_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    run_id: &str,
+    revision_digest: &str,
+) -> Result<()> {
+    let response = txn
+        .execute(&format!(
+            r#"{{ GraphRun(filter: {{ run_id: {{ _eq: "{}" }} }}, limit: 2) {{
+            _docID revision_digest status cancel_requested_at error update_generation
+        }} }}"#,
+            escape_graphql_string(run_id),
+        ))
+        .await?;
+    let found = rows(&response, "GraphRun");
+    if let Some(reason) = graph_publication_denial(found, revision_digest) {
+        anyhow::bail!(reason);
+    }
+    let run = &found[0];
+    let generation = run
+        .get("update_generation")
+        .and_then(Value::as_i64)
+        .context("graph run is missing its publication generation")?;
+    let next = generation
+        .checked_add(1)
+        .context("graph run publication generation exhausted")?;
+    let doc_id = run
+        .get("_docID")
+        .and_then(Value::as_str)
+        .context("graph run is missing its document ID")?;
+    txn.execute(&format!(
+        "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
+        escape_graphql_string(doc_id),
+        graphql_input_literal(&json!({ "update_generation": next }))?,
+    ))
+    .await?;
+    Ok(())
 }
 
 fn revision_id(plan: &GraphPlan) -> String {
@@ -1371,7 +1435,7 @@ async fn start_run_in_txn(
 }
 
 #[cfg(test)]
-pub(super) use tests::attribution_test_fixture;
+pub(super) use tests::{attribution_test_fixture, seed_signed_graph_request};
 
 #[cfg(test)]
 mod tests {
@@ -1795,6 +1859,8 @@ mod tests {
             gents_protocol::schemas::GRAPH_REVISION,
             gents_protocol::schemas::GRAPH_RUN,
             gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::GOAL,
+            gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
             gents_protocol::schemas::EVENT_TRIGGER,
@@ -2009,59 +2075,30 @@ mod tests {
         assert_eq!(switched.generation, 2);
 
         let now = chrono::Utc::now().to_rfc3339();
-        let completed_requests = node
-            .execute(&format!(
-                r#"mutation {{
-                    first: create_AgentRequest(input: {{
-                        request_id: "completed-request-1", agent_did: "did:key:worker",
-                        requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        lifecycle_state: "completed",
-                        caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                        created_at: "2026-08-25T00:00:00Z"
-                    }}) {{ _docID }}
-                    second: create_AgentRequest(input: {{
-                        request_id: "completed-request-2", agent_did: "did:key:worker",
-                        requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        lifecycle_state: "completed",
-                        caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                        created_at: "2026-08-25T00:00:01Z"
-                    }}) {{ _docID }}
-                    third: create_AgentRequest(input: {{
-                        request_id: "completed-request-3", agent_did: "did:key:worker",
-                        requester_did: "did:key:owner", behavior_id: "worker-v1",
-                        lifecycle_state: "completed",
-                        caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                        created_at: "2026-08-25T00:00:02Z"
-                    }}) {{ _docID }}
-                }}"#,
-                escape_graphql_string(&materialized.trigger_ids[0]),
-                escape_graphql_string(&run.correlation),
-                escape_graphql_string(&materialized.trigger_ids[0]),
-                escape_graphql_string(&run.correlation),
-                escape_graphql_string(&materialized.trigger_ids[0]),
-                escape_graphql_string(&run.correlation),
-            ))
+        for request_id in [
+            "completed-request-1",
+            "completed-request-2",
+            "completed-request-3",
+        ] {
+            seed_signed_graph_request(
+                &node,
+                &run,
+                &materialized.trigger_ids[0],
+                request_id,
+                "completed",
+                "",
+            )
             .await;
-        assert!(
-            !completed_requests.has_errors(),
-            "{:?}",
-            completed_requests.errors
-        );
-        let request = node
-            .execute(&format!(
-                r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "cancel-recovery-request", agent_did: "did:key:worker",
-                    requester_did: "did:key:owner", behavior_id: "worker-v1",
-                    lifecycle_state: "processing",
-                    caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                    created_at: "{}"
-                }}) {{ _docID }} }}"#,
-                escape_graphql_string(&materialized.trigger_ids[0]),
-                escape_graphql_string(&run.correlation),
-                escape_graphql_string(&now),
-            ))
-            .await;
-        assert!(!request.has_errors(), "{:?}", request.errors);
+        }
+        seed_signed_graph_request(
+            &node,
+            &run,
+            &materialized.trigger_ids[0],
+            "cancel-recovery-request",
+            "processing",
+            "",
+        )
+        .await;
         let cancel_intent = node
             .execute(&format!(
                 r#"mutation {{ update_GraphRun(
@@ -2137,6 +2174,8 @@ mod tests {
             gents_protocol::schemas::GRAPH_REVISION,
             gents_protocol::schemas::GRAPH_RUN,
             gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::GOAL,
+            gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
             gents_protocol::schemas::EVENT_TRIGGER,
@@ -2179,21 +2218,8 @@ mod tests {
         .unwrap();
         let now = chrono::Utc::now().to_rfc3339();
         let entry_trigger_id = graph_trigger_id(&plan.digest, "entry:input:worker:input").unwrap();
-        let request = node
-            .execute(&format!(
-                r#"mutation {{ create_AgentRequest(input: {{
-                    request_id: "request-1", agent_did: "did:key:worker",
-                    requester_did: "did:key:owner", behavior_id: "worker-v1",
-                    lifecycle_state: "completed",
-                    caused_by_trigger_id: "{}",
-                    caused_by_correlation: "{}", created_at: "{}"
-                }}) {{ _docID }} }}"#,
-                escape_graphql_string(&entry_trigger_id),
-                escape_graphql_string(&run.correlation),
-                escape_graphql_string(&now),
-            ))
+        seed_signed_graph_request(&node, &run, &entry_trigger_id, "request-1", "completed", "")
             .await;
-        assert!(!request.has_errors(), "{:?}", request.errors);
         let unsatisfied = super::super::load_graph_run_view(&node, "did:key:owner", &run.run_id)
             .await
             .unwrap();
@@ -2386,6 +2412,60 @@ mod tests {
     // Drives the real GraphRun transaction/interrupt owners. Request fixture
     // state changes emulate executor terminal observations, not a second graph
     // coordinator. No provider or wall-clock sleep is needed.
+    /// Seed a real authenticated route receipt, then set its mutable lifecycle.
+    pub(in crate::graph_pipeline) async fn seed_signed_graph_request(
+        node: &EmbeddedNode,
+        run: &GraphRunReceipt,
+        trigger: &str,
+        request_id: &str,
+        lifecycle: &str,
+        reason: &str,
+    ) {
+        use crate::identity::{AgentIdentity, KeyIdentity};
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("graph-worker.key"), None).unwrap();
+        let mut create = AgentRequestCreate::base(
+            request_id,
+            identity.did(),
+            identity.did(),
+            "worker-v1",
+            &format!("session-{request_id}"),
+            "Execute the pinned graph stage",
+            "scheduled",
+            "2026-08-25T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_automated_trigger(identity.did(), trigger),
+        );
+        let triggers = node
+            .execute(&format!(
+                r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+                escape_graphql_string(trigger),
+            ))
+            .await;
+        assert!(!triggers.has_errors(), "{:?}", triggers.errors);
+        create.caused_by_trigger_doc_id = Some(
+            triggers.data.unwrap()["EventTrigger"][0]["_docID"]
+                .as_str()
+                .unwrap()
+                .into(),
+        );
+        create.caused_by_trigger_id = Some(trigger.into());
+        create.caused_by_trigger_kind = Some("event".into());
+        create.caused_by_correlation = Some(run.correlation.clone());
+        create.caused_by_source_doc_id = Some(run.seed_doc_id.clone());
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let created = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let updated = node.execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "{}", failure_reason: "{}" }}) {{ _docID }} }}"#,
+            escape_graphql_string(request_id), escape_graphql_string(lifecycle), escape_graphql_string(reason),
+        )).await;
+        assert!(!updated.has_errors(), "{:?}", updated.errors);
+    }
+
     pub(in crate::graph_pipeline) async fn attribution_test_fixture(
         max_invocations: u32,
     ) -> (Arc<EmbeddedNode>, GraphRunReceipt, String) {
@@ -2395,6 +2475,8 @@ mod tests {
             gents_protocol::schemas::GRAPH_REVISION,
             gents_protocol::schemas::GRAPH_RUN,
             gents_protocol::schemas::AGENT_REQUEST,
+            gents_protocol::schemas::GOAL,
+            gents_protocol::schemas::GOAL_CREATION_CLAIM,
             gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
             gents_protocol::schemas::TASK,
             gents_protocol::schemas::EVENT_TRIGGER,
@@ -2446,32 +2528,8 @@ mod tests {
     ) {
         let (node, run, trigger) = attribution_test_fixture(2).await;
         let original_reason = "MaxTurnError: maximum 250 turns exceeded";
-        let seeded = node
-            .execute(&format!(
-                r#"mutation {{
-            cause: create_AgentRequest(input: {{
-                request_id: "{}", agent_did: "did:key:worker", requester_did: "did:key:owner",
-                behavior_id: "worker-v1", lifecycle_state: "failed", failure_reason: "{}",
-                caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                created_at: "2026-08-25T00:00:00Z"
-            }}) {{ _docID }}
-            sibling: create_AgentRequest(input: {{
-                request_id: "{}", agent_did: "did:key:worker", requester_did: "did:key:owner",
-                behavior_id: "worker-v1", lifecycle_state: "processing",
-                caused_by_trigger_id: "{}", caused_by_correlation: "{}",
-                created_at: "2026-08-25T00:00:01Z"
-            }}) {{ _docID }}
-        }}"#,
-                escape_graphql_string(cause_id),
-                escape_graphql_string(original_reason),
-                escape_graphql_string(&trigger),
-                escape_graphql_string(&run.correlation),
-                escape_graphql_string(sibling_id),
-                escape_graphql_string(&trigger),
-                escape_graphql_string(&run.correlation),
-            ))
-            .await;
-        assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+        seed_signed_graph_request(&node, &run, &trigger, cause_id, "failed", original_reason).await;
+        seed_signed_graph_request(&node, &run, &trigger, sibling_id, "processing", "").await;
 
         let first = reconcile_failure_fixture(&node, &run.run_id, via_access).await;
         assert_eq!(first.status, "running");

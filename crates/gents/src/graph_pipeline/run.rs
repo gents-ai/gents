@@ -24,11 +24,18 @@ use super::{
 };
 
 const GRAPH_RUN_VIEW_VERSION: u32 = 1;
+
+#[path = "logical_invocation.rs"]
+mod logical_invocation;
 const MAX_CANCEL_REASON_BYTES: usize = 1_024;
 
 #[cfg(test)]
 #[path = "attribution_contract_tests.rs"]
 mod attribution_contract_tests;
+
+#[cfg(test)]
+#[path = "publication_contract_tests.rs"]
+mod publication_contract_tests;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphResultRef {
@@ -110,6 +117,11 @@ pub struct GraphRunView {
     pub persisted_result_refs: Vec<GraphResultRef>,
     pub active_request_count: usize,
     pub terminal_request_count: usize,
+    /// Derived from physical ancestry and the canonical Goal; never persisted.
+    #[serde(default)]
+    pub outstanding_invocation_count: usize,
+    #[serde(default)]
+    pub terminal_stages_completed: bool,
     pub result_contract_satisfied: bool,
     pub failure_evidence: Option<Value>,
 }
@@ -253,63 +265,6 @@ fn planned_trigger_nodes(plan: &GraphPlan) -> Result<BTreeMap<String, String>> {
         anyhow::bail!("pinned graph plan has no materialized trigger routes");
     }
     Ok(nodes_by_trigger)
-}
-
-async fn load_requests(
-    executor: &(impl GraphRunQuery + ?Sized),
-    correlation: &str,
-    plan: &GraphPlan,
-) -> Result<Vec<GraphRunRequestView>> {
-    let nodes_by_trigger = planned_trigger_nodes(plan)?;
-    let trigger_ids = nodes_by_trigger.keys().cloned().collect::<Vec<_>>();
-    // Terminalization must observe every correlated request. The pinned
-    // invocation limit supplies failure evidence; it is not a safe query cap
-    // because work beyond that cap may still be active and require draining.
-    let response = executor
-        .execute_graph_query(&format!(
-            r#"{{
-                AgentRequest(
-                    filter: {{
-                        caused_by_correlation: {{ _eq: "{}" }},
-                        caused_by_trigger_id: {{ _in: {} }}
-                    }},
-                    order: {{ created_at: ASC }}
-                ) {{
-                    request_id session_id behavior_id caused_by_trigger_id lifecycle_state failure_reason
-                }}
-            }}"#,
-            escape_graphql_string(correlation),
-            graphql_string_list_literal(&trigger_ids),
-        ))
-        .await?;
-    let mut requests = rows(&response, "AgentRequest")
-        .iter()
-        .map(|row| {
-            let row = serde_json::from_value::<AgentRequestRow>((*row).clone())
-                .context("decoding graph-run AgentRequest row")?;
-            let lifecycle_state = row.lifecycle_state;
-            Ok(GraphRunRequestView {
-                request_id: row.request_id,
-                session_id: row
-                    .session_id
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .map(ToOwned::to_owned),
-                node_id: row
-                    .caused_by_trigger_id
-                    .as_deref()
-                    .and_then(|trigger_id| nodes_by_trigger.get(trigger_id))
-                    .cloned(),
-                behavior_id: row.behavior_id.unwrap_or_default(),
-                terminal: lifecycle_state.is_some_and(RequestLifecycleState::is_terminal),
-                succeeded: lifecycle_state == Some(RequestLifecycleState::Completed),
-                lifecycle_state: lifecycle_state.map(|state| state.as_str().to_string()),
-                failure_reason: row.failure_reason,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    requests.sort_by(|left, right| left.request_id.cmp(&right.request_id));
-    Ok(requests)
 }
 
 async fn load_groups(
@@ -490,7 +445,17 @@ async fn load_graph_run_view_with(
     let revision_digest = required_string(&run, "revision_digest")?;
     let plan = load_plan(executor, revision_digest).await?;
     let correlation = required_string(&run, "correlation")?;
-    let requests = load_requests(executor, correlation, &plan).await?;
+    let logical = logical_invocation::load(executor, correlation, &plan).await?;
+    let requests = logical.requests;
+    let outstanding_invocation_count = logical
+        .invocations
+        .iter()
+        .filter(|invocation| invocation.outstanding)
+        .count();
+    let invalid_invocation = logical
+        .invocations
+        .iter()
+        .find(|invocation| invocation.invalid);
     let groups = load_groups(executor, correlation, &plan).await?;
     let mut results = Vec::with_capacity(plan.results.len());
     for result in &plan.results {
@@ -527,9 +492,14 @@ async fn load_graph_run_view_with(
     let active_request_count = requests.iter().filter(|request| !request.terminal).count();
     let terminal_request_count = requests.len() - active_request_count;
     let unknown_request = requests.iter().find(|request| request.node_id.is_none());
-    let failed_request = requests
-        .iter()
-        .find(|request| request.terminal && !request.succeeded);
+    let failed_invocation = logical.invocations.iter().find(|invocation| {
+        !invocation.outstanding
+            && !invocation.invalid
+            && invocation
+                .tip
+                .as_ref()
+                .is_some_and(|tip| tip.terminal && !tip.succeeded)
+    });
     let over_limit = requests.len() > plan.limits.max_total_invocations as usize;
     let invalid_group = groups.iter().find(|group| group.quiesced_at.is_some());
     let started_at = run
@@ -554,10 +524,14 @@ async fn load_graph_run_view_with(
         .collect::<BTreeSet<_>>();
     let terminal_stages_completed = !terminal_nodes.is_empty()
         && terminal_nodes.iter().all(|node_id| {
-            requests.iter().any(|request| {
-                request.node_id.as_deref() == Some(*node_id)
-                    && request.terminal
-                    && request.succeeded
+            logical.invocations.iter().any(|invocation| {
+                invocation.node_id == *node_id
+                    && !invocation.outstanding
+                    && !invocation.invalid
+                    && invocation
+                        .tip
+                        .as_ref()
+                        .is_some_and(|tip| tip.terminal && tip.succeeded)
             })
         });
     let failure_evidence = if let Some(group) = invalid_group {
@@ -569,8 +543,14 @@ async fn load_graph_run_view_with(
     } else if let Some(request) = unknown_request {
         Some(json!({
             "version": 1, "code": "contract_drift",
-            "message": "correlated request behavior is not in the pinned graph plan",
+            "message": "pinned graph request lacks authenticated route binding",
             "request_id": request.request_id, "behavior_id": request.behavior_id,
+        }))
+    } else if let Some(invocation) = invalid_invocation {
+        Some(json!({
+            "version": 1, "code": "contract_drift",
+            "message": "graph invocation has ambiguous or cyclic authenticated ancestry",
+            "root_request_id": invocation.root_request_id,
         }))
     } else if over_limit {
         Some(json!({
@@ -586,14 +566,23 @@ async fn load_graph_run_view_with(
             "max_runtime_secs": plan.limits.max_runtime_secs,
             "deadline_at": deadline.map(|value| value.to_rfc3339()),
         }))
-    } else if let Some(request) = failed_request {
+    } else if let Some(invocation) = failed_invocation {
+        let request = invocation
+            .tip
+            .as_ref()
+            .expect("failed invocation has a tip");
         Some(json!({
             "version": 1, "code": "required_request_failed",
             "message": request.failure_reason.as_deref().unwrap_or("required graph request did not complete successfully"),
             "request_id": request.request_id,
+            "root_request_id": invocation.root_request_id,
             "lifecycle_state": request.lifecycle_state,
         }))
-    } else if active_request_count == 0 && terminal_stages_completed && !result_contract_satisfied {
+    } else if active_request_count == 0
+        && outstanding_invocation_count == 0
+        && terminal_stages_completed
+        && !result_contract_satisfied
+    {
         Some(json!({
             "version": 1,
             "code": "result_contract_unsatisfied",
@@ -683,9 +672,92 @@ async fn load_graph_run_view_with(
         persisted_result_refs,
         active_request_count,
         terminal_request_count,
+        outstanding_invocation_count,
+        terminal_stages_completed,
         result_contract_satisfied,
         failure_evidence,
     })
+}
+
+/// Authenticated derived association used by the existing publication transaction.
+/// This is not stored and does not authorize a new request by itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GraphInvocationBinding {
+    pub run_id: String,
+    pub revision_digest: String,
+}
+
+pub(crate) async fn graph_binding_for_request_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    parent_doc_id: &str,
+) -> Result<Option<GraphInvocationBinding>> {
+    // Correlation is only a discovery hint. Walk original physical ancestry so
+    // a historical child with omitted optional correlation remains discoverable.
+    let mut next = Some(parent_doc_id.to_owned());
+    let mut seen = BTreeSet::new();
+    let mut correlations = BTreeSet::new();
+    while let Some(doc_id) = next {
+        if !seen.insert(doc_id.clone()) {
+            break;
+        }
+        let response = txn
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
+                _docID caused_by_parent_request_doc_id caused_by_correlation caused_by_trigger_id
+            }} }}"#,
+                escape_graphql_string(&doc_id),
+            ))
+            .await?;
+        let Some(row) = rows(&response, "AgentRequest").first() else {
+            break;
+        };
+        let graph_route_hint = row
+            .get("caused_by_trigger_id")
+            .and_then(Value::as_str)
+            .is_some_and(super::runtime::graph_artifact_is_reserved);
+        if let Some(correlation) = row
+            .get("caused_by_correlation")
+            .and_then(Value::as_str)
+            .filter(|s| graph_route_hint && !s.is_empty())
+        {
+            correlations.insert(correlation.to_owned());
+        }
+        next = row
+            .get("caused_by_parent_request_doc_id")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+    }
+    if correlations.is_empty() {
+        return Ok(None);
+    }
+    let response = txn.execute(&format!(
+        r#"{{ GraphRun(filter: {{ correlation: {{ _in: {} }} }}) {{ run_id revision_digest correlation }} }}"#,
+        graphql_string_list_literal(&correlations.into_iter().collect::<Vec<_>>()),
+    )).await?;
+    let mut bindings = Vec::new();
+    for run in rows(&response, "GraphRun") {
+        let digest = required_string(run, "revision_digest")?;
+        let plan = load_plan(txn, digest).await?;
+        let projection =
+            logical_invocation::load(txn, required_string(run, "correlation")?, &plan).await?;
+        for invocation in projection.invocations {
+            if invocation.member_doc_ids.contains(parent_doc_id) {
+                anyhow::ensure!(
+                    !invocation.invalid,
+                    "cannot publish into ambiguous graph invocation ancestry"
+                );
+                bindings.push(GraphInvocationBinding {
+                    run_id: required_string(run, "run_id")?.to_owned(),
+                    revision_digest: digest.to_owned(),
+                });
+            }
+        }
+    }
+    anyhow::ensure!(
+        bindings.len() <= 1,
+        "request belongs to multiple authenticated graph invocations"
+    );
+    Ok(bindings.pop())
 }
 
 /// Reconstruct one durable graph execution from its pinned revision and the
@@ -956,7 +1028,7 @@ async fn capture_failure_txn(txn: ConfigApplyTxn<'_>, view: &GraphRunView) -> Re
         let current = query_run(&txn, &view.run_id).await?;
         let input = json!({
             "error": serde_json::to_string(&primary)?,
-            "update_generation": fresh.update_generation.saturating_add(1),
+            "update_generation": fresh.update_generation.checked_add(1).context("graph run generation exhausted")?,
         });
         txn.execute(&format!(
             "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
@@ -993,7 +1065,9 @@ async fn commit_terminal_txn(
         let decision = graph_run_terminal_decision(
             &fresh.status,
             fresh.cancellation_requested_at.is_some(),
-            fresh.result_contract_satisfied,
+            fresh.result_contract_satisfied
+                && fresh.terminal_stages_completed
+                && fresh.outstanding_invocation_count == 0,
             fresh.active_request_count == 0,
             fresh.failure_evidence.is_some(),
         );
@@ -1017,7 +1091,7 @@ async fn commit_terminal_txn(
             "status": status,
             "error": error.map(serde_json::to_string).transpose()?,
             "result_refs_json": result_refs.as_ref().map(serde_json::to_string).transpose()?,
-            "update_generation": current_generation.saturating_add(1),
+            "update_generation": current_generation.checked_add(1).context("graph run generation exhausted")?,
             "completed_at": chrono::Utc::now().to_rfc3339(),
         });
         let mutation = format!(
@@ -1052,6 +1126,8 @@ fn terminal_projection(
     } else if !view.requests.is_empty()
         && view.active_request_count == 0
         && view.result_contract_satisfied
+        && view.terminal_stages_completed
+        && view.outstanding_invocation_count == 0
     {
         Some(("succeeded", None, Some(view.successful_result_refs())))
     } else {
@@ -1209,7 +1285,7 @@ async fn persist_cancellation_intent(
             "cancel_requested_at": chrono::Utc::now().to_rfc3339(),
             "cancel_requested_by": actor_did,
             "cancel_reason": reason,
-            "update_generation": generation.saturating_add(1),
+            "update_generation": generation.checked_add(1).context("graph run generation exhausted")?,
         });
         txn.execute(&format!(
             "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
@@ -1315,6 +1391,8 @@ mod tests {
             persisted_result_refs: vec![],
             active_request_count: 0,
             terminal_request_count: 1,
+            outstanding_invocation_count: 0,
+            terminal_stages_completed: true,
             result_contract_satisfied: false,
             failure_evidence,
         }
