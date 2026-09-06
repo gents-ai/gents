@@ -1826,11 +1826,15 @@ mod tests {
         )
         .await
         .unwrap();
-        for (command, expected) in [
-            ("status", Some("active")),
-            ("pause", Some("paused")),
-            ("resume", Some("active")),
-            ("clear", None),
+        for (command, expected, expected_reply) in [
+            ("status", Some("active"), None),
+            ("pause", Some("paused"), None),
+            (
+                "resume",
+                Some("paused"),
+                Some("gents goal resume-request --session SESSION --from REQUEST_ID"),
+            ),
+            ("clear", None, None),
         ] {
             let dispatch = service.handle_acp_payload(&request_payload("session/prompt", json!({
                 "sessionId":"goal-controls", "prompt":[{"type":"text", "text":format!("/goal {command}"), "meta":{}}]
@@ -1842,6 +1846,14 @@ mod tests {
                 update["params"]["update"]["sessionUpdate"] == "agent_message_chunk"
                     && update["params"]["update"]["_meta"]["hostTurn"] == true
             }));
+            if let Some(expected_reply) = expected_reply {
+                assert!(dispatch.notifications.iter().any(|line| {
+                    let update = parse_response(line);
+                    update["params"]["update"]["content"]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains(expected_reply))
+                }));
+            }
             let goal =
                 gents::goal::load_canonical_goal(node, &service.config.agent_did, "goal-controls")
                     .await

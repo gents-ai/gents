@@ -103,9 +103,14 @@ impl GoalCommand {
         else {
             return Ok("No goal is set.".into());
         };
+        if *self == Self::Resume {
+            return Ok(format!(
+                "Goal remains {}. Resume it with `gents goal resume-request --session SESSION --from REQUEST_ID`.",
+                goal.status
+            ));
+        }
         let status = match self {
             Self::Pause => Some(GoalStatus::Paused),
-            Self::Resume => Some(GoalStatus::Active),
             _ => None,
         };
         if let Some(status) = status {
