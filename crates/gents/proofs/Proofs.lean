@@ -72,3 +72,5 @@ import Proofs.PeerRegistryDiscovery.DirectoryProjection
 import Proofs.PeerRegistryDiscovery.PersonaRequest
 
 import Proofs.Conformance.InvalidToolProgress
+
+import Proofs.Conformance.LogicalOutputObligation

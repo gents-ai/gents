@@ -196,6 +196,9 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // the per-kind label sequence and hand the inference loop a label the
         // summarizer's scope had already used.
         let inference = Box::pin(async {
+                let output_obligation_gate = crate::agent::output_obligation::OutputObligationGate::for_request(
+                    self.node.clone(), request, self.output_obligations.as_ref(),
+                ).await?;
                 let hook = DefraSessionHook::resume_with_identity_policy(
                     self.node.clone(),
                     &request.session_id,
@@ -210,7 +213,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 .with_goal_tool_authority(
                     self.behavior.tools.goal_tools_requested(),
                     self.behavior.tools.goal_creation_requested(),
-                );
+                )
+                .with_output_obligation_gate(output_obligation_gate.clone());
                 hook.set_active_request_binding(
                     Some(request.request_id.clone()),
                     Some(request.doc_id.clone()),
@@ -231,19 +235,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.loop_tools.len(),
                 )?;
                 loop_config.deadline = request_deadline;
-                let active_obligations = crate::agent::output_obligation::active_for_request(
-                    self.output_obligations.as_ref(),
-                    request.has_automated_trigger_lineage(),
-                );
-                if !active_obligations.is_empty() {
-                    loop_config.output_obligation_gate = Some(
-                        crate::agent::output_obligation::OutputObligationGate::new(
-                            self.node.clone(),
-                            request.doc_id.clone(),
-                            active_obligations,
-                        ),
-                    );
-                }
+                loop_config.output_obligation_gate = output_obligation_gate;
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
                 let turn_compaction_options = self.compaction_options_for_request(

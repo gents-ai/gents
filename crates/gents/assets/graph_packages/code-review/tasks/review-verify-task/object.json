@@ -4,8 +4,8 @@
   "description": null,
   "behavior_id": "review-verify",
   "prompt_template": "./prompt.md",
-  "goal_objective_template": "Verify every candidate for code-review run {{ group.correlation_value }} and persist the balanced verdict ledger and summary.",
-  "goal_token_budget": null,
+  "goal_objective_template": "Close verification for run {{ group.correlation_value }} across its {{ group.count }} completed scans. Persist one supported verdict per candidate, promote only confirmed findings, and publish the balanced verification summary, including zero candidates; then complete this Goal.",
+  "goal_token_budget": 1000000,
   "enabled": true,
   "output_schema_ref": null
 }

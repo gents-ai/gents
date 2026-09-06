@@ -323,6 +323,41 @@ mod tests {
     }
 
     #[test]
+    fn code_review_tasks_have_bounded_goals_without_creation_authority() {
+        let package = load_bundled_graph_package("code-review").unwrap();
+        assert_eq!(package.capabilities.len(), 4);
+        for capability in &package.capabilities {
+            let task: serde_json::Value =
+                serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();
+            let objective = task["goal_objective_template"]
+                .as_str()
+                .expect("each review Task must declare its durable Goal objective");
+            assert!(!objective.trim().is_empty(), "{}", capability.task_asset);
+            let budget = task["goal_token_budget"]
+                .as_i64()
+                .expect("each review Task must have a finite integral token budget");
+            assert!(budget > 0, "{}", capability.task_asset);
+            crate::goal::validate_task_goal_declaration(Some(objective), Some(budget)).unwrap();
+            let selection: serde_json::Value = serde_json::from_str(
+                package
+                    .asset_text(&capability.tool_selection_asset)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                selection["enable_goal_tools"], true,
+                "{}",
+                capability.tool_selection_asset
+            );
+            assert_eq!(
+                selection["enable_goal_creation"], false,
+                "{}",
+                capability.tool_selection_asset
+            );
+        }
+    }
+
+    #[test]
     fn web_deep_research_package_is_complete_and_compiler_valid() {
         let package = load_bundled_graph_package("web-deep-research").unwrap();
         assert!(package.package_digest.starts_with("sha256:"));
@@ -847,7 +882,9 @@ mod tests {
                 capability.task_asset
             );
             assert!(
-                task["goal_token_budget"].is_null(),
+                task["goal_token_budget"]
+                    .as_i64()
+                    .is_some_and(|budget| budget > 0),
                 "{}",
                 capability.task_asset
             );

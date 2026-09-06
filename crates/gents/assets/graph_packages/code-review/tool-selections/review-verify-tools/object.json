@@ -21,9 +21,13 @@
   "enable_defra_query": false,
   "defra_query_collections": [],
   "subagent_targets": [],
-  "backgroundable_tool_names": ["bash"],
+  "backgroundable_tool_names": [
+    "bash"
+  ],
   "write_tools": [],
-  "datastore_tool_surface_ids": ["review-verify-writes"],
+  "datastore_tool_surface_ids": [
+    "review-verify-writes"
+  ],
   "subagent_spawn_enabled": false,
   "subagent_steering_enabled": false,
   "subagent_background_enabled": false,

@@ -3603,3 +3603,174 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
+
+#[tokio::test]
+async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
+    use crate::agent::output_obligation::{ActiveOutputObligation, OutputObligationGate};
+    use crate::document_config::{WriteToolOutputObligation, WriteToolOutputObligationScope};
+    use crate::goal::{load_canonical_goal, set_goal, GoalStatus};
+
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    )
+    .with_goal_tool_authority(true, false);
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("publish required review output"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session = hook.session_id().await.unwrap();
+    set_goal(
+        &node,
+        "did:test:general",
+        &session,
+        Some("publish review output"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .unwrap();
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "goal-output-request", &session, deadline).await;
+    let request_doc = hook.active_request_doc_id().await.unwrap();
+    let gate = OutputObligationGate::new(
+        node.clone(),
+        request_doc.clone(),
+        vec![ActiveOutputObligation {
+            tool_name: "write_scan_result".into(),
+            contract: WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Trigger,
+                minimum_writes: 1,
+                expected_count_field: None,
+            },
+        }],
+    );
+    let hook = hook.with_output_obligation_gate(Some(gate.clone()));
+    // Match daemon wiring: clones must retain exactly this request's gate.
+    let persistence_hook = hook.clone();
+    let before = load_canonical_goal(&node, "did:test:general", &session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        persistence_hook
+            .on_tool_call(
+                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                None,
+                "premature-goal-complete",
+                r#"{"status":"complete","reason":"text alone is not output"}"#,
+            )
+            .await,
+        ToolCallHookAction::Skip { .. }
+    ));
+    let denied = fetch_tool_call_row(&node, &session, "premature-goal-complete").await;
+    assert_eq!(denied["lifecycle_state"], "completed");
+    let result: serde_json::Value =
+        serde_json::from_str(denied["result"].as_str().unwrap()).unwrap();
+    assert_eq!(result["accepted"], false);
+    assert!(result["error"]
+        .as_str()
+        .unwrap()
+        .contains("write_scan_result"));
+    let after = load_canonical_goal(&node, "did:test:general", &session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.parsed_status(), Some(GoalStatus::Active));
+    assert_eq!(after.continuation_sequence, before.continuation_sequence);
+    assert_eq!(after.completion_evidence, before.completion_evidence);
+
+    // Use the existing tool lifecycle owner, not a raw fabricated completed row.
+    // The gate's contract counts completed write acknowledgments; domain document
+    // writes and authenticated continuation membership have separate consumers.
+    let mut output = crate::tool_call_lifecycle::ToolCallLifecycle::new(
+        node.clone(),
+        "goal-output-request".into(),
+        session.clone(),
+        "did:test:general".into(),
+        "required-output".into(),
+        2,
+        "write_scan_result".into(),
+        "{}".into(),
+        deadline,
+    )
+    .with_request_doc_id(Some(request_doc));
+    output.start_running().await.unwrap();
+    assert_eq!(gate.unmet().await.unwrap().len(), 1);
+    output
+        .complete("persisted scan result acknowledgment")
+        .await
+        .unwrap();
+    assert!(gate.unmet().await.unwrap().is_empty());
+    assert!(matches!(
+        persistence_hook
+            .on_tool_call(
+                crate::goal::UPDATE_GOAL_TOOL_NAME,
+                None,
+                "acknowledged-goal-complete",
+                r#"{"status":"complete","reason":"required scan output is durable"}"#,
+            )
+            .await,
+        ToolCallHookAction::Skip { .. }
+    ));
+    let accepted = fetch_tool_call_row(&node, &session, "acknowledged-goal-complete").await;
+    assert_eq!(accepted["lifecycle_state"], "completed");
+    let result: serde_json::Value =
+        serde_json::from_str(accepted["result"].as_str().unwrap()).unwrap();
+    assert_eq!(result["accepted"], true);
+    let complete = load_canonical_goal(&node, "did:test:general", &session)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(complete.parsed_status(), Some(GoalStatus::Complete));
+
+    // Operator set_goal remains an explicit control-plane override. It does not
+    // borrow this model-facing hook's output contract or reopen the prior Goal.
+    set_goal(
+        &node,
+        "did:test:general",
+        "operator-output-session",
+        Some("operator decision"),
+        Some(GoalStatus::Active),
+        None,
+    )
+    .await
+    .unwrap();
+    let empty_gate = OutputObligationGate::new(
+        node.clone(),
+        "operator-unwritten-request",
+        vec![ActiveOutputObligation {
+            tool_name: "write_scan_result".into(),
+            contract: WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Trigger,
+                minimum_writes: 1,
+                expected_count_field: None,
+            },
+        }],
+    );
+    assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
+    set_goal(
+        &node,
+        "did:test:general",
+        "operator-output-session",
+        None,
+        Some(GoalStatus::Complete),
+        None,
+    )
+    .await
+    .unwrap();
+    let operator = load_canonical_goal(&node, "did:test:general", "operator-output-session")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(operator.parsed_status(), Some(GoalStatus::Complete));
+    assert_eq!(empty_gate.unmet().await.unwrap().len(), 1);
+    drop(persistence_hook);
+    drop(hook);
+    node.shutdown().await;
+}

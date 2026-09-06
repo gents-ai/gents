@@ -4,8 +4,8 @@
   "description": null,
   "behavior_id": "review-triage",
   "prompt_template": "./prompt.md",
-  "goal_objective_template": "Complete the operator-facing merge report for code-review run {{ event.correlation }}.",
-  "goal_token_budget": null,
+  "goal_objective_template": "Publish the final triage report for run {{ event.correlation }} matching its closed verification ledger ({{ doc.candidate_count }} candidates, {{ doc.confirmed_count }} confirmed, {{ doc.refuted_count }} refuted), then complete this Goal.",
+  "goal_token_budget": 150000,
   "enabled": true,
   "output_schema_ref": null
 }

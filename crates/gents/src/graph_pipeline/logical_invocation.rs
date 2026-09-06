@@ -105,55 +105,22 @@ pub(super) async fn load(
         }
         let (requests, goal) = &sessions[&key];
         let root_doc = root.doc_id.as_deref().unwrap();
-        let mut members = BTreeSet::from([root_doc.to_owned()]);
-        let mut parents = BTreeMap::<String, String>::new();
-        let mut invalid = false;
-        // Finite monotone closure; no timestamp ordering enters ancestry.
-        for _ in 0..requests.len() {
-            let mut changed = false;
-            for child in requests {
-                let Some(parent_doc) = child.caused_by_parent_request_doc_id.as_deref() else {
-                    continue;
-                };
-                if !members.contains(parent_doc) {
-                    continue;
-                }
-                let Some(child_doc) = child.doc_id.as_deref() else {
-                    continue;
-                };
-                let Some(goal_id) = child.caused_by_trigger_id.as_deref() else {
-                    continue;
-                };
-                let Some(parent) = requests
-                    .iter()
-                    .find(|r| r.doc_id.as_deref() == Some(parent_doc))
-                else {
-                    continue;
-                };
-                if crate::goal::verify_goal_continuation_edge(
-                    owner, session, goal_id, parent, child,
-                )
-                .is_err()
-                {
-                    continue;
-                }
-                if child_doc == root_doc
-                    || root_rows
-                        .iter()
-                        .any(|r| r.doc_id.as_deref() == Some(child_doc))
-                {
-                    invalid = true;
-                }
-                if parents.get(child_doc).is_some_and(|p| p != parent_doc) {
-                    invalid = true;
-                }
-                parents.insert(child_doc.to_owned(), parent_doc.to_owned());
-                changed |= members.insert(child_doc.to_owned());
-            }
-            if !changed {
-                break;
-            }
-        }
+        let ancestry =
+            crate::goal::authenticated_goal_request_members(owner, session, root_doc, requests)?;
+        anyhow::ensure!(
+            ancestry.entry.doc_id.as_deref() == Some(root_doc),
+            "graph invocation entry differs from its authenticated pinned root"
+        );
+        let members = ancestry.member_doc_ids.into_iter().collect::<BTreeSet<_>>();
+        let parents = ancestry.parents;
+        // Pinned-root association belongs to GraphRun, not generic Goal ancestry.
+        let mut invalid = parents.contains_key(root_doc)
+            || root_rows.iter().any(|candidate| {
+                candidate
+                    .doc_id
+                    .as_deref()
+                    .is_some_and(|doc| doc != root_doc && members.contains(doc))
+            });
         let member_rows = requests
             .iter()
             .filter(|r| r.doc_id.as_ref().is_some_and(|id| members.contains(id)))

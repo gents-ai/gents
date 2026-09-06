@@ -14,3 +14,5 @@ Call `write_review_area` exactly once for each row below. For every call set `ex
 | `{{ event.correlation }}:workflow-invariants` | `workflow-invariants` | `all changed paths` | `Find concrete repository-specific workflow, evidence, worktree seal/integration, live-probe, review-gating, or never-merge invariant violations introduced by the complete diff.` |
 
 Emit all four complete calls now, preferably in one parallel batch. Never emit analysis or prose. Never retry a successful write. After all four area rows are durably written, call `update_goal` with `status="complete"`. Never complete the goal while any required row is missing.
+
+On resumption, use `get_goal` and persisted transcript evidence to perform only missing work. Never repeat an acknowledged successful write, create a replacement Goal, reset a budget, or invent a required document. If Goal completion is rejected, address the missing obligation without duplicating completed writes. If genuinely blocked, use the existing Goal blocked-audit flow. Respect the remaining Goal budget and runtime continuation/termination decisions.

@@ -197,6 +197,18 @@ impl DefraSessionHook {
                     lifecycle.complete(&result).await?;
                     return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
                 };
+                if let Some(gate) = self.output_obligation_gate.as_ref() {
+                    let unmet = gate.unmet().await?;
+                    if !unmet.is_empty() {
+                        let result = json!({
+                            "accepted": false,
+                            "error": crate::agent::output_obligation::continuation_message(&unmet),
+                        })
+                        .to_string();
+                        lifecycle.complete(&result).await?;
+                        return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                    }
+                }
                 let active_time = goal.current_active_time_seconds(now);
                 let reason = parsed
                     .reason

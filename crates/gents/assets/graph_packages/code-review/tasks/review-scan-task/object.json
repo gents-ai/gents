@@ -4,8 +4,8 @@
   "description": null,
   "behavior_id": "review-scan",
   "prompt_template": "./prompt.md",
-  "goal_objective_template": "Complete code-review scan {{ doc.area_id }} and persist its candidate findings and terminal scan result.",
-  "goal_token_budget": null,
+  "goal_objective_template": "Finish the {{ doc.lens }} review for area {{ doc.area_id }} in run {{ event.correlation }}. Persist at most three supported candidates, or none when no defects are supported, and the mandatory scan-result sentinel for this exact area; then complete this Goal.",
+  "goal_token_budget": 500000,
   "enabled": true,
   "output_schema_ref": null
 }

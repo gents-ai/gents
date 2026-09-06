@@ -691,6 +691,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "logical_output_obligation_cases"
+      "LogicalOutputObligationCases"
+      "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes")
+      "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "completion_retry_cases"
       "completionRetry"
       "conformance::completion_retry_lean_witness_cases_hold")
