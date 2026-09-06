@@ -4,3 +4,4 @@ import Proofs.CompletionRetry.Executable
 import Proofs.CompletionRetry.Properties
 import Proofs.CompletionRetry.Contracts
 import Proofs.CompletionRetry.OutputObligation
+import Proofs.CompletionRetry.InvalidToolProgress

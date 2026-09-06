@@ -11,6 +11,31 @@ use super::shared::{
 };
 use super::BACKGROUND_COMMAND_TIMEOUT_SECS;
 
+/// Add corrective argv guidance only after the existing authority rejects the
+/// literal executable. Admitted filenames containing spaces remain unchanged.
+fn validate_read_only_bash_input(
+    command: &str,
+    args: &[String],
+    policy: &CommandExecutionPolicy,
+) -> Result<(), ToolError> {
+    validate_command_policy(command, args, policy).map_err(|error| {
+        if command.chars().any(char::is_whitespace)
+            && matches!(
+                &error,
+                ToolError::PolicyDenial(denial)
+                    if matches!(&denial.reason, super::denial::DenialReason::ReadOnlyCommandNotAllowlisted { .. })
+            )
+        {
+            ToolError::reported_failure(
+                crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
+                r#"Invalid bash command argument: this tool accepts one allowed executable name or path in `command`, with separate arguments in `args`; it does not interpret shell command strings. For example, use {"command":"ls","args":["crates"]}. The supplied literal executable was rejected; do not repeat the same unchanged call."#.to_owned(),
+            )
+        } else {
+            error
+        }
+    })
+}
+
 fn timeout_secs_schema(default_timeout: Duration, max_timeout: Duration) -> serde_json::Value {
     let max_secs = max_timeout.as_secs().max(default_timeout.as_secs());
     serde_json::json!({
@@ -116,7 +141,7 @@ impl Tool for ReadOnlyBashTool {
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "Executable name or path from the read-only command allowlist."
+                        "description": "One executable name or path from the read-only allowlist, not a shell command string. Example: {\"command\":\"ls\",\"args\":[\"crates\"]}."
                     },
                     "args": {
                         "type": "array",
@@ -143,7 +168,7 @@ impl Tool for ReadOnlyBashTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let policy = crate::toolset::effective_command_policy(&self.policy);
-        validate_command_policy(&args.command, &args.args, &policy)?;
+        validate_read_only_bash_input(&args.command, &args.args, &policy)?;
         run_command(
             &self.context,
             Self::NAME,
@@ -249,5 +274,70 @@ impl Tool for UnrestrictedBashTool {
 
     fn into_dyn_error(error: Self::Error) -> crate::llm::tool::ToolError {
         error.into_dispatch_error()
+    }
+}
+
+#[cfg(test)]
+mod input_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_only_bash_malformed_command_reports_corrective_invalid_argument() {
+        let root = tempfile::tempdir().unwrap();
+        let tool = ReadOnlyBashTool::new(
+            ToolContext::new(root.path().to_path_buf(), false).unwrap(),
+            Duration::from_secs(10),
+            vec!["ls".into()],
+        );
+        let error = Tool::call(
+            &tool,
+            BashArgs {
+                command: "ls crates".into(),
+                args: Vec::new(),
+                cwd: None,
+                timeout_secs: None,
+                raw_json: false,
+            },
+        )
+        .await
+        .unwrap_err()
+        .into_dispatch_error();
+        match error {
+            crate::llm::tool::ToolError::ReportedFailure { class, text } => {
+                assert_eq!(
+                    class,
+                    crate::tool_call_lifecycle::FailureClass::ArgumentInvalid
+                );
+                assert!(text.contains(r#"{"command":"ls","args":["crates"]}"#));
+                assert!(text.contains("does not interpret shell command strings"));
+            }
+            other => panic!("expected typed invalid input, got {other:?}"),
+        }
+        let definition = Tool::definition(&tool, String::new()).await;
+        assert!(
+            definition.parameters["properties"]["command"]["description"]
+                .as_str()
+                .unwrap()
+                .contains(r#"{"command":"ls","args":["crates"]}"#)
+        );
+    }
+
+    #[test]
+    fn read_only_bash_guidance_preserves_literal_and_denied_authority() {
+        let mut policy = CommandExecutionPolicy::read_only(vec!["ls".into()]);
+        assert!(validate_read_only_bash_input("ls", &["crates".into()], &policy).is_ok());
+        assert!(matches!(
+            validate_read_only_bash_input("rm", &[], &policy),
+            Err(ToolError::PolicyDenial(_))
+        ));
+        // Explicitly admitted literal executable names are never split or rejected.
+        policy.allowed_argv_prefixes = vec![vec!["literal executable".into()]];
+        assert!(validate_command_policy("literal executable", &[], &policy).is_ok());
+        assert!(validate_read_only_bash_input("literal executable", &[], &policy).is_ok());
+        policy.forbidden_argv_prefixes = vec![vec!["literal executable".into()]];
+        assert!(matches!(
+            validate_read_only_bash_input("literal executable", &[], &policy),
+            Err(ToolError::PolicyDenial(_))
+        ));
     }
 }

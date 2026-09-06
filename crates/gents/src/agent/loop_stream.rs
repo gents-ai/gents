@@ -47,6 +47,7 @@ use crate::truncation::{tool_result_truncation_mode, truncate_text, TruncationLi
 
 mod aggregate_budget;
 mod contract;
+mod invalid_tool_progress;
 mod one_shot;
 mod request_assembly;
 mod tool_dispatch;
@@ -125,6 +126,8 @@ where
         // prompt (mirrors Lean `PromptAssembly.Template.assembleWithContext`).
         let mut new_messages: Vec<Message> =
             assemble_new_messages(config.context_message.clone(), prompt);
+        // Request-local and cumulative across turns, retries, and compaction.
+        let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut aggregated_usage = Usage::new();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
         let mut current_turn: usize = config.initial_turn_index;
@@ -651,6 +654,10 @@ where
                                         )))?;
                                     }
                                 }
+                                // Charge only after the hook has accepted the outcome.
+                                // Default fail-closed persistence aborts above on failure;
+                                // explicit fail-open callers retain their existing policy.
+                                invalid_tool_progress.record(&outcome);
                                 // The typed outcome's model-facing accessor is
                                 // the only text that may thread to the model.
                                 let (bounded, _, _) = truncate_text(
@@ -663,6 +670,22 @@ where
                         };
 
                         pending_results.push((rig_compat::from_rig_tool_call(&tool_call), internal_call_id, bounded_result));
+                        if invalid_tool_progress.exhausted() {
+                            // Deliver the eighth result before failing. Do not await another
+                            // provider item: it could stall or contain a ninth tool call.
+                            for item in close_streaming_turn(
+                                &mut new_messages,
+                                &mut accumulator,
+                                stream.message_id.clone(),
+                                pending_results,
+                            ) {
+                                yield item;
+                            }
+                            Err(StreamingError::Completion(CompletionError::ProviderError(
+                                invalid_tool_progress.exhaustion_reason(),
+                            )))?;
+                            unreachable!("invalid tool budget exhaustion ends the stream");
+                        }
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                     }

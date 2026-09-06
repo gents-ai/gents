@@ -16,7 +16,13 @@ pub(crate) async fn dispatch_tool(
 ) -> ToolOutcome {
     let Some(tool) = tools.iter().find(|tool| tool.name() == name) else {
         // An unresolved name is a typed dispatch failure, not completed output.
-        return ToolOutcome::from_tool_call_error(&format!("error: unknown tool '{name}'"));
+        return ToolOutcome::from_dispatch(
+            name,
+            Err(crate::llm::tool::ToolError::ReportedFailure {
+                class: crate::tool_call_lifecycle::FailureClass::ArgumentInvalid,
+                text: format!("error: unknown tool '{name}'"),
+            }),
+        );
     };
 
     let Some(scope) = current_tool_runtime_context() else {
