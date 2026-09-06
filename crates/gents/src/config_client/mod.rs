@@ -13,7 +13,7 @@
 //! authentication for a caller ACP identity; without it, the server still
 //! signs committed mutations as the node but evaluates the query anonymously.
 //!
-//! Write conventions (load-bearing — see `CLAUDE.md`):
+//! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
 //!   [`crate::graphql::escape_graphql_string`];
 //! - list fields never render `[]` (typed as `JsonArray`, corrupts nillable

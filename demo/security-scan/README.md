@@ -79,7 +79,7 @@ asserts its example snippet fires.
 
 `graphql-injection` and `defra-empty-array` are gents-native additions,
 not part of deepsec's upstream taxonomy: they encode this repository's
-two documented sharp edges (see `CLAUDE.md`) — every GraphQL
+two documented sharp edges (see `AGENTS.md`) — every GraphQL
 interpolation must pass `escape_graphql_string`, and a DefraDB mutation
 must never emit an empty `[]` literal. Both are `precise` tier because
 they check syntactic project law rather than a fuzzy security heuristic,

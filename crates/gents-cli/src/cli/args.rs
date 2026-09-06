@@ -2009,7 +2009,7 @@ pub(crate) struct ToolSelectionUpsertArgs {
     pub(crate) clear_command_network_mode: bool,
     #[arg(
         long = "command-allowed-argv-prefix",
-        help = "Argv prefix allowed for bash (subcommand-precise). When set, every command must match a prefix; also admits heads outside the read-only base allowlist. Prefer over replacing the base when extending. See docs/macos-bash-sandbox.md"
+        help = "Argv prefix allowed for bash (subcommand-precise). When set, every command must match a prefix; also admits heads outside the read-only base allowlist. Prefer over replacing the base when extending"
     )]
     pub(crate) command_allowed_argv_prefixes: Vec<String>,
     #[arg(long, default_value_t = false)]

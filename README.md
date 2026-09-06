@@ -24,18 +24,6 @@ gents server    # start the runtime (embedded DefraDB + GraphQL + P2P)
 gents codex     # launch Codex against the Gents app-server shim
 ```
 
-**[The getting-started guide](docs/demo.md)** walks every step and the paths
-off it: letting the agent change things (`init --write` / `--yolo`, and what
-each preset guarantees), pointing `init` at other OpenAI-compatible backends,
-verifying the signed binary, building from source, and the fallback `chat`
-REPL. Desktop app, fleet bring-up, and authenticated enrollment:
-[docs/operations.md](docs/operations.md).
-Operators performing the breaking product cutover should use the single
-[Gents cutover runbook](docs/gents-cutover.md).
-The plan for packaging the desktop chat, fleet, and Tauri bridge surfaces for
-downstream apps (#877) is specified in
-[docs/reusable-desktop-packages.md](docs/reusable-desktop-packages.md).
-
 For the interactive fleet demo, run `gents demo` — it ships in the binary,
 no checkout, `make`, or mock required. It boots a single curated agent (read-only
 tools + demo skills) on a backend you pick on first run, then drops into a
@@ -119,7 +107,7 @@ It contains no mock backend path.
 Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents inverts that: the loop is thin and formally specified, and the hard properties come from the substrate.
 
 - **The data store is the control plane.** Configure an agent by writing documents; trigger work by writing documents; debug by reading them. The runtime watches request documents and writes responses back. Multi-agent coordination is document replication, not RPC.
-- **Identity is cryptographic and layered.** A *principal* (DID) is the permission and audit boundary. *Behaviors* — prompt, tools, model — are reusable interfaces on a principal. *Deployments* place principals on hosts. Least privilege falls out of the model.
+- **Identity and authorization are cryptographic and layered.** DefraDB authenticates a *principal* as a DID, and document ACP authorizes access. *Behaviors* — prompt, tools, model — are reusable interfaces on a principal. *Deployments* place principals on hosts.
 - **The core is proven.** The request, process, persistence, tool-call, and subagent lifecycles — and what the runtime feeds the model — are specified in Lean 4 with zero `sorry`s, fenced by conformance tests, and only then implemented. See [the proofs](crates/gents/proofs/README.md).
 
 ## Architecture
@@ -133,7 +121,7 @@ Agent frameworks bolt persistence, identity, and coordination onto a loop. Gents
    │  → tool surface (files/bash/MCP/subagents/skills)       │
    │  → persistence hooks → live response streaming          │
    ├─────────────────────────────────────────────────────────┤
-   │  embedded DefraDB: identity (DID) · ACL · P2P           │
+   │  embedded DefraDB: identity (DID) · document ACP · P2P  │
    └─────────────────────────────────────────────────────────┘
         ▲                ▲                  ▲
      CLI (operate)   desktop (observe)   other peers (replicate)
@@ -154,7 +142,7 @@ Building from source needs a few system dependencies (Rust, a C/C++ toolchain,
 use pinned HTTPS revisions.
 Build, test, and toolchain setup live in **[DEVELOPMENT.md](DEVELOPMENT.md)**.
 
-The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
+The development flow is foundation-first: Lean model → conformance tests → implementation. `AGENTS.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
 
 ## Status
 
