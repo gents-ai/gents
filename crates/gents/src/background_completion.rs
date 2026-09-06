@@ -4,7 +4,7 @@
 //! running until the child request reaches a terminal state. This module owns
 //! the observer path that projects that terminal state into the parent
 //! `AgentToolCall`, appends a compact transcript notification, and enqueues the
-//! coalesced same-session wake-up request.
+//! coalesced same-session wake-up request when no Goal owns continuation.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -25,11 +25,7 @@ use crate::background_tools::{
     subagent_tool_not_allowed_payload, ChildEdge,
 };
 use crate::graphql::escape_graphql_string;
-use crate::lifecycle::queue::{
-    enqueue_background_completion_with_message, enqueue_session_request, parse_queue_hints,
-    QueueHints, QueuePolicy, QueueSource,
-};
-use crate::lifecycle::ExecutionOrigin;
+use crate::lifecycle::queue::{QueueHints, QueuePolicy, QueueSource};
 use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
 
@@ -55,7 +51,7 @@ pub enum BackgroundCompletionOutcome {
         parent_tool_call_id: String,
         parent_session_id: String,
         notification_sequence: u32,
-        wake_request_id: String,
+        wake_request_id: Option<String>,
     },
     NotTerminal,
     NotBackground,
@@ -122,8 +118,7 @@ use rendering::{
     compact_summary, non_empty, render_notification, render_tool_completion, xml_escape_attr,
 };
 use side_effects::{
-    bound_background_wake_request, bridge_state_is_terminal, ensure_projection_side_effects,
-    existing_tool_completion_notification, existing_wakeup_after,
+    bridge_state_is_terminal, ensure_projection_side_effects, existing_tool_completion_notification,
 };
 
 #[cfg(test)]

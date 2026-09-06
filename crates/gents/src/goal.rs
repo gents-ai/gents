@@ -2024,7 +2024,7 @@ async fn finish_set_goal(
     }
 }
 
-async fn load_canonical_goal_in_txn(
+pub(crate) async fn load_canonical_goal_in_txn(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
     agent_did: &str,
     session_id: &str,

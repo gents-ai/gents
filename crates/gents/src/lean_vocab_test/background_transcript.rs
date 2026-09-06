@@ -175,6 +175,14 @@ pub(crate) struct LeanR6BackgroundingCase {
     pub(crate) retry_delay_seconds: Option<usize>,
     #[serde(default)]
     pub(crate) is_latest: Option<bool>,
+    #[serde(default)]
+    pub(crate) goal_status: Option<String>,
+    #[serde(default)]
+    pub(crate) notification_persisted: Option<bool>,
+    #[serde(default)]
+    pub(crate) wake_created: Option<bool>,
+    #[serde(default)]
+    pub(crate) redrive_allowed: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

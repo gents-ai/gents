@@ -322,7 +322,11 @@ def r6BackgroundingCaseJson (witness : R6BackgroundingCase) : String :=
     ++ "\"max_retries\":" ++ jsonOptionalNat witness.maxRetries ++ ","
     ++ "\"post_retry_count\":" ++ jsonOptionalNat witness.postRetryCount ++ ","
     ++ "\"retry_delay_seconds\":" ++ jsonOptionalNat witness.retryDelaySeconds ++ ","
-    ++ "\"is_latest\":" ++ jsonOptionalBool witness.isLatest
+    ++ "\"is_latest\":" ++ jsonOptionalBool witness.isLatest ++ ","
+    ++ "\"goal_status\":" ++ jsonOptionalString witness.goalStatus ++ ","
+    ++ "\"notification_persisted\":" ++ jsonOptionalBool witness.notificationPersisted ++ ","
+    ++ "\"wake_created\":" ++ jsonOptionalBool witness.wakeCreated ++ ","
+    ++ "\"redrive_allowed\":" ++ jsonOptionalBool witness.redriveAllowed
     ++ "}"
 
 def r5CrossDeploymentCaseJson (witness : R5CrossDeploymentCase) : String :=

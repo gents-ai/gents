@@ -15,17 +15,6 @@ pub(super) fn queue_source_and_key_match(
     })
 }
 
-pub(super) fn coalesce_key(hints: &QueueHints) -> Option<&str> {
-    if hints.policy != QueuePolicy::Coalesce {
-        return None;
-    }
-    hints
-        .key
-        .as_deref()
-        .map(str::trim)
-        .filter(|key| !key.is_empty())
-}
-
 pub async fn reconcile_coalesced_pending_request(
     node: &EmbeddedNode,
     session_id: &str,
@@ -289,15 +278,4 @@ pub(super) fn request_only_parent_linkage_graphql_fields(parent: &AgentRequest) 
         }
         _ => anyhow::bail!("cannot enqueue control continuation from incoherent parent linkage"),
     }
-}
-
-pub(super) async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> Result<String> {
-    crate::request_binding::require_request_doc_id(node, request_id).await
-}
-
-pub(super) async fn lookup_request_doc_id_optional(
-    node: &EmbeddedNode,
-    request_id: &str,
-) -> Result<Option<String>> {
-    crate::request_binding::resolve_request_doc_id(node, request_id).await
 }

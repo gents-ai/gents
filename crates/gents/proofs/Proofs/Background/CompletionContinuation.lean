@@ -1,5 +1,6 @@
 import Proofs.Session.Properties.Executable
 import Proofs.Request
+import Proofs.Goals
 import Proofs.ToolExecution.State
 import Proofs.Transcript.State
 
@@ -13,7 +14,7 @@ composes those seams into the model-facing background-completion contract:
 1. an in-flight assistant wait call is durably reserved before it can block;
 2. only a terminal parent-visible tool may produce a completion notification;
 3. the notification is appended after the reserved assistant row;
-4. a canonical coalesced wake is enqueued only after that append exists; and
+4. without a canonical Goal, a coalesced wake is enqueued only after that append exists; and
 5. when that wake is claimed, the continuation still carries the transcript
    containing both rows in the correct order.
 
@@ -119,6 +120,30 @@ def enqueueWake?
   else
     none
 
+/-! Canonical Goal presence selects the existing Goal continuation owner,
+including paused and terminal Goals. This is not another budget/status policy.
+The observation is the canonical same-principal/session Goal in the existing
+publication transaction; no absent-scan phantom protection is claimed.
+Existing pending wakes are not canceled by this projection. -/
+def enqueueWakeForOwner?
+    (goal : Option Goals.Status)
+    (notified : NotifiedCompletion)
+    (pre : SessionQueue.SessionQueueState) : Option QueuedCompletion :=
+  match goal with
+  | some _ => none
+  | none => enqueueWake? notified pre
+
+theorem goal_owned_notification_does_not_enqueue
+    (status : Goals.Status) (notified : NotifiedCompletion)
+    (pre : SessionQueue.SessionQueueState) :
+    enqueueWakeForOwner? (some status) notified pre = none := by
+  rfl
+
+theorem non_goal_enqueue_preserves_existing_policy
+    (notified : NotifiedCompletion) (pre : SessionQueue.SessionQueueState) :
+    enqueueWakeForOwner? none notified pre = enqueueWake? notified pre := by
+  rfl
+
 /-- A claimed continuation retains the notified transcript by construction. -/
 structure Continuation where
   queued : QueuedCompletion
@@ -169,6 +194,13 @@ theorem notified_completion_has_durable_message
     simp [Transcript.TranscriptState.appendUserMessage, row]
   · rw [notified.appended]
     rfl
+
+theorem goal_owned_delivery_retains_notification_without_wake
+    (status : Goals.Status) (notified : NotifiedCompletion)
+    (pre : SessionQueue.SessionQueueState) :
+    HasNotification notified ∧ enqueueWakeForOwner? (some status) notified pre = none :=
+  ⟨notified_completion_has_durable_message notified,
+    goal_owned_notification_does_not_enqueue status notified pre⟩
 
 /-- Acceptance theorem: once a background wake is claimed, its parent-visible
 terminal state and durable notification are still available to provider-input
@@ -324,6 +356,23 @@ def redriveWake? (wake : FailedWake) : Option RequestContext :=
     some (redrivenWakeContext wake.ctx)
   else
     none
+
+/-- Legacy failed wakes also defer to the canonical Goal owner. This guard
+is applied at publication, not merely during candidate discovery. -/
+def redriveWakeForOwner?
+    (goal : Option Goals.Status) (wake : FailedWake) : Option RequestContext :=
+  match goal with
+  | some _ => none
+  | none => redriveWake? wake
+
+theorem goal_owned_failed_wake_cannot_redrive
+    (status : Goals.Status) (wake : FailedWake) :
+    redriveWakeForOwner? (some status) wake = none := by
+  rfl
+
+theorem non_goal_redrive_preserves_existing_policy (wake : FailedWake) :
+    redriveWakeForOwner? none wake = redriveWake? wake := by
+  rfl
 
 theorem redriveWake?_bounded
     {wake : FailedWake}

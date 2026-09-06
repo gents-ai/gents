@@ -456,7 +456,7 @@ async fn wait_for_background_theorem_child_lifecycle_state(
 
 pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 34);
+    assert_eq!(cases.len(), 41);
 
     let names = cases
         .iter()
@@ -465,6 +465,13 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
     assert_eq!(
         names,
         [
+            "no_goal_preserves_background_wake",
+            "active_goal_owns_background_continuation",
+            "paused_goal_does_not_background_resume",
+            "blocked_goal_does_not_background_resume",
+            "usage_limited_goal_does_not_background_resume",
+            "budget_limited_goal_owns_wrapup",
+            "complete_goal_does_not_background_resume",
             "background_tool_budget_count_7_admits_spawn",
             "background_tool_budget_count_8_rejects_spawn",
             "tool_kind_background_mode_executes",
@@ -683,6 +690,13 @@ pub(super) async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_co
 
     for case in cases.iter().filter(|case| case.group == "native_lifecycle") {
         drive_r6_native_lifecycle_case(case).await;
+    }
+
+    for case in cases
+        .iter()
+        .filter(|case| case.group == "completion_continuation_owner")
+    {
+        drive_r6_completion_owner_case(case).await;
     }
 
     let continuation =
@@ -2238,4 +2252,192 @@ async fn persist_bridge_step_child_completion(
         "create bridge-step child AgentResponse failed: {:?}",
         response.errors
     );
+}
+
+async fn drive_r6_completion_owner_case(case: &lean_vocab_test::LeanR6BackgroundingCase) {
+    use crate::support::{
+        create_request_for_agent_with_signed_fields, upsert_conversation_for_agent,
+    };
+    use gents::goal::{load_canonical_goal, set_goal, GoalStatus};
+    let status = case.goal_status.as_deref().map(|status| match status {
+        "active" => GoalStatus::Active,
+        "paused" => GoalStatus::Paused,
+        "blocked" => GoalStatus::Blocked,
+        "usage_limited" => GoalStatus::UsageLimited,
+        "budget_limited" => GoalStatus::BudgetLimited,
+        "complete" => GoalStatus::Complete,
+        other => panic!("unknown generated Goal status {other}"),
+    });
+    // Separate stores keep the historical failed-wake witness from coalescing
+    // with the notification witness's deliberately pending no-Goal wake.
+    for redrive in [false, true] {
+        let db = test_db(&format!("{}-{redrive}", case.name)).await;
+        let did = db.node_identity.did();
+        let session = "completion-owner-session";
+        let parent = "completion-owner-parent";
+        let parent_doc = create_request_for_agent_with_signed_fields(
+            &db.node,
+            did,
+            parent,
+            session,
+            "completed",
+            "2026-07-15T00:00:00Z",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        if let Some(status) = status {
+            set_goal(
+                &db.node,
+                did,
+                session,
+                Some("One continuation owner"),
+                Some(status),
+                Some(Some(10)),
+            )
+            .await
+            .unwrap();
+        }
+        let before = load_canonical_goal(&db.node, did, session).await.unwrap();
+        if redrive {
+            // Real historical scheduled wake fixture, matching the existing
+            // failed-wake recovery test's persisted preconditions.
+            let metadata = escape_graphql_string(
+                &json!({
+                    "queue": {"source":"background_completion", "policy":"coalesce",
+                        "key":format!("background_completion:{session}"),
+                        "queued_after_request_id":parent},
+                    "background_completion_wake_version":1
+                })
+                .to_string(),
+            );
+            let response = db.node.execute(&format!(r#"mutation {{
+                create_AgentRequest(input: {{ request_id: "failed-wake", agent_did: "{}",
+                    behavior_id: "{}", session_id: "{session}", content: "background input",
+                    metadata: "{metadata}", execution_origin: "scheduled", lifecycle_state: "failed",
+                    failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",
+                    created_at: "2026-07-15T00:00:00Z", retry_count: 1, max_retries: 3,
+                    retry_root_request: "failed-wake", terminal_redrive_attempts: 0,
+                    backend_id: "{}", subagent_depth: 0
+                }}) {{ _docID }} }}"#, escape_graphql_string(did),
+                crate::support::AGENT_NAME, crate::support::BACKEND_ID)).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            upsert_conversation_for_agent(
+                &db.node,
+                did,
+                session,
+                "failed-wake",
+                "background input",
+                "active",
+            )
+            .await;
+            let first = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
+                .await
+                .unwrap();
+            assert_eq!(
+                first.redriven > 0,
+                case.redrive_allowed.unwrap(),
+                "{}",
+                case.name
+            );
+            assert_eq!(first.failed, 0);
+            let second = gents::RequestLifecycle::redrive_failed_background_wakeups(&db.node, did)
+                .await
+                .unwrap();
+            assert_eq!(second.redriven, 0, "replay must not add another successor");
+            let requests = db
+                .node
+                .execute("{ AgentRequest { request_id retry_parent_request_doc_id } }")
+                .await;
+            assert!(!requests.has_errors(), "{:?}", requests.errors);
+            assert_eq!(
+                requests.data.unwrap()["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                2 + usize::from(case.redrive_allowed.unwrap())
+            );
+        } else {
+            let mut tool = ToolCallLifecycle::new_background_tool(
+                db.node.clone(),
+                parent.into(),
+                session.into(),
+                did.into(),
+                "native-tool".into(),
+                1,
+                "bash".into(),
+                "{}".into(),
+                chrono::Utc::now() + chrono::Duration::minutes(5),
+            );
+            tool.start_running().await.unwrap();
+            assert!(tool
+                .bridge_complete("durable native output".into())
+                .await
+                .unwrap());
+            // Crash boundary: native execution is terminal, notification has
+            // not been delivered. Only the existing delivery reconciler acts.
+            let row = db
+                .node
+                .execute("{ AgentToolCall { started_at deadline_at completed_at } }")
+                .await;
+            assert!(!row.has_errors());
+            let row = &row.data.as_ref().unwrap()["AgentToolCall"][0];
+            let pending = db.node.execute(&format!(r#"mutation {{ update_AgentToolCall(
+                filter: {{tool_call_id: {{_eq: "native-tool"}}}}, input: {{
+                    status: "completionPending", started_at: "{}", deadline_at: "{}", completed_at: "{}"
+                }}) {{_docID}} }}"#, row["started_at"].as_str().unwrap(),
+                row["deadline_at"].as_str().unwrap(), row["completed_at"].as_str().unwrap())).await;
+            assert!(!pending.has_errors(), "{:?}", pending.errors);
+            let first =
+                ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, did)
+                    .await
+                    .unwrap();
+            assert_eq!(first.side_effects_converged, 1);
+            let second =
+                ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, did)
+                    .await
+                    .unwrap();
+            assert!(second.is_noop());
+            let observed = db.node.execute("{ AgentRequest { _docID request_id } AgentMessage { request_id request_doc_id content } AgentToolCall { status completion_notification_delivered_at } }").await;
+            assert!(!observed.has_errors(), "{:?}", observed.errors);
+            let data = observed.data.unwrap();
+            let messages = data["AgentMessage"].as_array().unwrap();
+            assert_eq!(!messages.is_empty(), case.notification_persisted.unwrap());
+            assert_eq!(
+                messages.len(),
+                1,
+                "notification replay must not duplicate input"
+            );
+            assert!(messages[0]["content"]
+                .as_str()
+                .unwrap()
+                .contains("durable native output"));
+            let requests = data["AgentRequest"].as_array().unwrap();
+            assert_eq!(requests.len(), 1 + usize::from(case.wake_created.unwrap()));
+            let consumer = if case.wake_created.unwrap() {
+                requests
+                    .iter()
+                    .find(|row| row["request_id"] != parent)
+                    .unwrap()
+            } else {
+                requests
+                    .iter()
+                    .find(|row| row["_docID"] == parent_doc)
+                    .unwrap()
+            };
+            assert_eq!(messages[0]["request_id"], consumer["request_id"]);
+            assert_eq!(messages[0]["request_doc_id"], consumer["_docID"]);
+            assert_eq!(data["AgentToolCall"][0]["status"], "completed");
+            assert!(data["AgentToolCall"][0]["completion_notification_delivered_at"].is_string());
+        }
+        let after = load_canonical_goal(&db.node, did, session).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(before).unwrap(),
+            serde_json::to_value(after).unwrap(),
+            "{}: delivery/redrive may not change Goal state or budget",
+            case.name
+        );
+    }
 }

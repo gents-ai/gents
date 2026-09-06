@@ -1207,7 +1207,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
         let parent = "parent-over-budget";
-        create_request_for_agent_with_signed_fields(
+        let parent_doc = create_request_for_agent_with_signed_fields(
             db.node.as_ref(),
             db.node_identity.did(),
             parent,
@@ -1253,6 +1253,55 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await
         .unwrap();
 
+        let mut background = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
+            db.node.clone(),
+            parent.into(),
+            SESSION.into(),
+            db.node_identity.did().into(),
+            "budget-handoff-tool".into(),
+            1,
+            "bash".into(),
+            "{}".into(),
+            chrono::Utc::now() + chrono::Duration::minutes(5),
+        );
+        background.start_running().await.unwrap();
+        assert!(background
+            .bridge_complete("late result required for final wrapup".into())
+            .await
+            .unwrap());
+        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
+            &db.node, db.node_identity.did(),
+        ).await.unwrap();
+        let observed = db.node.execute(
+            "{ AgentRequest { _docID request_id } AgentMessage { request_id request_doc_id content } AgentToolCall { completion_notification_delivered_at } }",
+        ).await;
+        assert!(!observed.has_errors(), "{:?}", observed.errors);
+        let data = observed.data.unwrap();
+        assert_eq!(
+            data["AgentRequest"].as_array().unwrap().len(),
+            1,
+            "a completion wake would keep the session busy and bypass Goal wrapup"
+        );
+        let messages = data["AgentMessage"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["request_id"], parent);
+        assert_eq!(messages[0]["request_doc_id"], parent_doc);
+        assert!(messages[0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("late result required for final wrapup"));
+        assert!(data["AgentToolCall"][0]["completion_notification_delivered_at"].is_string());
+        let before_handoff = load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            before_handoff.parsed_status(),
+            Some(GoalStatus::Active),
+            "notification delivery must leave budget decisions to GoalSource"
+        );
+        assert_eq!(before_handoff.continuation_sequence.unwrap_or_default(), 0);
+
         let (mut source, _snapshot_tx) = source(&db);
         tokio::time::timeout(Duration::from_secs(2), source.next_fire())
             .await
@@ -1284,6 +1333,15 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let metadata: serde_json::Value =
             serde_json::from_str(children[0].metadata.as_deref().unwrap()).unwrap();
         assert_eq!(metadata["goal"]["wrapup"], true, "{terminal}");
+        let history = gents::load_history(&db.node, &children[0].session_id)
+            .await
+            .unwrap();
+        assert!(
+            serde_json::to_string(&history)
+                .unwrap()
+                .contains("late result required for final wrapup"),
+            "the Goal child must be able to load the parent's durable background input"
+        );
 
         // A restart while this wrapup is pending must not publish another child
         // or charge an ordinary infrastructure retry for the failed parent.

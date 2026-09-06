@@ -827,6 +827,15 @@ Model → conformance → Rust bindings:
   subagent completion, verifies the message and wake, releases the active
   parent, claims the wake through `DefraWatcher`, and verifies the message is
   still present.
+- **Goal-owned background input (#1410)** — the completion composition checks
+  canonical Goal presence before enqueue or failed-wake redrive. All six Goal
+  statuses retain their existing continuation owner: the background path
+  persists the notification without creating another request. Seven generated
+  `completion_continuation_owner` cases exercise real delivery, replay, and
+  redrive; the Goal controller integration test then reads that input through
+  the budget-limited wrap-up child. Legacy receipt repair uses the same
+  transaction owner. This models the observed Goal state; it does not claim
+  cross-node phantom protection for concurrent creation after an absent read.
 - **Wake coalescing** — `Proofs/Session/*` queue model
   (`background_completion` source, coalesce keys, automated drain) →
   queue-source rows in `r6_backgrounding_cases` and the R4c steering

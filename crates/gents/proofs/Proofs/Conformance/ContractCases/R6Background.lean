@@ -151,6 +151,22 @@ def r6CompletionContinuationCase : R6BackgroundingCase :=
     (some wake.source.toDefraDB)
     (wake.queueKey.map fun key => wake.source.toDefraDB ++ ":" ++ toString key)
 
+/-- These fields drive actual notification publication and failed-wake
+redrive consumers; they do not model-check a duplicate Rust reference machine. -/
+def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6BackgroundingCase :=
+  let notified := BackgroundCompletion.appendNotification?
+    BackgroundCompletion.canonicalCompletion BackgroundCompletion.canonicalWaitReservedTranscript
+  let queued := notified.bind fun notification =>
+    BackgroundCompletion.enqueueWakeForOwner? goal notification BackgroundCompletion.canonicalQueue
+  let redrive := BackgroundCompletion.redriveWakeForOwner? goal
+    (BackgroundCompletion.failedWakeFixture)
+  { r6Case name "completion_continuation_owner" "notify_and_select_continuation_owner"
+      notified.isSome 1 "completed" with
+    goalStatus := goal.map Goals.Status.toDefraDB
+    notificationPersisted := some notified.isSome
+    wakeCreated := some queued.isSome
+    redriveAllowed := some redrive.isSome }
+
 def r6FailedWakeRedriveCase
     (name : String)
     (wake : BackgroundCompletion.FailedWake) : R6BackgroundingCase :=
@@ -319,6 +335,13 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6RestartCase
   , r6CompletionQueueCase
   , r6CompletionContinuationCase
+  , r6GoalOwnerCase "no_goal_preserves_background_wake" none
+  , r6GoalOwnerCase "active_goal_owns_background_continuation" (some .active)
+  , r6GoalOwnerCase "paused_goal_does_not_background_resume" (some .paused)
+  , r6GoalOwnerCase "blocked_goal_does_not_background_resume" (some .blocked)
+  , r6GoalOwnerCase "usage_limited_goal_does_not_background_resume" (some .usageLimited)
+  , r6GoalOwnerCase "budget_limited_goal_owns_wrapup" (some .budgetLimited)
+  , r6GoalOwnerCase "complete_goal_does_not_background_resume" (some .complete)
   , r6FailedWakeRedriveCase
       "failed_background_wake_with_budget_redrives"
       (BackgroundCompletion.failedWakeFixture (retryCount := 1))
@@ -447,6 +470,13 @@ theorem r6BackgroundingCases_pinned :
       , ("terminal_completion_message_precedes_claimed_continuation", true,
           "background", none, "completed", some "background_completion",
           some "background_completion:900")
+      , ("no_goal_preserves_background_wake", true, "background", none, "completed", none, none)
+      , ("active_goal_owns_background_continuation", true, "background", none, "completed", none, none)
+      , ("paused_goal_does_not_background_resume", true, "background", none, "completed", none, none)
+      , ("blocked_goal_does_not_background_resume", true, "background", none, "completed", none, none)
+      , ("usage_limited_goal_does_not_background_resume", true, "background", none, "completed", none, none)
+      , ("budget_limited_goal_owns_wrapup", true, "background", none, "completed", none, none)
+      , ("complete_goal_does_not_background_resume", true, "background", none, "completed", none, none)
       , ("failed_background_wake_with_budget_redrives", true,
           "background", none, "failed", some "background_completion",
           some "background_completion:900")
@@ -512,6 +542,21 @@ theorem r6BackgroundingCases_pinned :
       , ("caller_deadline_preserves_running_process", true,
           "background", none, "running", none, none)
       ] := by
+  rfl
+
+/-- Pin ownership inputs and durable outcomes, not only the older common
+R6 fields. Every emitted owner case retains its notification; only the
+non-Goal case may enqueue or redrive a background wake. -/
+theorem goal_owner_delivery_cases_pin_all_outcomes :
+    ((r6BackgroundingCases.filter fun c => c.group == "completion_continuation_owner").map
+      fun c => (c.name, c.goalStatus, c.notificationPersisted, c.wakeCreated, c.redriveAllowed)) =
+      [ ("no_goal_preserves_background_wake", none, some true, some true, some true)
+      , ("active_goal_owns_background_continuation", some "active", some true, some false, some false)
+      , ("paused_goal_does_not_background_resume", some "paused", some true, some false, some false)
+      , ("blocked_goal_does_not_background_resume", some "blocked", some true, some false, some false)
+      , ("usage_limited_goal_does_not_background_resume", some "usage_limited", some true, some false, some false)
+      , ("budget_limited_goal_owns_wrapup", some "budget_limited", some true, some false, some false)
+      , ("complete_goal_does_not_background_resume", some "complete", some true, some false, some false) ] := by
   rfl
 
 /-! ## Tool output paging witnesses (#937)

@@ -69,29 +69,34 @@ fn wake_agent_request(
 async fn notification_is_atomically_bound_to_coalesced_wake() {
     let db = test_db("atomic-background-notification").await;
     let parent = root_parent(db.agent_did(), "atomic-background-session");
-    let first = enqueue_background_completion_with_message(
+    let first = persist_background_completion_with_message(
         &db.node,
         &parent,
         "first notification",
         "background-completion-notification:first:tool",
         "review notifications",
         background_hints(&parent),
+        None,
     )
     .await
     .unwrap();
-    let second = enqueue_background_completion_with_message(
+    let second = persist_background_completion_with_message(
         &db.node,
         &parent,
         "second notification",
         "background-completion-notification:second:tool",
         "review notifications",
         background_hints(&parent),
+        None,
     )
     .await
     .unwrap();
     assert!(first.created_request);
     assert!(!second.created_request);
-    assert_eq!(first.request.doc_id, second.request.doc_id);
+    assert_eq!(
+        first.request.as_ref().expect("non-Goal wake").doc_id,
+        second.request.as_ref().expect("non-Goal wake").doc_id
+    );
 
     let wake_query = format!(
         r#"{{
@@ -100,7 +105,7 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
                 caused_by_parent_request_doc_id
             }}
         }}"#,
-        escape_graphql_string(&first.request.doc_id)
+        escape_graphql_string(&first.request.as_ref().expect("non-Goal wake").doc_id)
     );
     let wake_response = db.node.execute(&wake_query).await;
     assert!(
@@ -140,11 +145,25 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
     for row in rows {
         assert_eq!(
             row["request_id"].as_str(),
-            Some(first.request.request_id.as_str())
+            Some(
+                first
+                    .request
+                    .as_ref()
+                    .expect("non-Goal wake")
+                    .request_id
+                    .as_str()
+            )
         );
         assert_eq!(
             row["request_doc_id"].as_str(),
-            Some(first.request.doc_id.as_str())
+            Some(
+                first
+                    .request
+                    .as_ref()
+                    .expect("non-Goal wake")
+                    .doc_id
+                    .as_str()
+            )
         );
     }
 }
@@ -153,26 +172,31 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
 async fn concurrent_notifications_converge_to_one_pending_wake() {
     let db = test_db("atomic-background-race").await;
     let parent = root_parent(db.agent_did(), "atomic-background-race-session");
-    let first = enqueue_background_completion_with_message(
+    let first = persist_background_completion_with_message(
         &db.node,
         &parent,
         "first concurrent notification",
         "background-completion-notification:race-first:tool",
         "review notifications",
         background_hints(&parent),
+        None,
     );
-    let second = enqueue_background_completion_with_message(
+    let second = persist_background_completion_with_message(
         &db.node,
         &parent,
         "second concurrent notification",
         "background-completion-notification:race-second:tool",
         "review notifications",
         background_hints(&parent),
+        None,
     );
     let (first, second) = tokio::join!(first, second);
     let first = first.unwrap();
     let second = second.unwrap();
-    assert_eq!(first.request.doc_id, second.request.doc_id);
+    assert_eq!(
+        first.request.as_ref().expect("non-Goal wake").doc_id,
+        second.request.as_ref().expect("non-Goal wake").doc_id
+    );
     assert_eq!(
         [first.created_request, second.created_request]
             .into_iter()
@@ -259,47 +283,59 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
         "atomic-background-idempotent-notification-session",
     );
     let message_key = "background-completion-notification:idempotent:tool";
-    let first = enqueue_background_completion_with_message(
+    let first = persist_background_completion_with_message(
         &db.node,
         &parent,
         "idempotent notification",
         message_key,
         "review notifications",
         background_hints(&parent),
+        None,
     )
     .await
     .unwrap();
-    let retry = enqueue_background_completion_with_message(
+    let retry = persist_background_completion_with_message(
         &db.node,
         &parent,
         "idempotent notification",
         message_key,
         "review notifications",
         background_hints(&parent),
+        None,
     )
     .await
     .unwrap();
 
-    assert_eq!(retry.request.doc_id, first.request.doc_id);
-    assert_eq!(retry.request.request_id, first.request.request_id);
-    assert_eq!(retry.request.session_id, first.request.session_id);
+    assert_eq!(
+        retry.request.as_ref().expect("non-Goal wake").doc_id,
+        first.request.as_ref().expect("non-Goal wake").doc_id
+    );
+    assert_eq!(
+        retry.request.as_ref().expect("non-Goal wake").request_id,
+        first.request.as_ref().expect("non-Goal wake").request_id
+    );
+    assert_eq!(
+        retry.request.as_ref().expect("non-Goal wake").session_id,
+        first.request.as_ref().expect("non-Goal wake").session_id
+    );
     assert_eq!(retry.message_sequence, first.message_sequence);
     assert!(!retry.created_request);
 
-    let conflict = enqueue_background_completion_with_message(
+    let conflict = persist_background_completion_with_message(
         &db.node,
         &parent,
         "changed notification",
         message_key,
         "review notifications",
         background_hints(&parent),
+        None,
     )
     .await
     .unwrap_err();
     assert!(
         conflict
             .to_string()
-            .contains("conflicts with its persisted binding"),
+            .contains("conflicts with its persisted scope or content"),
         "unexpected conflict: {conflict:#}"
     );
 }
@@ -312,13 +348,14 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
         let node = db.node.clone();
         let parent = parent.clone();
         async move {
-            enqueue_background_completion_with_message(
+            persist_background_completion_with_message(
                 node.as_ref(),
                 &parent,
                 &format!("concurrent notification {index}"),
                 &format!("background-completion-notification:many-race-{index}:tool"),
                 "review notifications",
                 background_hints(&parent),
+                None,
             )
             .await
             .unwrap()
@@ -326,10 +363,10 @@ async fn many_concurrent_notifications_publish_one_wake_identity() {
     }))
     .await;
 
-    let wake_doc_id = &enqueued[0].request.doc_id;
+    let wake_doc_id = &enqueued[0].request.as_ref().expect("non-Goal wake").doc_id;
     assert!(enqueued
         .iter()
-        .all(|result| result.request.doc_id == *wake_doc_id));
+        .all(|result| result.request.as_ref().expect("non-Goal wake").doc_id == *wake_doc_id));
     assert_eq!(
         enqueued
             .iter()
@@ -345,13 +382,14 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     let node = db.node.clone();
     let parent = root_parent(db.agent_did(), "background-restart-before-claim-session");
     let hints = background_hints(&parent);
-    let enqueued = enqueue_background_completion_with_message(
+    let enqueued = persist_background_completion_with_message(
         node.as_ref(),
         &parent,
         "restart-safe notification",
         "background-completion-notification:restart-before-claim:tool",
         "review notifications",
         hints.clone(),
+        None,
     )
     .await
     .unwrap();
@@ -372,8 +410,8 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 
     let request = wake_agent_request(
         &parent,
-        &enqueued.request.doc_id,
-        &enqueued.request.request_id,
+        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
+        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
         &hints,
     );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
@@ -417,20 +455,21 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
     let node = db.node.clone();
     let parent = root_parent(db.agent_did(), "background-response-repair-ack-session");
     let hints = background_hints(&parent);
-    let enqueued = enqueue_background_completion_with_message(
+    let enqueued = persist_background_completion_with_message(
         node.as_ref(),
         &parent,
         "response-persisted notification",
         "background-completion-notification:response-persisted:tool",
         "review notifications",
         hints.clone(),
+        None,
     )
     .await
     .unwrap();
     let request = wake_agent_request(
         &parent,
-        &enqueued.request.doc_id,
-        &enqueued.request.request_id,
+        &enqueued.request.as_ref().expect("non-Goal wake").doc_id,
+        &enqueued.request.as_ref().expect("non-Goal wake").request_id,
         &hints,
     );
     let mut lifecycle = crate::RequestLifecycle::new_with_execution_binding(
@@ -467,7 +506,7 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
         }}) {{ _docID }}
     }}"#,
             escape_graphql_string(&response_doc_id),
-            escape_graphql_string(&enqueued.request.doc_id)
+            escape_graphql_string(&enqueued.request.as_ref().expect("non-Goal wake").doc_id)
         ))
         .await;
     assert!(
@@ -514,20 +553,21 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let node = db.node.clone();
     let parent = root_parent(db.agent_did(), "background-successor-ack-session");
     let hints = background_hints(&parent);
-    let first = enqueue_background_completion_with_message(
+    let first = persist_background_completion_with_message(
         node.as_ref(),
         &parent,
         "first notification",
         "background-completion-notification:successor-first:tool",
         "review notifications",
         hints.clone(),
+        None,
     )
     .await
     .unwrap();
     let first_request = wake_agent_request(
         &parent,
-        &first.request.doc_id,
-        &first.request.request_id,
+        &first.request.as_ref().expect("non-Goal wake").doc_id,
+        &first.request.as_ref().expect("non-Goal wake").request_id,
         &hints,
     );
     let mut first_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
@@ -557,18 +597,22 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     .await
     .unwrap();
 
-    let second = enqueue_background_completion_with_message(
+    let second = persist_background_completion_with_message(
         node.as_ref(),
         &parent,
         "second notification",
         "background-completion-notification:successor-second:tool",
         "review notifications",
         hints.clone(),
+        None,
     )
     .await
     .unwrap();
     assert!(second.created_request);
-    assert_ne!(first.request.doc_id, second.request.doc_id);
+    assert_ne!(
+        first.request.as_ref().expect("non-Goal wake").doc_id,
+        second.request.as_ref().expect("non-Goal wake").doc_id
+    );
     let generation_query = format!(
         r#"{{
             AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ retry_key }}
@@ -607,8 +651,8 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
 
     let second_request = wake_agent_request(
         &parent,
-        &second.request.doc_id,
-        &second.request.request_id,
+        &second.request.as_ref().expect("non-Goal wake").doc_id,
+        &second.request.as_ref().expect("non-Goal wake").request_id,
         &hints,
     );
     let mut second_lifecycle = crate::RequestLifecycle::new_with_execution_binding(
@@ -648,12 +692,17 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
     let first_epoch = diagnostics
         .epochs
         .iter()
-        .find(|epoch| epoch.root_request_id == first.request.request_id)
+        .find(|epoch| {
+            epoch.root_request_id == first.request.as_ref().expect("non-Goal wake").request_id
+        })
         .unwrap();
     assert_eq!(first_epoch.state, "acknowledged_by_successor");
-    let timeline = crate::run_timeline_fetch::load_run_timeline(&access, &first.request.request_id)
-        .await
-        .unwrap();
+    let timeline = crate::run_timeline_fetch::load_run_timeline(
+        &access,
+        &first.request.as_ref().expect("non-Goal wake").request_id,
+    )
+    .await
+    .unwrap();
     assert_eq!(timeline.background_completions.len(), 2);
     assert!(timeline.background_completion_diagnostics_error.is_none());
     assert!(timeline.descendant_edges.is_empty());
