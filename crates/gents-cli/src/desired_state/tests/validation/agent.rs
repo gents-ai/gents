@@ -165,9 +165,9 @@ fn shipped_long_running_demo_manifests_validate() {
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
 
     for relative_root in [
-        "demo/security-scan",
-        "demo/defending-code",
-        "demo/repo-maintenance",
+        "packs/security_scan",
+        "packs/defending_code",
+        "packs/repo_maintenance",
     ] {
         let root = workspace_root.join(relative_root);
         let (_, report) = load::load_manifest_root(&root);

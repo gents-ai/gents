@@ -52,15 +52,15 @@ mod tests {
     fn ensure_supported_accepts_only_declared_subset() {
         assert_eq!(
             OutputFormat::Json
-                .ensure_supported("demo", &[OutputFormat::Text, OutputFormat::Json])
+                .ensure_supported("pack", &[OutputFormat::Text, OutputFormat::Json])
                 .unwrap(),
             OutputFormat::Json
         );
         let err = OutputFormat::Tree
-            .ensure_supported("demo", &[OutputFormat::Text, OutputFormat::Json])
+            .ensure_supported("pack", &[OutputFormat::Text, OutputFormat::Json])
             .unwrap_err()
             .to_string();
-        assert!(err.contains("unsupported --output tree for demo"));
+        assert!(err.contains("unsupported --output tree for pack"));
         assert!(err.contains("text, json"));
     }
 }

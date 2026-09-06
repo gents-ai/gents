@@ -64,7 +64,7 @@ impl Fixture {
         let installed = install_bundled_graph_package(
             &access,
             identity.did(),
-            "code-review",
+            "code_review",
             &GraphPackageInstallBindings {
                 owner_did: identity.did().into(),
                 roles: BTreeMap::from([
@@ -607,7 +607,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     use tokio_util::sync::CancellationToken;
 
     let fx = Fixture::new(true, false).await;
-    let package = crate::graph_package::load_bundled_graph_package("code-review").unwrap();
+    let package = crate::graph_package::load_bundled_graph_package("code_review").unwrap();
     let mut tasks = HashMap::new();
     let mut routes = HashMap::new();
     let mut behaviors = Vec::new();
@@ -637,7 +637,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         let declared: Value = serde_json::from_str(
             package
                 .asset_text(&format!(
-                    "datastore-tool-surfaces/review-{stage}-writes/object.json"
+                    "datastore_tool_surfaces/review_{stage}_writes/object.json"
                 ))
                 .unwrap(),
         )

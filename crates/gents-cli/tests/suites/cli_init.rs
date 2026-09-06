@@ -23,7 +23,10 @@ fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
     for suffix in ["alpha", "zeta"] {
         let skill_id = format!("{agent_did}:skill-{suffix}");
         write_json_file(
-            &root.join("skills").join(&skill_id).join("object.json"),
+            &root
+                .join("skills")
+                .join(crate::support::document_handle(&skill_id))
+                .join("object.json"),
             &serde_json::json!({
                 "skill_id": skill_id,
                 "agent_did": agent_did,
@@ -79,7 +82,14 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await
+        .context("initial boot readiness")?;
 
     assert_runtime_init_state(
         &graphql,
@@ -112,7 +122,14 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
     )?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
+    serve
+        .capturing(wait_for_runtime_ready(
+            &graphql,
+            &agent_did,
+            Duration::from_secs(30),
+        ))
+        .await
+        .context("restart readiness after idempotent init")?;
 
     assert_runtime_init_state(
         &graphql,
@@ -224,7 +241,7 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent-principal.json");
+    let principal_path = pack_root.join("agent_principal.json");
     let mut principal = read_json_file(&principal_path)?;
     let original_behavior_id = principal
         .get("default_behavior_id")
@@ -233,9 +250,11 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
         .to_string();
     let applied_behavior_id = format!("{agent_did}:applied-default");
     let original_behavior_dir = pack_root
-        .join("agent-behaviors")
-        .join(&original_behavior_id);
-    let applied_behavior_dir = pack_root.join("agent-behaviors").join(&applied_behavior_id);
+        .join("agent_behaviors")
+        .join(crate::support::document_handle(&original_behavior_id));
+    let applied_behavior_dir = pack_root
+        .join("agent_behaviors")
+        .join(crate::support::document_handle(&applied_behavior_id));
     fs::create_dir_all(&applied_behavior_dir)?;
     for entry in fs::read_dir(&original_behavior_dir)? {
         let entry = entry?;
@@ -322,7 +341,7 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent-principal.json");
+    let principal_path = pack_root.join("agent_principal.json");
     let mut principal = read_json_file(&principal_path)?;
     principal["display_name"] = Value::String("Metadata-only rename".to_string());
     write_json_file(&principal_path, &principal)?;
@@ -388,14 +407,17 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal = read_json_file(&pack_root.join("agent-principal.json"))?;
+    let principal = read_json_file(&pack_root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .context("exported principal missing default behavior")?;
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
     write_json_file(
-        &pack_root.join("tasks").join(&task_id).join("object.json"),
+        &pack_root
+            .join("tasks")
+            .join(crate::support::document_handle(&task_id))
+            .join("object.json"),
         &serde_json::json!({
             "task_id": task_id,
             "name": "Post-apply task",

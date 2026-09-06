@@ -1,9 +1,11 @@
 mod catalog;
 mod install;
 
+pub(crate) use catalog::{digest_assets, graph_manifest_from_pack};
+
 pub use catalog::{
-    graph_package_catalog, load_bundled_graph_package, BundledGraphPackage,
-    GraphPackageCatalogEntry, GraphPackageManifest, PackageCapabilityTemplate,
+    graph_package_catalog, load_bundled_graph_package, load_resolved_graph_package,
+    BundledGraphPackage, GraphPackageCatalogEntry, GraphPackageManifest, PackageCapabilityTemplate,
     PackageExternalDependency, PackageRoleDeclaration,
 };
 pub use install::{

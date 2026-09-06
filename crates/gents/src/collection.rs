@@ -85,7 +85,7 @@ impl Collection {
 
     pub fn file_name(self) -> Option<&'static str> {
         match self {
-            Collection::AgentPrincipal => Some("agent-principal.json"),
+            Collection::AgentPrincipal => Some("agent_principal.json"),
             _ => None,
         }
     }
@@ -93,17 +93,17 @@ impl Collection {
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
             Collection::AgentPrincipal => None,
-            Collection::AgentBehavior => Some("agent-behaviors"),
+            Collection::AgentBehavior => Some("agent_behaviors"),
             Collection::Skill => Some("skills"),
-            Collection::DatastoreToolSurface => Some("datastore-tool-surfaces"),
-            Collection::ChainKeyBinding => Some("chain-key-bindings"),
-            Collection::EthTool => Some("eth-tools"),
-            Collection::WorkspaceRoot => Some("workspace-roots"),
-            Collection::ToolSelection => Some("tool-selections"),
-            Collection::InferenceBackend => Some("inference-backends"),
-            Collection::InferenceProfile => Some("inference-profiles"),
-            Collection::ToolServiceRegistry => Some("tool-services"),
-            Collection::ProjectionAcpBinding => Some("projection-acp-bindings"),
+            Collection::DatastoreToolSurface => Some("datastore_tool_surfaces"),
+            Collection::ChainKeyBinding => Some("chain_key_bindings"),
+            Collection::EthTool => Some("eth_tools"),
+            Collection::WorkspaceRoot => Some("workspace_roots"),
+            Collection::ToolSelection => Some("tool_selections"),
+            Collection::InferenceBackend => Some("inference_backends"),
+            Collection::InferenceProfile => Some("inference_profiles"),
+            Collection::ToolServiceRegistry => Some("tool_services"),
+            Collection::ProjectionAcpBinding => Some("projection_acp_bindings"),
             Collection::Task => Some("tasks"),
             Collection::Schedule => Some("schedules"),
             Collection::EventTrigger => Some("event_triggers"),

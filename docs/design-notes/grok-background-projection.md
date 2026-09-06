@@ -51,7 +51,7 @@ the resolved session/principal/requester scope before cancellation.
 With spawn_process and bash_unrestricted enabled on the served behavior:
 
 ```sh
-python3 demo/grok-tui-port/scripts/grok_background_probe.py \
+python3 packs/grok_tui_port/scripts/grok_background_probe.py \
   --socket /path/to/grok.sock --cwd "$PWD" \
   --model GLM-5.3-Flash-NVFP4
 ```

@@ -1,6 +1,9 @@
 #![allow(dead_code, unused_imports)]
 
+#[path = "../../src/desired_state/document_handle.rs"]
+mod document_handle;
 pub mod fs;
+pub(crate) use document_handle::document_handle;
 pub mod graphql;
 pub mod mocks;
 pub mod ports;

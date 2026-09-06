@@ -234,7 +234,7 @@ route diagnostics.
 
 ### `studio-1` demo database
 
-- [ ] Stop every demo/runtime process that can write the `studio-1` demo
+- [ ] Stop every pack/runtime process that can write the `studio-1` demo
   database.
 - [ ] Snapshot and label the pre-cutover demo database for historical reference;
   do not import it into Gents.

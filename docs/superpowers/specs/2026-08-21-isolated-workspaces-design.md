@@ -692,7 +692,7 @@ Each PR independently reviewable. Lean/conformance before runtime where legality
 ### PR 10 — Acceptance pack + maintenance-pack migration
 
 - Pack modeling DefensePatchAssignment; defending-code pack switches patch/validate/review to workspace references.
-- Rewrite `demo/repo-maintenance` execute/review off prompt `make worktree`.
+- Rewrite `packs/repo_maintenance` execute/review off prompt `make worktree`.
 - Depends on: PR 5–8 (WASM fixture optional if builtin emitter covers the pack).
 
 ### PR 11 — `spawn_subagent` workspace parameter

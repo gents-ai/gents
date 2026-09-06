@@ -41,7 +41,7 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)

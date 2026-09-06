@@ -190,7 +190,7 @@ impl BoundModel {
     /// Build the `models` object of a `session/new` result.
     ///
     /// The audited wire shape nests `availableModels` and `currentModelId`
-    /// under a `models` key — see `recon-input/audited-ledger.json`
+    /// under a `models` key — see `recon_input/audited_ledger.json`
     /// (`session:new-load`) and the live probe's
     /// `session["models"]["currentModelId"]` read. Splicing the catalog keys
     /// into the top-level result object breaks the pager, so the nesting is
@@ -1829,7 +1829,9 @@ mod tests {
         for (command, expected) in [
             ("status", Some("active")),
             ("pause", Some("paused")),
-            ("resume", Some("active")),
+            // This display-only fixture has no signed causal predecessor. A
+            // host turn must not fabricate a lineage-free continuation.
+            ("resume", Some("paused")),
             ("clear", None),
         ] {
             let dispatch = service.handle_acp_payload(&request_payload("session/prompt", json!({

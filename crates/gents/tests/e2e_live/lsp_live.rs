@@ -59,20 +59,20 @@ fn repo_root() -> PathBuf {
 }
 
 fn pack_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../demo/lsp-rust")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../packs/lsp_rust")
 }
 
 fn pack_json_string(relative: &str, field: &str) -> String {
     let raw = std::fs::read_to_string(pack_dir().join(relative)).unwrap_or_else(|err| {
-        panic!("read demo/lsp-rust/{relative}: {err}");
+        panic!("read packs/lsp_rust/{relative}: {err}");
     });
     let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|err| {
-        panic!("parse demo/lsp-rust/{relative}: {err}");
+        panic!("parse packs/lsp_rust/{relative}: {err}");
     });
     value
         .get(field)
         .and_then(serde_json::Value::as_str)
-        .unwrap_or_else(|| panic!("demo/lsp-rust/{relative} missing string {field}"))
+        .unwrap_or_else(|| panic!("packs/lsp_rust/{relative} missing string {field}"))
         .to_string()
 }
 
@@ -81,11 +81,11 @@ fn pack_default_prompt() -> String {
 }
 
 fn pack_lsp_config() -> String {
-    pack_json_string("tool-selections/lsp-readonly/object.json", "lsp_config")
+    pack_json_string("tool_selections/lsp_readonly/object.json", "lsp_config")
 }
 
 fn pack_system_prompt() -> String {
-    std::fs::read_to_string(pack_dir().join("agent-behaviors/lsp-coder/system_prompt.md"))
+    std::fs::read_to_string(pack_dir().join("agent_behaviors/lsp_coder/system_prompt.md"))
         .expect("pack system prompt")
 }
 

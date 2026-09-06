@@ -103,7 +103,7 @@ For an isolated desktop data directory — useful for demos and QA runs — set
 `GENTS_DESKTOP_HOME` before launching the Tauri app:
 
 ```bash
-GENTS_DESKTOP_HOME=/tmp/gents-desktop-demo/desktop \
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop \
   npm --prefix apps/gents-desktop run tauri -- dev
 ```
 
@@ -128,36 +128,9 @@ gents server \
 
 ## Connected runtime bring-up
 
-The interactive `gents demo` command is the fastest path to a connected
-fleet. It ships in the binary, boots a curated single node, and its `demo>`
-shell escalates to the full topology:
-
-```bash
-gents demo
-```
-
-- `pair` brings up a second node (the **Worker**), completes authenticated
-  enrollment, installs its owner-scoped routes, and waits for both reconcilers
-  to publish exact applied evidence.
-- `delegate` enables cross-node delegation: the **Orchestrator** delegates a
-  child request that materializes and runs **on the Worker node** and replicates
-  its result back. This uses background await (foreground remote spawns are
-  rejected) and `subagent_allow_cross_deployment` on both runtimes — a gate that
-  is off by default and appropriate only for a trusted local loopback fleet.
-- `desktop` seeds an isolated desktop peer directory with both runtimes and
-  launches the native app (`GENTS_DESKTOP_HOME` set, remote re-pair off),
-  so the **Fleet Dashboard** shows both deployments and Chat mirrors the CLI.
-
-The demo needs a real OpenAI-compatible backend — no mock. Point it at a local
-inference server at `http://127.0.0.1:8080/v1`:
-
-```bash
-llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf
-```
-
-or a hosted preset (`gents demo --desktop --backend-preset openai --model gpt-5.4-mini`,
-with `OPENAI_API_KEY` in the environment). The first run offers an interactive
-backend picker and remembers the choice.
+Start and configure runtimes with `gents init`, `gents config apply`, and
+`gents server`. Reusable worked scenarios are distributed through
+[`gents pack`](../packs/README.md); there is no separate demo shell.
 
 To enroll a desktop or mobile client into a running runtime, enter the
 runtime's address in **Add Agent**. The client authenticates the DID advertised

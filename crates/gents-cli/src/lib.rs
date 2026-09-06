@@ -432,6 +432,7 @@ async fn async_main() -> Result<()> {
         Command::Fleet { command } => commands::fleet::dispatch(command).await,
         Command::Task { command } => commands::task::dispatch(command).await,
         Command::Graph { command } => commands::graph::dispatch(command).await,
+        Command::Pack { command } => commands::pack::dispatch(command).await,
         Command::Diagnose(args) => commands::diagnose::diagnose(args).await,
         Command::Tools { command } => commands::tools::dispatch(command).await,
         Command::Config { command } => commands::config::dispatch(command).await,
@@ -442,7 +443,6 @@ async fn async_main() -> Result<()> {
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
-        Command::Demo(args) => commands::demo::demo(args).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();

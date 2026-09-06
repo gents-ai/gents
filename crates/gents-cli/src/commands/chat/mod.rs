@@ -138,28 +138,6 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     Ok(())
 }
 
-pub(crate) async fn submit_chat_turn(
-    graphql: &str,
-    agent_did: &str,
-    session_id: &str,
-    behavior_id: Option<&str>,
-    content: &str,
-    timeout_secs: u64,
-    poll_secs: u64,
-) -> Result<(SubmittedRequest, Value)> {
-    submit_chat_turn_with_goal(
-        graphql,
-        agent_did,
-        session_id,
-        behavior_id,
-        content,
-        None,
-        timeout_secs,
-        poll_secs,
-    )
-    .await
-}
-
 #[derive(Clone, Copy)]
 struct GoalBackedSubmission<'a> {
     objective: &'a str,

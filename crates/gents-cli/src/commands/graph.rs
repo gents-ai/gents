@@ -7,7 +7,7 @@ use std::{io, io::IsTerminal as _, io::Write as _};
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graph_package::{
-    bundled_graph_id, default_bundled_graph_package_install_bindings, graph_package_catalog,
+    bundled_graph_id, default_bundled_graph_package_install_bindings,
     install_bundled_graph_package, load_bundled_graph_package, GraphPackageInstallBindings,
 };
 use gents::graph_pipeline::{
@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{
-    GraphCancelArgs, GraphCatalogArgs, GraphCommand, GraphInstallArgs, GraphResultArgs,
-    GraphRunArgs, GraphScopeArgs, GraphToggleArgs, GraphWatchArgs,
+    GraphCancelArgs, GraphCommand, GraphResultArgs, GraphRunArgs, GraphScopeArgs, GraphToggleArgs,
+    GraphWatchArgs, PackInstallArgs,
 };
 use crate::{print_json, resolve_agent_did, resolve_config_access};
 
@@ -40,8 +40,6 @@ const CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES: usize = 1_800;
 
 pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     match command {
-        GraphCommand::Catalog(args) => catalog(args),
-        GraphCommand::Install(args) => install(args).await,
         GraphCommand::Run(args) => run(args).await,
         GraphCommand::Watch(args) => watch(args).await,
         GraphCommand::Result(args) => result(args).await,
@@ -51,18 +49,7 @@ pub(crate) async fn dispatch(command: GraphCommand) -> Result<()> {
     }
 }
 
-fn catalog(args: GraphCatalogArgs) -> Result<()> {
-    let mut entries = graph_package_catalog()?;
-    if let Some(package) = args.package.as_deref() {
-        entries.retain(|entry| entry.name == package);
-        if entries.is_empty() {
-            anyhow::bail!("unknown bundled graph package {package:?}");
-        }
-    }
-    print_json(&json!({ "packages": entries }))
-}
-
-async fn install(args: GraphInstallArgs) -> Result<()> {
+pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<()> {
     let package = load_bundled_graph_package(&args.package)?;
     let (access, owner_did) = access_and_actor(&args.scope).await?;
     let bindings = if let Some(path) = args.bindings.as_deref() {
@@ -95,10 +82,10 @@ async fn install(args: GraphInstallArgs) -> Result<()> {
         previous.as_deref(),
     )
     .await?;
-    match args
-        .output
-        .ensure_supported("graph install", &[OutputFormat::Text, OutputFormat::Json])?
-    {
+    if !emit_report {
+        return Ok(());
+    }
+    match args.output {
         OutputFormat::Json => print_json(&json!({
             "install": receipt,
             "activation": activation,
@@ -355,7 +342,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
         .await?
         .with_context(|| {
             format!(
-                "graph is not installed; run `gents graph install {}` first",
+                "graph is not installed; run `gents pack install {}` first",
                 args.package
             )
         })?;
@@ -372,14 +359,14 @@ async fn run(args: GraphRunArgs) -> Result<()> {
     let bundled_package = load_bundled_graph_package(&args.package)?;
     if active_package.package_digest != bundled_package.package_digest {
         anyhow::bail!(
-            "installed graph package {:?} does not match this gents binary; run `gents graph install {}` before starting a run",
+            "installed graph package {:?} does not match this gents binary; run `gents pack install {}` before starting a run",
             args.package,
             args.package
         );
     }
     let digest = plan.digest.clone();
     let (entry, input) = match args.package.as_str() {
-        "code-review" => {
+        "code_review" => {
             let endpoint_url =
                 url::Url::parse(endpoint).context("parsing graph GraphQL endpoint")?;
             let local_endpoint = endpoint_url.host_str().is_some_and(|host| {
@@ -435,7 +422,7 @@ async fn run(args: GraphRunArgs) -> Result<()> {
             });
             ("review", input)
         }
-        "web-deep-research" => {
+        "web_deep_research" => {
             if !(2..=8).contains(&args.investigator_count) {
                 anyhow::bail!("--investigator-count must be between 2 and 8");
             }

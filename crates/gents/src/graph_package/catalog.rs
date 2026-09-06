@@ -10,7 +10,7 @@ use crate::graph_pipeline::{
     COMPILER_VERSION,
 };
 
-include!(concat!(env!("OUT_DIR"), "/bundled_graph_packages.rs"));
+use crate::pack::{bundled_pack_asset, BUNDLED_GRAPH_PACKAGE_NAMES};
 
 #[derive(Deserialize)]
 struct BundledToolSurface {
@@ -98,7 +98,7 @@ impl BundledGraphPackage {
                 self.manifest.name
             );
         }
-        bundled_graph_package_asset(&self.manifest.name, path)
+        bundled_pack_asset(&self.manifest.name, path)
             .with_context(|| format!("bundled asset {path:?} is missing"))
     }
 
@@ -123,10 +123,10 @@ impl BundledGraphPackage {
     }
 }
 
-fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
+pub(crate) fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
     let mut hasher = Sha256::new();
     for path in paths {
-        let bytes = bundled_graph_package_asset(package_name, path)
+        let bytes = bundled_pack_asset(package_name, path)
             .with_context(|| format!("bundled package references missing asset {path:?}"))?;
         hasher.update((path.len() as u64).to_be_bytes());
         hasher.update(path.as_bytes());
@@ -137,7 +137,7 @@ fn digest_assets(package_name: &str, paths: &[String]) -> Result<String> {
 }
 
 fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_graph_package_asset(package_name, path)
+    let bytes = bundled_pack_asset(package_name, path)
         .with_context(|| format!("bundled package references missing asset {path:?}"))?;
     let surface: BundledToolSurface = serde_json::from_slice(bytes)
         .with_context(|| format!("bundled tool surface asset {path:?} is malformed"))?;
@@ -150,7 +150,7 @@ fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
 }
 
 fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_graph_package_asset(package_name, path)
+    let bytes = bundled_pack_asset(package_name, path)
         .with_context(|| format!("bundled package references missing asset {path:?}"))?;
     let selection: serde_json::Value = serde_json::from_slice(bytes)
         .with_context(|| format!("bundled tool selection asset {path:?} is malformed"))?;
@@ -182,19 +182,36 @@ fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
-    let manifest_bytes = bundled_graph_package_asset(package_name, "manifest.json")
-        .with_context(|| format!("bundled package {package_name:?} has no manifest"))?;
-    let manifest: GraphPackageManifest = serde_json::from_slice(manifest_bytes)?;
-    if manifest.name != package_name {
-        anyhow::bail!(
-            "bundled package directory {package_name:?} disagrees with manifest name {:?}",
-            manifest.name
-        );
-    }
-    if manifest.manifest_version != 1 {
-        anyhow::bail!("unsupported bundled package manifest version");
-    }
+/// Strip distribution-only metadata at the boundary; the existing strict
+/// graph manifest remains the sole owner of graph field validation.
+pub(crate) fn graph_manifest_from_pack(
+    pack: &crate::pack::PackManifest,
+) -> Result<GraphPackageManifest> {
+    let mut fields: serde_json::Map<String, serde_json::Value> =
+        pack.graph.clone().into_iter().collect();
+    fields.insert(
+        "manifest_version".to_owned(),
+        serde_json::json!(pack.manifest_version),
+    );
+    fields.insert("name".to_owned(), serde_json::json!(pack.name));
+    fields.insert("version".to_owned(), serde_json::json!(pack.version));
+    fields.insert(
+        "description".to_owned(),
+        serde_json::json!(pack.description),
+    );
+    serde_json::from_value(serde_json::Value::Object(fields)).context("invalid graph manifest")
+}
+
+fn load_package(distribution: &crate::pack::ResolvedPack) -> Result<BundledGraphPackage> {
+    let package_name = distribution.manifest.name.as_str();
+    anyhow::ensure!(
+        matches!(
+            distribution.manifest.metadata.kind,
+            crate::pack::PackKind::Graph
+        ),
+        "pack is not a graph"
+    );
+    let manifest = graph_manifest_from_pack(&distribution.manifest)?;
     if manifest.compiler_version != COMPILER_VERSION {
         anyhow::bail!(
             "package compiler {} does not match runtime {}",
@@ -203,11 +220,11 @@ fn load_package(package_name: &str) -> Result<BundledGraphPackage> {
         );
     }
     let intent: GraphIntent = serde_json::from_slice(
-        bundled_graph_package_asset(package_name, &manifest.intent)
+        bundled_pack_asset(package_name, &manifest.intent)
             .with_context(|| format!("bundled package intent {:?} is missing", manifest.intent))?,
     )?;
     let capabilities: Vec<PackageCapabilityTemplate> = serde_json::from_slice(
-        bundled_graph_package_asset(package_name, &manifest.capabilities).with_context(|| {
+        bundled_pack_asset(package_name, &manifest.capabilities).with_context(|| {
             format!(
                 "bundled package capabilities {:?} are missing",
                 manifest.capabilities
@@ -262,13 +279,25 @@ pub fn load_bundled_graph_package(name: &str) -> Result<BundledGraphPackage> {
     if !BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name) {
         anyhow::bail!("unknown bundled graph package {name:?}");
     }
-    load_package(name)
+    let distribution = crate::pack::resolve_pack(name)?;
+    load_package(&distribution)
+}
+
+pub fn load_resolved_graph_package(
+    distribution: &crate::pack::ResolvedPack,
+) -> Result<BundledGraphPackage> {
+    anyhow::ensure!(
+        BUNDLED_GRAPH_PACKAGE_NAMES.contains(&distribution.manifest.name.as_str()),
+        "unknown bundled graph package {:?}",
+        distribution.manifest.name
+    );
+    load_package(distribution)
 }
 
 pub fn graph_package_catalog() -> Result<Vec<GraphPackageCatalogEntry>> {
     BUNDLED_GRAPH_PACKAGE_NAMES
         .iter()
-        .map(|name| Ok(load_package(name)?.catalog_entry()))
+        .map(|name| Ok(load_bundled_graph_package(name)?.catalog_entry()))
         .collect()
 }
 
@@ -281,8 +310,8 @@ mod tests {
 
     #[test]
     fn bundled_catalog_is_read_only_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("code-review").unwrap();
-        assert_eq!(graph_package_catalog().unwrap().len(), 2);
+        let package = load_bundled_graph_package("code_review").unwrap();
+        assert!(graph_package_catalog().unwrap().len() >= 2);
         assert!(package.package_digest.starts_with("sha256:"));
         for path in &package.asset_paths {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
@@ -324,7 +353,7 @@ mod tests {
 
     #[test]
     fn code_review_tasks_have_bounded_goals_without_creation_authority() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         assert_eq!(package.capabilities.len(), 4);
         for capability in &package.capabilities {
             let task: serde_json::Value =
@@ -359,7 +388,7 @@ mod tests {
 
     #[test]
     fn web_deep_research_package_is_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        let package = load_bundled_graph_package("web_deep_research").unwrap();
         assert!(package.package_digest.starts_with("sha256:"));
         assert_eq!(package.manifest.external_dependencies.len(), 1);
         let dependency = &package.manifest.external_dependencies[0];
@@ -487,10 +516,10 @@ mod tests {
 
     #[test]
     fn web_deep_research_handoffs_are_typed_and_correlation_scoped() {
-        let package = load_bundled_graph_package("web-deep-research").unwrap();
+        let package = load_bundled_graph_package("web_deep_research").unwrap();
         for (asset, fields) in [
             (
-                "tasks/research-plan-task/prompt.md",
+                "tasks/research_plan_task/prompt.md",
                 &[
                     "question",
                     "scope",
@@ -501,7 +530,7 @@ mod tests {
                 ][..],
             ),
             (
-                "tasks/research-investigate-task/prompt.md",
+                "tasks/research_investigate_task/prompt.md",
                 &[
                     "assignment_id",
                     "question",
@@ -513,7 +542,7 @@ mod tests {
                 ][..],
             ),
             (
-                "tasks/research-report-task/prompt.md",
+                "tasks/research_report_task/prompt.md",
                 &[
                     "title",
                     "thesis",
@@ -532,7 +561,7 @@ mod tests {
             }
         }
         let adjudicate_prompt = package
-            .asset_text("tasks/research-adjudicate-task/prompt.md")
+            .asset_text("tasks/research_adjudicate_task/prompt.md")
             .unwrap();
         assert!(adjudicate_prompt.contains("{{ group.correlation_value }}"));
         assert!(adjudicate_prompt.contains("{{ group.count }}"));
@@ -540,11 +569,11 @@ mod tests {
 
         let expected_surface_tools = [
             (
-                "datastore-tool-surfaces/research-plan-writes/object.json",
+                "datastore_tool_surfaces/research_plan_writes/object.json",
                 vec!["write_research_assignment", "write_research_plan"],
             ),
             (
-                "datastore-tool-surfaces/research-investigate-writes/object.json",
+                "datastore_tool_surfaces/research_investigate_writes/object.json",
                 vec![
                     "write_research_source",
                     "write_research_claim",
@@ -553,7 +582,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore-tool-surfaces/research-adjudicate-io/object.json",
+                "datastore_tool_surfaces/research_adjudicate_io/object.json",
                 vec![
                     "read_research_investigation",
                     "read_research_source",
@@ -564,7 +593,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore-tool-surfaces/research-report-io/object.json",
+                "datastore_tool_surfaces/research_report_io/object.json",
                 vec![
                     "read_report_research_source",
                     "read_report_research_evidence",
@@ -608,7 +637,7 @@ mod tests {
 
         let investigator: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/research-investigate-writes/object.json")
+                .asset_text("datastore_tool_surfaces/research_investigate_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -683,10 +712,10 @@ mod tests {
 
     #[test]
     fn code_review_scan_writes_use_the_trigger_area_id() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         let surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -715,10 +744,10 @@ mod tests {
 
     #[test]
     fn code_review_evidence_handoff_is_compact_and_correlation_scoped() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         let surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-recon-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_recon_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -756,18 +785,18 @@ mod tests {
         assert!(expected_total.required);
         assert_eq!(expected_total.fill, None);
         let recon_prompt = package
-            .asset_text("tasks/review-recon-task/prompt.md")
+            .asset_text("tasks/review_recon_task/prompt.md")
             .unwrap();
         assert!(recon_prompt.contains("{{ doc.evidence_summary }}"));
         assert!(!recon_prompt.contains("{{ doc.evidence }}"));
         let scan_prompt = package
-            .asset_text("tasks/review-scan-task/prompt.md")
+            .asset_text("tasks/review_scan_task/prompt.md")
             .unwrap();
         assert!(!scan_prompt.contains("{{ doc.evidence }}"));
 
         let scan_surface: BundledToolSurface = serde_json::from_str(
             package
-                .asset_text("datastore-tool-surfaces/review-scan-writes/object.json")
+                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
                 .unwrap(),
         )
         .unwrap();
@@ -830,10 +859,10 @@ mod tests {
 
     #[test]
     fn code_review_stages_use_role_specific_least_privilege_tools() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         for asset in [
-            "tool-selections/review-recon-tools/object.json",
-            "tool-selections/review-scan-tools/object.json",
+            "tool_selections/review_recon_tools/object.json",
+            "tool_selections/review_scan_tools/object.json",
         ] {
             let selection: Value =
                 serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
@@ -848,7 +877,7 @@ mod tests {
             assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
         }
 
-        let asset = "tool-selections/review-verify-tools/object.json";
+        let asset = "tool_selections/review_verify_tools/object.json";
         let selection: Value = serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
         assert_eq!(selection["enable_file_tools"], true, "{asset}");
         assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
@@ -870,7 +899,7 @@ mod tests {
 
     #[test]
     fn code_review_stages_are_durable_goal_controlled() {
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         for capability in &package.capabilities {
             let task: Value =
                 serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();

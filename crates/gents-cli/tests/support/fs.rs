@@ -23,12 +23,12 @@ pub fn read_json_file(path: &Path) -> Result<Value> {
 }
 
 pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
-    let principal_path = root.join("agent-principal.json");
+    let principal_path = root.join("agent_principal.json");
     let mut principal = read_json_file(&principal_path)?;
     principal["agent_did"] = Value::String(agent_did.to_string());
     write_json_file(&principal_path, &principal)?;
 
-    for dir_name in ["agent-behaviors", "tool-selections"] {
+    for dir_name in ["agent_behaviors", "tool_selections"] {
         let collection_dir = root.join(dir_name);
         if !collection_dir.exists() {
             continue;
@@ -51,13 +51,13 @@ pub fn rewrite_manifest_agent_dids(root: &Path, agent_did: &str) -> Result<()> {
 }
 
 pub fn assert_manifest_agent_dids(root: &Path, expected_agent_did: &str) -> Result<()> {
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
         Some(expected_agent_did)
     );
 
-    for dir_name in ["agent-behaviors", "tool-selections"] {
+    for dir_name in ["agent_behaviors", "tool_selections"] {
         let collection_dir = root.join(dir_name);
         if !collection_dir.exists() {
             continue;
@@ -117,7 +117,7 @@ pub fn read_captured_log(log: Option<&tempfile::NamedTempFile>) -> Result<String
 
 pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<()> {
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &project_object_fields(
             exported
                 .get("agent_principal")
@@ -133,7 +133,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
 
     write_per_doc_collection(
         root,
-        "agent-behaviors",
+        "agent_behaviors",
         "behavior_id",
         exported
             .get("agent_behaviors")
@@ -154,7 +154,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
     )?;
     write_per_doc_collection(
         root,
-        "tool-selections",
+        "tool_selections",
         "selection_id",
         exported
             .get("tool_selections")
@@ -189,7 +189,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
     )?;
     write_per_doc_collection(
         root,
-        "inference-backends",
+        "inference_backends",
         "backend_id",
         exported
             .get("inference_backends")
@@ -208,7 +208,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
     if let Some(profiles) = exported.get("inference_profiles") {
         write_per_doc_collection(
             root,
-            "inference-profiles",
+            "inference_profiles",
             "profile_id",
             profiles,
             &[
@@ -232,7 +232,7 @@ pub fn write_manifest_root_from_export(root: &Path, exported: &Value) -> Result<
     if let Some(services) = exported.get("tool_service_registries") {
         write_per_doc_collection(
             root,
-            "tool-services",
+            "tool_services",
             "service_id",
             services,
             &[
@@ -303,7 +303,9 @@ fn write_per_doc_collection(
             .get(unique_field)
             .and_then(Value::as_str)
             .ok_or_else(|| anyhow!("row missing {unique_field}: {row}"))?;
-        let dir = root.join(dir_name).join(handle);
+        let dir = root
+            .join(dir_name)
+            .join(crate::support::document_handle(&handle));
         fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         write_json_file(&dir.join("object.json"), &object)?;
     }

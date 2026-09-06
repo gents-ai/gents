@@ -95,7 +95,7 @@ pub fn desktop_bin() -> Result<PathBuf> {
         .current_dir(workspace_root)
         .args(["build", "-p", "gents-desktop", "--bin", "gents-desktop"])
         .status()
-        .context("building gents-desktop binary for demo e2e")?;
+        .context("building gents-desktop binary for e2e")?;
     if !status.success() {
         bail!("cargo build -p gents-desktop --bin gents-desktop failed");
     }

@@ -340,7 +340,7 @@ fn compilation_requires_a_terminal_result_contract() {
 
 fn package_plan(artifacts: Vec<PlannedPackageArtifact>) -> PackagePlan {
     PackagePlan {
-        name: "code-review".to_owned(),
+        name: "code_review".to_owned(),
         version: "1.0.0".to_owned(),
         package_digest: format!("sha256:{}", "1".repeat(64)),
         bundled_provenance: BundledProvenance {

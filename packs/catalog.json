@@ -1,0 +1,16 @@
+{
+  "catalog_version": 1,
+  "packs": [
+    "background_continuation",
+    "code_review",
+    "defending_code",
+    "graph_pipeline",
+    "grok_tui_port",
+    "lsp_rust",
+    "mailbox",
+    "pipeline",
+    "repo_maintenance",
+    "security_scan",
+    "web_deep_research"
+  ]
+}
