@@ -33,6 +33,7 @@ import Proofs.Identity.Conformance
 import Proofs.Conformance.EventDelivery
 import Proofs.Conformance.GraphPipeline
 import Proofs.Conformance.RequestExecutionLease
+import Proofs.Conformance.InferenceRegistry
 
 namespace Conformance.Contracts
 
@@ -59,6 +60,8 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
     ++ "\"request_execution_lease_trace_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
+    ++ "\"inference_registry_cases\":"
+      ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"
       ++ jsonArray (processTransitionCases.map lifecycleTransitionCaseJson) ++ ","
     ++ "\"trigger_dispatch_case_count\":"

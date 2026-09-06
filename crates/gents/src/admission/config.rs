@@ -1,8 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
+use sha2::{Digest, Sha256};
 
 use crate::backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS};
+
+/// Domain and version of the canonical resource identity encoding.
+const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendAdmissionConfig {
@@ -38,6 +42,26 @@ impl BackendAdmissionConfig {
             );
         }
 
+        // Reuse the effective provider mapping and hash its resource fields
+        // in a versioned, unambiguous encoding. Display/catalog metadata does
+        // not replace controllers; availability remains separately owned.
+        // Only the digest, never credential values, enters persisted call rows.
+        let fields = backend.backend_fields();
+        let fingerprint_inputs = (
+            BACKEND_CONFIG_FINGERPRINT_TAG,
+            &backend.backend_id,
+            &fields.backend_provider_kind,
+            &fields.openai_wire_api,
+            &fields.backend_endpoint,
+            &fields.backend_api_key,
+            &fields.backend_api_key_env_var,
+            backend.max_concurrent,
+            backend.max_queue_depth,
+        );
+        let encoded = serde_json::to_vec(&fingerprint_inputs)?;
+        let digest = Sha256::digest(&encoded);
+        let config_fingerprint = format!("sha256:{digest:x}");
+
         Ok(Self {
             backend_id: backend.backend_id.clone(),
             max_concurrent: backend.max_concurrent as usize,
@@ -45,7 +69,7 @@ impl BackendAdmissionConfig {
             enabled: backend.enabled,
             probe_status: backend.probe_status.clone(),
             measured_unhealthy: false,
-            config_fingerprint: format!("{backend:?}"),
+            config_fingerprint,
         })
     }
 
@@ -118,6 +142,34 @@ pub(crate) fn backend_admission_configs_from_backends<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_identity_normalizes_wire_defaults_and_protects_credentials() {
+        let mut backend = InferenceBackend::from_value(&serde_json::json!({
+            "backend_id": "resource-identity",
+            "name": "Resource identity",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1/v1",
+            "api_key": "fixture-only-secret",
+            "max_concurrent": 2,
+            "max_queue_depth": 0,
+            "enabled": true,
+            "probe_status": "healthy"
+        }))
+        .unwrap();
+        let implicit = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        backend.openai_wire_api = Some(backend.backend_fields().openai_wire_api);
+        assert_eq!(
+            BackendAdmissionConfig::from_backend(&backend).unwrap(),
+            implicit
+        );
+        assert!(!implicit.config_fingerprint.contains("fixture-only-secret"));
+
+        backend.api_key = Some("rotated-fixture-only-secret".into());
+        let rotated = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        assert_ne!(implicit.config_fingerprint, rotated.config_fingerprint);
+        assert!(!rotated.config_fingerprint.contains("fixture-only-secret"));
+    }
 
     fn config(
         enabled: bool,
