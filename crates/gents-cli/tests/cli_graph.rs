@@ -117,7 +117,7 @@ fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
     anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
     anyhow::ensure!(
         packages[0].get("name").and_then(Value::as_str) == Some("web_deep_research"),
-        "catalog did not return web-deep-research: {catalog}"
+        "catalog did not return web_deep_research: {catalog}"
     );
     anyhow::ensure!(
         packages[0]
