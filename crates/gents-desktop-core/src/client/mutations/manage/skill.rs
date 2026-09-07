@@ -4,7 +4,7 @@
 //! + tool-dependency fragment owned by a principal (`agent_did`). Every field
 //! is operator-authored — the runtime never writes skills back — so this
 //! writer projects all of them. `tool_refs` is a `[String!]` and MUST render
-//! an empty list as `null`, never `[]` (CLAUDE.md sharp edge: a bare `[]`
+//! an empty list as `null`, never `[]` (AGENTS.md sharp edge: a bare `[]`
 //! literal types as `JsonArray` and corrupts the nillable array column); the
 //! shared `graphql_string_list_field` helper enforces that.
 //!

@@ -1,6 +1,6 @@
 # Gents Fixture Host
 
-Minimal downstream Tauri host for [reusable desktop packages](../../docs/reusable-desktop-packages.md) phase 4.
+Minimal downstream Tauri host for the reusable desktop packages.
 
 ## Proves
 

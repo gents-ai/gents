@@ -54,7 +54,7 @@ cargo build -p gents-cli                     # CLI + Codex app-server shim
 cd crates/gents/proofs && lake build        # the Lean proofs
 ```
 
-The development flow is foundation-first: Lean model → conformance tests → implementation. `CLAUDE.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
+The development flow is foundation-first: Lean model → conformance tests → implementation. `AGENTS.md` is the working brief; the [proofs README](crates/gents/proofs/README.md) maps the formal coverage.
 
 ## Binary size and compile graph
 

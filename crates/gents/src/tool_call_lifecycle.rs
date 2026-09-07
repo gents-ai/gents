@@ -9,8 +9,7 @@
 //!
 //! ## R2 maintenance obligations
 //!
-//! This module implements R2 ("Rust subagent data plane"). Per the spec at
-//! `docs/superpowers/specs/2026-05-08-r2-rust-subagent-data-plane-design.md` (removed from the tree; see git history):
+//! This module implements R2 ("Rust subagent data plane"):
 //!
 //! - SubagentSource (R3) consumes `create_subagent_request` and the bridge methods.
 //! - Agent-facing tools (R4) are routed via hook integration that uses

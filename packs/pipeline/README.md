@@ -137,11 +137,6 @@ create fired stage-2; both requests reached `completed`; 3 inference calls,
 complete was a few seconds — the 60s backend probe is the only slow step, and
 it happens once at startup.
 
-## Design
-
-- Topology: `docs/superpowers/specs/2026-08-07-event-trigger-graph-experiments-design.md`
-- Surfaces: `docs/superpowers/specs/2026-08-07-datastore-tool-surface-design.md`
-
 ## Declared topology
 
 Document-trigger edges; task writes and host callbacks are described above.
