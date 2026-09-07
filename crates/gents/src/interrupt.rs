@@ -98,13 +98,12 @@ pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<
         }}"#
     );
     // The latch mutation is idempotent and can race the source-spawn observer
-    // or another interrupt caller. DefraDB reports those overlapping commits
-    // as transient transaction conflicts, so use the runtime's bounded retry
-    // seam instead of surfacing a flaky operator failure.
-    let resp = crate::graphql::graphql_mutation_with_transaction_retry(
+    // or another interrupt caller. Route it through the canonical write owner
+    // so DefraDB owns any auto-commit conflict handling.
+    let resp = crate::config_client::ConfigAccess::write_local_response(
         node,
+        "interrupt.latch_request",
         &mutation,
-        "latch AgentRequest interrupt_requested_at",
     )
     .await?;
     // Defensive: confirm at least one row was updated. Zero rows would mean

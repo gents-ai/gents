@@ -12,7 +12,6 @@ use crate::behavior_readiness_publisher::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
-use crate::session::execute_mutation_with_retry;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReconcilePhase {
@@ -378,7 +377,12 @@ async fn upsert_runtime_status(
         last_reconcile_completed_at = escape_graphql_string(&row.last_reconcile_completed_at),
         updated_at = escape_graphql_string(&row.updated_at),
     );
-    let response = execute_mutation_with_retry(node, &mutation, "upsert_runtime_status").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "upsert_runtime_status",
+        &mutation,
+    )
+    .await?;
     if response.has_errors() {
         anyhow::bail!("upsert AgentRuntime failed: {:?}", response.errors);
     }

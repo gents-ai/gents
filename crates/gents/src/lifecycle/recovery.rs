@@ -143,28 +143,23 @@ impl RequestLifecycle {
                 }}"#,
             );
 
-            let resp = crate::graphql::graphql_mutation_response_with_transaction_retry(
+            let resp = crate::config_client::ConfigAccess::write_local(
                 node,
+                "lifecycle.redrive_terminal",
                 &mutation,
-                "re-drive terminal request convergence",
             )
             .await;
-            if resp.has_errors() {
-                tracing::warn!(
-                    doc_id = %doc_id,
-                    request_id = %request_id,
-                    lifecycle_state = %lifecycle_state,
-                    errors = ?resp.errors,
-                    "failed to re-drive terminal request convergence"
-                );
-                failed += 1;
-                continue;
-            }
+            let resp = match resp {
+                Ok(resp) => resp,
+                Err(error) => {
+                    tracing::warn!(doc_id = %doc_id, request_id = %request_id, lifecycle_state = %lifecycle_state, %error, "failed to re-drive terminal request convergence");
+                    failed += 1;
+                    continue;
+                }
+            };
 
             let updated = resp
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
+                .pointer("/data/update_AgentRequest")
                 .is_some_and(response_has_documents);
             if !updated {
                 continue;

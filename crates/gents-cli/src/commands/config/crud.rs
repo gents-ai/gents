@@ -153,30 +153,24 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
         );
     }
 
-    let txn = access.begin_apply_txn().await?;
-    let result = apply_delete_collection(
-        &txn,
-        spec.collection.graphql_type(),
-        spec.collection.unique_field(),
-        std::slice::from_ref(&id),
-    )
-    .await;
-    match result {
-        Ok(deleted) => {
-            txn.commit().await?;
-            match output {
-                OutputFormat::Json => print_json(&json!({
-                    "collection": spec.collection.graphql_type(),
-                    "id": id,
-                    "deleted": deleted,
-                })),
-                _ => unreachable!("ensure_supported restricts config rm output formats"),
-            }
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
+    let collection = spec.collection.graphql_type();
+    let unique_field = spec.collection.unique_field();
+    let id_ref = &id;
+    let deleted = access
+        .transact("cli.config.delete", move |txn| {
+            Box::pin(async move {
+                apply_delete_collection(txn, collection, unique_field, std::slice::from_ref(id_ref))
+                    .await
+            })
+        })
+        .await?;
+    match output {
+        OutputFormat::Json => print_json(&json!({
+            "collection": spec.collection.graphql_type(),
+            "id": id,
+            "deleted": deleted,
+        })),
+        _ => unreachable!("ensure_supported restricts config rm output formats"),
     }
 }
 

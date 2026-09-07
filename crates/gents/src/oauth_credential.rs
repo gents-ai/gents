@@ -335,16 +335,10 @@ pub async fn upsert_oauth_credential(
     node: &EmbeddedNode,
     credential: &OAuthCredential,
 ) -> Result<String> {
-    let response = node
-        .execute(&oauth_credential_upsert_mutation(credential))
-        .await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "upserting OAuthCredential returned errors: {:?}",
-            response.errors
-        );
-    }
-    let response = json!({ "data": response.data.unwrap_or(Value::Null) });
+    let mutation = oauth_credential_upsert_mutation(credential);
+    let response =
+        crate::config_client::ConfigAccess::write_local(node, "oauth_credential.upsert", &mutation)
+            .await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")
 }
 

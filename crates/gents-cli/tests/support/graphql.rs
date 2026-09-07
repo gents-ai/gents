@@ -1,8 +1,4 @@
 use anyhow::{anyhow, bail, Context, Result};
-use gents::retry::{
-    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
-    DEFRA_DB_CONFLICT_MAX_RETRIES,
-};
 use serde_json::Value;
 
 // Re-export the canonical escaper instead of duplicating it, so test-support
@@ -10,26 +6,12 @@ use serde_json::Value;
 pub use gents::graphql::escape_graphql_string;
 
 pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
-    let client = reqwest::Client::new();
-    for attempt in 0..=DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let response = client
-            .post(graphql)
-            .json(&serde_json::json!({ "query": query }))
-            .send()
-            .await
-            .with_context(|| format!("posting GraphQL to {graphql}"))?;
-        let value: Value = response.json().await.context("decoding GraphQL response")?;
-        if let Some(errors) = value.get("errors") {
-            let transient = is_defradb_transaction_conflict_text(&errors.to_string());
-            if transient && attempt < DEFRA_DB_CONFLICT_MAX_RETRIES {
-                tokio::time::sleep(defradb_conflict_retry_backoff(attempt)).await;
-                continue;
-            }
-            bail!("graphql returned errors: {errors}");
-        }
-        return Ok(value);
+    let access = gents::config_client::ConfigAccess::Graphql(graphql.to_string());
+    if query.trim_start().starts_with("mutation") {
+        access.write("test.fixture", query).await
+    } else {
+        access.execute(query).await
     }
-    unreachable!("graphql_query loop always returns or bails within MAX_ATTEMPTS")
 }
 
 pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> {

@@ -88,7 +88,7 @@ pub(super) async fn load_sequenced_history_projection(
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "load_history").await;
+    let resp = execute_query_timed(node, &query, "load_history").await?;
     if resp.has_errors() {
         anyhow::bail!(
             "loading history for session_id={} through_sequence={:?}: {:?}",
@@ -226,7 +226,8 @@ async fn save_message_inner(
         }}"#
     );
 
-    super::retry::execute_mutation_with_retry(node, &mutation, "save_message").await?;
+    crate::config_client::ConfigAccess::write_local(node, "session.save_message", &mutation)
+        .await?;
     Ok(())
 }
 
@@ -363,7 +364,7 @@ async fn message_sequence_exists(
             ) {{ sequence }}
         }}"#
     );
-    let response = execute_query_timed(node, &query, "message_sequence_exists").await;
+    let response = execute_query_timed(node, &query, "message_sequence_exists").await?;
     if response.has_errors() {
         anyhow::bail!(
             "checking AgentMessage sequence for session_id={} sequence={}: {:?}",
@@ -398,7 +399,7 @@ async fn message_sequence_for_key(
             ) {{ sequence }}
         }}"#
     );
-    let response = execute_query_timed(node, &query, "message_sequence_for_key").await;
+    let response = execute_query_timed(node, &query, "message_sequence_for_key").await?;
     if response.has_errors() {
         anyhow::bail!(
             "keyed AgentMessage lookup failed for session_id={} message_key={}: {:?}",
@@ -449,7 +450,7 @@ pub(crate) async fn message_sequence_for_request_content(
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "message_sequence_for_request_content").await;
+    let resp = execute_query_timed(node, &query, "message_sequence_for_request_content").await?;
     if resp.has_errors() {
         anyhow::bail!(
             "dedup lookup for session_id={} request_id={}: {:?}",
@@ -497,7 +498,7 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "max_tool_call_reserved_sequence").await;
+    let resp = execute_query_timed(node, &query, "max_tool_call_reserved_sequence").await?;
     if resp.has_errors() {
         anyhow::bail!(
             "loading tool-call message sequences for session_id={}: {:?}",
@@ -554,7 +555,8 @@ async fn create_message(
         message_key,
     );
 
-    super::retry::execute_mutation_with_retry(node, &mutation, "append AgentMessage").await?;
+    crate::config_client::ConfigAccess::write_local(node, "session.append_message", &mutation)
+        .await?;
     Ok(())
 }
 
@@ -627,7 +629,11 @@ pub(crate) async fn mark_response_materialized(
         }}"#
     );
 
-    super::retry::execute_mutation_with_retry(node, &mutation, "mark_response_materialized")
-        .await?;
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "session.mark_response_materialized",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }

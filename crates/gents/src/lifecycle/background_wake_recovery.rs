@@ -266,40 +266,17 @@ fn retry_is_due(candidate: &AgentRequestRow, now: chrono::DateTime<chrono::Utc>)
 
 async fn redrive_one(node: &EmbeddedNode, candidate: &AgentRequestRow) -> Result<RedriveOutcome> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let mut last_error = None;
-    for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt = redrive_in_transaction(&txn, candidate, &request_id).await;
-        let result = match attempt {
-            Ok(outcome) => txn.commit().await.map(|()| outcome),
-            Err(error) => {
-                let _ = txn.discard().await;
-                Err(error)
-            }
-        };
-        match result {
-            Ok(outcome) => return Ok(outcome),
-            Err(error)
-                if retry_index < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && retryable_transaction_error(&error) =>
-            {
-                let backoff = crate::graphql::defradb_conflict_retry_backoff(retry_index);
-                last_error = Some(error);
-                tokio::time::sleep(backoff).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("background wake redrive exhausted")))
-}
-
-fn retryable_transaction_error(error: &anyhow::Error) -> bool {
-    let text = error.to_string().to_ascii_lowercase();
-    crate::graphql::is_defradb_transaction_conflict_text(&text)
-        || text.contains("unique")
-        || text.contains("constraint")
-        || text.contains("database is locked")
-        || text.contains("compare-and-set lost")
+    let request_id = &request_id;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "lifecycle.background_wake_redrive",
+        move |txn| {
+            Box::pin(async move { redrive_in_transaction(txn, candidate, request_id).await })
+        },
+    )
+    .await
 }
 
 async fn redrive_in_transaction(

@@ -30,7 +30,7 @@ async fn claim_request_with_projection<F>(
     build_mutation: F,
 ) -> Result<(defra_node::QueryResponse, BackgroundCompletionClaimSnapshot)>
 where
-    F: Fn(&str) -> String,
+    F: Fn(&str) -> String + Sync,
 {
     let session_id = escape_graphql_string(session_id);
     let snapshot_query = format!(
@@ -49,83 +49,68 @@ where
             ) {{ sequence message_key }}
         }}"#
     );
-    let mut last_error = None;
-    for retry_index in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt = async {
-            let snapshot = if capture_background_snapshot {
-                let response = txn.execute_local_response(&snapshot_query).await?;
-                let through_sequence = response
+    let snapshot_query = &snapshot_query;
+    let build_mutation = &build_mutation;
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "lifecycle.claim_request",
+        move |txn| {
+            Box::pin(async move {
+                let snapshot = if capture_background_snapshot {
+                    let response = txn.execute_local_response(&snapshot_query).await?;
+                    let through_sequence = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("all_messages"))
+                        .and_then(serde_json::Value::as_array)
+                        .and_then(|rows| rows.first())
+                        .and_then(|row| row.get("sequence"))
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|sequence| u32::try_from(sequence).ok());
+                    let notification_keys = response
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("notifications"))
+                        .and_then(serde_json::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter(|row| {
+                            row.get("sequence")
+                                .and_then(serde_json::Value::as_u64)
+                                .zip(through_sequence.map(u64::from))
+                                .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
+                        })
+                        .filter_map(|row| {
+                            row.get("message_key").and_then(serde_json::Value::as_str)
+                        })
+                        .map(ToOwned::to_owned)
+                        .collect();
+                    BackgroundCompletionClaimSnapshot {
+                        through_sequence,
+                        notification_keys,
+                    }
+                } else {
+                    BackgroundCompletionClaimSnapshot::default()
+                };
+                let snapshot_fields = capture_background_snapshot
+                    .then(|| snapshot.mutation_fields())
+                    .unwrap_or_default();
+                let mutation = build_mutation(&snapshot_fields);
+                let claimed = txn.execute_local_response(&mutation).await?;
+                if claimed
                     .data
                     .as_ref()
-                    .and_then(|data| data.get("all_messages"))
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|rows| rows.first())
-                    .and_then(|row| row.get("sequence"))
-                    .and_then(serde_json::Value::as_u64)
-                    .and_then(|sequence| u32::try_from(sequence).ok());
-                let notification_keys = response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("notifications"))
-                    .and_then(serde_json::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter(|row| {
-                        row.get("sequence")
-                            .and_then(serde_json::Value::as_u64)
-                            .zip(through_sequence.map(u64::from))
-                            .is_some_and(|(sequence, cutoff)| sequence <= cutoff)
-                    })
-                    .filter_map(|row| row.get("message_key").and_then(serde_json::Value::as_str))
-                    .map(ToOwned::to_owned)
-                    .collect();
-                BackgroundCompletionClaimSnapshot {
-                    through_sequence,
-                    notification_keys,
+                    .and_then(|data| data.get("update_AgentRequest"))
+                    .is_some_and(response_has_documents)
+                {
+                    super::materialize::apply_request_session_projection(&txn, projection).await?;
                 }
-            } else {
-                BackgroundCompletionClaimSnapshot::default()
-            };
-            let snapshot_fields = capture_background_snapshot
-                .then(|| snapshot.mutation_fields())
-                .unwrap_or_default();
-            let mutation = build_mutation(&snapshot_fields);
-            let claimed = txn.execute_local_response(&mutation).await?;
-            if claimed
-                .data
-                .as_ref()
-                .and_then(|data| data.get("update_AgentRequest"))
-                .is_some_and(response_has_documents)
-            {
-                super::materialize::apply_request_session_projection(&txn, projection).await?;
-            }
-            Ok::<_, anyhow::Error>((claimed, snapshot))
-        }
-        .await;
-        let result = match attempt {
-            Ok(claimed) => txn.commit().await.map(|()| claimed),
-            Err(error) => {
-                let _ = txn.discard().await;
-                Err(error)
-            }
-        };
-        match result {
-            Ok(claimed) => return Ok(claimed),
-            Err(error)
-                if retry_index < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && crate::graphql::is_defradb_transaction_conflict_text(
-                        &error.to_string().to_ascii_lowercase(),
-                    ) =>
-            {
-                let backoff = crate::graphql::defradb_conflict_retry_backoff(retry_index);
-                last_error = Some(error);
-                tokio::time::sleep(backoff).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("request claim transaction exhausted")))
+                Ok::<_, anyhow::Error>((claimed, snapshot))
+            })
+        },
+    )
+    .await
 }
 
 fn parse_rfc3339_utc(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -233,10 +218,10 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let resp = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
             &self.node,
-            &mutation,
             "interrupt_before_claim",
+            &mutation,
         )
         .await?;
         if !resp
@@ -286,10 +271,10 @@ impl RequestLifecycle {
                 ) {{ _docID }}
             }}"#
         );
-        let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let resp = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
             &self.node,
-            &mutation,
             "expire_stale",
+            &mutation,
         )
         .await?;
         if !resp
@@ -372,14 +357,15 @@ impl RequestLifecycle {
             }}"#
         );
 
-        let updated = crate::retry::retry_terminal_persistence_operation(
-            "reject_request_admission",
-            crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
-            std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
-            || async {
-                let txn =
-                    crate::config_client::ConfigApplyTxn::begin_local(&self.node, None).await?;
-                let attempt = async {
+        let request_mutation = &request_mutation;
+        let response_mutation = &response_mutation;
+        let updated = crate::config_client::ConfigAccess::transact_local_idempotent(
+            &self.node,
+            None,
+            crate::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.reject_admission",
+            move |txn| {
+                Box::pin(async move {
                     let response = txn.execute_local_response(&request_mutation).await?;
                     let updated = response
                         .data
@@ -401,15 +387,7 @@ impl RequestLifecycle {
                         None
                     };
                     Ok::<_, anyhow::Error>((updated, response_doc_id))
-                }
-                .await;
-                match attempt {
-                    Ok(result) => txn.commit().await.map(|()| result),
-                    Err(error) => {
-                        let _ = txn.discard().await;
-                        Err(error)
-                    }
-                }
+                })
             },
         )
         .await?;
@@ -652,10 +630,13 @@ mod tests {
             }}"#,
             max_retries = DEFAULT_REQUEST_MAX_RETRIES,
         );
-        let response =
-            session::execute_mutation_with_retry(node, &mutation, "insert_pending_request")
-                .await
-                .unwrap();
+        let response = crate::config_client::ConfigAccess::write_local_response(
+            node,
+            "test.insert_pending_request",
+            &mutation,
+        )
+        .await
+        .unwrap();
         let inline_doc_id = response
             .data
             .as_ref()

@@ -17,36 +17,28 @@ pub(crate) async fn publish_claimed_continuation(
     wrapup: bool,
 ) -> Result<Option<GoalResumeReceipt>> {
     let identity = RegisteredIdentity::from_registered_did(&observed.agent_did, None)?;
+    let identity = &identity;
     // Preserve the automatic queue writer's node actor; target identity signs
     // the child independently of the database actor.
-    let txn = ConfigApplyTxn::begin_local(node, None).await?;
-    match stage_claimed_continuation(
-        &txn,
-        &identity,
-        observed,
-        parent_request_id,
-        content,
-        wrapup,
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "goal.publish_claimed_continuation",
+        move |txn| {
+            Box::pin(async move {
+                stage_claimed_continuation(
+                    txn,
+                    identity,
+                    observed,
+                    parent_request_id,
+                    content,
+                    wrapup,
+                )
+                .await
+            })
+        },
     )
     .await
-    {
-        Ok(Some(receipt)) => {
-            if receipt.created {
-                txn.commit().await?;
-            } else {
-                txn.discard().await?;
-            }
-            Ok(Some(receipt))
-        }
-        Ok(None) => {
-            txn.discard().await?;
-            Ok(None)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
 }
 
 async fn stage_claimed_continuation(

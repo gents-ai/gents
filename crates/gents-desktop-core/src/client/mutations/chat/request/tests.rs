@@ -516,7 +516,7 @@ async fn submit_recovery_seed_request(
     execute_mutation(
         core.node(),
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
-        "seed signed recovery request",
+        "test.seed_recovery_request",
     )
     .await?;
     core.refresh_store().await?;

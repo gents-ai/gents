@@ -487,10 +487,10 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
     async fn mark_applied(&self, doc_id: &str, behavior_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = mark_applied_mutation(doc_id, behavior_id, &now);
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.mark_persona_applied",
             &mutation,
-            "mark PersonaConfigRequest applied",
         )
         .await
         .map(|_| ())
@@ -499,10 +499,10 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
     async fn mark_rejected(&self, doc_id: &str, detail: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = mark_rejected_mutation(doc_id, detail, &now);
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.mark_persona_rejected",
             &mutation,
-            "mark PersonaConfigRequest rejected",
         )
         .await
         .map(|_| ())

@@ -566,7 +566,10 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
         .await
         .expect_err("stale native publication must lose");
     assert!(
-        crate::graphql::is_defradb_transaction_conflict_text(&conflict.to_string()),
+        conflict
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("transaction conflict"),
         "{conflict}"
     );
     let durable = execute(

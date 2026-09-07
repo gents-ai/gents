@@ -8,10 +8,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config_client::ConfigApplyTxn;
-use crate::graphql::{
-    defradb_conflict_retry_backoff, escape_graphql_string, is_defradb_transaction_conflict_text,
-    response_has_documents, DEFRA_DB_CONFLICT_MAX_RETRIES,
-};
+use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::session;
 use crate::watcher::AgentRequest;
 
@@ -27,9 +24,9 @@ mod metadata;
 mod mutation;
 
 pub(crate) use atomic_inputs::persist_background_completion_with_message;
+use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
-use atomic_inputs::{steering_transaction_attempt, steering_transaction_error_is_retryable};
 pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{parent_behavior_id, queue_row_to_enqueued_request, queue_source_and_key_match};
 pub use draining::drain_automated_wakeups;

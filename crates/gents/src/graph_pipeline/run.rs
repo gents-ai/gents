@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::{ConfigAccess, ConfigApplyTxn};
+use crate::config_client::{ConfigAccess, ConfigApplyTxn, TransactionOutcome};
 use crate::graphql::{
     document_composite_version, escape_graphql_string, validate_collection_identifier,
 };
@@ -44,6 +44,12 @@ mod attribution_contract_tests;
 #[cfg(test)]
 #[path = "publication_contract_tests.rs"]
 mod publication_contract_tests;
+
+#[cfg(test)]
+#[path = "run_owner_tests.rs"]
+mod run_owner_tests;
+#[cfg(test)]
+use run_owner_tests::{capture_failure_txn, commit_terminal_txn, persist_cancellation_intent};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphResultRef {
@@ -1020,8 +1026,17 @@ async fn commit_terminal(
     view: &GraphRunView,
     status: &str,
 ) -> Result<()> {
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    commit_terminal_txn(txn, view, status).await
+    let completed_at = chrono::Utc::now().to_rfc3339();
+    let completed_at = &completed_at;
+    ConfigAccess::transact_local(
+        node,
+        identity,
+        "graph_pipeline.commit_terminal",
+        move |txn| {
+            Box::pin(async move { commit_terminal_in_txn(txn, view, status, completed_at).await })
+        },
+    )
+    .await
 }
 
 async fn commit_terminal_with_access(
@@ -1029,125 +1044,95 @@ async fn commit_terminal_with_access(
     view: &GraphRunView,
     status: &str,
 ) -> Result<()> {
-    let txn = access.begin_apply_txn().await?;
-    commit_terminal_txn(txn, view, status).await
+    let completed_at = chrono::Utc::now().to_rfc3339();
+    let completed_at = &completed_at;
+    access
+        .transact("graph_pipeline.commit_terminal", move |txn| {
+            Box::pin(async move { commit_terminal_in_txn(txn, view, status, completed_at).await })
+        })
+        .await
 }
 
 /// Capture inside the existing GraphRun transaction before causing sibling
 /// interruptions. A losing generation writes nothing and emits no interrupts.
-async fn capture_failure_txn(txn: ConfigApplyTxn<'_>, view: &GraphRunView) -> Result<()> {
-    let result = async {
-        let fresh = load_graph_run_view_with(&txn, &view.owner_did, &view.run_id).await?;
-        if fresh.status != "running" || fresh.update_generation != view.update_generation {
-            return Ok(false);
-        }
-        if fresh.cancellation_requested_at.is_some() || fresh.error.is_some() {
-            return Ok(false);
-        }
-        let Some(primary) = fresh.failure_evidence else {
-            return Ok(false);
-        };
-        let current = query_run(&txn, &view.run_id).await?;
-        let input = json!({
-            "error": serde_json::to_string(&primary)?,
-            "update_generation": fresh.update_generation.checked_add(1).context("graph run generation exhausted")?,
-        });
-        txn.execute(&format!(
-            "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
-            escape_graphql_string(required_string(&current, "_docID")?),
-            graphql_input_literal(&input)?,
-        ))
-        .await?;
-        Result::<bool>::Ok(true)
+async fn capture_failure_in_txn(txn: &ConfigApplyTxn<'_>, view: &GraphRunView) -> Result<bool> {
+    let fresh = load_graph_run_view_with(txn, &view.owner_did, &view.run_id).await?;
+    if fresh.status != "running" || fresh.update_generation != view.update_generation {
+        return Ok(false);
     }
-    .await;
-    match result {
-        Ok(false) => txn.discard().await,
-        Ok(true) => match txn.commit().await {
-            Ok(()) => Ok(()),
-            // Reconciliation always reloads after this shared operation. A
-            // native competing winner is an observation change, not a failure
-            // that may bypass reloading or emit stale sibling interruptions.
-            Err(error)
-                if crate::graphql::is_defradb_transaction_conflict_text(&format!("{error:#}")) =>
-            {
-                Ok(())
-            }
-            Err(error) => Err(error).context("commit graph failure cause"),
-        },
-        Err(error) => {
-            let _ = txn.discard().await;
-            if crate::graphql::is_defradb_transaction_conflict_text(&format!("{error:#}")) {
-                Ok(())
-            } else {
-                Err(error)
-            }
-        }
+    if fresh.cancellation_requested_at.is_some() || fresh.error.is_some() {
+        return Ok(false);
     }
+    let Some(primary) = fresh.failure_evidence else {
+        return Ok(false);
+    };
+    let current = query_run(txn, &view.run_id).await?;
+    let input = json!({
+        "error": serde_json::to_string(&primary)?,
+        "update_generation": fresh.update_generation.checked_add(1).context("graph run generation exhausted")?,
+    });
+    txn.execute(&format!(
+        "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
+        escape_graphql_string(required_string(&current, "_docID")?),
+        graphql_input_literal(&input)?,
+    ))
+    .await?;
+    Ok(true)
 }
 
-async fn commit_terminal_txn(
-    txn: ConfigApplyTxn<'_>,
+async fn commit_terminal_in_txn(
+    txn: &ConfigApplyTxn<'_>,
     view: &GraphRunView,
     status: &str,
+    completed_at: &str,
 ) -> Result<()> {
-    let result = async {
-        // The terminal predicate depends on AgentRequest, group-state, and
-        // result documents as well as GraphRun. Rebuild that complete view in
-        // the same transaction that writes terminal state so a concurrent
-        // graph materialization conflicts instead of committing stale success.
-        let fresh = load_graph_run_view_with(&txn, &view.owner_did, &view.run_id).await?;
-        if fresh.status != "running" || fresh.update_generation != view.update_generation {
-            anyhow::bail!("graph run terminal CAS lost; reload the durable run");
-        }
-        let decision = graph_run_terminal_decision(
-            &fresh.status,
-            fresh.cancellation_requested_at.is_some(),
-            fresh.result_contract_satisfied
-                && fresh.terminal_stages_completed
-                && fresh.outstanding_invocation_count == 0,
-            fresh.active_request_count == 0,
-            fresh.failure_evidence.is_some(),
-        );
-        let allowed = match status {
-            "succeeded" => decision.may_succeed,
-            "failed" => decision.may_fail,
-            "cancelled" => decision.may_cancel,
-            _ => false,
-        };
-        if !allowed {
-            anyhow::bail!("graph run terminal transition is not legal");
-        }
-        let current = query_run(&txn, &view.run_id).await?;
-        let current_generation = fresh.update_generation;
-        let doc_id = required_string(&current, "_docID")?;
-        let result_refs = (status == "succeeded").then(|| fresh.successful_result_refs());
-        let error = (status == "failed")
-            .then_some(fresh.failure_evidence.as_ref())
-            .flatten();
-        let input = json!({
-            "status": status,
-            "error": error.map(serde_json::to_string).transpose()?,
-            "result_refs_json": result_refs.as_ref().map(serde_json::to_string).transpose()?,
-            "update_generation": current_generation.checked_add(1).context("graph run generation exhausted")?,
-            "completed_at": chrono::Utc::now().to_rfc3339(),
-        });
-        let mutation = format!(
-            "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
-            escape_graphql_string(doc_id),
-            graphql_input_literal(&input)?,
-        );
-        txn.execute(&mutation).await?;
-        Result::<()>::Ok(())
+    // The terminal predicate depends on AgentRequest, group-state, and result
+    // documents as well as GraphRun. Rebuild that complete view in the same
+    // transaction that writes terminal state so a concurrent materialization
+    // conflicts and the canonical owner replays the complete observation.
+    let fresh = load_graph_run_view_with(txn, &view.owner_did, &view.run_id).await?;
+    if fresh.status != "running" || fresh.update_generation != view.update_generation {
+        anyhow::bail!("graph run terminal CAS lost; reload the durable run");
     }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await.context("commit GraphRun terminal CAS"),
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
+    let decision = graph_run_terminal_decision(
+        &fresh.status,
+        fresh.cancellation_requested_at.is_some(),
+        fresh.result_contract_satisfied
+            && fresh.terminal_stages_completed
+            && fresh.outstanding_invocation_count == 0,
+        fresh.active_request_count == 0,
+        fresh.failure_evidence.is_some(),
+    );
+    let allowed = match status {
+        "succeeded" => decision.may_succeed,
+        "failed" => decision.may_fail,
+        "cancelled" => decision.may_cancel,
+        _ => false,
+    };
+    if !allowed {
+        anyhow::bail!("graph run terminal transition is not legal");
     }
+    let current = query_run(txn, &view.run_id).await?;
+    let current_generation = fresh.update_generation;
+    let doc_id = required_string(&current, "_docID")?;
+    let result_refs = (status == "succeeded").then(|| fresh.successful_result_refs());
+    let error = (status == "failed")
+        .then_some(fresh.failure_evidence.as_ref())
+        .flatten();
+    let input = json!({
+        "status": status,
+        "error": error.map(serde_json::to_string).transpose()?,
+        "result_refs_json": result_refs.as_ref().map(serde_json::to_string).transpose()?,
+        "update_generation": current_generation.checked_add(1).context("graph run generation exhausted")?,
+        "completed_at": completed_at,
+    });
+    let mutation = format!(
+        "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
+        escape_graphql_string(doc_id),
+        graphql_input_literal(&input)?,
+    );
+    txn.execute(&mutation).await?;
+    Ok(())
 }
 
 fn terminal_projection(
@@ -1211,8 +1196,16 @@ pub async fn reconcile_graph_run(
         return Ok(view);
     }
     if needs_failure_capture(&view) {
-        let txn = ConfigApplyTxn::begin_local(node, identity.clone()).await?;
-        capture_failure_txn(txn, &view).await?;
+        let outcome = ConfigAccess::transact_local_observing_conflict(
+            node,
+            identity.clone(),
+            "graph_pipeline.capture_failure",
+            |txn| Box::pin(async { capture_failure_in_txn(txn, &view).await }),
+        )
+        .await?;
+        match outcome {
+            TransactionOutcome::Committed(_) | TransactionOutcome::ConflictObserved => {}
+        }
         view = load_graph_run_view(node, actor_did, run_id).await?;
         if view.is_terminal() {
             return Ok(view);
@@ -1247,7 +1240,14 @@ pub async fn reconcile_graph_run_with_access(
         return Ok(view);
     }
     if needs_failure_capture(&view) {
-        capture_failure_txn(access.begin_apply_txn().await?, &view).await?;
+        let outcome = access
+            .transact_observing_conflict("graph_pipeline.capture_failure", |txn| {
+                Box::pin(async { capture_failure_in_txn(txn, &view).await })
+            })
+            .await?;
+        match outcome {
+            TransactionOutcome::Committed(_) | TransactionOutcome::ConflictObserved => {}
+        }
         view = load_graph_run_view_with_access(access, actor_did, run_id).await?;
         if view.is_terminal() {
             return Ok(view);
@@ -1290,60 +1290,53 @@ pub async fn request_graph_run_cancellation(
     if before.is_terminal() {
         return Ok(before);
     }
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    persist_cancellation_intent(txn, actor_did, run_id, reason).await?;
+    let requested_at = chrono::Utc::now().to_rfc3339();
+    let requested_at = &requested_at;
+    ConfigAccess::transact_local(node, identity, "graph_pipeline.cancel_intent", move |txn| {
+        Box::pin(async move {
+            persist_cancellation_intent_in_txn(txn, actor_did, run_id, reason, requested_at).await
+        })
+    })
+    .await?;
     interrupt_active_requests(node, &before.requests).await?;
     reconcile_graph_run(node, None, actor_did, run_id).await
 }
 
-async fn persist_cancellation_intent(
-    txn: ConfigApplyTxn<'_>,
+async fn persist_cancellation_intent_in_txn(
+    txn: &ConfigApplyTxn<'_>,
     actor_did: &str,
     run_id: &str,
     reason: Option<&str>,
+    requested_at: &str,
 ) -> Result<()> {
-    let result = async {
-        let current = query_run(&txn, run_id).await?;
-        if required_string(&current, "status")? != "running" {
-            return Ok(());
-        }
-        if current
-            .get("cancel_requested_at")
-            .and_then(Value::as_str)
-            .is_some()
-        {
-            return Ok(());
-        }
-        let doc_id = required_string(&current, "_docID")?;
-        let generation = current
-            .get("update_generation")
-            .and_then(Value::as_i64)
-            .unwrap_or_default();
-        let input = json!({
-            "cancel_requested_at": chrono::Utc::now().to_rfc3339(),
-            "cancel_requested_by": actor_did,
-            "cancel_reason": reason,
-            "update_generation": generation.checked_add(1).context("graph run generation exhausted")?,
-        });
-        txn.execute(&format!(
-            "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
-            escape_graphql_string(doc_id),
-            graphql_input_literal(&input)?,
-        ))
-        .await?;
-        Result::<()>::Ok(())
+    let current = query_run(txn, run_id).await?;
+    if required_string(&current, "status")? != "running" {
+        return Ok(());
     }
-    .await;
-    match result {
-        Ok(()) => txn
-            .commit()
-            .await
-            .context("commit graph cancellation intent")?,
-        Err(error) => {
-            let _ = txn.discard().await;
-            return Err(error);
-        }
+    if current
+        .get("cancel_requested_at")
+        .and_then(Value::as_str)
+        .is_some()
+    {
+        return Ok(());
     }
+    let doc_id = required_string(&current, "_docID")?;
+    let generation = current
+        .get("update_generation")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let input = json!({
+        "cancel_requested_at": requested_at,
+        "cancel_requested_by": actor_did,
+        "cancel_reason": reason,
+        "update_generation": generation.checked_add(1).context("graph run generation exhausted")?,
+    });
+    txn.execute(&format!(
+        "mutation {{ update_GraphRun(docID: \"{}\", input: {}) {{ _docID }} }}",
+        escape_graphql_string(doc_id),
+        graphql_input_literal(&input)?,
+    ))
+    .await?;
     Ok(())
 }
 
@@ -1359,7 +1352,9 @@ async fn interrupt_request_with_access(access: &ConfigAccess, request_id: &str) 
         escape_graphql_string(request_id),
         escape_graphql_string(&now),
     );
-    access.execute_committed(&mutation).await?;
+    access
+        .write("graph_pipeline.interrupt_request", &mutation)
+        .await?;
     Ok(())
 }
 
@@ -1378,8 +1373,16 @@ pub async fn request_graph_run_cancellation_with_access(
     if before.is_terminal() {
         return Ok(before);
     }
-    let txn = access.begin_apply_txn().await?;
-    persist_cancellation_intent(txn, actor_did, run_id, reason).await?;
+    let requested_at = chrono::Utc::now().to_rfc3339();
+    let requested_at = &requested_at;
+    access
+        .transact("graph_pipeline.cancel_intent", move |txn| {
+            Box::pin(async move {
+                persist_cancellation_intent_in_txn(txn, actor_did, run_id, reason, requested_at)
+                    .await
+            })
+        })
+        .await?;
     for request in &before.requests {
         if !request.terminal && !request.request_id.is_empty() {
             interrupt_request_with_access(access, &request.request_id).await?;

@@ -95,7 +95,9 @@ pub(crate) async fn run_codex_login(
         chrono::Utc::now(),
     );
     let mutation = gents::oauth_credential::oauth_credential_upsert_mutation(&credential);
-    let response = access.execute(&mutation).await?;
+    let response = access
+        .write("cli.codex_login.credential", &mutation)
+        .await?;
     let doc_id = gents_protocol::graphql::extract_mutation_doc_id(&response, "OAuthCredential")?;
 
     Ok(CodexLoginOutcome { doc_id, credential })

@@ -861,9 +861,10 @@ async fn apply_disable(
 
 #[cfg(test)]
 pub(crate) async fn seed_persona_validation_references(node: &EmbeddedNode) -> Result<()> {
-    let response = node
-        .execute(
-            r#"mutation {
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "test.seed_persona_validation_references",
+        r#"mutation {
                 openai: create_InferenceBackend(input: {
                     backend_id: "openai"
                     name: "OpenAI"
@@ -891,13 +892,8 @@ pub(crate) async fn seed_persona_validation_references(node: &EmbeddedNode) -> R
                     display_name: "Profile 2"
                 }) { _docID }
             }"#,
-        )
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "seed persona validation references: {:?}",
-        response.errors
-    );
+    )
+    .await?;
     Ok(())
 }
 

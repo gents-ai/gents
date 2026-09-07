@@ -92,7 +92,7 @@ pub(super) async fn p2p_network_register(args: P2pNetworkRegisterArgs) -> Result
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
     let mutation = registry_upsert_mutation(&entry, &now, UpsertKind::Full);
     access
-        .execute(&mutation)
+        .write("cli.p2p.network.register", &mutation)
         .await
         .context("writing PeerRegistry row")?;
 
@@ -179,7 +179,7 @@ pub(super) async fn p2p_network_rm(args: P2pAccessArgs) -> Result<()> {
 
     let mutation = delete_registry_mutation(&peer_id);
     let response = access
-        .execute(&mutation)
+        .write("cli.p2p.network.delete", &mutation)
         .await
         .context("deleting PeerRegistry row")?;
     let removed_count = count_deleted(&response, "delete_PeerRegistry");

@@ -90,32 +90,18 @@ pub(crate) async fn apply_bound_desired_manifest(
         prune,
     );
 
-    let (applied, pruned) = {
-        let txn = access
-            .begin_apply_txn()
-            .await
-            .context("config apply: begin transaction")?;
-        let result = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
-            Ok(applied_total) => Ok(split_apply_counts(applied_total, &planned, prune)),
-            Err(error) => Err(error),
-        };
-        let counts = match result {
-            Ok(counts) => counts,
-            Err(error) => {
-                if let Err(discard_err) = txn.discard().await {
-                    tracing::warn!(
-                        %discard_err,
-                        "config apply: tx discard failed after apply error"
-                    );
-                }
-                return Err(error);
-            }
-        };
-        if let Err(commit_err) = txn.commit().await {
-            return Err(commit_err).context("config apply: commit failed");
-        }
-        counts
-    };
+    let desired_bundle_ref = &desired_bundle;
+    let planned_ref = &planned;
+    let (applied, pruned) = access
+        .transact("cli.config.apply", move |txn| {
+            Box::pin(async move {
+                let applied_total =
+                    apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await?;
+                Ok(split_apply_counts(applied_total, planned_ref, prune))
+            })
+        })
+        .await
+        .context("config apply transaction")?;
 
     let provisioning =
         desired_state::apply_workspace_provisioning(access, desired_manifest).await?;

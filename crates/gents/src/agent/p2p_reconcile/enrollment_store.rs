@@ -327,10 +327,10 @@ impl GraphqlEnrollmentStore {
 
         let mutation = decision_mutation(&decision, revision.as_ref());
         let committed = async {
-            let response = crate::graphql::graphql_mutation_with_transaction_retry(
+            let response = crate::config_client::ConfigAccess::write_local_response(
                 self.node.as_ref(),
+                "p2p.write_enrollment_decision",
                 &mutation,
-                "write enrollment operator decision",
             )
             .await?;
             let response = json!({ "data": response.data.unwrap_or_default() });
@@ -469,10 +469,10 @@ impl GraphqlEnrollmentStore {
         revision.admin_sig = self.identity.sign(&revision.signing_payload()).await?;
         revision.validate_against_approval(&active.request, &active.decision)?;
         let mutation = revision_mutation(&revision);
-        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             self.node.as_ref(),
+            "p2p.write_enrollment_revocation",
             &mutation,
-            "write enrollment revocation",
         )
         .await;
         let revision_doc_id = match response {
@@ -636,10 +636,10 @@ impl GraphqlEnrollmentStore {
         receipt.admin_sig = self.identity.sign(&receipt.signing_payload()).await?;
         receipt.validate_against_approval(&active.request, &active.decision)?;
         let mutation = route_receipt_mutation(&receipt);
-        let committed = crate::graphql::graphql_mutation_with_transaction_retry(
+        let committed = crate::config_client::ConfigAccess::write_local_response(
             self.node.as_ref(),
+            "p2p.write_enrollment_route_receipt",
             &mutation,
-            "write enrollment route receipt",
         )
         .await;
         match committed {

@@ -1317,10 +1317,10 @@ async fn persona_mutate(
     record.local_signature = identity.sign(&record.signing_payload()).await?;
     record.validate_shape()?;
     let mutation = local_persona_request_mutation(&record);
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local(
         node,
+        "self_config.create_persona_request",
         &mutation,
-        "create PersonaConfigRequest",
     )
     .await?;
 

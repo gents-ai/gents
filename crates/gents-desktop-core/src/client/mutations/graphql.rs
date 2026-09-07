@@ -1,23 +1,21 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use serde_json::Value;
+
+pub(crate) async fn execute_mutation_response(
+    node: &EmbeddedNode,
+    mutation: &str,
+    operation: &'static str,
+) -> Result<Value> {
+    gents::config_client::ConfigAccess::write_local(node, operation, mutation).await
+}
 
 pub(super) async fn execute_mutation(
     node: &EmbeddedNode,
     mutation: &str,
-    operation: &str,
+    operation: &'static str,
 ) -> Result<()> {
-    let response = node.execute(mutation).await;
-    if response.has_errors() {
-        bail!(
-            "{operation} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    execute_mutation_response(node, mutation, operation).await?;
     Ok(())
 }
 

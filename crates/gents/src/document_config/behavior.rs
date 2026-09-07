@@ -284,36 +284,36 @@ pub(crate) async fn list_agent_behavior_records(
 }
 
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, behavior: &AgentBehavior) -> Result<()> {
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let result = async {
-        let mut effective = behavior.clone();
-        if let Some(existing) =
-            crate::config_client::load_agent_behavior_in_txn(&txn, &behavior.behavior_id).await?
-        {
-            // This legacy full-row encoder never writes the skill arrays, so
-            // those two fields remain stored state during an update.
-            effective.skill_refs = existing.skill_refs;
-            effective.skill_excludes = existing.skill_excludes;
-        } else {
-            // This legacy encoder never writes the skill arrays on create,
-            // so validate the empty defaults DefraDB will persist.
-            effective.skill_refs.clear();
-            effective.skill_excludes.clear();
-        }
-        let refs = ConfigReferences::load_in_txn(&txn, &effective.agent_did).await?;
-        effective.validate_references(&refs)?;
-        txn.execute(&upsert_agent_behavior_mutation(behavior))
-            .await?;
-        Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "document_config.agent_behavior.upsert",
+        |txn| {
+            Box::pin(async move {
+                let mut effective = behavior.clone();
+                if let Some(existing) =
+                    crate::config_client::load_agent_behavior_in_txn(txn, &behavior.behavior_id)
+                        .await?
+                {
+                    // This legacy full-row encoder never writes the skill arrays, so
+                    // those two fields remain stored state during an update.
+                    effective.skill_refs = existing.skill_refs;
+                    effective.skill_excludes = existing.skill_excludes;
+                } else {
+                    // This legacy encoder never writes the skill arrays on create,
+                    // so validate the empty defaults DefraDB will persist.
+                    effective.skill_refs.clear();
+                    effective.skill_excludes.clear();
+                }
+                let refs = ConfigReferences::load_in_txn(txn, &effective.agent_did).await?;
+                effective.validate_references(&refs)?;
+                txn.execute(&upsert_agent_behavior_mutation(behavior))
+                    .await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }
 
 fn upsert_agent_behavior_mutation(behavior: &AgentBehavior) -> String {

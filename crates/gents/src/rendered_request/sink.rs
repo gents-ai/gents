@@ -168,10 +168,10 @@ impl DefraRenderedRequestSink {
         // A duplicate-key error is an expected input to reconciliation, so the
         // create itself does not warn. A genuine failure is logged by the
         // transport after the re-read below cannot establish idempotency.
-        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "rendered_request.create",
             &mutation,
-            "rendered_request::create",
         )
         .await?;
         // A mutation that returns no document wrote nothing, and "no errors" is
@@ -267,10 +267,10 @@ impl DefraRenderedRequestSink {
             }}"#,
             accounting_json = escape_graphql_string(&accounting_json),
         );
-        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "rendered_request.persist_context_accounting",
             &mutation,
-            "rendered_request::persist_inference_context_accounting",
         )
         .await?;
         if !response

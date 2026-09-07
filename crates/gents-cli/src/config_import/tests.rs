@@ -223,16 +223,21 @@ async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> 
         "display_name": "Tools A"
     });
 
-    let txn = access.begin_apply_txn().await?;
-    apply_import_collection(
-        &txn,
-        "ToolSelection",
-        "selection_id",
-        std::slice::from_ref(&doc),
-        true,
-    )
-    .await?;
-    txn.commit().await?;
+    let doc_ref = &doc;
+    access
+        .transact("test.config_import.recreate_tool_selection", move |txn| {
+            Box::pin(async move {
+                apply_import_collection(
+                    txn,
+                    "ToolSelection",
+                    "selection_id",
+                    std::slice::from_ref(doc_ref),
+                    true,
+                )
+                .await
+            })
+        })
+        .await?;
     let first_doc_id = tool_selection_doc_id(&access).await?;
 
     access
@@ -243,16 +248,20 @@ async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> 
         )
         .await?;
 
-    let txn = access.begin_apply_txn().await?;
-    apply_import_collection(
-        &txn,
-        "ToolSelection",
-        "selection_id",
-        std::slice::from_ref(&doc),
-        true,
-    )
-    .await?;
-    txn.commit().await?;
+    access
+        .transact("test.config_import.recreate_tool_selection", move |txn| {
+            Box::pin(async move {
+                apply_import_collection(
+                    txn,
+                    "ToolSelection",
+                    "selection_id",
+                    std::slice::from_ref(doc_ref),
+                    true,
+                )
+                .await
+            })
+        })
+        .await?;
     let recreated_doc_id = tool_selection_doc_id(&access).await?;
 
     assert_ne!(first_doc_id, recreated_doc_id);

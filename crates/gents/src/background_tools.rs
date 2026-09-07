@@ -26,7 +26,6 @@ use crate::lifecycle::queue::{
     drain_automated_wakeups, enqueue_steering_request_with_message, is_automated_wakeup,
     QueueHints, QueuePolicy, QueueSource,
 };
-use crate::session::execute_mutation_with_retry;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -2266,8 +2265,12 @@ pub(crate) async fn fail_running_subagent_tool_call(
         }}"#
     );
 
-    let response =
-        execute_mutation_with_retry(node, &mutation, "fail_running_subagent_tool_call").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "fail_running_subagent_tool_call",
+        &mutation,
+    )
+    .await?;
     Ok(response
         .data
         .as_ref()

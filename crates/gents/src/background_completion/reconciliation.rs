@@ -226,10 +226,10 @@ async fn clear_unclaimed_deadline_at(node: &EmbeddedNode, doc_id: &str) -> Resul
             ) {{ _docID }}
         }}"#
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "background_completion.clear_unclaimed_deadline",
         &mutation,
-        "clear unclaimed_deadline_at",
     )
     .await?;
     Ok(())

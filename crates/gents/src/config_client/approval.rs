@@ -132,7 +132,7 @@ pub async fn write_tool_approval(
         }}"#
     );
     access
-        .execute_mutation(&mutation, "create AgentToolApproval")
+        .write("config.tool_approval.create", &mutation)
         .await
         .context("create AgentToolApproval")?;
     Ok(approval_id)
@@ -157,8 +157,10 @@ mod tests {
         // Persist a held row shaped like the runtime's hold_for_approval.
         let deadline = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
         access
-            .execute(&format!(
-                r#"mutation {{
+            .write(
+                "test.approval.seed",
+                &format!(
+                    r#"mutation {{
                     create_AgentToolCall(input: {{
                         tool_call_key: "session-client:call-client",
                         request_id: "req-client",
@@ -175,7 +177,8 @@ mod tests {
                         deadline_at: "{deadline}"
                     }}) {{ _docID }}
                 }}"#
-            ))
+                ),
+            )
             .await
             .unwrap();
 

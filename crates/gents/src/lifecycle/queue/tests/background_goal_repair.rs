@@ -27,9 +27,13 @@ async fn legacy_fixture(name: &str) -> (TestDb, AgentRequest, String) {
         escape_graphql_string(name),
         escape_graphql_string(&content)
     );
-    let response = session::execute_mutation_with_retry(&db.node, &mutation, "seed legacy input")
-        .await
-        .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        &db.node,
+        "test.seed_legacy_input",
+        &mutation,
+    )
+    .await
+    .unwrap();
     let doc =
         extract_single_doc_id(&response, "create_AgentMessage").expect("legacy message doc ID");
     (db, parent, doc)

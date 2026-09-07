@@ -6,7 +6,7 @@ use defra_node::EmbeddedNode;
 use rig::completion::{CompletionError, Usage};
 
 use super::controller::InferenceCallRecord;
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 pub(super) fn spawn_persistence<F>(future: F)
 where
@@ -45,10 +45,10 @@ pub(super) async fn persist_call_queued(
 ) -> Result<String> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "queued", None, Some(&now), None, None, None);
-    let resp = graphql_mutation_with_transaction_retry(
+    let resp = crate::config_client::ConfigAccess::write_local_response(
         node.as_ref(),
+        "admission.persist_call_queued",
         &mutation,
-        "persist queued InferenceCall",
     )
     .await?;
     extract_inference_call_doc_id(resp.data.as_ref())
@@ -60,10 +60,10 @@ pub(super) async fn persist_call_started(
 ) -> Result<String, CompletionError> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = add_call_mutation(call, "running", None, Some(&now), Some(&now), None, None);
-    let resp = graphql_mutation_with_transaction_retry(
+    let resp = crate::config_client::ConfigAccess::write_local_response(
         node.as_ref(),
+        "admission.persist_call_started",
         &mutation,
-        "persist running InferenceCall",
     )
     .await
     .map_err(completion_persistence_error)?;
@@ -83,10 +83,10 @@ pub(super) async fn persist_existing_call_running(
             input: {{ call_state: "running", started_at: "{started_at}" }}
         ) {{ _docID }} }}"#
     );
-    let response = graphql_mutation_with_transaction_retry(
+    let response = crate::config_client::ConfigAccess::write_local_response(
         node.as_ref(),
+        "admission.persist_existing_call_running",
         &mutation,
-        "persist existing running InferenceCall",
     )
     .await?;
     anyhow::ensure!(
@@ -114,10 +114,10 @@ pub(super) async fn persist_terminal_call(
         Some(&now),
         usage,
     );
-    graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node.as_ref(),
+        "admission.persist_terminal_call",
         &mutation,
-        "persist terminal InferenceCall",
     )
     .await?;
     Ok(())
@@ -148,10 +148,10 @@ pub(super) async fn persist_existing_call_terminal(
                 {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
         ) {{ _docID }} }}"#
     );
-    let response = graphql_mutation_with_transaction_retry(
+    let response = crate::config_client::ConfigAccess::write_local_response(
         node.as_ref(),
+        "admission.persist_existing_call_terminal",
         &mutation,
-        "persist existing terminal InferenceCall",
     )
     .await?;
     if !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty() {
@@ -170,10 +170,10 @@ pub(super) async fn persist_existing_call_terminal(
                 input: {{ {prompt_tokens} {completion_tokens} {cached_input_tokens} }}
             ) {{ _docID }} }}"#
         );
-        let response = graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             node.as_ref(),
+            "admission.persist_late_call_usage",
             &mutation,
-            "persist late InferenceCall usage",
         )
         .await?;
         !crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty()

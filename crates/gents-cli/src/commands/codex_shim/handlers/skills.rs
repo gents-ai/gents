@@ -4,7 +4,7 @@ use gents_codex_protocol as codex;
 use serde_json::Value;
 
 use super::super::protocol::{send_error, send_result};
-use super::super::store::{execute_committed, query_node_json};
+use super::super::store::{query_node_json, write_committed};
 use super::super::{Outbound, ShimState, JSONRPC_INVALID_PARAMS};
 use crate::extract_mutation_doc_id;
 
@@ -99,7 +99,7 @@ pub(super) async fn handle_skills_config_write(
         skill_id = escape_graphql_string(&skill_id),
         enabled = params.enabled,
     );
-    let response = match execute_committed(state.node.as_ref(), &mutation).await {
+    let response = match write_committed(&state.node, "codex.skill.set_enabled", &mutation).await {
         Ok(response) => response,
         Err(error) => {
             return send_error(

@@ -1,6 +1,6 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigApplyTxn;
+use gents::config_client::{ConfigAccess, ConfigApplyTxn};
 use gents::ToolSelectionDocument;
 use gents_protocol::graphql::graphql_rows_from_response;
 use gents_protocol::row::{ToolSelectionRow, ToolServiceRegistryRow};
@@ -14,27 +14,23 @@ use super::super::graphql::{
 
 pub async fn upsert_tool_selection(node: &EmbeddedNode, row: &ToolSelectionRow) -> Result<()> {
     let mutation = build_upsert_tool_selection_mutation(row)?;
-    let mut candidate = tool_selection_document(row)?;
-    let txn = ConfigApplyTxn::begin_local(node, None).await?;
-    let result = async {
-        if let Some(existing) = preserved_tool_selection_fields(&txn, &row.selection_id).await? {
-            // These columns are not represented by this desktop mutation, so
-            // they remain stored state rather than being cleared by the save.
-            candidate.read_only_command_allowlist = existing.read_only_command_allowlist;
-            candidate.approval_required_tools = existing.approval_required_tools;
-        }
-        candidate.validate()?;
-        txn.execute(&mutation).await?;
-        Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let candidate = tool_selection_document(row)?;
+    let mutation_ref = &mutation;
+    ConfigAccess::transact_local(node, None, "desktop.tool_selection.upsert", move |txn| {
+        let mut candidate = candidate.clone();
+        Box::pin(async move {
+            if let Some(existing) = preserved_tool_selection_fields(txn, &row.selection_id).await? {
+                // These columns are not represented by this desktop mutation, so
+                // they remain stored state rather than being cleared by the save.
+                candidate.read_only_command_allowlist = existing.read_only_command_allowlist;
+                candidate.approval_required_tools = existing.approval_required_tools;
+            }
+            candidate.validate()?;
+            txn.execute(mutation_ref).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 async fn preserved_tool_selection_fields(
@@ -472,22 +468,14 @@ pub async fn delete_tool_selection(
     selection_id: &str,
 ) -> Result<usize> {
     let mutation = build_delete_tool_selection_mutation(agent_did, selection_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_tool_selection failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.tool_selection.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_ToolSelection"))
+        .pointer("/data/delete_ToolSelection")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
@@ -514,22 +502,14 @@ fn build_delete_tool_selection_mutation(agent_did: &str, selection_id: &str) -> 
 
 pub async fn delete_tool_service_registry(node: &EmbeddedNode, service_id: &str) -> Result<usize> {
     let mutation = build_delete_tool_service_registry_mutation(service_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_tool_service_registry failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.tool_service.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_ToolServiceRegistry"))
+        .pointer("/data/delete_ToolServiceRegistry")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))

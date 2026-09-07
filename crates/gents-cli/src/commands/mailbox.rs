@@ -86,13 +86,12 @@ async fn dismiss(args: MailboxItemArgs) -> Result<()> {
             match before.parsed_status() {
                 Some(MailboxStatus::Open) => {
                     let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-                    access
-                        .execute(&format!(
-                            r#"mutation {{ update_MailboxItem(filter: {{ _docID: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }}, input: {{ status: "dismissed", updated_at: "{now}", resolved_at: "{now}", resolved_doc_id: null }}) {{ _docID }} }}"#,
-                            escape_graphql_string(&args.doc_id),
-                            escape_graphql_string(&principal),
-                        ))
-                        .await?;
+                    let mutation = format!(
+                        r#"mutation {{ update_MailboxItem(filter: {{ _docID: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }}, status: {{ _eq: "open" }} }}, input: {{ status: "dismissed", updated_at: "{now}", resolved_at: "{now}", resolved_doc_id: null }}) {{ _docID }} }}"#,
+                        escape_graphql_string(&args.doc_id),
+                        escape_graphql_string(&principal),
+                    );
+                    access.write("cli.mailbox.dismiss", &mutation).await?;
                 }
                 Some(_) => {}
                 None => bail!("MailboxItem has unknown status {:?}", before.status),

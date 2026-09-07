@@ -1,7 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigApplyTxn;
+use gents::config_client::ConfigAccess;
 use gents::{AgentBehaviorDocument, ConfigReferences};
 use gents_protocol::row::AgentBehaviorRow;
 use serde_json::Value;
@@ -14,24 +14,20 @@ use super::super::graphql::{
 pub async fn upsert_agent_behavior(node: &EmbeddedNode, row: &AgentBehaviorRow) -> Result<()> {
     let behavior = agent_behavior_document(row)?;
     let mutation = build_upsert_agent_behavior_mutation(row)?;
-    let txn = ConfigApplyTxn::begin_local(node, None).await?;
-    let result = async {
-        let references = ConfigReferences::load_in_txn(&txn, &behavior.agent_did).await?;
-        behavior.validate_references(&references)?;
-        // Keep the desktop encoder: represented row options are authoritative
-        // clears, while columns absent from AgentBehaviorRow (description,
-        // summary, request_context_template) remain stored state.
-        txn.execute(&mutation).await?;
-        Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let behavior_ref = &behavior;
+    let mutation_ref = &mutation;
+    ConfigAccess::transact_local(node, None, "desktop.behavior.upsert", move |txn| {
+        Box::pin(async move {
+            let references = ConfigReferences::load_in_txn(txn, &behavior_ref.agent_did).await?;
+            behavior_ref.validate_references(&references)?;
+            // Keep the desktop encoder: represented row options are authoritative
+            // clears, while columns absent from AgentBehaviorRow (description,
+            // summary, request_context_template) remain stored state.
+            txn.execute(mutation_ref).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
 fn agent_behavior_document(row: &AgentBehaviorRow) -> Result<AgentBehaviorDocument> {
@@ -182,22 +178,14 @@ pub async fn delete_agent_behavior(
     behavior_id: &str,
 ) -> Result<usize> {
     let mutation = build_delete_agent_behavior_mutation(agent_did, behavior_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_agent_behavior failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.behavior.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_AgentBehavior"))
+        .pointer("/data/delete_AgentBehavior")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))

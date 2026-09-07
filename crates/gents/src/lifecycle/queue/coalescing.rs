@@ -58,10 +58,10 @@ pub async fn reconcile_coalesced_pending_request(
             }}"#,
             survivor_doc_id = escape_graphql_string(&survivor.doc_id),
         );
-        crate::retry::execute_graphql_with_terminal_persistence_retry(
+        crate::config_client::ConfigAccess::write_local_idempotent_update_response(
             node,
-            &mutation,
             "reconcile_coalesced_pending_request",
+            &mutation,
         )
         .await?;
     }

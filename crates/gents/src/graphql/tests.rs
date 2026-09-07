@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[test]
 fn validate_graphql_name_accepts_conforming_names() {
@@ -186,8 +187,12 @@ async fn concurrent_mutations_share_the_node_write_path() {
             let mutation = format!(
                 r#"mutation {{ create_GateWrite(input: {{ write_id: "write-{index}" }}) {{ _docID }} }}"#
             );
-            graphql_mutation_with_transaction_retry(&node, &mutation, "test concurrent write")
-                .await
+            crate::config_client::ConfigAccess::write_local(
+                &node,
+                "test.concurrent_write",
+                &mutation,
+            )
+            .await
         });
     }
 
@@ -201,5 +206,32 @@ async fn concurrent_mutations_share_the_node_write_path() {
         .await
         .unwrap();
     assert_eq!(rows::<Value>(&response, "GateWrite").unwrap().len(), WRITES);
+    node.shutdown().await;
+}
+
+#[tokio::test]
+async fn public_graphql_read_helpers_reject_mutations_before_execution() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type ReadBoundaryFact { value: String }")
+        .await
+        .unwrap();
+    let mutation = r#"mutation { create_ReadBoundaryFact(input: {value: "bypass"}) { _docID } }"#;
+
+    assert!(
+        graphql_with_transaction_retry(&node, mutation, "read boundary")
+            .await
+            .is_err()
+    );
+    assert!(
+        graphql_response_with_transaction_retry(&node, mutation, "raw read boundary")
+            .await
+            .is_err()
+    );
+
+    let response = node.execute("{ ReadBoundaryFact { value } }").await;
+    assert_eq!(
+        response.data.unwrap()["ReadBoundaryFact"],
+        serde_json::json!([])
+    );
     node.shutdown().await;
 }

@@ -374,10 +374,10 @@ impl ClientCore {
                 }}) {{ _docID }}
             }}"#
         );
-        let committed = gents::graphql::graphql_mutation_with_transaction_retry(
+        let committed = gents::config_client::ConfigAccess::write_local(
             self.node.as_ref(),
+            "desktop.enrollment.create_admin_pin",
             &mutation,
-            "create_network_admin_pin",
         )
         .await;
         match committed {
@@ -399,13 +399,12 @@ impl ClientCore {
         let input = enrollment_request_input(request);
         let mutation =
             format!("mutation {{ create_NetworkEnrollmentRequest(input: {input}) {{ _docID }} }}");
-        let response = gents::graphql::graphql_mutation_with_transaction_retry(
+        let response = gents::config_client::ConfigAccess::write_local(
             self.node.as_ref(),
+            "desktop.enrollment.create_request",
             &mutation,
-            "create_network_enrollment_request",
         )
         .await?;
-        let response = serde_json::json!({ "data": response.data.unwrap_or_default() });
         gents_protocol::graphql::extract_mutation_doc_id(&response, "NetworkEnrollmentRequest")
             .context("enrollment request mutation returned no document ID")
     }

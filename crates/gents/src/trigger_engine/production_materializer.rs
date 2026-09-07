@@ -512,10 +512,10 @@ impl MaterializerHandle for ProductionMaterializer {
                 correlation_filter = correlation_filter,
                 request_exclusion_filter = request_exclusion_filter,
             );
-            let resp = crate::retry::execute_graphql_with_terminal_persistence_retry(
+            let resp = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
                 node.as_ref(),
-                &mutation,
                 "supersede_active_runtime_requests_for_trigger",
+                &mutation,
             )
             .await?;
             let mut count = resp
@@ -544,7 +544,8 @@ impl MaterializerHandle for ProductionMaterializer {
             // A progressing executor may invalidate the observed tuple. Read
             // again before allowing LatestOnly to dispatch its replacement.
             let mut converged = false;
-            for _ in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
+            const EXECUTION_REVOCATION_ATTEMPTS: usize = 4;
+            for _ in 0..EXECUTION_REVOCATION_ATTEMPTS {
                 let result = node.execute(&query).await;
                 anyhow::ensure!(
                     !result.has_errors(),

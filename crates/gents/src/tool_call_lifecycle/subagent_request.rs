@@ -16,9 +16,16 @@ use crate::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
 };
 use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
-use crate::session::execute_mutation_with_retry;
 
 use super::IllegalToolCallTransition;
+
+async fn execute_mutation_with_retry(
+    node: &EmbeddedNode,
+    mutation: &str,
+    operation: &'static str,
+) -> Result<defra_node::QueryResponse> {
+    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
+}
 
 enum SubagentAdmissionSource {
     LocalChild,

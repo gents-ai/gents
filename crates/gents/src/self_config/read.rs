@@ -13,7 +13,7 @@ use anyhow::Result;
 use serde_json::{json, Map, Value};
 
 use crate::config_client::patch::SelfConfigTarget;
-use crate::config_client::ConfigApplyTxn;
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 
 use super::ops::{BehaviorAnchor, SelfConfigCore, EFFECT_TIMING_NOTE};
@@ -26,12 +26,18 @@ impl SelfConfigCore {
         no_lockout: bool,
         dry_run: bool,
     ) -> Result<Value> {
-        let txn = self.begin_txn().await?;
-        let result = self
-            .read_in_txn(&txn, categories, no_lockout, dry_run)
-            .await;
-        let _ = txn.discard().await;
-        result
+        let identity = self.identity()?;
+        ConfigAccess::transact_local(
+            self.node(),
+            Some(identity),
+            "self_config.read",
+            move |txn| {
+                Box::pin(
+                    async move { self.read_in_txn(txn, categories, no_lockout, dry_run).await },
+                )
+            },
+        )
+        .await
     }
 
     async fn read_in_txn(

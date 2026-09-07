@@ -51,7 +51,6 @@ pub(crate) use query::{
     session_has_other_live_response,
 };
 pub use retry::count_active_sessions;
-pub(crate) use retry::execute_mutation_with_retry;
 pub use sessions::close_session;
 pub(crate) use sessions::max_sequence;
 #[cfg(test)]

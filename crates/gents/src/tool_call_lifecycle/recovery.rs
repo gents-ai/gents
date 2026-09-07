@@ -20,7 +20,6 @@ use crate::background_tools::{
 };
 use crate::graphql::{escape_graphql_string, response_has_documents};
 use crate::interrupt::interrupt_request;
-use crate::session::execute_mutation_with_retry;
 
 use super::{
     subagent_request::create_subagent_request_with_request_id_and_workspace,
@@ -29,6 +28,14 @@ use super::{
     },
     AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallState,
 };
+
+async fn execute_mutation_with_retry(
+    node: &EmbeddedNode,
+    mutation: &str,
+    operation: &'static str,
+) -> Result<defra_node::QueryResponse> {
+    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
+}
 
 #[derive(Debug, Default)]
 pub struct ToolCallRecoveryReport {
@@ -1554,10 +1561,10 @@ async fn interrupt_pending_descendant_row(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+    let response = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
         node,
-        &mutation,
         "interrupt_queued_descendant",
+        &mutation,
     )
     .await?;
     Ok(response
@@ -1854,10 +1861,10 @@ async fn mark_child_request_dead(
             ) {{ _docID }}
         }}"#
     );
-    let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+    let response = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
         node,
-        &mutation,
         "terminalize_expired_child_request",
+        &mutation,
     )
     .await?;
     Ok(response

@@ -954,23 +954,22 @@ impl DefraSessionHook {
                 tail = crate::graphql::escape_graphql_string(&tail),
                 datetimes = datetime_fragment,
             );
-            let response = crate::graphql::graphql_mutation_response_with_transaction_retry(
+            let response = crate::config_client::ConfigAccess::write_local_response(
                 &self.node,
+                "hook.flush_background_tool_output",
                 &mutation,
-                "flush background tool live output",
             )
             .await;
-            if response.has_errors() {
-                tracing::debug!(
-                    tool_call_id = %tool_call_id,
-                    errors = ?response.errors,
-                    "live output tail flush failed; will retry next tick"
-                );
-            } else {
-                self.background_live_outputs
-                    .record_flushed_seq_if_live(&tool_call_id, seq)
-                    .await;
-                count += 1;
+            match response {
+                Ok(_) => {
+                    self.background_live_outputs
+                        .record_flushed_seq_if_live(&tool_call_id, seq)
+                        .await;
+                    count += 1;
+                }
+                Err(error) => {
+                    tracing::debug!(tool_call_id = %tool_call_id, %error, "live output tail flush failed; will retry next tick");
+                }
             }
         }
         Ok(count)

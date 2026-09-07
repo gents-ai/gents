@@ -1116,334 +1116,366 @@ pub async fn upsert_tool_selection(
     node: &EmbeddedNode,
     selection: &ToolSelectionDocument,
 ) -> Result<()> {
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let validation = async {
-        crate::config_client::effective_tool_selection(
-            &txn,
-            selection,
-            &[],
-            &["file_tool_root", "subagent_default_await_mode"],
-        )
-        .await?
-        .validate()
-    }
-    .await;
-    if let Err(error) = validation {
-        let _ = txn.discard().await;
-        return Err(error);
-    }
-    let escaped_selection_id = escape_graphql_string(&selection.selection_id);
-    let escaped_agent_did = escape_graphql_string(&selection.agent_did);
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "document_config.tool_selection.upsert",
+        |txn| {
+            Box::pin(async move {
+                let validation = async {
+                    crate::config_client::effective_tool_selection(
+                        txn,
+                        selection,
+                        &[],
+                        &["file_tool_root", "subagent_default_await_mode"],
+                    )
+                    .await?
+                    .validate()
+                }
+                .await;
+                validation?;
+                let escaped_selection_id = escape_graphql_string(&selection.selection_id);
+                let escaped_agent_did = escape_graphql_string(&selection.agent_did);
 
-    let add_fields = vec![
-        Some(format!(r#"selection_id: "{escaped_selection_id}""#)),
-        Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
-        graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
-        graphql_fields::graphql_string_field(
-            "tool_policy_version",
-            selection.tool_policy_version.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_file_tools",
-            selection.enable_file_tools,
-        ),
-        graphql_fields::graphql_string_field(
-            "file_tools_mode",
-            selection.file_tools_mode.as_deref(),
-        ),
-        Some(graphql_fields::graphql_nullable_string_field(
-            "file_tool_root",
-            selection.file_tool_root.as_deref(),
-        )),
-        graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
-        graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
-        graphql_fields::graphql_string_field(
-            "command_execution_policy",
-            selection.command_execution_policy.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "command_allowed_argv_prefixes",
-            selection.command_allowed_argv_prefixes.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "command_forbidden_argv_prefixes",
-            selection.command_forbidden_argv_prefixes.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "read_only_command_allowlist",
-            selection.read_only_command_allowlist.as_deref(),
-        ),
-        graphql_fields::graphql_string_field(
-            "command_network_mode",
-            selection.command_network_mode.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "cli_tool_names",
-            selection.cli_tool_names.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_meta_tools",
-            selection.enable_meta_tools,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_goal_tools",
-            selection.enable_goal_tools,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_goal_creation",
-            selection.enable_goal_creation,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "allowed_mcp_service_ids",
-            selection.allowed_mcp_service_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "required_mcp_service_ids",
-            selection.required_mcp_service_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "backgroundable_tool_names",
-            selection.backgroundable_tool_names.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "approval_required_tools",
-            selection.approval_required_tools.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "subagent_targets",
-            selection.subagent_targets.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_spawn_enabled",
-            selection.subagent_spawn_enabled,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_steering_enabled",
-            selection.subagent_steering_enabled,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_background_enabled",
-            selection.subagent_background_enabled,
-        ),
-        Some(graphql_fields::graphql_nullable_string_field(
-            "subagent_default_await_mode",
-            selection.subagent_default_await_mode.as_deref(),
-        )),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_allow_cross_deployment",
-            selection.subagent_allow_cross_deployment,
-        ),
-        selection
-            .cross_deployment_spawn_timeout_seconds
-            .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
-        graphql_fields::graphql_optional_bool_field("enable_memory", selection.enable_memory),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_session_history_tool",
-            selection.enable_session_history_tool,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_context_budget",
-            selection.enable_context_budget,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_defra_query",
-            selection.enable_defra_query,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "defra_query_collections",
-            selection.defra_query_collections.as_deref(),
-        ),
-        graphql_write_tools_field(selection.write_tools.as_deref()),
-        graphql_fields::graphql_string_list_field(
-            "datastore_tool_surface_ids",
-            selection.datastore_tool_surface_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "eth_tool_ids",
-            selection.eth_tool_ids.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_self_config",
-            selection.enable_self_config,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "self_config_categories",
-            selection.self_config_categories.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "self_config_no_lockout",
-            selection.self_config_no_lockout,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "self_config_dry_run",
-            selection.self_config_dry_run,
-        ),
-        graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
-        // Optional strings in desired state are authoritative: omission clears
-        // an older operator value instead of silently preserving it.
-        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
-        Some(format!(
-            r#"updated_at: "{}""#,
-            escape_graphql_string(&mint_recreate_identity_timestamp())
-        )),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
+                let add_fields = vec![
+                    Some(format!(r#"selection_id: "{escaped_selection_id}""#)),
+                    Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
+                    graphql_fields::graphql_string_field(
+                        "display_name",
+                        selection.display_name.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "tool_policy_version",
+                        selection.tool_policy_version.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_file_tools",
+                        selection.enable_file_tools,
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "file_tools_mode",
+                        selection.file_tools_mode.as_deref(),
+                    ),
+                    Some(graphql_fields::graphql_nullable_string_field(
+                        "file_tool_root",
+                        selection.file_tool_root.as_deref(),
+                    )),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_bash",
+                        selection.enable_bash,
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "bash_mode",
+                        selection.bash_mode.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "command_execution_policy",
+                        selection.command_execution_policy.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "command_allowed_argv_prefixes",
+                        selection.command_allowed_argv_prefixes.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "command_forbidden_argv_prefixes",
+                        selection.command_forbidden_argv_prefixes.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "read_only_command_allowlist",
+                        selection.read_only_command_allowlist.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "command_network_mode",
+                        selection.command_network_mode.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "cli_tool_names",
+                        selection.cli_tool_names.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_meta_tools",
+                        selection.enable_meta_tools,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_goal_tools",
+                        selection.enable_goal_tools,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_goal_creation",
+                        selection.enable_goal_creation,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "allowed_mcp_service_ids",
+                        selection.allowed_mcp_service_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "required_mcp_service_ids",
+                        selection.required_mcp_service_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "backgroundable_tool_names",
+                        selection.backgroundable_tool_names.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "approval_required_tools",
+                        selection.approval_required_tools.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "subagent_targets",
+                        selection.subagent_targets.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_spawn_enabled",
+                        selection.subagent_spawn_enabled,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_steering_enabled",
+                        selection.subagent_steering_enabled,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_background_enabled",
+                        selection.subagent_background_enabled,
+                    ),
+                    Some(graphql_fields::graphql_nullable_string_field(
+                        "subagent_default_await_mode",
+                        selection.subagent_default_await_mode.as_deref(),
+                    )),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_allow_cross_deployment",
+                        selection.subagent_allow_cross_deployment,
+                    ),
+                    selection
+                        .cross_deployment_spawn_timeout_seconds
+                        .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_memory",
+                        selection.enable_memory,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_session_history_tool",
+                        selection.enable_session_history_tool,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_context_budget",
+                        selection.enable_context_budget,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_defra_query",
+                        selection.enable_defra_query,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "defra_query_collections",
+                        selection.defra_query_collections.as_deref(),
+                    ),
+                    graphql_write_tools_field(selection.write_tools.as_deref()),
+                    graphql_fields::graphql_string_list_field(
+                        "datastore_tool_surface_ids",
+                        selection.datastore_tool_surface_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "eth_tool_ids",
+                        selection.eth_tool_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_self_config",
+                        selection.enable_self_config,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "self_config_categories",
+                        selection.self_config_categories.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "self_config_no_lockout",
+                        selection.self_config_no_lockout,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "self_config_dry_run",
+                        selection.self_config_dry_run,
+                    ),
+                    graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
+                    // Optional strings in desired state are authoritative: omission clears
+                    // an older operator value instead of silently preserving it.
+                    graphql_fields::graphql_string_field(
+                        "lsp_config",
+                        selection.lsp_config.as_deref(),
+                    ),
+                    Some(format!(
+                        r#"updated_at: "{}""#,
+                        escape_graphql_string(&mint_recreate_identity_timestamp())
+                    )),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(",\n                    ");
 
-    let update_fields = vec![
-        Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
-        graphql_fields::graphql_string_field("display_name", selection.display_name.as_deref()),
-        graphql_fields::graphql_string_field(
-            "tool_policy_version",
-            selection.tool_policy_version.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_file_tools",
-            selection.enable_file_tools,
-        ),
-        graphql_fields::graphql_string_field(
-            "file_tools_mode",
-            selection.file_tools_mode.as_deref(),
-        ),
-        Some(graphql_fields::graphql_nullable_string_field(
-            "file_tool_root",
-            selection.file_tool_root.as_deref(),
-        )),
-        graphql_fields::graphql_optional_bool_field("enable_bash", selection.enable_bash),
-        graphql_fields::graphql_string_field("bash_mode", selection.bash_mode.as_deref()),
-        graphql_fields::graphql_string_field(
-            "command_execution_policy",
-            selection.command_execution_policy.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "command_allowed_argv_prefixes",
-            selection.command_allowed_argv_prefixes.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "command_forbidden_argv_prefixes",
-            selection.command_forbidden_argv_prefixes.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "read_only_command_allowlist",
-            selection.read_only_command_allowlist.as_deref(),
-        ),
-        graphql_fields::graphql_string_field(
-            "command_network_mode",
-            selection.command_network_mode.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "cli_tool_names",
-            selection.cli_tool_names.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_meta_tools",
-            selection.enable_meta_tools,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_goal_tools",
-            selection.enable_goal_tools,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_goal_creation",
-            selection.enable_goal_creation,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "allowed_mcp_service_ids",
-            selection.allowed_mcp_service_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "required_mcp_service_ids",
-            selection.required_mcp_service_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "backgroundable_tool_names",
-            selection.backgroundable_tool_names.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "approval_required_tools",
-            selection.approval_required_tools.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "subagent_targets",
-            selection.subagent_targets.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_spawn_enabled",
-            selection.subagent_spawn_enabled,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_steering_enabled",
-            selection.subagent_steering_enabled,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_background_enabled",
-            selection.subagent_background_enabled,
-        ),
-        Some(graphql_fields::graphql_nullable_string_field(
-            "subagent_default_await_mode",
-            selection.subagent_default_await_mode.as_deref(),
-        )),
-        graphql_fields::graphql_optional_bool_field(
-            "subagent_allow_cross_deployment",
-            selection.subagent_allow_cross_deployment,
-        ),
-        selection
-            .cross_deployment_spawn_timeout_seconds
-            .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
-        graphql_fields::graphql_optional_bool_field("enable_memory", selection.enable_memory),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_session_history_tool",
-            selection.enable_session_history_tool,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_context_budget",
-            selection.enable_context_budget,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_defra_query",
-            selection.enable_defra_query,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "defra_query_collections",
-            selection.defra_query_collections.as_deref(),
-        ),
-        graphql_write_tools_field(selection.write_tools.as_deref()),
-        graphql_fields::graphql_string_list_field(
-            "datastore_tool_surface_ids",
-            selection.datastore_tool_surface_ids.as_deref(),
-        ),
-        graphql_fields::graphql_string_list_field(
-            "eth_tool_ids",
-            selection.eth_tool_ids.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "enable_self_config",
-            selection.enable_self_config,
-        ),
-        graphql_fields::graphql_string_list_field(
-            "self_config_categories",
-            selection.self_config_categories.as_deref(),
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "self_config_no_lockout",
-            selection.self_config_no_lockout,
-        ),
-        graphql_fields::graphql_optional_bool_field(
-            "self_config_dry_run",
-            selection.self_config_dry_run,
-        ),
-        graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
-        graphql_fields::graphql_string_field("lsp_config", selection.lsp_config.as_deref()),
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<_>>()
-    .join(",\n                    ");
+                let update_fields = vec![
+                    Some(format!(r#"agent_did: "{escaped_agent_did}""#)),
+                    graphql_fields::graphql_string_field(
+                        "display_name",
+                        selection.display_name.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "tool_policy_version",
+                        selection.tool_policy_version.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_file_tools",
+                        selection.enable_file_tools,
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "file_tools_mode",
+                        selection.file_tools_mode.as_deref(),
+                    ),
+                    Some(graphql_fields::graphql_nullable_string_field(
+                        "file_tool_root",
+                        selection.file_tool_root.as_deref(),
+                    )),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_bash",
+                        selection.enable_bash,
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "bash_mode",
+                        selection.bash_mode.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "command_execution_policy",
+                        selection.command_execution_policy.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "command_allowed_argv_prefixes",
+                        selection.command_allowed_argv_prefixes.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "command_forbidden_argv_prefixes",
+                        selection.command_forbidden_argv_prefixes.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "read_only_command_allowlist",
+                        selection.read_only_command_allowlist.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_field(
+                        "command_network_mode",
+                        selection.command_network_mode.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "cli_tool_names",
+                        selection.cli_tool_names.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_meta_tools",
+                        selection.enable_meta_tools,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_goal_tools",
+                        selection.enable_goal_tools,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_goal_creation",
+                        selection.enable_goal_creation,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "allowed_mcp_service_ids",
+                        selection.allowed_mcp_service_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "required_mcp_service_ids",
+                        selection.required_mcp_service_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "backgroundable_tool_names",
+                        selection.backgroundable_tool_names.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "approval_required_tools",
+                        selection.approval_required_tools.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "subagent_targets",
+                        selection.subagent_targets.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_spawn_enabled",
+                        selection.subagent_spawn_enabled,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_steering_enabled",
+                        selection.subagent_steering_enabled,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_background_enabled",
+                        selection.subagent_background_enabled,
+                    ),
+                    Some(graphql_fields::graphql_nullable_string_field(
+                        "subagent_default_await_mode",
+                        selection.subagent_default_await_mode.as_deref(),
+                    )),
+                    graphql_fields::graphql_optional_bool_field(
+                        "subagent_allow_cross_deployment",
+                        selection.subagent_allow_cross_deployment,
+                    ),
+                    selection
+                        .cross_deployment_spawn_timeout_seconds
+                        .map(|value| format!("cross_deployment_spawn_timeout_seconds: {value}")),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_memory",
+                        selection.enable_memory,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_session_history_tool",
+                        selection.enable_session_history_tool,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_context_budget",
+                        selection.enable_context_budget,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_defra_query",
+                        selection.enable_defra_query,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "defra_query_collections",
+                        selection.defra_query_collections.as_deref(),
+                    ),
+                    graphql_write_tools_field(selection.write_tools.as_deref()),
+                    graphql_fields::graphql_string_list_field(
+                        "datastore_tool_surface_ids",
+                        selection.datastore_tool_surface_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "eth_tool_ids",
+                        selection.eth_tool_ids.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "enable_self_config",
+                        selection.enable_self_config,
+                    ),
+                    graphql_fields::graphql_string_list_field(
+                        "self_config_categories",
+                        selection.self_config_categories.as_deref(),
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "self_config_no_lockout",
+                        selection.self_config_no_lockout,
+                    ),
+                    graphql_fields::graphql_optional_bool_field(
+                        "self_config_dry_run",
+                        selection.self_config_dry_run,
+                    ),
+                    graphql_fields::graphql_optional_bool_field("enable_lsp", selection.enable_lsp),
+                    graphql_fields::graphql_string_field(
+                        "lsp_config",
+                        selection.lsp_config.as_deref(),
+                    ),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(",\n                    ");
 
-    let mutation = format!(
-        r#"mutation {{
+                let mutation = format!(
+                    r#"mutation {{
             upsert_ToolSelection(
                 filter: {{ selection_id: {{ _eq: "{escaped_selection_id}" }} }},
                 add: {{
@@ -1454,13 +1486,12 @@ pub async fn upsert_tool_selection(
                 }}
             ) {{ _docID }}
         }}"#
-    );
+                );
 
-    match txn.execute(&mutation).await {
-        Ok(_) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }

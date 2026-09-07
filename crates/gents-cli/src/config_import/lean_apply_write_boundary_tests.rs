@@ -112,20 +112,21 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
 
         let (graphql, recorder) = start_recording_graphql().await;
         let access = ConfigAccess::Graphql(graphql);
-        let txn = access.begin_apply_txn().await.expect("begin apply tx");
-        let counts = match apply_desired_state_changes(&txn, &desired_bundle, &planned).await {
-            Ok(counts) => {
-                txn.commit().await.expect("commit");
-                counts
-            }
-            Err(error) => {
-                let _ = txn.discard().await;
+        let desired_bundle_ref = &desired_bundle;
+        let planned_ref = &planned;
+        let counts = access
+            .transact("test.lean_apply.success", move |txn| {
+                Box::pin(async move {
+                    apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await
+                })
+            })
+            .await
+            .unwrap_or_else(|error| {
                 panic!(
                     "production apply_desired_state_changes failed for Lean case {}: {error}",
                     case.name
-                );
-            }
-        };
+                )
+            });
 
         assert_counts_match_lean(case, &counts);
 
@@ -166,22 +167,35 @@ async fn generated_apply_reconcile_cases_fence_production_apply_write_boundary()
                 start_recording_graphql_with_committed_state(initial_external_state).await;
             let access = ConfigAccess::Graphql(graphql);
 
-            let txn = access
-                .begin_apply_txn()
-                .await
-                .expect("begin failure-case tx");
             recorder.install_fail_at("0", case.prefix_len);
-
-            let result = apply_desired_state_changes(&txn, &desired_bundle, &planned).await;
+            let pending_after_failure = Arc::new(Mutex::new(Vec::new()));
+            let pending_capture = pending_after_failure.clone();
+            let recorder_capture = recorder.clone();
+            let result = access
+                .transact("test.lean_apply.injected_failure", move |txn| {
+                    let pending_capture = pending_capture.clone();
+                    let recorder_capture = recorder_capture.clone();
+                    Box::pin(async move {
+                        let result =
+                            apply_desired_state_changes(txn, desired_bundle_ref, planned_ref).await;
+                        if result.is_err() {
+                            *pending_capture.lock().expect("pending capture lock") =
+                                recorder_capture.pending_state();
+                        }
+                        result
+                    })
+                })
+                .await;
             assert!(
                 result.is_err(),
                 "injected failure at write {} must surface as Err for Lean case {}",
                 case.prefix_len,
                 case.name,
             );
-            let pending_after_failure = recorder.pending_state();
-
-            let _ = txn.discard().await;
+            let pending_after_failure = pending_after_failure
+                .lock()
+                .expect("pending capture lock")
+                .clone();
 
             let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();
             assert_eq!(
@@ -1370,16 +1384,21 @@ fn doc_key_from_desired(doc: &LeanApplyDesiredDoc) -> (Collection, String) {
 async fn config_apply_txn_round_trip_against_recorder() {
     let (graphql, recorder) = start_recording_graphql().await;
     let access = ConfigAccess::Graphql(graphql);
-    let txn = access.begin_apply_txn().await.expect("begin");
-
-    let _ = txn
-        .execute("mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }")
+    let recorder_in_tx = recorder.clone();
+    access
+        .transact("test.config_apply.round_trip", move |txn| {
+            let recorder_in_tx = recorder_in_tx.clone();
+            Box::pin(async move {
+                txn.execute(
+                    "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
+                )
+                .await?;
+                assert!(recorder_in_tx.committed_state().is_empty());
+                Ok(())
+            })
+        })
         .await
-        .expect("execute in tx");
-
-    assert!(recorder.committed_state().is_empty());
-
-    txn.commit().await.expect("commit");
+        .expect("owned transaction");
 
     let committed = recorder.committed_state();
     assert_eq!(committed.len(), 1);
@@ -1392,14 +1411,18 @@ async fn config_apply_txn_round_trip_against_recorder() {
 async fn config_apply_txn_discard_leaves_committed_empty() {
     let (graphql, recorder) = start_recording_graphql().await;
     let access = ConfigAccess::Graphql(graphql);
-    let txn = access.begin_apply_txn().await.expect("begin");
-
-    let _ = txn
-        .execute("mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }")
-        .await
-        .expect("execute in tx");
-
-    txn.discard().await.expect("discard");
+    let result: Result<()> = access
+        .transact("test.config_apply.discard", move |txn| {
+            Box::pin(async move {
+                txn.execute(
+                    "mutation { doc_0: create_Task(input: { task_id: \"task-a\" }) { _docID } }",
+                )
+                .await?;
+                anyhow::bail!("force rollback")
+            })
+        })
+        .await;
+    assert!(result.is_err());
 
     assert!(recorder.committed_state().is_empty());
     let (begin_count, commit_count, discard_count) = recorder.tx_lifecycle_counts();

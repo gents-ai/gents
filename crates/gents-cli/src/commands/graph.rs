@@ -261,36 +261,30 @@ async fn persist_code_review_evidence_pages(
         &evidence.chunks,
     );
     let manifest = code_review_evidence_manifest_input(evidence_id, evidence);
-    let txn = access.begin_apply_txn().await?;
-    let result = async {
-        txn.execute(&format!(
-            "mutation {{ create_CodeReviewEvidenceManifest(input: {}) {{ _docID }} }}",
-            graphql_input_literal(&manifest)?
-        ))
+    let pages_ref = &pages;
+    let manifest_ref = &manifest;
+    access
+        .transact("cli.graph.persist_review_evidence", move |txn| {
+            Box::pin(async move {
+                txn.execute(&format!(
+                    "mutation {{ create_CodeReviewEvidenceManifest(input: {}) {{ _docID }} }}",
+                    graphql_input_literal(manifest_ref)?
+                ))
+                .await
+                .context("persisting immutable code-review evidence manifest")?;
+                for (page, input) in pages_ref.iter().enumerate() {
+                    let mutation = format!(
+                        "mutation {{ create_CodeReviewEvidencePage(input: {}) {{ _docID }} }}",
+                        graphql_input_literal(input)?
+                    );
+                    txn.execute(&mutation).await.with_context(|| {
+                        format!("persisting immutable code-review evidence page {page}")
+                    })?;
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        })
         .await
-        .context("persisting immutable code-review evidence manifest")?;
-        for (page, input) in pages.iter().enumerate() {
-            let mutation = format!(
-                "mutation {{ create_CodeReviewEvidencePage(input: {}) {{ _docID }} }}",
-                graphql_input_literal(input)?
-            );
-            txn.execute(&mutation).await.with_context(|| {
-                format!("persisting immutable code-review evidence page {page}")
-            })?;
-        }
-        Ok::<_, anyhow::Error>(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn
-            .commit()
-            .await
-            .context("committing immutable code-review evidence pages"),
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
 }
 
 /// Build immutable, host-owned review evidence. Recon sees only the compact

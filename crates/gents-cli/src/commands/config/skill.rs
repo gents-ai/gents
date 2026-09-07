@@ -72,7 +72,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute_committed(&mutation).await?;
+    let response = access.write("cli.config.skill.upsert", &mutation).await?;
     extract_mutation_doc_id(&response, "Skill")
 }
 
@@ -167,7 +167,7 @@ pub(super) async fn skill_rm(args: SkillRefArgs) -> Result<()> {
     let mutation = format!(
         r#"mutation {{ delete_Skill(filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}) {{ _docID }} }}"#
     );
-    let response = access.execute_committed(&mutation).await?;
+    let response = access.write("cli.config.skill.delete", &mutation).await?;
     let deleted = response
         .get("data")
         .and_then(|data| data.get("delete_Skill"))
@@ -192,7 +192,9 @@ pub(super) async fn skill_set_enabled(args: SkillRefArgs, enabled: bool) -> Resu
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute_committed(&mutation).await?;
+    let response = access
+        .write("cli.config.skill.set_enabled", &mutation)
+        .await?;
     let updated = response
         .get("data")
         .and_then(|data| data.get("update_Skill"))

@@ -10,6 +10,23 @@ mod apply;
 mod prune;
 mod validation;
 
+async fn apply_live_desired_state(
+    access: &ConfigAccess,
+    bundle: &DesiredApplyBundle,
+    planned: &DesiredStateDiffReport,
+) -> Result<()> {
+    use crate::config_import::apply_desired_state_changes;
+
+    access
+        .transact("test.desired_state.apply", move |txn| {
+            Box::pin(async move {
+                apply_desired_state_changes(txn, bundle, planned).await?;
+                Ok(())
+            })
+        })
+        .await
+}
+
 fn manifest_with_subagent_targets(targets: Vec<SubagentTarget>) -> DesiredStateManifest {
     use super::super::{DesiredAgentPrincipal, DesiredStateManifest, DesiredToolSelection};
     let targets: Vec<String> = targets.iter().map(SubagentTarget::to_entry).collect();

@@ -434,10 +434,10 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .collect::<Vec<_>>();
         let receipt = self.signed_receipt(request, "served", "", manifest).await?;
         let mutation = terminal_mutation(request, &receipt)?;
-        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.mark_hydration_served",
             &mutation,
-            "mark SessionHydrationRequest served",
         )
         .await?;
         anyhow::ensure!(
@@ -452,10 +452,10 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             .signed_receipt(request, "rejected", detail, Vec::new())
             .await?;
         let mutation = terminal_mutation(request, &receipt)?;
-        let response = crate::graphql::graphql_mutation_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.mark_hydration_rejected",
             &mutation,
-            "mark SessionHydrationRequest rejected",
         )
         .await?;
         anyhow::ensure!(

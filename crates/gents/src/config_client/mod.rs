@@ -5,13 +5,13 @@
 //! writers under `gents-cli/src/config_writes`) and the runtime
 //! self-configuration tools (`crate::self_config`).
 //!
-//! The client is DID-parameterized: [`ConfigApplyTxn::begin_local`] accepts an
+//! The client is DID-parameterized: [`ConfigAccess::transact_local`] accepts an
 //! optional `identity::Did`, and every statement executed inside that
-//! transaction carries it as the DefraDB ACP actor — authorization is
-//! enforced at the node, not by app-level ownership checks. Embedded CLI paths
-//! default to the node DID and signer. HTTP paths require bearer
-//! authentication for a caller ACP identity; without it, the server still
-//! signs committed mutations as the node but evaluates the query anonymously.
+//! transaction carries it as the DefraDB ACP actor. Authorization remains at
+//! the node. Embedded CLI paths default to the node DID and signer. HTTP paths
+//! require bearer authentication for a caller ACP identity; without it, the
+//! server still signs committed mutations as the node but evaluates the query
+//! anonymously.
 //!
 //! Write conventions (load-bearing — see `AGENTS.md`):
 //! - every interpolated value goes through
@@ -26,12 +26,22 @@ mod approval;
 mod common;
 mod desired_state;
 mod event_trigger;
+mod graphql;
 mod inference_backend;
 mod inference_profile;
+mod retry;
 mod schedule;
 mod schema_contract;
 mod task;
 mod txn;
+pub(crate) mod write_telemetry;
+
+pub(crate) use graphql::ensure_query_document;
+
+#[cfg(test)]
+pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool {
+    retry::classified_transaction_conflict(error).is_some()
+}
 
 pub mod patch;
 
@@ -60,7 +70,8 @@ pub(crate) use tool_selection::effective_tool_selection;
 pub use tool_selection::{
     write_tool_selection_document, write_tool_selection_document_with_clear_fields,
 };
-pub use txn::ConfigApplyTxn;
+pub(crate) use txn::TransactionOutcome;
+pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};
 
 mod tool_selection;
 
@@ -69,7 +80,8 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use futures::future::BoxFuture;
+use gents_protocol::graphql::GraphqlRequestOptions;
 use serde_json::{json, Value};
 
 pub enum ConfigAccess {
@@ -89,33 +101,24 @@ impl ConfigAccess {
         }
     }
 
-    pub async fn execute(&self, query: &str) -> Result<Value> {
-        match self {
-            Self::Graphql(graphql) => post_graphql(graphql, query).await,
-            Self::Local(node) => {
-                let response =
-                    crate::graphql::graphql_with_transaction_retry(node, query, "config GraphQL")
-                        .await?;
-                Ok(json!({
-                    "data": response.data.unwrap_or(Value::Null),
-                }))
+    pub fn execute<'a>(&'a self, query: &'a str) -> BoxFuture<'a, Result<Value>> {
+        Box::pin(async move {
+            graphql::ensure_query_document(query)?;
+            match self {
+                Self::Graphql(graphql) => post_graphql(graphql, query).await,
+                Self::Local(node) => {
+                    let response = crate::graphql::graphql_with_transaction_retry(
+                        node,
+                        query,
+                        "config GraphQL",
+                    )
+                    .await?;
+                    Ok(json!({
+                        "data": response.data.unwrap_or(Value::Null),
+                    }))
+                }
             }
-        }
-    }
-
-    pub async fn execute_mutation(&self, mutation: &str, operation: &str) -> Result<Value> {
-        match self {
-            Self::Graphql(graphql) => post_graphql(graphql, mutation).await,
-            Self::Local(node) => {
-                let response = crate::graphql::graphql_mutation_with_transaction_retry(
-                    node, mutation, operation,
-                )
-                .await?;
-                Ok(json!({
-                    "data": response.data.unwrap_or(Value::Null),
-                }))
-            }
-        }
+        })
     }
 
     /// Apply schema SDL through the same local-or-HTTP control-plane seam as
@@ -255,7 +258,7 @@ pub fn graphql_diagnostic_hint(graphql: &str) -> String {
 }
 
 pub async fn post_graphql(graphql: &str, query: &str) -> Result<Value> {
-    execute_graphql_async(
+    query_graphql_with_options(
         graphql,
         query,
         GraphqlRequestOptions {
@@ -265,5 +268,18 @@ pub async fn post_graphql(graphql: &str, query: &str) -> Result<Value> {
         },
     )
     .await
-    .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql)))
+}
+
+/// Execute one HTTP GraphQL read with caller-selected transport retry options.
+///
+/// Mutations are rejected before network I/O so HTTP reads cannot bypass the
+/// canonical committed-write owner.
+pub async fn query_graphql_with_options(
+    graphql: &str,
+    query: &str,
+    options: GraphqlRequestOptions,
+) -> Result<Value> {
+    graphql::query_with_options(graphql, query, options)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(graphql)))
 }

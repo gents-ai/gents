@@ -7,9 +7,15 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::graphql::{
-    escape_graphql_string, first_row, graphql_mutation_with_transaction_retry, rows,
-};
+use crate::graphql::{escape_graphql_string, first_row, rows};
+
+async fn committed_mutation(
+    node: &EmbeddedNode,
+    operation: &'static str,
+    mutation: &str,
+) -> Result<defra_node::QueryResponse> {
+    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
+}
 use crate::workspace::{
     isolated_workspace_upsert_mutation, workspace_placement_upsert_mutation, IsolatedWorkspaceDoc,
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
@@ -728,9 +734,7 @@ pub async fn create_pending_invocation(
         idempotency_key = escape_graphql_string(&invocation.idempotency_key),
         created_at = escape_graphql_string(&now),
     );
-    match graphql_mutation_with_transaction_retry(node, &mutation, "create_CallbackInvocation")
-        .await
-    {
+    match committed_mutation(node, "callback.create_invocation", &mutation).await {
         Ok(_) => load_invocation_by_key(node, &invocation.idempotency_key)
             .await?
             .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
@@ -789,9 +793,7 @@ pub async fn update_invocation(
         error = escape_graphql_string(error),
         claimed_at = escape_graphql_string(claimed_at),
     );
-    let response =
-        graphql_mutation_with_transaction_retry(node, &mutation, "update_CallbackInvocation")
-            .await?;
+    let response = committed_mutation(node, "callback.update_invocation", &mutation).await?;
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
@@ -831,7 +833,7 @@ pub async fn create_callback_result(
         correlation = escape_graphql_string(correlation),
         created_at = escape_graphql_string(&now),
     );
-    match graphql_mutation_with_transaction_retry(node, &mutation, "create_CallbackResult").await {
+    match committed_mutation(node, "callback.create_result", &mutation).await {
         Ok(_) => load_callback_result(node, &result.invocation_id)
             .await?
             .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
@@ -909,13 +911,13 @@ pub async fn flush_workspace_docs(
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     for workspace in docs.workspaces.values() {
         let mutation = isolated_workspace_upsert_mutation(workspace);
-        graphql_mutation_with_transaction_retry(node, &mutation, "upsert_IsolatedWorkspace")
+        committed_mutation(node, "callback.upsert_isolated_workspace", &mutation)
             .await
             .with_context(|| format!("persist IsolatedWorkspace {}", workspace.workspace_id))?;
     }
     for placement in docs.placements.values() {
         let mutation = workspace_placement_upsert_mutation(placement, &now);
-        graphql_mutation_with_transaction_retry(node, &mutation, "upsert_WorkspacePlacement")
+        committed_mutation(node, "callback.upsert_workspace_placement", &mutation)
             .await
             .with_context(|| format!("persist WorkspacePlacement {}", placement.workspace_id))?;
     }

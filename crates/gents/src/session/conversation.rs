@@ -1,6 +1,5 @@
 use super::query::load_conversation_document;
 use super::query::load_recent_conversation_titles;
-use super::retry::execute_mutation_with_retry;
 use super::*;
 
 pub(crate) const CONVERSATION_TITLE_SOURCE_FALLBACK: &str = "placeholder";
@@ -56,7 +55,12 @@ pub(crate) async fn update_conversation_title_with_source(
         }}"#
     );
 
-    execute_mutation_with_retry(node, &mutation, "update_conversation_title_with_source").await?;
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "session.update_conversation_title",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }
 

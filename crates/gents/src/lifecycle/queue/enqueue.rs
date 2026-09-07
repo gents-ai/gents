@@ -38,55 +38,28 @@ pub(crate) async fn enqueue_steering_request_with_message(
     // request-scoped prompt dedup reuses this keyed row instead of appending a
     // second copy when the continuation starts.
     let persisted_content = serde_json::to_string(&crate::llm::message::Message::user(content))?;
+    let persisted_content = &persisted_content;
+    let request_id = &request_id;
+    let request_mutation = &request_mutation;
 
-    let mut retry_index = 0;
-    let enqueued = loop {
-        let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt = steering_transaction_attempt(
-            &txn,
-            parent,
-            &persisted_content,
-            &request_id,
-            &request_mutation,
-        )
-        .await;
-
-        let result = match attempt {
-            Ok(enqueued) => match txn.commit().await {
-                Ok(()) => Ok(enqueued),
-                Err(error) => Err(error),
-            },
-            Err(error) => {
-                if let Err(discard_error) = txn.discard().await {
-                    tracing::warn!(
-                        error = %discard_error,
-                        "discarding failed steering transaction also failed"
-                    );
-                }
-                Err(error)
-            }
-        };
-
-        match result {
-            Ok(enqueued) => break enqueued,
-            Err(error)
-                if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && steering_transaction_error_is_retryable(&error) =>
-            {
-                let backoff = defradb_conflict_retry_backoff(retry_index);
-                retry_index += 1;
-                tracing::warn!(
+    let enqueued = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "lifecycle.enqueue_steering",
+        move |txn| {
+            Box::pin(async move {
+                steering_transaction_attempt(
+                    txn,
+                    parent,
+                    persisted_content,
                     request_id,
-                    attempt = retry_index,
-                    backoff_ms = backoff.as_millis() as u64,
-                    error = %error,
-                    "retrying atomic steering persistence"
-                );
-                tokio::time::sleep(backoff).await;
-            }
-            Err(error) => return Err(error),
-        }
-    };
+                    request_mutation,
+                )
+                .await
+            })
+        },
+    )
+    .await?;
 
     Ok(enqueued)
 }

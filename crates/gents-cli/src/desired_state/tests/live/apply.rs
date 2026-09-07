@@ -5,7 +5,7 @@ async fn explicit_null_clears_task_goals_and_tool_goal_capabilities() -> Result<
     use std::path::PathBuf;
 
     use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
-    use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+    use crate::config_import::diff_has_pending_apply;
     use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
 
     let tempdir = tempfile::tempdir()?;
@@ -51,9 +51,7 @@ async fn explicit_null_clears_task_goals_and_tool_goal_capabilities() -> Result<
         &live_manifest,
         false,
     );
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &initial_bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &initial_bundle, &planned).await?;
 
     let mut cleared = initial;
     cleared.tasks[0].goal_objective_template = Some(None);
@@ -77,9 +75,7 @@ async fn explicit_null_clears_task_goals_and_tool_goal_capabilities() -> Result<
         vec!["goal-tools"]
     );
 
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &clear_bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &clear_bundle, &planned).await?;
 
     let remaining_bundle = build_desired_state_live_bundle(&access, &cleared).await?;
     let (remaining_principal, remaining_manifest) =
@@ -116,7 +112,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
     use std::path::PathBuf;
 
     use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
-    use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+    use crate::config_import::diff_has_pending_apply;
     use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
 
     let tempdir = tempfile::tempdir()?;
@@ -231,9 +227,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
         false,
     );
 
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &desired_bundle, &planned).await?;
 
     let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =
@@ -315,7 +309,7 @@ async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> R
     use std::path::PathBuf;
 
     use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
-    use crate::config_import::{apply_desired_state_changes, diff_has_pending_apply};
+    use crate::config_import::diff_has_pending_apply;
     use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
 
     let tempdir = tempfile::tempdir()?;
@@ -400,9 +394,7 @@ async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> R
         false,
     );
 
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &desired_bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &desired_bundle, &planned).await?;
 
     let remaining_bundle = build_desired_state_live_bundle(&access, &desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =

@@ -146,10 +146,9 @@ async fn submit_local_persona(
     record.local_signature = identity.sign(&record.signing_payload()).await?;
     record.validate_shape()?;
     let access = ConfigAccess::Graphql(graphql.to_string());
+    let mutation = gents::agent::persona_ops::local_persona_request_mutation(&record);
     access
-        .execute(&gents::agent::persona_ops::local_persona_request_mutation(
-            &record,
-        ))
+        .write("cli.config.behavior.persona_request", &mutation)
         .await?;
     poll_persona_request(&access, &record.request_key).await
 }

@@ -12,7 +12,7 @@
 //! CLI's `commands/config/skill.rs` carries the import/export + SKILL.md
 //! parsing surface, which the desktop intentionally does not duplicate.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use chrono::Utc;
 use defra_node::EmbeddedNode;
 use gents_protocol::row::SkillRow;
@@ -119,22 +119,11 @@ pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
 
 pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) -> Result<usize> {
     let mutation = build_delete_skill_mutation(agent_did, skill_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_skill failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response =
+        super::super::graphql::execute_mutation_response(node, &mutation, "desktop.skill.delete")
+            .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_Skill"))
+        .pointer("/data/delete_Skill")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))

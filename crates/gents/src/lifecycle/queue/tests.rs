@@ -208,10 +208,13 @@ async fn insert_raw_queue_request(
         }}"#,
         max_retries = DEFAULT_REQUEST_MAX_RETRIES,
     );
-    let response =
-        session::execute_mutation_with_retry(node, &mutation, "insert_raw_queue_request")
-            .await
-            .unwrap();
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "test.insert_raw_queue_request",
+        &mutation,
+    )
+    .await
+    .unwrap();
     extract_single_doc_id(&response, "create_AgentRequest")
         .expect("raw queue create returns _docID")
 }

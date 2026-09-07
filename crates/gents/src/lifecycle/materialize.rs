@@ -148,15 +148,17 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
     }
     let escaped_request_id = escape_graphql_string(&request_id);
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    let mutation = &mutation;
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::graphql::graphql_mutation_with_transaction_retry(
+    let response = crate::config_client::ConfigAccess::write_local(
         node,
+        "lifecycle.materialize_pending",
         &mutation,
-        "materialize_pending_agent_request",
     )
     .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
 
     let doc_id = resolve_created_agent_request_doc_id(
         node,
@@ -183,51 +185,35 @@ async fn publish_graph_root_request(
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<EnqueuedAgentRequest> {
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-    for attempt in 0..=crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES {
-        let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-        let staged = async {
-            crate::graph_pipeline::fence_graph_root_request_in_txn(&txn, create).await?;
-            let response = txn.execute(&mutation).await?;
-            let child = response
-                .pointer("/data/create_AgentRequest")
-                .or_else(|| response.pointer("/data/add_AgentRequest"))
-                .context("graph root create omitted result")?;
-            let doc_id = child
-                .get("_docID")
-                .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
-                .and_then(serde_json::Value::as_str)
-                .context("graph root create omitted document ID")?
-                .to_owned();
-            Ok::<_, anyhow::Error>(doc_id)
-        }
-        .await;
-        let result = match staged {
-            Ok(doc_id) => txn.commit().await.map(|()| doc_id),
-            Err(error) => {
-                let _ = txn.discard().await;
-                Err(error)
-            }
-        };
-        match result {
-            Ok(doc_id) => {
-                return Ok(EnqueuedAgentRequest {
-                    doc_id,
-                    request_id: create.request_id.clone(),
-                    session_id: create.session_id.clone(),
-                })
-            }
-            Err(error)
-                if attempt < crate::graphql::DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && crate::graphql::is_defradb_transaction_conflict_text(&format!(
-                        "{error:#}"
-                    )) =>
-            {
-                tokio::time::sleep(crate::graphql::defradb_conflict_retry_backoff(attempt)).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-    unreachable!("bounded publication retry returns on its final attempt")
+    let mutation = &mutation;
+    let doc_id = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "lifecycle.publish_graph_root",
+        move |txn| {
+            Box::pin(async move {
+                crate::graph_pipeline::fence_graph_root_request_in_txn(&txn, create).await?;
+                let response = txn.execute(&mutation).await?;
+                let child = response
+                    .pointer("/data/create_AgentRequest")
+                    .or_else(|| response.pointer("/data/add_AgentRequest"))
+                    .context("graph root create omitted result")?;
+                let doc_id = child
+                    .get("_docID")
+                    .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
+                    .and_then(serde_json::Value::as_str)
+                    .context("graph root create omitted document ID")?
+                    .to_owned();
+                Ok::<_, anyhow::Error>(doc_id)
+            })
+        },
+    )
+    .await?;
+    Ok(EnqueuedAgentRequest {
+        doc_id,
+        request_id: create.request_id.clone(),
+        session_id: create.session_id.clone(),
+    })
 }
 
 /// Build and sign the canonical pending request used by trigger materialization.
@@ -597,12 +583,13 @@ pub async fn activate_workspace_bound_request(
         workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
         pending = RequestLifecycleState::Pending.as_str(),
     );
-    let response = crate::graphql::graphql_mutation_with_transaction_retry(
+    let response = crate::config_client::ConfigAccess::write_local(
         node,
+        "lifecycle.activate_workspace_bound",
         &mutation,
-        "activate_workspace_bound_request",
     )
     .await?;
+    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
     if crate::graphql::single_mutation_document(&response, "update_AgentRequest")?.is_none() {
         let query = format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
@@ -766,12 +753,13 @@ impl RequestLifecycle {
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-        let resp = crate::graphql::graphql_mutation_with_transaction_retry(
+        let resp = crate::config_client::ConfigAccess::write_local(
             node.as_ref(),
+            "lifecycle.materialize_before_claim",
             &mutation,
-            "materialize_signed_pending_request_before_owned_claim",
         )
         .await?;
+        let resp: defra_node::QueryResponse = serde_json::from_value(resp)?;
 
         let doc_id = resolve_created_agent_request_doc_id(
             node.as_ref(),

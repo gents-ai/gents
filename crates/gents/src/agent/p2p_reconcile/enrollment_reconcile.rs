@@ -793,10 +793,10 @@ async fn reconcile_data_plane(
             &client_collections,
             &Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         );
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             node,
+            "p2p.upsert_enrollment_route",
             &mutation,
-            "upsert enrollment base route",
         )
         .await?;
     }
@@ -805,10 +805,10 @@ async fn reconcile_data_plane(
             continue;
         }
         let mutation = delete_enrollment_route_mutation(peer_id);
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             node,
+            "p2p.retract_enrollment_route",
             &mutation,
-            "retract enrollment base route",
         )
         .await?;
     }
@@ -829,10 +829,10 @@ fn enrollment_route_matches_fence(
 
 async fn delete_enrollment_route(node: &EmbeddedNode, peer_id: &str) -> Result<()> {
     let mutation = delete_enrollment_route_mutation(peer_id);
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "p2p.retract_enrollment_route_fenced",
         &mutation,
-        "retract enrollment base route at authority fence",
     )
     .await
     .map(|_| ())

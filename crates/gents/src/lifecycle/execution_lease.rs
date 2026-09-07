@@ -29,13 +29,12 @@ impl ExecutionWriteFence {
         response_mutation: &str,
         kind: ExecutionWriteKind,
     ) -> Result<defra_node::QueryResponse> {
-        crate::retry::retry_terminal_persistence_operation(
-            "owned_response_progress",
-            crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
-            std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
-            || async {
-                let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-                let attempt = async {
+        crate::config_client::ConfigAccess::transact_local_idempotent(
+            node,
+            None,
+            crate::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.response_progress",
+            move |txn| Box::pin(async move {
                     let doc_id = escape_graphql_string(&self.request_doc_id);
                     let query = format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ request_id lifecycle_state execution_generation execution_lease_expires_at execution_progress_seq }} }}"#);
                     let result = txn.execute_local_response(&query).await?;
@@ -85,13 +84,8 @@ impl ExecutionWriteFence {
                     anyhow::ensure!(result.data.as_ref().and_then(|v| v.get("update_AgentResponse").or_else(|| v.get("create_AgentResponse"))).is_some_and(response_has_documents)
                         || extract_single_doc_id(&result, "create_AgentResponse").is_some(),
                         "owned response write matched no document");
-                    Ok::<_, anyhow::Error>(result)
-                }.await;
-                match attempt {
-                    Ok(result) => txn.commit().await.map(|()| result),
-                    Err(error) => { let _ = txn.discard().await; Err(error) }
-                }
-            }
+                Ok::<_, anyhow::Error>(result)
+            })
         ).await
     }
 }
@@ -128,7 +122,13 @@ impl Drop for RequestLifecycle {
                     lifecycle_state: {{ _in: {active} }} }},
                 input: {{ execution_lease_expires_at: "{expired}" }}
             ) {{ _docID }} }}"#);
-            if let Err(error) = crate::graphql::graphql_mutation_with_transaction_retry(&node, &mutation, "relinquish_execution_lease").await {
+            if let Err(error) = crate::config_client::ConfigAccess::write_local(
+                &node,
+                "lifecycle.relinquish_execution_lease",
+                &mutation,
+            )
+            .await
+            {
                 tracing::warn!(%error, %doc_id, "could not promptly relinquish execution lease; durable expiry remains recoverable");
             }
         });
@@ -218,6 +218,7 @@ struct ResponseLeaseView {
     interrupted_at: Option<String>,
 }
 
+#[derive(Clone, Copy)]
 enum TerminalAuthority<'a> {
     Owner(&'a str),
     Recovery {
@@ -397,12 +398,13 @@ async fn terminalize_execution(
         ExecutionOperation,
     };
     let fresh_generation = ExecutionGeneration::fresh();
-    crate::retry::retry_terminal_persistence_operation(
-        "terminalize_execution_generation", crate::retry::TERMINAL_PERSISTENCE_MAX_RETRIES,
-        std::time::Duration::from_millis(crate::retry::TERMINAL_PERSISTENCE_INITIAL_BACKOFF_MS),
-        || async {
-            let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-            let attempt = async {
+    let fresh_generation = &fresh_generation;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "lifecycle.terminalize_execution",
+        move |txn| Box::pin(async move {
                 let doc_id = escape_graphql_string(request_doc_id);
                 let query = format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                     _docID request_id agent_did requester_did behavior_id session_id lifecycle_state
@@ -503,14 +505,8 @@ async fn terminalize_execution(
                 let projection = session::request_conversation_status_projection_mutation(
                     row.session_id.as_deref().context("missing request session")?, &row.request_id, effective_outcome.conversation_status(), &timestamp);
                 txn.execute_local_response(&projection).await?;
-                Ok::<_, anyhow::Error>(TerminalizeResult::Won)
-            }.await;
-            match attempt {
-                Ok(TerminalizeResult::Won) => txn.commit().await.map(|()| TerminalizeResult::Won),
-                Ok(result) => { let _ = txn.discard().await; Ok(result) },
-                Err(error) => { let _ = txn.discard().await; Err(error) },
-            }
-        }
+            Ok::<_, anyhow::Error>(TerminalizeResult::Won)
+        })
     ).await
 }
 

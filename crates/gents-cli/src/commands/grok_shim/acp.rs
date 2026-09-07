@@ -61,6 +61,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
+use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use serde_json::{json, Value};
@@ -1591,8 +1592,9 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                 }}) {{ _docID }}
             }}"#
         );
-        let response = config.node.execute(&create).await;
-        ensure_no_errors(&response, "grok shim AgentSession create")?;
+        ConfigAccess::Local(config.node.clone())
+            .write("grok.session.create", &create)
+            .await?;
     } else {
         // Reactivate an existing row without touching the immutable fields.
         let update = format!(
@@ -1608,8 +1610,9 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
                 ) {{ _docID }}
             }}"#
         );
-        let response = config.node.execute(&update).await;
-        ensure_no_errors(&response, "grok shim AgentSession reactivate")?;
+        ConfigAccess::Local(config.node.clone())
+            .write("grok.session.reactivate", &update)
+            .await?;
     }
     Ok(())
 }

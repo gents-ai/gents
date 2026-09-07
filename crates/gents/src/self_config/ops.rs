@@ -18,7 +18,7 @@ use crate::config_client::patch::{
     apply_patch, create_doc_in_txn, diff_docs, ensure_admissible, read_doc_in_txn,
     update_doc_fields_in_txn, FieldDelta, SelfConfigPatch, SelfConfigTarget,
 };
-use crate::config_client::ConfigApplyTxn;
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::ToolSelectionDocument;
 
 /// How a self-config write lands: config documents are watched by the control
@@ -96,14 +96,13 @@ impl SelfConfigCore {
         &self.behavior_id
     }
 
+    pub(crate) fn node(&self) -> &EmbeddedNode {
+        &self.node
+    }
+
     pub(crate) fn identity(&self) -> Result<Did> {
         Did::new(self.agent_did.clone())
             .map_err(|error| anyhow!("agent DID is not ACP-addressable: {error}"))
-    }
-
-    /// Begin an identity-scoped transaction.
-    pub(crate) async fn begin_txn(&self) -> Result<ConfigApplyTxn<'_>> {
-        ConfigApplyTxn::begin_local(&self.node, Some(self.identity()?)).await
     }
 
     /// Load and ownership-check the behavior anchor inside the transaction.
@@ -139,33 +138,26 @@ impl SelfConfigCore {
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
 
-        let txn = self.begin_txn().await?;
-        let outcome = self.apply_in_txn(&txn, &request).await;
-        match outcome {
-            Ok(outcome) => {
-                txn.commit().await.with_context(|| {
-                    format!(
-                        "committing {} self-config patch",
-                        request.target.collection_name()
-                    )
-                })?;
-                Ok(PatchOutcome {
-                    committed: true,
-                    ..outcome
-                })
-            }
-            Err(error) => {
-                if let Err(discard_error) = txn.discard().await {
-                    tracing::warn!(
-                        collection = request.target.collection_name(),
-                        %discard_error,
-                        "self-config transaction discard reported an error; \
-                         atomicity still guarantees no partial write"
-                    );
-                }
-                Err(error)
-            }
-        }
+        let identity = self.identity()?;
+        let this = self;
+        let request = &request;
+        let outcome = ConfigAccess::transact_local(
+            &self.node,
+            Some(identity),
+            "self_config.apply",
+            move |txn| Box::pin(async move { this.apply_in_txn(txn, request).await }),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "committing {} self-config patch",
+                request.target.collection_name()
+            )
+        })?;
+        Ok(PatchOutcome {
+            committed: true,
+            ..outcome
+        })
     }
 
     async fn apply_in_txn(
@@ -217,13 +209,19 @@ impl SelfConfigCore {
     }
 
     /// Dry-run preview: merge + validate in memory, return the diff. Nothing
-    /// is written; the transaction is read-only and always discarded.
+    /// is written; the consistent-snapshot transaction remains read-only.
     pub(crate) async fn preview(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
         ensure_admissible(request.target, &request.patch)?;
-        let txn = self.begin_txn().await?;
-        let result = self.preview_in_txn(&txn, &request).await;
-        let _ = txn.discard().await;
-        result
+        let identity = self.identity()?;
+        let this = self;
+        let request = &request;
+        ConfigAccess::transact_local(
+            &self.node,
+            Some(identity),
+            "self_config.preview",
+            move |txn| Box::pin(async move { this.preview_in_txn(txn, request).await }),
+        )
+        .await
     }
 
     async fn preview_in_txn(
