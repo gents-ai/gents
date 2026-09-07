@@ -6,8 +6,13 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.16.0 - 2026-09-07
+
 ### Added
 
+- Claude Max / Claude.ai subscription backend: native Anthropic Messages HTTP
+  wire, first-party `gents claude-login` PKCE, credential-expiry health probe,
+  and `discover-models --write` (#1398, #1399, #1400).
 - Desktop bridge 6.2: `MCPServiceHealthView.displayState` (`healthy | stale |
   unreachable`) is the only MCP health classification; the desktop's
   synthetic `stuck` state is removed.
@@ -365,6 +370,7 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 | Tag        | Bridge crate | npm packages | contract_version | Notes                                         |
 | ---------- | ------------ | ------------ | ---------------- | --------------------------------------------- |
+| v0.16.0    | 0.16.0       | 0.16.0       | 6.3              | Claude subscription backend; packs catalog; write owner |
 | v0.15.0    | 0.15.0       | 0.15.0       | 4.0              | Authenticated mobile authority; Regolith; DefraDB v0.19.0 |
 | v0.14.0    | 0.14.0       | 0.14.0       | 1.5              | Mobile sync health, graph review, clarity refactors; DefraDB `81ff3cee` |
 | v0.13.0    | 0.13.0       | 0.13.0       | 1.3              | Hydration, bounded mobile transcripts, graph pipeline; DefraDB `54b629b1` |
