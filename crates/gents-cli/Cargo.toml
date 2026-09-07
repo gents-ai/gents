@@ -75,6 +75,7 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
+tempfile = "3"
 
 [dev-dependencies]
 acp.workspace = true
@@ -83,5 +84,4 @@ gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
 identity.workspace = true
 jsonschema = { version = "0.46.5", default-features = false }
-tempfile = "3"
 tokio-tungstenite = "0.26.2"

@@ -33,7 +33,7 @@ MAINTENANCE_RETRY_MAX_TRANSPORT ?= 720
 MAINTENANCE_RETRY_MAX_RESAMPLE ?= 32
 DEFENDING_ROOT ?= $(CURDIR)
 DEFENDING_PROMPT ?= Map the repository's trust boundaries, find plausible exploitable vulnerabilities, adversarially verify them, and draft minimal reviewable fixes for confirmed findings.
-DEFENDING_ENDPOINT ?= http://100.73.235.38:8000/v1
+DEFENDING_ENDPOINT ?= http://127.0.0.1:8080/v1
 DEFENDING_MODEL ?= GLM-5.2
 DEFENDING_MIN_AREAS ?= 4
 DEFENDING_MAX_AREAS ?= 10
@@ -56,7 +56,7 @@ DEFENDING_RETRY_MAX_TRANSPORT ?= 720
 DEFENDING_RETRY_MAX_RESAMPLE ?= 32
 GROK_PORT_CEILING ?= $(CURDIR)
 GROK_PORT_GENTS_ROOT ?= $(CURDIR)
-GROK_PORT_GROK_ROOT ?= $(CURDIR)/demo/grok-tui-port/recon-input
+GROK_PORT_GROK_ROOT ?= $(CURDIR)/packs/grok_tui_port/recon_input
 GROK_PORT_PROMPT ?= Map the Grok TUI wire from grok-build and implement a Gents-only thin client. Do not add DefraDB access control or Grok permission UI. Prove model name, context window, tool-call semantics, subprocesses, subagents, and interrupts with live GLM turns.
 GROK_PORT_BASE_SHA ?= HEAD
 GROK_PORT_PR_BASE ?= main
@@ -146,10 +146,10 @@ help:
 	@echo "  make live-agent            Run ignored live runtime tests"
 	@echo "  make live-desktop-smoke    Run live desktop smoke suites"
 	@echo
-	@echo "Bundled graphs:"
-	@echo "  gents graph catalog        Inspect graphs shipped in the binary"
-	@echo "  gents graph install code-review"
-	@echo "  gents graph run code-review --repo DIR --base origin/main --head HEAD"
+	@echo "Bundled packs:"
+	@echo "  gents pack list        Inspect packs shipped in the binary"
+	@echo "  gents pack install code_review"
+	@echo "  gents graph run code_review --repo DIR --base origin/main --head HEAD"
 	@echo
 	@echo "Maintenance:"
 	@echo "  make maintain              Audit MAINTENANCE_ROOT and emit small cleanup work packages"
@@ -236,7 +236,7 @@ maintain:
 	GENTS_MAINTENANCE_STREAM_BATCH_MS="$(MAINTENANCE_STREAM_BATCH_MS)" \
 	GENTS_MAINTENANCE_RETRY_MAX_TRANSPORT="$(MAINTENANCE_RETRY_MAX_TRANSPORT)" \
 	GENTS_MAINTENANCE_RETRY_MAX_RESAMPLE="$(MAINTENANCE_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/repo-maintenance" \
+	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/repo_maintenance" \
 		--http-port "$(MAINTENANCE_PORT)" \
 		--job-id "$$maintenance_job_id" \
 		$(if $(MAINTENANCE_KEEP_HOME),--keep-home,)
@@ -271,7 +271,7 @@ defend:
 	GENTS_DEFENDING_STREAM_BATCH_MS="$(DEFENDING_STREAM_BATCH_MS)" \
 	GENTS_DEFENDING_RETRY_MAX_TRANSPORT="$(DEFENDING_RETRY_MAX_TRANSPORT)" \
 	GENTS_DEFENDING_RETRY_MAX_RESAMPLE="$(DEFENDING_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/defending-code" \
+	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/defending_code" \
 		--http-port "$(DEFENDING_PORT)" \
 		--job-id "$$defending_job_id" \
 		$(if $(DEFENDING_KEEP_HOME),--keep-home,)
@@ -305,11 +305,11 @@ grok-port:
 	GENTS_GROK_PORT_MIN_SURFACES="$(GROK_PORT_MIN_SURFACES)" \
 	GENTS_GROK_PORT_MAX_SURFACES="$(GROK_PORT_MAX_SURFACES)" \
 	GENTS_GROK_PORT_MAX_CONCURRENT_1="$(GROK_PORT_MAX_CONCURRENT_1)" \
-	GENTS_GROK_PORT_ORCHESTRATOR_HOME="$(CURDIR)/demo/grok-tui-port/runs/$$grok_port_job_id/home" \
+	GENTS_GROK_PORT_ORCHESTRATOR_HOME="$(CURDIR)/packs/grok_tui_port/runs/$$grok_port_job_id/home" \
 	GENTS_GROK_PORT_ORCHESTRATOR_GRAPHQL="http://127.0.0.1:$(GROK_PORT_PORT)/api/v0/graphql" \
-	GENTS_GROK_PORT_LIVE_HOME="$(abspath $(GROK_PORT_GENTS_ROOT))/demo/grok-tui-port/runs/$$grok_port_job_id/live-home" \
+	GENTS_GROK_PORT_LIVE_HOME="$(abspath $(GROK_PORT_GENTS_ROOT))/packs/grok_tui_port/runs/$$grok_port_job_id/live-home" \
 	GENTS_GROK_PORT_LIVE_GRAPHQL="http://127.0.0.1:$(GROK_PORT_LIVE_PORT)/api/v0/graphql" \
-	GENTS_GROK_PORT_LIVE_SOCKET="$(abspath $(GROK_PORT_GENTS_ROOT))/demo/grok-tui-port/runs/$$grok_port_job_id/grok-leader.sock" \
+	GENTS_GROK_PORT_LIVE_SOCKET="$(abspath $(GROK_PORT_GENTS_ROOT))/packs/grok_tui_port/runs/$$grok_port_job_id/grok-leader.sock" \
 	GENTS_GROK_PORT_CONTEXT_WINDOW="$(GROK_PORT_CONTEXT_WINDOW)" \
 	GENTS_GROK_PORT_MAX_OUTPUT_TOKENS="$(GROK_PORT_MAX_OUTPUT_TOKENS)" \
 	GENTS_GROK_PORT_MAX_TURNS="$(GROK_PORT_MAX_TURNS)" \
@@ -328,7 +328,7 @@ grok-port:
 	GENTS_GROK_PORT_STREAM_BATCH_MS="$(GROK_PORT_STREAM_BATCH_MS)" \
 	GENTS_GROK_PORT_RETRY_MAX_TRANSPORT="$(GROK_PORT_RETRY_MAX_TRANSPORT)" \
 	GENTS_GROK_PORT_RETRY_MAX_RESAMPLE="$(GROK_PORT_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- demo run "$(CURDIR)/demo/grok-tui-port" \
+	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/grok_tui_port" \
 		--http-port "$(GROK_PORT_PORT)" \
 		--job-id "$$grok_port_job_id" \
 		$(if $(GROK_PORT_KEEP_HOME),--keep-home,)

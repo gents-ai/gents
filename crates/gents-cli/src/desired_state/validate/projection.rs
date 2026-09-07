@@ -29,12 +29,12 @@ pub(super) fn validate_projection_bindings(
         let binding_id = binding.binding_id.trim();
         if binding_id.is_empty() {
             errors.push(
-                "projection-acp-bindings manifest contains a binding with an empty binding_id"
+                "projection_acp_bindings manifest contains a binding with an empty binding_id"
                     .to_string(),
             );
         } else if !projection_binding_ids.insert(binding_id.to_string()) {
             errors.push(format!(
-                "duplicate binding_id in projection-acp-bindings manifest: {binding_id}"
+                "duplicate binding_id in projection_acp_bindings manifest: {binding_id}"
             ));
         }
 

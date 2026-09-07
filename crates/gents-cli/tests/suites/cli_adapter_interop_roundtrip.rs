@@ -399,7 +399,8 @@ fn langgraph_envelope_value() -> Value {
         "provenance": {
             "runtime": "gents",
             "source_projection_id": "run_timeline",
-            "source_projection_version": "v1"
+            "source_projection_version": "v1",
+            "source_version_status": "current_state_captured_only"
         },
         "output": {
             "adapter": "langgraph_state_history",

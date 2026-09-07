@@ -226,12 +226,12 @@ pub(super) fn validate_tool_selections(
         let selection_id = selection.selection_id.trim();
         if selection_id.is_empty() {
             errors.push(
-                "tool-selections.json contains a tool selection with an empty selection_id"
+                "tool_selections.json contains a tool selection with an empty selection_id"
                     .to_string(),
             );
         } else if !tool_selection_ids.insert(selection_id.to_string()) {
             errors.push(format!(
-                "duplicate selection_id in tool-selections.json: {selection_id}"
+                "duplicate selection_id in tool_selections.json: {selection_id}"
             ));
         }
 
@@ -381,17 +381,17 @@ pub(super) fn validate_tool_service_registries(
         let service_id = service.service_id.trim();
         if service_id.is_empty() {
             errors.push(
-                "tool-services manifest contains a service with an empty service_id".to_string(),
+                "tool_services manifest contains a service with an empty service_id".to_string(),
             );
         } else if !service_ids.insert(service_id.to_string()) {
             errors.push(format!(
-                "duplicate service_id in tool-services manifest: {service_id}"
+                "duplicate service_id in tool_services manifest: {service_id}"
             ));
         }
 
         if service.mcp_port.unwrap_or_default() <= 0 {
             errors.push(format!(
-                "service {} in tool-services manifest must contain a positive mcp_port",
+                "service {} in tool_services manifest must contain a positive mcp_port",
                 service.service_id
             ));
         }
@@ -401,7 +401,7 @@ pub(super) fn validate_tool_service_registries(
             && non_empty(&service.lan_ip).is_none()
         {
             errors.push(format!(
-                "service {} in tool-services manifest must contain at least one of hostname, tailscale_ip, or lan_ip",
+                "service {} in tool_services manifest must contain at least one of hostname, tailscale_ip, or lan_ip",
                 service.service_id
             ));
         }

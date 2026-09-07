@@ -193,5 +193,5 @@ provisions the declared Goal, so granting creation would be redundant. The
 stage request's DID/session owns the Goal and the existing `GoalSource` plus
 goal-continuation queue supplies the durable terminal condition. Graph edges
 remain document triggers; the graph DSL does not acquire or duplicate Goal or
-steering lifecycle authority. `demo/pipeline` is the checked-in composition
+steering lifecycle authority. `packs/pipeline` is the checked-in composition
 example.

@@ -94,6 +94,9 @@ jobs:
       - name: Run Harbor agent adapter tests
         run: python3 scripts/harbor/test_gents_agent.py
 
+      - name: Check bundled pack manifests and diagrams
+        run: node scripts/check_packs.mjs
+
   rust-and-cli:
     name: rust-and-cli (${{ matrix.suite }})
     if: >-

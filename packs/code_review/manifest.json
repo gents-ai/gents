@@ -1,0 +1,78 @@
+{
+  "manifest_version": 1,
+  "name": "code_review",
+  "version": "1.6.0",
+  "description": "Host-evidenced four-stage review: deterministic dispatch, immutable paged evidence, bounded lens swarm, verification, and triage.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "graph"
+  ],
+  "kind": "graph",
+  "assets": [
+    "README.md",
+    "agent_behaviors/review_recon/object.json",
+    "agent_behaviors/review_recon/system_prompt.md",
+    "agent_behaviors/review_scan/object.json",
+    "agent_behaviors/review_scan/system_prompt.md",
+    "agent_behaviors/review_triage/object.json",
+    "agent_behaviors/review_triage/system_prompt.md",
+    "agent_behaviors/review_verify/object.json",
+    "agent_behaviors/review_verify/system_prompt.md",
+    "capabilities.json",
+    "datastore_tool_surfaces/review_recon_writes/object.json",
+    "datastore_tool_surfaces/review_scan_writes/object.json",
+    "datastore_tool_surfaces/review_triage_writes/object.json",
+    "datastore_tool_surfaces/review_verify_writes/object.json",
+    "graph.json",
+    "schemas/candidate_finding.graphql",
+    "schemas/evidence_manifest.graphql",
+    "schemas/evidence_page.graphql",
+    "schemas/finding.graphql",
+    "schemas/finding_verdict.graphql",
+    "schemas/review_area.graphql",
+    "schemas/review_job.graphql",
+    "schemas/scan_result.graphql",
+    "schemas/triage_report.graphql",
+    "schemas/verification_summary.graphql",
+    "tasks/review_recon_task/object.json",
+    "tasks/review_recon_task/prompt.md",
+    "tasks/review_scan_task/object.json",
+    "tasks/review_scan_task/prompt.md",
+    "tasks/review_triage_task/object.json",
+    "tasks/review_triage_task/prompt.md",
+    "tasks/review_verify_task/object.json",
+    "tasks/review_verify_task/prompt.md",
+    "tool_selections/review_recon_tools/object.json",
+    "tool_selections/review_scan_tools/object.json",
+    "tool_selections/review_triage_tools/object.json",
+    "tool_selections/review_verify_tools/object.json"
+  ],
+  "dependencies": [],
+  "compiler_version": "graph-intent-v3",
+  "roles": [
+    {
+      "name": "coordinator",
+      "description": "Runs reconnaissance, verification, and triage."
+    },
+    {
+      "name": "reviewer",
+      "description": "Runs bounded parallel review lenses."
+    }
+  ],
+  "schemas": [
+    "schemas/review_job.graphql",
+    "schemas/evidence_manifest.graphql",
+    "schemas/evidence_page.graphql",
+    "schemas/review_area.graphql",
+    "schemas/candidate_finding.graphql",
+    "schemas/scan_result.graphql",
+    "schemas/finding_verdict.graphql",
+    "schemas/finding.graphql",
+    "schemas/verification_summary.graphql",
+    "schemas/triage_report.graphql"
+  ],
+  "intent": "graph.json",
+  "capabilities": "capabilities.json"
+}

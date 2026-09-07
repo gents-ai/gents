@@ -675,7 +675,7 @@ push. No NASA/SDLC pack e2e in this slice.
 
 ## Non-goals (this slice)
 
-- Wiring `demo/sdlc/` or any graph pack to the surface (they consume it
+- Wiring `packs/sdlc/` or any graph pack to the surface (they consume it
   later).
 - `AgentToolApproval` / HoldsPanel integration.
 - Push notifications, email, or GitHub as a mailbox transport (GitHub

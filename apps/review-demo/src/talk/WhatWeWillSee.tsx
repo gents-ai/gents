@@ -11,7 +11,7 @@ const EDGES = [
         <code>review-recon-task</code>
       </>
     ),
-    path: "schemas/review_job.graphql · event_triggers/review-recon/ · agent-behaviors/review-recon/ · tasks/review-recon-task/",
+    path: "schemas/review_job.graphql · graph.json · agent_behaviors/review_recon/ · tasks/review_recon_task/",
   },
   {
     write: (
@@ -25,7 +25,7 @@ const EDGES = [
         <code>review-scan-task</code>
       </>
     ),
-    path: "schemas/review_area.graphql · event_triggers/review-scan/ · agent-behaviors/review-scan/ · tasks/review-scan-task/",
+    path: "schemas/review_area.graphql · graph.json · agent_behaviors/review_scan/ · tasks/review_scan_task/",
   },
   {
     write: (
@@ -39,7 +39,7 @@ const EDGES = [
         task <code>review-verify-task</code>
       </>
     ),
-    path: "schemas/scan_result.graphql · event_triggers/review-verify/ · agent-behaviors/review-verify/ · tasks/review-verify-task/",
+    path: "schemas/scan_result.graphql · graph.json · agent_behaviors/review_verify/ · tasks/review_verify_task/",
   },
   {
     write: (
@@ -53,7 +53,7 @@ const EDGES = [
         <code>review-triage-task</code> (report only; findings already written)
       </>
     ),
-    path: "schemas/verification_summary.graphql · event_triggers/review-triage/ · agent-behaviors/review-triage/ · tasks/review-triage-task/",
+    path: "schemas/verification_summary.graphql · graph.json · agent_behaviors/review_triage/ · tasks/review_triage_task/",
   },
 ];
 
@@ -63,7 +63,7 @@ export function WhatWeWillSee() {
       <p className="eyebrow">What we’ll see</p>
       <p className="talk-lead">
         One seed write. Four document edges. No coordinator process.{" "}
-        <code>gents graph run code-review --watch</code> creates a <code>ReviewJob</code>; each
+        <code>gents graph run code_review --watch</code> creates a <code>ReviewJob</code>; each
         create fires a trigger that materializes that stage’s Task on that stage’s Behavior.
       </p>
       <ol className="edge-list">

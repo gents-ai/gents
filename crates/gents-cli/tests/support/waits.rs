@@ -30,6 +30,7 @@ pub async fn wait_for_runtime_ready(
             ),
         )
         .await;
+        let last_observation = format!("{response:?}");
         match response {
             Ok(response) => {
                 if let Ok(row) = first_graphql_row(&response, "AgentBehaviorReadiness") {
@@ -60,7 +61,7 @@ pub async fn wait_for_runtime_ready(
         }
 
         if Instant::now() >= deadline {
-            bail!("timed out waiting for authoritative runtime readiness for {agent_did}");
+            bail!("timed out waiting for authoritative runtime readiness for {agent_did}; last observation: {last_observation}");
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;

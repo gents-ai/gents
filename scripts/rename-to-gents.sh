@@ -302,7 +302,7 @@ path_slice() {
     crates | crates/*)
       PATH_SLICE=core
       ;;
-    docs | docs/* | demo | demo/* | examples | examples/* | \
+    docs | docs/* | packs | packs/* | examples | examples/* | \
       AGENTS.md | CLAUDE.md | DEVELOPMENT.md | README.md | *.md)
       PATH_SLICE=docs
       ;;

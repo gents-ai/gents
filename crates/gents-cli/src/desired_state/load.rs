@@ -30,6 +30,18 @@ pub(crate) fn load_manifest_root(
         return (None, empty_report(root_display, errors));
     }
 
+    for name in gents::DESIRED_STATE_APPLY_ORDER
+        .iter()
+        .filter_map(|collection| collection.dir_name())
+        .chain([CALLBACK_BINDINGS_DIR, REPOSITORY_PLACEMENTS_DIR])
+    {
+        let old = name.replace('_', "-");
+        if old != name && root.join(&old).exists() {
+            errors.push(format!(
+                "unsupported directory {old}; rename it to {name} (no legacy layout support)"
+            ));
+        }
+    }
     let principal = load_agent_principal(root, &mut errors);
 
     let mut agent_behaviors: Vec<DesiredAgentBehavior> =
@@ -218,7 +230,7 @@ fn per_doc_dir(root: &Path, collection: Collection, handle: &str) -> std::path::
     let dir_name = collection
         .dir_name()
         .expect("per_doc_dir called with non-directory collection");
-    root.join(dir_name).join(handle)
+    root.join(dir_name).join(super::document_handle(handle))
 }
 
 pub(crate) fn load_per_doc_collection<T>(
@@ -329,11 +341,12 @@ where
         }
         id_to_handle.insert(parsed.unique_id().to_string(), handle.clone());
 
-        if parsed.unique_id() != handle {
+        if super::document_handle(parsed.unique_id()) != handle {
             errors.push(format!(
-                "directory name '{handle}' does not match {} '{}' in {}",
+                "directory name '{handle}' does not match {} '{}' (expected canonical handle '{}') in {}",
                 unique_field,
                 parsed.unique_id(),
+                super::document_handle(parsed.unique_id()),
                 object_path.display()
             ));
             continue;

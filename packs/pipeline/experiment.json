@@ -1,0 +1,38 @@
+{
+  "name": "pipeline",
+  "description": "Job -> finding (written by a DatastoreToolSurface create tool) -> stage-2",
+  "init": {
+    "inference_url": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
+    "model_name": "${GENTS_EXP_MODEL:-d4f}",
+    "backend_preset": "vllm",
+    "openai_wire_api": "chat-completions"
+  },
+  "seed": {
+    "collection": "ExperimentJob",
+    "job_id_field": "job_id",
+    "prompt_field": "prompt",
+    "fields": {
+      "suite": "topology-ab",
+      "arm": "pipeline"
+    }
+  },
+  "default_prompt": "List three risks of running agents with database write access. Be brief.",
+  "expect": {
+    "trigger_ids": ["exp-stage1", "exp-stage2"],
+    "signed_provenance": true,
+    "required_tool_call_trigger_ids": ["exp-stage1"],
+    "source_edges": [
+      {
+        "producer_trigger_id": "exp-stage1",
+        "producer_tool_name": "write_experiment_finding",
+        "consumer_trigger_id": "exp-stage2",
+        "source_collection": "ExperimentFinding"
+      }
+    ],
+    "projections": ["atif", "openai-codex", "langgraph", "multi-agent"],
+    "collection_counts": {
+      "ExperimentFinding": 1
+    }
+  },
+  "await_timeout_secs": 240
+}

@@ -1,6 +1,20 @@
-# Review demo page (design)
+# Review demo page (historical design; not implemented)
 
-Company talk companion for the `demo/code-review` pack: a page that is already
+Status: superseded. The proposed `make review*` targets and a code-review
+`experiment.json` scenario were never implemented. The shipped pack is a graph,
+so the supported unattended workflow is:
+
+```sh
+gents graph run code_review --repo . --base origin/main --head HEAD --watch
+```
+
+There is currently no stock talk-page/seed-only workflow for this graph. The
+remainder of this document records the original proposal and is not an operator
+runbook.
+
+## Archived proposal
+
+Company talk companion for the `packs/code_review` pack: a page that is already
 open while we explain the graph, then hydrates a live document DAG when
 `make review` seeds a `ReviewJob`.
 
@@ -10,7 +24,7 @@ Approved 2026-08-18 (layout A, left-rail talk track, three make targets).
 
 The pack already exercises collection tools, templated task prompts, and task
 triggers — including grouped fan-in. `make review` already exists as a
-`gents demo run` wrapper, but that path starts a fresh node, awaits the whole
+`gents pack run` wrapper, but that path starts a fresh node, awaits the whole
 graph, then **kills the server**. There is no talk surface.
 
 The room needs:
@@ -29,10 +43,10 @@ Three terminals, in this order:
 | Command | When | What |
 | --- | --- | --- |
 | `make review-page` | Before people sit down | Vite app on `:19190`. Empty DAG. Polls `:19191`. |
-| `make review-serve` | Before the talk, or as "the node" | Durable home + `gents server --apply-root demo/code-review` on `:19191`. Stays up. |
+| `make review-serve` | Before the talk, or as "the node" | Durable home + server on `:19191`, then `gents pack install code_review`. Stays up. |
 | `make review` | The kick | Seeds one new `ReviewJob`. Does **not** start or stop the server. The page hydrates. |
 
-`gents demo run demo/code-review` remains the unattended / CI path (await,
+`gents pack run code_review` remains the unattended / CI path (await,
 acceptance checks, kill server). The talk does not use it.
 
 ## Architecture
@@ -62,13 +76,15 @@ Defaults stay `REVIEW_PORT=19191`, `REVIEW_ROOT=$(CURDIR)`, same
 
 ### `make review-serve`
 
-1. Durable home: `demo/code-review/runs/demo-home` (gitignored via
-   `demo/*/runs/`).
+1. Durable home: `packs/code_review/runs/demo-home` (gitignored via
+   `packs/*/runs/`).
 2. If the home has no identity, run the same `gents init` the pack runner uses
    (`write` tool package, `GENTS_REVIEW_ROOT`, backend/model from
    `experiment.json`).
-3. Foreground: `gents server --home <home> --http-port $(REVIEW_PORT)
-   --apply-root demo/code-review --p2p-transport none --no-codex-shim`.
+3. Start `gents server --home <home> --http-port $(REVIEW_PORT)
+   --tool-ceiling readwrite --tool-root $(REVIEW_ROOT) --p2p-transport none
+   --no-codex-shim`, wait for readiness, then install the graph with
+   `gents pack install code_review --home <home> --graphql <graphql>`.
 4. Print `page http://127.0.0.1:19190` and `graphql http://127.0.0.1:19191/...`.
 5. `REVIEW_RESET=1` deletes the home first.
 
@@ -77,13 +93,12 @@ is captured when the server starts. Seeding does not re-apply.
 
 ### `make review`
 
-1. `gents demo seed demo/code-review --http-port $(REVIEW_PORT)
-   --home $(REVIEW_HOME)`. The command waits for `/healthz` and an enabled
+1. `gents pack seed packs/code_review --http-port $(REVIEW_PORT)`. The command waits for `/healthz` and an enabled
    EventTrigger on `ReviewJob`; if the node is down:
    `start the pack node first: make review-serve`.
 2. Allocate a unique `run_id` (`REVIEW_JOB_ID` or the pack runner's
    `exp-<unix-secs>` default).
-3. POST the same `create_ReviewJob` mutation `gents demo run` uses
+3. POST the same `create_ReviewJob` mutation `gents pack run` uses
    (`run_id`, `focus`, `repository_path`, `base_ref`, `head_ref`,
    `lens_count`, `lens_min`, `lens_max`, `pr_number`), via
    `graphql::escape_graphql_string`.
@@ -136,15 +151,15 @@ Copy:
 > `make review` creates a `ReviewJob`; each create fires a trigger that
 > materializes that stage’s Task on that stage’s Behavior.
 
-Then four stacked edges. Ids **are** the folder names under
-`demo/code-review/`.
+Then four stacked edges. Database IDs retain kebab-case; their canonical folder
+handles under `packs/code_review/` use underscores.
 
 | Write | Trigger | Behavior | Task | Tree |
 | --- | --- | --- | --- | --- |
-| seed `ReviewJob` | `review-recon` per_document | `review-recon` | `review-recon-task` | `schemas/review_job.graphql` · `event_triggers/review-recon/` · `agent-behaviors/review-recon/` · `tasks/review-recon-task/` |
-| `write_review_area` → `ReviewArea` × N | `review-scan` parallel | `review-scan` | `review-scan-task` | `schemas/review_area.graphql` · `event_triggers/review-scan/` · `agent-behaviors/review-scan/` · `tasks/review-scan-task/` |
-| `write_scan_result` → `ScanResult` × N | `review-verify` **per_group** | `review-verify` | `review-verify-task` | `schemas/scan_result.graphql` · `event_triggers/review-verify/` · `agent-behaviors/review-verify/` · `tasks/review-verify-task/` |
-| `write_verification_summary` → `VerificationSummary` | `review-triage` per_document | `review-triage` | `review-triage-task` | `schemas/verification_summary.graphql` · `event_triggers/review-triage/` · `agent-behaviors/review-triage/` · `tasks/review-triage-task/` |
+| seed `ReviewJob` | `review-recon` per_document | `review-recon` | `review-recon-task` | `schemas/review_job.graphql` · `graph.json` · `agent_behaviors/review_recon/` · `tasks/review_recon_task/` |
+| `write_review_area` → `ReviewArea` × N | `review-scan` parallel | `review-scan` | `review-scan-task` | `schemas/review_area.graphql` · `graph.json` · `agent_behaviors/review_scan/` · `tasks/review_scan_task/` |
+| `write_scan_result` → `ScanResult` × N | `review-verify` **per_group** | `review-verify` | `review-verify-task` | `schemas/scan_result.graphql` · `graph.json` · `agent_behaviors/review_verify/` · `tasks/review_verify_task/` |
+| `write_verification_summary` → `VerificationSummary` | `review-triage` per_document | `review-triage` | `review-triage-task` | `schemas/verification_summary.graphql` · `graph.json` · `agent_behaviors/review_triage/` · `tasks/review_triage_task/` |
 
 Side writes that are **not** trigger edges, shown as badges on the producing
 node when present:
@@ -331,7 +346,7 @@ Root `package.json` workspaces already include `apps/*` via the two existing
 apps; add `apps/review-demo` explicitly if the glob is not used (today the
 list is explicit — add the entry).
 
-Seed helper: `gents demo seed <pack> --http-port N`. Makefile
+Seed helper: `gents pack seed <pack> --http-port N`. Makefile
 `review` invokes it. The command reuses pack interpolation, GraphQL
 escape, and EventTrigger readiness from `demo run`.
 
@@ -350,10 +365,10 @@ No live GLM. No browser e2e required for v1 (talk page, not product).
 
 ## Non-goals
 
-- Changing `gents demo run` to leave the server up.
+- Changing `gents pack run` to leave the server up.
 - A Tauri HTTP transport or reusing `RequestTracePanel` / `ChatTranscriptPanel`.
 - Force-directed / pan-zoom graph libraries.
-- Historical replay from `demo/code-review/runs/<job>/`.
+- Historical replay from `packs/code_review/runs/<job>/`.
 - Editing documents from the page.
 - Lean / conformance (presentation only).
 - Showing two runs at once.

@@ -62,9 +62,9 @@ async fn workspace_root_set_list_show_rm_round_trip() -> Result<()> {
     );
 
     // The enabled root need not exist on disk at all.
-    let enabled_root = tempdir.path().join("does-not-exist-yet/enabled-root");
+    let enabled_root = tempdir.path().join("does_not_exist_yet/enabled_root");
     let enabled_root_str = enabled_root.to_str().context("enabled root utf8")?;
-    let disabled_root = tempdir.path().join("disabled-root");
+    let disabled_root = tempdir.path().join("disabled_root");
     fs::create_dir_all(&disabled_root)?;
     let disabled_root_str = disabled_root.to_str().context("disabled root utf8")?;
 

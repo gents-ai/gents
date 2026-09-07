@@ -1064,7 +1064,7 @@ async fn bundled_package_root_binding_survives_task_metadata_changes() {
     };
     let access = ConfigAccess::Local(node.clone());
     let installed =
-        install_bundled_graph_package(&access, identity.did(), "code-review", &bindings)
+        install_bundled_graph_package(&access, identity.did(), "code_review", &bindings)
             .await
             .unwrap();
     activate_graph_revision(

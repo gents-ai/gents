@@ -751,7 +751,7 @@ allowlist (scalars + per-server `disabled` / `priority` /
 - `cargo test -p gents` then `cargo check --workspace --all-targets`.
 
 No live rust-analyzer in required CI. Operator-run proof is
-`demo/lsp-rust` plus the ignored `e2e_live::lsp_live` test
+`packs/lsp_rust` plus the ignored `e2e_live::lsp_live` test
 (`GENTS_LIVE_LSP=1`). The deterministic arm asserts useful, file-specific
 document-symbol results and corresponding hovers. A second unscripted arm
 asks only a semantic question, asserts at least one useful LSP call, and

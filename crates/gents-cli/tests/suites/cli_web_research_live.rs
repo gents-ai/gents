@@ -470,9 +470,9 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
     let install = run_cli_json(
         &home_dir,
         &[
-            "graph",
+            "pack",
             "install",
-            "web-deep-research",
+            "web_deep_research",
             "--home",
             home_arg,
             "--output",
@@ -495,7 +495,7 @@ async fn full_stack_web_deep_research_consumes_real_search_and_inference() -> Re
         &[
             "graph",
             "run",
-            "web-deep-research",
+            "web_deep_research",
             "--home",
             home_arg,
             "--question",

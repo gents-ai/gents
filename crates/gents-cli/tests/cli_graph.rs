@@ -25,17 +25,82 @@ fn required_str<'a>(value: &'a Value, path: &[&str]) -> Result<&'a str> {
 }
 
 #[test]
+fn all_pack_kinds_are_available_without_a_checkout() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let catalog = run_cli_json(temp.path(), &["pack", "list"])?;
+    anyhow::ensure!(catalog["packs"].as_array().context("packs")?.len() >= 11);
+    for name in ["code_review", "pipeline", "mailbox", "graph_pipeline"] {
+        let shown = run_cli_json(temp.path(), &["pack", "show", name])?;
+        anyhow::ensure!(shown["manifest"]["name"] == name);
+    }
+    let root = temp.path().join("assets");
+    let root_arg = root.to_str().context("path")?;
+    let denial = run_cli_failure_stderr(
+        temp.path(),
+        &[
+            "pack", "install", "mailbox", "--home", root_arg, "--output", "text",
+        ],
+    )?;
+    anyhow::ensure!(denial.contains("unsupported --output text"), "{denial}");
+    anyhow::ensure!(!root.exists(), "invalid output format wrote pack assets");
+    for flag in ["--force-rebind-concrete-did", "--agent-did"] {
+        let mut invalid = vec!["pack", "install", "mailbox", "--home", root_arg, flag];
+        if flag == "--agent-did" {
+            invalid.push("did:key:unused");
+        }
+        let denial = run_cli_failure_stderr(temp.path(), &invalid)?;
+        anyhow::ensure!(denial.contains("binding flags do not apply"), "{denial}");
+        anyhow::ensure!(!root.exists(), "invalid options wrote pack assets");
+    }
+    let args = ["pack", "install", "mailbox", "--home", root_arg];
+    let first = run_cli_json(temp.path(), &args)?;
+    anyhow::ensure!(run_cli_json(temp.path(), &args)? == first);
+    let installed = std::path::Path::new(required_str(&first, &["installed_assets"])?);
+    anyhow::ensure!(installed
+        .join("datastore_tool_surfaces/mailbox_writes/object.json")
+        .is_file());
+    std::fs::write(installed.join("README.md"), "operator edit")?;
+    let denial = run_cli_failure_stderr(temp.path(), &args)?;
+    anyhow::ensure!(denial.contains("installed asset was modified"));
+    Ok(())
+}
+
+#[test]
+fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("node");
+    let home_arg = home.to_str().context("path")?;
+    run_init_json(
+        temp.path(),
+        &["--agent-name", "pack-installer", "--home", home_arg],
+    )?;
+    let args = [
+        "pack",
+        "install",
+        "pipeline",
+        "--home",
+        home_arg,
+        "--force-rebind-concrete-did",
+    ];
+    let first = run_cli_json(temp.path(), &args)?;
+    anyhow::ensure!(first["ok"] == true, "{first}");
+    let second = run_cli_json(temp.path(), &args)?;
+    anyhow::ensure!(
+        second["ok"] == true && second["changed"] == false,
+        "{second}"
+    );
+    Ok(())
+}
+
+#[test]
 fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
-    let catalog = run_cli_json(tempdir.path(), &["graph", "catalog", "code-review"])?;
-    let packages = catalog
-        .get("packages")
-        .and_then(Value::as_array)
-        .context("catalog output is missing packages")?;
+    let catalog = run_cli_json(tempdir.path(), &["pack", "show", "code_review"])?;
+    let packages = [catalog["graph"].clone()];
     anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
     anyhow::ensure!(
-        packages[0].get("name").and_then(Value::as_str) == Some("code-review"),
-        "catalog did not return code-review: {catalog}"
+        packages[0].get("name").and_then(Value::as_str) == Some("code_review"),
+        "catalog did not return code_review: {catalog}"
     );
     anyhow::ensure!(
         std::fs::read_dir(tempdir.path())?.next().is_none(),
@@ -47,14 +112,11 @@ fn bundled_catalog_is_read_only_outside_a_source_checkout() -> Result<()> {
 #[test]
 fn web_deep_research_is_in_the_bundled_catalog() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating graph catalog tempdir")?;
-    let catalog = run_cli_json(tempdir.path(), &["graph", "catalog", "web-deep-research"])?;
-    let packages = catalog
-        .get("packages")
-        .and_then(Value::as_array)
-        .context("catalog output is missing packages")?;
+    let catalog = run_cli_json(tempdir.path(), &["pack", "show", "web_deep_research"])?;
+    let packages = [catalog["graph"].clone()];
     anyhow::ensure!(packages.len() == 1, "unexpected catalog output: {catalog}");
     anyhow::ensure!(
-        packages[0].get("name").and_then(Value::as_str) == Some("web-deep-research"),
+        packages[0].get("name").and_then(Value::as_str) == Some("web_deep_research"),
         "catalog did not return web-deep-research: {catalog}"
     );
     anyhow::ensure!(
@@ -102,9 +164,9 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     );
 
     let install_args = [
-        "graph",
+        "pack",
         "install",
-        "code-review",
+        "code_review",
         "--home",
         home_arg,
         "--output",
@@ -126,9 +188,9 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
     let denial = run_cli_failure_stderr(
         tempdir.path(),
         &[
-            "graph",
+            "pack",
             "install",
-            "code-review",
+            "code_review",
             "--home",
             home_arg,
             "--agent-did",
@@ -145,7 +207,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         &[
             "graph",
             "disable",
-            "code-review",
+            "code_review",
             "--home",
             home_arg,
             "--agent-did",
@@ -158,7 +220,7 @@ fn clean_binary_install_is_idempotent_activates_and_is_owner_fenced() -> Result<
         &[
             "graph",
             "enable",
-            "code-review",
+            "code_review",
             "--home",
             home_arg,
             "--agent-did",

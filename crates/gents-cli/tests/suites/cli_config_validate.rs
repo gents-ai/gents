@@ -19,7 +19,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     let tool_selection_id = format!("{default_behavior_id}-tools");
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did.clone(),
             "display_name": "Default Agent",
@@ -29,8 +29,8 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     )?;
     {
         let dir = root
-            .join("agent-behaviors")
-            .join(default_behavior_id.as_str());
+            .join("agent_behaviors")
+            .join(crate::support::document_handle(&default_behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -51,8 +51,8 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
     }
     {
         let dir = root
-            .join("tool-selections")
-            .join(tool_selection_id.as_str());
+            .join("tool_selections")
+            .join(crate::support::document_handle(&tool_selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -76,7 +76,7 @@ async fn config_validate_accepts_normalized_manifest_root() -> Result<()> {
         )?;
     }
     {
-        let dir = root.join("inference-backends").join("default-backend");
+        let dir = root.join("inference_backends").join("default_backend");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -162,7 +162,7 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did.clone(),
             "display_name": "Broken Agent",
@@ -171,7 +171,7 @@ async fn config_validate_reports_reference_errors_and_fails_nonzero() -> Result<
         }),
     )?;
     {
-        let dir = root.join("agent-behaviors").join("other-behavior");
+        let dir = root.join("agent_behaviors").join("other_behavior");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -243,13 +243,13 @@ async fn config_validate_reports_command_policy_errors() -> Result<()> {
         .path()
         .join("infra")
         .join("agents")
-        .join("policy-errors");
+        .join("policy_errors");
     fs::create_dir_all(&home_dir)?;
     fs::create_dir_all(&root)?;
 
     let agent_did = format!("did:key:z{}", Uuid::new_v4().simple());
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did.clone(),
             "display_name": "Policy Agent",
@@ -258,7 +258,7 @@ async fn config_validate_reports_command_policy_errors() -> Result<()> {
         }),
     )?;
 
-    let dir = root.join("tool-selections").join("policy-tools");
+    let dir = root.join("tool_selections").join("policy_tools");
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),
@@ -334,7 +334,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     let tool_selection_id = format!("{default_behavior_id}-tools");
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did.clone(),
             "display_name": "Fleet Agent",
@@ -344,8 +344,8 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     )?;
     {
         let dir = root
-            .join("agent-behaviors")
-            .join(default_behavior_id.as_str());
+            .join("agent_behaviors")
+            .join(crate::support::document_handle(&default_behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -366,8 +366,8 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
     }
     {
         let dir = root
-            .join("tool-selections")
-            .join(tool_selection_id.as_str());
+            .join("tool_selections")
+            .join(crate::support::document_handle(&tool_selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -386,7 +386,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         )?;
     }
     {
-        let dir = root.join("inference-backends").join("default-backend");
+        let dir = root.join("inference_backends").join("default_backend");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -404,7 +404,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         )?;
     }
     {
-        let dir = root.join("tool-services").join("ops-mcp");
+        let dir = root.join("tool_services").join("ops_mcp");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -421,7 +421,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         )?;
     }
     {
-        let dir = root.join("tasks").join("nightly-audit");
+        let dir = root.join("tasks").join("nightly_audit");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -437,7 +437,7 @@ async fn config_validate_accepts_tool_services_dir_and_tasks_dir() -> Result<()>
         )?;
     }
     {
-        let dir = root.join("schedules").join("nightly-audit-hourly");
+        let dir = root.join("schedules").join("nightly_audit_hourly");
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -492,7 +492,7 @@ async fn config_validate_without_binding_keeps_manifest_agent_did_authoritative(
         .path()
         .join("infra")
         .join("agents")
-        .join("mini-1-steward");
+        .join("mini_1_steward");
     fs::create_dir_all(&home_dir)?;
 
     let manifest_did = "did:test:mini-1-steward";
@@ -529,7 +529,7 @@ async fn config_validate_bind_home_force_rebinds_concrete_agent_did() -> Result<
         .path()
         .join("infra")
         .join("agents")
-        .join("mini-1-steward");
+        .join("mini_1_steward");
     fs::create_dir_all(&home_dir)?;
 
     let init = run_init_json(
@@ -586,7 +586,7 @@ async fn config_validate_bind_home_rejects_concrete_manifest_did_without_force()
         .path()
         .join("infra")
         .join("agents")
-        .join("mini-1-steward");
+        .join("mini_1_steward");
     fs::create_dir_all(&home_dir)?;
 
     run_init_json(
@@ -757,7 +757,7 @@ fn write_rebindable_manifest_root_with_subagent_targets(
     let tool_selection_id = "default-tools";
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did,
             "display_name": "Mini 1 Steward",
@@ -767,8 +767,8 @@ fn write_rebindable_manifest_root_with_subagent_targets(
     )?;
     write_json_file(
         &root
-            .join("agent-behaviors")
-            .join(default_behavior_id)
+            .join("agent_behaviors")
+            .join(crate::support::document_handle(&default_behavior_id))
             .join("object.json"),
         &serde_json::json!({
             "behavior_id": default_behavior_id,
@@ -800,8 +800,8 @@ fn write_rebindable_manifest_root_with_subagent_targets(
 
     write_json_file(
         &root
-            .join("tool-selections")
-            .join(tool_selection_id)
+            .join("tool_selections")
+            .join(crate::support::document_handle(&tool_selection_id))
             .join("object.json"),
         &serde_json::json!({
             "selection_id": tool_selection_id,
@@ -822,8 +822,8 @@ fn write_rebindable_manifest_root_with_subagent_targets(
     )?;
     write_json_file(
         &root
-            .join("inference-backends")
-            .join("default-backend")
+            .join("inference_backends")
+            .join("default_backend")
             .join("object.json"),
         &serde_json::json!({
             "backend_id": "default-backend",

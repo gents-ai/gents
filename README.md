@@ -36,18 +36,8 @@ The plan for packaging the desktop chat, fleet, and Tauri bridge surfaces for
 downstream apps (#877) is specified in
 [docs/reusable-desktop-packages.md](docs/reusable-desktop-packages.md).
 
-For the interactive fleet demo, run `gents demo` — it ships in the binary,
-no checkout, `make`, or mock required. It boots a single curated agent (read-only
-tools + demo skills) on a backend you pick on first run, then drops into a
-`demo>` shell: `chat` with the agent, `pair` a 2nd node (a **Worker**),
-`delegate` a cross-node subagent that runs on the worker over P2P (the result
-replicates back), `desktop` to open the same fleet through the native Fleet
-Dashboard UI, and `reconfigure` to switch backends.
-New chat turns use the configured model backend, reachable on both nodes. Keep
-the local `llama-server` above running, or launch with a hosted preset and
-model, e.g. `OPENAI_API_KEY=... gents demo --backend-preset openai --model
-gpt-5.4-mini`. Add `--desktop` to launch the native app as soon as the runtime
-is ready.
+For worked document-driven scenarios, use `gents pack list` and see the
+[pack catalog and authoring guide](packs/README.md).
 
 The binary also carries an immutable catalog of useful graphs. Cataloging is
 read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex
@@ -58,11 +48,11 @@ that default backend when it is installed:
 gents init                 # choose ChatGPT / Codex and complete OAuth
 gents server               # keep this running in another terminal
 
-gents graph catalog code-review
-gents graph install code-review
+gents pack show code_review
+gents pack install code_review
 
 cd /path/to/repo
-gents graph run code-review
+gents graph run code_review
 gents graph watch <run-id>
 gents graph result <run-id>
 ```
@@ -90,13 +80,13 @@ cd web-research-mcp
 checks, registers `http://127.0.0.1:9213/mcp` against the running local Gents
 node, and probes readiness. The graph package installs Gents documents and
 declares this external dependency; it deliberately does not silently allocate
-the roughly 12 GB Docker stack during `graph install`.
+the roughly 12 GB Docker stack during `pack install`.
 
 Then install the graph and run it with live fan-out progress:
 
 ```bash
-gents graph install web-deep-research
-gents graph run web-deep-research \
+gents pack install web_deep_research
+gents graph run web_deep_research \
   --question "What changed in the MCP security guidance, and what should operators do?" \
   --investigator-count 4 \
   --watch

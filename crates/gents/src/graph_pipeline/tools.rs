@@ -306,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn checked_in_evaluation_cases_match_compiler_results() {
         let cases: Vec<EvalCase> = serde_json::from_str(include_str!(
-            "../../../../demo/graph-pipeline/eval_cases.json"
+            "../../../../packs/graph_pipeline/eval_cases.json"
         ))
         .unwrap();
         let caller = "did:key:owner";

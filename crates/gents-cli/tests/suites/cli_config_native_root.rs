@@ -25,7 +25,7 @@ fn write_principal_with_behavior(root: &std::path::Path) -> Result<()> {
     let default_behavior_id = "default";
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did,
             "default_behavior_id": default_behavior_id,
@@ -33,7 +33,9 @@ fn write_principal_with_behavior(root: &std::path::Path) -> Result<()> {
         }),
     )?;
 
-    let dir = root.join("agent-behaviors").join(default_behavior_id);
+    let dir = root
+        .join("agent_behaviors")
+        .join(crate::support::document_handle(&default_behavior_id));
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),
@@ -60,7 +62,7 @@ fn validate_accepts_minimal_per_doc_root() -> Result<()> {
 fn validate_rejects_handle_mismatch() -> Result<()> {
     let tmp = tempdir()?;
     write_principal_with_behavior(tmp.path())?;
-    let dir = tmp.path().join("agent-behaviors").join("on-disk");
+    let dir = tmp.path().join("agent_behaviors").join("on-disk");
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),
@@ -93,14 +95,17 @@ fn validate_rejects_missing_sidecar() -> Result<()> {
     let agent_did = "did:key:example";
     let default_behavior_id = "default";
     write_json_file(
-        &tmp.path().join("agent-principal.json"),
+        &tmp.path().join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did,
             "default_behavior_id": default_behavior_id,
             "enabled": true
         }),
     )?;
-    let dir = tmp.path().join("agent-behaviors").join(default_behavior_id);
+    let dir = tmp
+        .path()
+        .join("agent_behaviors")
+        .join(crate::support::document_handle(&default_behavior_id));
     fs::create_dir_all(&dir)?;
     write_json_file(
         &dir.join("object.json"),
@@ -132,7 +137,7 @@ fn validate_rejects_missing_sidecar() -> Result<()> {
 fn validate_accepts_stray_readme_in_doc_dir() -> Result<()> {
     let tmp = tempdir()?;
     write_principal_with_behavior(tmp.path())?;
-    let dir = tmp.path().join("agent-behaviors").join("default");
+    let dir = tmp.path().join("agent_behaviors").join("default");
     fs::write(dir.join("README.md"), "notes")?;
     let report = run_validate(tmp.path())?;
     assert_eq!(report.get("ok").and_then(Value::as_bool), Some(true));

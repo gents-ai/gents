@@ -238,23 +238,10 @@ toward it** — connecting, subscribing collections, installing replicators,
 and recording what it did. The same idea as `kubectl apply`, applied to
 gossip replication.
 
-## The presentable local demo
+## Driving the example
 
-Straight from the binary, run the interactive demo and type `pair` in its shell:
-
-```bash
-gents demo
-```
-
-`pair` brings up a second isolated node (the **Worker**), creates an
-authenticated enrollment, waits for both owner-scoped route legs and the
-runtime's signed applied-route receipt, then opens chat. `delegate`
-then enables cross-node subagent delegation, and `status` shows the fleet. No
-checkout, `make`, or mock is required — the command ships in the binary and
-picks a real backend on first run.
-
-The rest of this section walks the same documents the command writes for you,
-so you can drive the flow by hand and see exactly what reconciles.
+The following sections describe the pairing documents and CLI operations
+directly. For reusable runnable configurations, see the [pack catalog](../packs/README.md).
 
 ## The operator/reconciler documents
 

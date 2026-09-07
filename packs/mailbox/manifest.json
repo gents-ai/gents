@@ -1,0 +1,18 @@
+{
+  "manifest_version": 1,
+  "name": "mailbox",
+  "version": "1.0.0",
+  "description": "Worked mailbox assets for Gents",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "example"
+  ],
+  "kind": "assets",
+  "assets": [
+    "README.md",
+    "datastore_tool_surfaces/mailbox_writes/object.json"
+  ],
+  "dependencies": []
+}

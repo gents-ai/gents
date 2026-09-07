@@ -1,0 +1,36 @@
+{
+  "manifest_version": 1,
+  "name": "pipeline",
+  "version": "1.0.0",
+  "description": "Job -> finding (written by a DatastoreToolSurface create tool) -> stage-2",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "example"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/exp_stage1/object.json",
+    "agent_behaviors/exp_stage1/system_prompt.md",
+    "agent_behaviors/exp_stage2/object.json",
+    "agent_behaviors/exp_stage2/system_prompt.md",
+    "agent_principal.json",
+    "datastore_tool_surfaces/experiment_writes/object.json",
+    "event_triggers/exp_stage1/object.json",
+    "event_triggers/exp_stage2/object.json",
+    "experiment.json",
+    "inference_backends/exp_deepseek/object.json",
+    "inference_profiles/exp_profile/object.json",
+    "schemas/experiment_finding.graphql",
+    "schemas/experiment_job.graphql",
+    "tasks/exp_stage1_task/object.json",
+    "tasks/exp_stage1_task/prompt.md",
+    "tasks/exp_stage2_task/object.json",
+    "tasks/exp_stage2_task/prompt.md",
+    "tool_selections/exp_tools_stage1/object.json",
+    "tool_selections/exp_tools_stage2/object.json"
+  ],
+  "dependencies": []
+}

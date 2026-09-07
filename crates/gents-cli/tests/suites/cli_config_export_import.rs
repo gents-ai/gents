@@ -45,7 +45,7 @@ fn run_config_apply(home_dir: &Path, root: &Path) -> Result<Value> {
 async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
-    let export_root = tempdir.path().join("export-root");
+    let export_root = tempdir.path().join("export_root");
     fs::create_dir_all(&home_dir)?;
 
     let agent_name = "mini-1-steward";
@@ -86,7 +86,7 @@ async fn config_export_bind_home_ignores_stale_runtime_state_agent_did() -> Resu
         ],
     )?;
 
-    let principal = read_json_file(&export_root.join("agent-principal.json"))?;
+    let principal = read_json_file(&export_root.join("agent_principal.json"))?;
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
         Some(agent_did.as_str())
@@ -107,7 +107,7 @@ fn write_simple_manifest_root(
     let backend_id = format!("{agent_name}-backend");
 
     write_json_file(
-        &root.join("agent-principal.json"),
+        &root.join("agent_principal.json"),
         &serde_json::json!({
             "agent_did": agent_did,
             "display_name": agent_name,
@@ -116,7 +116,9 @@ fn write_simple_manifest_root(
         }),
     )?;
     {
-        let dir = root.join("agent-behaviors").join(&behavior_id);
+        let dir = root
+            .join("agent_behaviors")
+            .join(crate::support::document_handle(&behavior_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -133,7 +135,9 @@ fn write_simple_manifest_root(
         )?;
     }
     {
-        let dir = root.join("tool-selections").join(&selection_id);
+        let dir = root
+            .join("tool_selections")
+            .join(crate::support::document_handle(&selection_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -152,7 +156,9 @@ fn write_simple_manifest_root(
         )?;
     }
     {
-        let dir = root.join("inference-backends").join(&backend_id);
+        let dir = root
+            .join("inference_backends")
+            .join(crate::support::document_handle(&backend_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -176,11 +182,11 @@ fn write_simple_manifest_root(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let source_home = tempdir.path().join("source-home");
-    let target_home = tempdir.path().join("target-home");
-    let initial_root = tempdir.path().join("initial-root");
-    let export_root = tempdir.path().join("export-root");
-    let reapply_root = tempdir.path().join("reapply-root");
+    let source_home = tempdir.path().join("source_home");
+    let target_home = tempdir.path().join("target_home");
+    let initial_root = tempdir.path().join("initial_root");
+    let export_root = tempdir.path().join("export_root");
+    let reapply_root = tempdir.path().join("reapply_root");
     fs::create_dir_all(&source_home)?;
     fs::create_dir_all(&target_home)?;
     run_init_json(
@@ -210,7 +216,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     )?;
 
     {
-        let dir = initial_root.join("tool-services").join(&service_id);
+        let dir = initial_root
+            .join("tool_services")
+            .join(crate::support::document_handle(&service_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -228,8 +236,8 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     }
     {
         let dir = initial_root
-            .join("projection-acp-bindings")
-            .join(&binding_id);
+            .join("projection_acp_bindings")
+            .join(crate::support::document_handle(&binding_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -249,7 +257,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
-        let dir = initial_root.join("tasks").join(&task_id);
+        let dir = initial_root
+            .join("tasks")
+            .join(crate::support::document_handle(&task_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -265,7 +275,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
-        let dir = initial_root.join("tasks").join(&second_task_id);
+        let dir = initial_root
+            .join("tasks")
+            .join(crate::support::document_handle(&second_task_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -281,7 +293,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
-        let dir = initial_root.join("schedules").join(&schedule_id);
+        let dir = initial_root
+            .join("schedules")
+            .join(crate::support::document_handle(&schedule_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -295,7 +309,9 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         )?;
     }
     {
-        let dir = initial_root.join("schedules").join(&second_schedule_id);
+        let dir = initial_root
+            .join("schedules")
+            .join(crate::support::document_handle(&second_schedule_id));
         fs::create_dir_all(&dir)?;
         write_json_file(
             &dir.join("object.json"),
@@ -345,13 +361,13 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         "expected export confirmation, got: {export_stdout}"
     );
 
-    let principal = read_json_file(&export_root.join("agent-principal.json"))?;
+    let principal = read_json_file(&export_root.join("agent_principal.json"))?;
     assert_eq!(
         principal.get("agent_did").and_then(Value::as_str),
         Some(agent_did.as_str())
     );
 
-    let tool_services = read_per_doc_collection(&export_root, "tool-services")?;
+    let tool_services = read_per_doc_collection(&export_root, "tool_services")?;
     assert_eq!(
         tool_services
             .iter()
@@ -363,8 +379,8 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     );
     let ts_object = read_json_file(
         &export_root
-            .join("tool-services")
-            .join(&service_id)
+            .join("tool_services")
+            .join(crate::support::document_handle(&service_id))
             .join("object.json"),
     )?;
     assert!(
@@ -376,7 +392,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         "tool-service export should omit discovered tools: {ts_object}"
     );
 
-    let projection_bindings = read_per_doc_collection(&export_root, "projection-acp-bindings")?;
+    let projection_bindings = read_per_doc_collection(&export_root, "projection_acp_bindings")?;
     let binding_doc = projection_bindings
         .iter()
         .find(|b| b.get("binding_id").and_then(Value::as_str) == Some(binding_id.as_str()))
@@ -426,7 +442,10 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("task {task_id} missing prompt_template field"))?;
     if prompt_template == "./prompt.md" {
-        let sidecar_path = export_root.join("tasks").join(&task_id).join("prompt.md");
+        let sidecar_path = export_root
+            .join("tasks")
+            .join(crate::support::document_handle(&task_id))
+            .join("prompt.md");
         let sidecar = fs::read_to_string(&sidecar_path)
             .with_context(|| format!("reading sidecar {}", sidecar_path.display()))?;
         assert_eq!(
@@ -500,7 +519,7 @@ async fn config_export_apply_round_trips_with_extra_collections() -> Result<()> 
     );
 
     let reexported_tasks = read_per_doc_collection(&reapply_root, "tasks")?;
-    let reexported_bindings = read_per_doc_collection(&reapply_root, "projection-acp-bindings")?;
+    let reexported_bindings = read_per_doc_collection(&reapply_root, "projection_acp_bindings")?;
     assert_eq!(
         reexported_bindings
             .iter()

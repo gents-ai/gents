@@ -900,7 +900,7 @@ mod tests {
         }
 
         let error =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .unwrap_err();
         assert!(error.to_string().contains("missing or ambiguous"));
@@ -922,7 +922,7 @@ mod tests {
         }
 
         let error =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .expect_err("package behavior must use a model advertised by its backend");
         assert!(
@@ -953,7 +953,7 @@ mod tests {
         let access = ConfigAccess::Local(node.clone());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
         let bindings = create_fixture_bindings(node.as_ref()).await;
-        let package = load_bundled_graph_package("code-review").unwrap();
+        let package = load_bundled_graph_package("code_review").unwrap();
         let expected = package.asset_text("schemas/review_job.graphql").unwrap();
         let incompatible = expected.replace(
             "run_id: String @index(unique: true) @immutable",
@@ -963,7 +963,7 @@ mod tests {
         node.add_schema(&incompatible).await.unwrap();
 
         let error =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .unwrap_err();
         let message = format!("{error:#}");
@@ -996,11 +996,11 @@ mod tests {
         assert!(!unrelated.has_errors(), "{:?}", unrelated.errors);
 
         let first =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .unwrap();
         let second =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .unwrap();
         assert_eq!(first, second);
@@ -1074,7 +1074,7 @@ mod tests {
         .await
         .unwrap();
         let after_activation =
-            install_bundled_graph_package(&access, &bindings.owner_did, "code-review", &bindings)
+            install_bundled_graph_package(&access, &bindings.owner_did, "code_review", &bindings)
                 .await
                 .unwrap();
         assert_eq!(first, after_activation);
@@ -1189,7 +1189,7 @@ mod tests {
         let successor = install_bundled_graph_package(
             &access,
             &bindings.owner_did,
-            "code-review",
+            "code_review",
             &successor_bindings,
         )
         .await
@@ -1349,7 +1349,7 @@ mod tests {
         let retry_error = install_bundled_graph_package(
             &access,
             &bindings.owner_did,
-            "code-review",
+            "code_review",
             &successor_bindings,
         )
         .await

@@ -239,10 +239,10 @@ fn init_tool_package_shorthands_parse() {
 
 #[test]
 fn server_apply_root_flags_parse() {
-    let args = parse_server(&["--apply-root", "demo/pipeline", "--apply-prune"]);
+    let args = parse_server(&["--apply-root", "packs/pipeline", "--apply-prune"]);
     assert_eq!(
         args.apply_root.as_deref(),
-        Some(std::path::Path::new("demo/pipeline"))
+        Some(std::path::Path::new("packs/pipeline"))
     );
     assert!(args.apply_prune);
     let bare = parse_server(&[]);
@@ -645,22 +645,28 @@ fn parse_graph(argv: &[&str]) -> GraphCommand {
 }
 
 #[test]
-fn graph_catalog_and_install_parse() {
-    assert!(matches!(
-        parse_graph(&["catalog", "code-review"]),
-        GraphCommand::Catalog(GraphCatalogArgs { package: Some(package) }) if package == "code-review"
-    ));
+fn pack_catalog_and_install_parse() {
+    assert!(matches!(parse_pack(&["list"]), PackCommand::List));
+    assert!(
+        matches!(parse_pack(&["show", "code_review"]), PackCommand::Show(args) if args.package == "code_review")
+    );
+    assert!(Cli::try_parse_from(["gents", "graph", "install", "code_review"]).is_err());
+    assert!(Cli::try_parse_from(["gents", "demo"]).is_err());
+    assert!(Cli::try_parse_from(["gents", "demo", "run", "pipeline"]).is_err());
+    assert!(
+        Cli::try_parse_from(["gents", "pack", "seed", "pipeline", "--home", "/tmp/node"]).is_err()
+    );
 
-    match parse_graph(&[
+    match parse_pack(&[
         "install",
-        "code-review",
+        "code_review",
         "--bindings",
         "/tmp/bindings.json",
         "--home",
         "/tmp/gents-home",
     ]) {
-        GraphCommand::Install(args) => {
-            assert_eq!(args.package, "code-review");
+        PackCommand::Install(args) => {
+            assert_eq!(args.package, "code_review");
             assert_eq!(
                 args.bindings.as_deref(),
                 Some(std::path::Path::new("/tmp/bindings.json"))
@@ -672,11 +678,25 @@ fn graph_catalog_and_install_parse() {
         }
         _ => panic!("expected graph install"),
     }
+
+    match parse_pack(&["prune", "mailbox", "--home", "/tmp/gents-home"]) {
+        PackCommand::Prune(args) => {
+            assert_eq!(args.package, "mailbox");
+            assert_eq!(
+                args.home.as_deref(),
+                Some(std::path::Path::new("/tmp/gents-home"))
+            );
+        }
+        _ => panic!("expected pack prune"),
+    }
+    assert!(
+        matches!(parse_pack(&["prune", "pipeline"]), PackCommand::Prune(args) if args.home.is_none())
+    );
 }
 
 #[test]
 fn graph_run_defaults_to_current_checkout() {
-    match parse_graph(&["run", "code-review"]) {
+    match parse_graph(&["run", "code_review"]) {
         GraphCommand::Run(args) => {
             assert_eq!(args.repo, std::path::PathBuf::from("."));
             assert_eq!(args.base, "origin/main");
@@ -690,7 +710,7 @@ fn graph_run_defaults_to_current_checkout() {
 fn graph_run_watch_result_cancel_and_toggle_parse() {
     match parse_graph(&[
         "run",
-        "code-review",
+        "code_review",
         "--repo",
         "/tmp/repo",
         "--base",
@@ -700,7 +720,7 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
         "--watch",
     ]) {
         GraphCommand::Run(args) => {
-            assert_eq!(args.package, "code-review");
+            assert_eq!(args.package, "code_review");
             assert_eq!(args.repo, std::path::PathBuf::from("/tmp/repo"));
             assert_eq!(args.base, "origin/main");
             assert_eq!(args.head, "HEAD");
@@ -719,32 +739,30 @@ fn graph_run_watch_result_cancel_and_toggle_parse() {
         matches!(parse_graph(&["cancel", "run-1", "--reason", "operator"]), GraphCommand::Cancel(args) if args.run_id == "run-1" && args.reason.as_deref() == Some("operator"))
     );
     assert!(
-        matches!(parse_graph(&["disable", "code-review"]), GraphCommand::Disable(args) if args.package == "code-review")
+        matches!(parse_graph(&["disable", "code_review"]), GraphCommand::Disable(args) if args.package == "code_review")
     );
     assert!(
-        matches!(parse_graph(&["enable", "code-review"]), GraphCommand::Enable(args) if args.package == "code-review")
+        matches!(parse_graph(&["enable", "code_review"]), GraphCommand::Enable(args) if args.package == "code_review")
     );
 }
 
-fn parse_demo(argv: &[&str]) -> DemoArgs {
-    let mut args = vec!["gents", "demo"];
+fn parse_pack(argv: &[&str]) -> PackCommand {
+    let mut args = vec!["gents", "pack"];
     args.extend_from_slice(argv);
-    let cli = Cli::try_parse_from(args).expect("demo should parse");
+    let cli = Cli::try_parse_from(args).expect("pack should parse");
     match cli.command {
-        Command::Demo(args) => args,
-        _ => panic!("expected `demo`"),
+        Command::Pack { command } => command,
+        _ => panic!("expected `pack`"),
     }
 }
 
 #[test]
-fn demo_seed_parses_pack_port_home_and_page() {
-    let args = parse_demo(&[
+fn pack_seed_parses_pack_port_and_page() {
+    let args = parse_pack(&[
         "seed",
-        "demo/pipeline",
+        "packs/pipeline",
         "--http-port",
         "19191",
-        "--home",
-        "/tmp/review-home",
         "--page-port",
         "19190",
         "--prompt",
@@ -752,32 +770,28 @@ fn demo_seed_parses_pack_port_home_and_page() {
         "--job-id",
         "review-1",
     ]);
-    match args.command {
-        Some(DemoCommand::Seed(seed)) => {
-            assert_eq!(seed.pack, "demo/pipeline");
+    match args {
+        PackCommand::Seed(seed) => {
+            assert_eq!(seed.pack, "packs/pipeline");
             assert_eq!(seed.http_port, 19191);
-            assert_eq!(
-                seed.home.as_deref(),
-                Some(std::path::Path::new("/tmp/review-home"))
-            );
             assert_eq!(seed.page_port, Some(19190));
             assert_eq!(seed.prompt.as_deref(), Some("review the diff"));
             assert_eq!(seed.job_id.as_deref(), Some("review-1"));
         }
-        _ => panic!("expected demo seed"),
+        _ => panic!("expected pack seed"),
     }
 }
 
 #[test]
-fn demo_init_parses_pack_and_home() {
-    let args = parse_demo(&["init", "demo/pipeline", "--home", "/tmp/review-home"]);
-    match args.command {
-        Some(DemoCommand::Init(init)) => {
-            assert_eq!(init.pack, "demo/pipeline");
+fn pack_init_parses_pack_and_home() {
+    let args = parse_pack(&["init", "packs/pipeline", "--home", "/tmp/review-home"]);
+    match args {
+        PackCommand::Init(init) => {
+            assert_eq!(init.pack, "packs/pipeline");
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);
         }
-        _ => panic!("expected demo init"),
+        _ => panic!("expected pack init"),
     }
 }
 

@@ -1,6 +1,6 @@
 # Bundled graph productization
 
-Status: accepted design for the first `code-review` vertical slice.
+Status: accepted design for the first `code_review` vertical slice.
 
 ## Outcome
 
@@ -10,13 +10,13 @@ graph without a Gents source checkout:
 ```text
 gents init
 gents server
-gents graph catalog code-review
-gents graph install code-review
-gents graph run code-review --watch
+gents pack show code_review
+gents pack install code_review
+gents graph run code_review --watch
 gents graph result <run-id>
 ```
 
-`graph run code-review` defaults to the current directory, `origin/main`, and
+`graph run code_review` defaults to the current directory, `origin/main`, and
 `HEAD`. The server is required because it owns reconciliation, request recovery,
 and durable graph completion.
 
@@ -59,7 +59,7 @@ The implementation therefore extends those owners:
 ```json
 {
   "manifest_version": 1,
-  "name": "code-review",
+  "name": "code_review",
   "version": "1.0.1",
   "description": "Bounded four-stage code review.",
   "compiler_version": "graph-intent-v3",
@@ -93,7 +93,7 @@ schema or document writes and grants no authority.
 
 ### Install
 
-`gents graph install code-review`:
+`gents pack install code_review`:
 
 1. resolves the initialized owner principal and its default behavior;
 2. binds each package role to that operator-approved principal, deployment,
@@ -229,11 +229,11 @@ Run the following against a release-style binary and a clean temporary home:
 
 1. `gents init`; choose ChatGPT/Codex OAuth and complete login.
 2. Start `gents server` with schema operations enabled by the embedded server.
-3. Confirm `graph catalog code-review` is read-only.
-4. Install `code-review` with no bindings flags; confirm it inherits the
+3. Confirm `pack show code_review` is read-only.
+4. Install `code_review` with no bindings flags; confirm it inherits the
    initialized default behavior and creates one active revision.
 5. Repeat install; confirm the digest and document counts are unchanged.
-6. From an arbitrary Git worktree, run `gents graph run code-review --watch`.
+6. From an arbitrary Git worktree, run `gents graph run code_review --watch`.
 7. Confirm recon, four scans, verification, and triage become visible with
    model/tool/session activity and non-misleading token usage.
 8. Confirm the run terminals only after every correlated request is terminal.
@@ -280,7 +280,7 @@ Primary files by layer:
 - durable schemas: `crates/gents-schemas/schemas/agent/graph_*.graphql`;
 - runtime: `crates/gents/src/graph_pipeline/`;
 - package lowering: `crates/gents/src/graph_package/` and desired-state apply;
-- bundle: `crates/gents/assets/graph_packages/code-review/`;
+- bundle: `packs/code_review/`;
 - CLI: `crates/gents-cli/src/commands/graph.rs` and graph CLI tests;
 - observation: `run_timeline_fetch.rs` and the existing adapter/bridge seam.
 

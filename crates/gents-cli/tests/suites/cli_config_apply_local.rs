@@ -40,9 +40,9 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
         ],
     )?;
 
-    let backends_dir = root.join("inference-backends");
+    let backends_dir = root.join("inference_backends");
     let backend_entry = fs::read_dir(&backends_dir)
-        .context("reading inference-backends dir after export")?
+        .context("reading inference_backends dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
     let backend_id = backend_entry
@@ -51,8 +51,8 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
         .ok_or_else(|| anyhow!("non-utf8 backend dir name"))?
         .to_string();
     let backends_path = root
-        .join("inference-backends")
-        .join(&backend_id)
+        .join("inference_backends")
+        .join(crate::support::document_handle(&backend_id))
         .join("object.json");
     let mut backend = read_json_file(&backends_path)?;
     let updated_endpoint = "http://127.0.0.1:9100/v1";
@@ -107,8 +107,8 @@ async fn config_apply_updates_backend_from_fresh_init_home_locally() -> Result<(
     )?;
     let reexported_backend = read_json_file(
         &reexport_root
-            .join("inference-backends")
-            .join(&backend_id)
+            .join("inference_backends")
+            .join(crate::support::document_handle(&backend_id))
             .join("object.json"),
     )?;
     assert_eq!(
@@ -171,7 +171,7 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
             root.to_str().expect("utf-8 root"),
         ],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -180,8 +180,12 @@ async fn config_apply_prunes_live_only_tasks_and_schedules_when_requested_locall
 
     let task_id = format!("prune-task-{}", Uuid::new_v4().simple());
     let schedule_id = format!("prune-schedule-{}", Uuid::new_v4().simple());
-    let task_dir = root.join("tasks").join(&task_id);
-    let schedule_dir = root.join("schedules").join(&schedule_id);
+    let task_dir = root
+        .join("tasks")
+        .join(crate::support::document_handle(&task_id));
+    let schedule_dir = root
+        .join("schedules")
+        .join(crate::support::document_handle(&schedule_id));
     write_json_file(
         &task_dir.join("object.json"),
         &serde_json::json!({
@@ -477,9 +481,9 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
         ],
     )?;
 
-    let backends_dir = root.join("inference-backends");
+    let backends_dir = root.join("inference_backends");
     let backend_entry = fs::read_dir(&backends_dir)
-        .context("reading inference-backends dir after export")?
+        .context("reading inference_backends dir after export")?
         .next()
         .ok_or_else(|| anyhow!("no inference-backend subdirs after export"))??;
     let old_backend_id = backend_entry
@@ -489,24 +493,30 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
         .to_string();
     let new_backend_id = format!("{old_backend_id}-renamed");
 
-    let mut backend = read_json_file(&backends_dir.join(&old_backend_id).join("object.json"))?;
+    let mut backend = read_json_file(
+        &backends_dir
+            .join(crate::support::document_handle(&old_backend_id))
+            .join("object.json"),
+    )?;
     backend["backend_id"] = Value::String(new_backend_id.clone());
     write_json_file(
-        &backends_dir.join(&new_backend_id).join("object.json"),
+        &backends_dir
+            .join(crate::support::document_handle(&new_backend_id))
+            .join("object.json"),
         &backend,
     )?;
-    fs::remove_dir_all(backends_dir.join(&old_backend_id))
+    fs::remove_dir_all(backends_dir.join(crate::support::document_handle(&old_backend_id)))
         .context("removing renamed backend dir")?;
 
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?
         .to_string();
     let behavior_path = root
-        .join("agent-behaviors")
-        .join(&behavior_id)
+        .join("agent_behaviors")
+        .join(crate::support::document_handle(&behavior_id))
         .join("object.json");
     let mut behavior = read_json_file(&behavior_path)?;
     behavior["backend_id"] = Value::String(new_backend_id.clone());
@@ -627,14 +637,14 @@ async fn config_apply_prunes_live_only_inference_backends_when_requested_locally
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn config_apply_force_rebinds_concrete_manifest_to_home_identity_locally() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
-    let source_home_env = tempdir.path().join("source-home-env");
-    let target_home_env = tempdir.path().join("target-home-env");
+    let source_home_env = tempdir.path().join("source_home_env");
+    let target_home_env = tempdir.path().join("target_home_env");
     let root = tempdir
         .path()
         .join("infra")
         .join("agents")
-        .join("mini-1")
-        .join("mini-1-steward");
+        .join("mini_1")
+        .join("mini_1_steward");
     fs::create_dir_all(&source_home_env)?;
     fs::create_dir_all(&target_home_env)?;
 
@@ -813,7 +823,7 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
             root.to_str().expect("utf-8 root"),
         ],
     )?;
-    let principal = read_json_file(&root.join("agent-principal.json"))?;
+    let principal = read_json_file(&root.join("agent_principal.json"))?;
     let behavior_id = principal
         .get("default_behavior_id")
         .and_then(Value::as_str)
@@ -821,7 +831,9 @@ async fn reapply_recreates_a_pruned_unique_row() -> Result<()> {
         .to_string();
 
     let task_id = format!("recreate-task-{}", Uuid::new_v4().simple());
-    let task_dir = root.join("tasks").join(&task_id);
+    let task_dir = root
+        .join("tasks")
+        .join(crate::support::document_handle(&task_id));
     let task_object = serde_json::json!({
         "task_id": task_id.clone(),
         "name": "Recreate Me",

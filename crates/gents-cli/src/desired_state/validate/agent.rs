@@ -91,7 +91,7 @@ pub(super) fn validate_principal<'a>(
 ) -> &'a str {
     let principal_agent_did = manifest.agent_principal.agent_did.trim();
     if principal_agent_did.is_empty() {
-        errors.push("agent-principal.json must contain a non-empty agent_did".to_string());
+        errors.push("agent_principal.json must contain a non-empty agent_did".to_string());
     }
     principal_agent_did
 }
@@ -108,7 +108,7 @@ pub(super) fn validate_backends(
         let backend_id = backend.backend_id.trim();
         if !backend_id.is_empty() && !backend_ids.insert(backend_id.to_string()) {
             errors.push(format!(
-                "duplicate backend_id in inference-backends.json: {backend_id}"
+                "duplicate backend_id in inference_backends.json: {backend_id}"
             ));
         }
         if !backend_id.is_empty() {
@@ -150,11 +150,11 @@ pub(super) fn validate_profiles(
         let profile_id = profile.profile_id.trim();
         if profile_id.is_empty() {
             errors.push(
-                "inference-profiles.json contains a profile with an empty profile_id".to_string(),
+                "inference_profiles.json contains a profile with an empty profile_id".to_string(),
             );
         } else if !profile_ids.insert(profile_id.to_string()) {
             errors.push(format!(
-                "duplicate profile_id in inference-profiles.json: {profile_id}"
+                "duplicate profile_id in inference_profiles.json: {profile_id}"
             ));
         }
 
@@ -242,11 +242,11 @@ pub(super) fn validate_behaviors(
         let behavior_id = behavior.behavior_id.trim();
         if behavior_id.is_empty() {
             errors.push(
-                "agent-behaviors.json contains a behavior with an empty behavior_id".to_string(),
+                "agent_behaviors.json contains a behavior with an empty behavior_id".to_string(),
             );
         } else if !behavior_ids.insert(behavior_id.to_string()) {
             errors.push(format!(
-                "duplicate behavior_id in agent-behaviors.json: {behavior_id}"
+                "duplicate behavior_id in agent_behaviors.json: {behavior_id}"
             ));
         }
 
@@ -286,13 +286,13 @@ pub(super) fn validate_default_behavior(
         Some(default_behavior_id) => {
             if !behavior_ids.contains(default_behavior_id) {
                 errors.push(format!(
-                    "agent-principal.json default_behavior_id {} is not present in agent-behaviors.json",
+                    "agent_principal.json default_behavior_id {} is not present in agent_behaviors.json",
                     default_behavior_id
                 ));
             }
         }
         None => errors
-            .push("agent-principal.json must contain a non-empty default_behavior_id".to_string()),
+            .push("agent_principal.json must contain a non-empty default_behavior_id".to_string()),
     }
 }
 

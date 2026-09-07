@@ -1,0 +1,86 @@
+{
+  "manifest_version": 1,
+  "name": "web_deep_research",
+  "version": "1.1.0",
+  "description": "Bounded four-stage web research with OSS retrieval-quality and typed evidence handoffs.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "graph"
+  ],
+  "kind": "graph",
+  "assets": [
+    "README.md",
+    "agent_behaviors/research_adjudicate/object.json",
+    "agent_behaviors/research_adjudicate/system_prompt.md",
+    "agent_behaviors/research_investigate/object.json",
+    "agent_behaviors/research_investigate/system_prompt.md",
+    "agent_behaviors/research_plan/object.json",
+    "agent_behaviors/research_plan/system_prompt.md",
+    "agent_behaviors/research_report/object.json",
+    "agent_behaviors/research_report/system_prompt.md",
+    "capabilities.json",
+    "datastore_tool_surfaces/research_adjudicate_io/object.json",
+    "datastore_tool_surfaces/research_investigate_writes/object.json",
+    "datastore_tool_surfaces/research_plan_writes/object.json",
+    "datastore_tool_surfaces/research_report_io/object.json",
+    "graph.json",
+    "schemas/research_assignment.graphql",
+    "schemas/research_claim.graphql",
+    "schemas/research_claim_verdict.graphql",
+    "schemas/research_draft.graphql",
+    "schemas/research_evidence.graphql",
+    "schemas/research_investigation.graphql",
+    "schemas/research_job.graphql",
+    "schemas/research_plan.graphql",
+    "schemas/research_result.graphql",
+    "schemas/research_source.graphql",
+    "tasks/research_adjudicate_task/object.json",
+    "tasks/research_adjudicate_task/prompt.md",
+    "tasks/research_investigate_task/object.json",
+    "tasks/research_investigate_task/prompt.md",
+    "tasks/research_plan_task/object.json",
+    "tasks/research_plan_task/prompt.md",
+    "tasks/research_report_task/object.json",
+    "tasks/research_report_task/prompt.md",
+    "tool_selections/research_adjudicate_tools/object.json",
+    "tool_selections/research_investigate_tools/object.json",
+    "tool_selections/research_plan_tools/object.json",
+    "tool_selections/research_report_tools/object.json"
+  ],
+  "dependencies": [],
+  "compiler_version": "graph-intent-v3",
+  "external_dependencies": [
+    {
+      "service_id": "web-research-mcp",
+      "description": "Real self-hosted SearXNG search, Firecrawl extraction, and durable evidence gateway.",
+      "repository_url": "https://github.com/source-inc/web-research-mcp",
+      "install_command": "./scripts/stack install-mcp"
+    }
+  ],
+  "roles": [
+    {
+      "name": "coordinator",
+      "description": "Plans the research, adjudicates evidence, and writes the report."
+    },
+    {
+      "name": "researcher",
+      "description": "Searches and extracts web evidence for one bounded research lens."
+    }
+  ],
+  "schemas": [
+    "schemas/research_job.graphql",
+    "schemas/research_plan.graphql",
+    "schemas/research_assignment.graphql",
+    "schemas/research_investigation.graphql",
+    "schemas/research_source.graphql",
+    "schemas/research_claim.graphql",
+    "schemas/research_evidence.graphql",
+    "schemas/research_claim_verdict.graphql",
+    "schemas/research_draft.graphql",
+    "schemas/research_result.graphql"
+  ],
+  "intent": "graph.json",
+  "capabilities": "capabilities.json"
+}

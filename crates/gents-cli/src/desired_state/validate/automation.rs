@@ -146,27 +146,27 @@ pub(super) fn validate_event_triggers(manifest: &DesiredStateManifest, errors: &
         let trigger_id = trigger.trigger_id.trim();
         if trigger_id.is_empty() {
             errors.push(
-                "event-triggers manifest contains a trigger with an empty trigger_id".to_string(),
+                "event_triggers manifest contains a trigger with an empty trigger_id".to_string(),
             );
             continue;
         }
         if !event_trigger_ids.insert(trigger_id.to_string()) {
             errors.push(format!(
-                "duplicate trigger_id in event-triggers manifest: {trigger_id}"
+                "duplicate trigger_id in event_triggers manifest: {trigger_id}"
             ));
         }
 
         let task_id = trigger.task_id.trim();
         if task_id.is_empty() {
             errors.push(format!(
-                "event_trigger {} in event-triggers manifest must contain a non-empty task_id",
+                "event_trigger {} in event_triggers manifest must contain a non-empty task_id",
                 trigger.trigger_id
             ));
         }
 
         if trigger.source_collection.trim().is_empty() {
             errors.push(format!(
-                "event_trigger {} in event-triggers manifest must contain a non-empty source_collection",
+                "event_trigger {} in event_triggers manifest must contain a non-empty source_collection",
                 trigger.trigger_id
             ));
         } else if let Err(error) =
@@ -202,7 +202,7 @@ pub(super) fn validate_event_triggers(manifest: &DesiredStateManifest, errors: &
         match trigger.concurrency.trim() {
             "parallel" | "serial" | "latest_only" => {}
             other => errors.push(format!(
-                "event_trigger {} in event-triggers manifest has unknown concurrency {}; expected parallel|serial|latest_only",
+                "event_trigger {} in event_triggers manifest has unknown concurrency {}; expected parallel|serial|latest_only",
                 trigger.trigger_id, other
             )),
         }
@@ -375,7 +375,7 @@ pub(super) fn validate_callback_bindings(
         let binding_id = binding.binding_id.trim();
         if binding_id.is_empty() {
             errors.push(
-                "callback-bindings manifest contains a binding with an empty binding_id"
+                "callback_bindings manifest contains a binding with an empty binding_id"
                     .to_string(),
             );
             continue;
@@ -432,7 +432,7 @@ pub(super) fn validate_repository_placements(
     for placement in &manifest.repository_placements {
         if placement.repository_id.trim().is_empty() {
             errors.push(
-                "repository-placements manifest contains a placement with an empty repository_id"
+                "repository_placements manifest contains a placement with an empty repository_id"
                     .to_string(),
             );
         }

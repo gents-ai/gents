@@ -4,11 +4,11 @@
 
 This design describes the **shipped** experiment surface on branch/PR:
 
-- **Canonical self-contained pack** at `demo/pipeline/` (schemas +
+- **Canonical self-contained pack** at `packs/pipeline/` (schemas +
   config): `ExperimentJob` → finding write → `ExperimentFinding`
 - Stage-1 create tool via **`DatastoreToolSurface` `experiment-writes`**
   (not inline `write_tools`); stage-2 has **no tools**
-- **`gents config apply --root demo/pipeline`** applies pack-local
+- **`gents config apply --root packs/pipeline`** applies pack-local
   `schemas/` first, then desired-state (surfaces, selections, triggers)
 - No multi-arm shape matrix, no harness binary
 - Inference example targets **DeepSeek V4 Flash** (`d4f`) via OpenAI-compatible
@@ -32,13 +32,13 @@ document-driven graphs:
 
 Substantially all runtime infrastructure already exists. This workstream adds:
 
-1. **Agent config** — desired-state root at `demo/`, applied with
-   `gents demo run pipeline`.
-2. **Operator documentation** — `demo/README.md` for validate → schema
+1. **Agent config** — desired-state root at `packs/`, applied with
+   `gents pack run pipeline`.
+2. **Operator documentation** — `packs/README.md` for validate → schema
    apply → server → apply → wait for EventSource → single seed create →
    await lineage → timeline / token export.
 
-No new harness code under `demo/`.
+No new harness code under `packs/`.
 
 Fan-out is expressed as N EventTriggers on the same seed create. Pipeline
 stages become "stage agents create next-collection docs."
@@ -70,15 +70,15 @@ alongside the config documents, so one `apply` registers collections and
 config together.
 
 ```text
-demo/
+packs/
   README.md                       what a pack is; index of packs
   pipeline/                       the shipped pack
     README.md                     operator guide (real apply path)
     schemas/                      SDL for ExperimentJob / ExperimentFinding
-    agent-principal.json
-    datastore-tool-surfaces/      experiment-writes (stage-1's create tool)
-    tool-selections/  agent-behaviors/  tasks/  event_triggers/
-    inference-backends/  inference-profiles/
+    agent_principal.json
+    datastore_tool_surfaces/      experiment-writes (stage-1's create tool)
+    tool_selections/  agent_behaviors/  tasks/  event_triggers/
+    inference_backends/  inference_profiles/
     runs/                         gitignored scratch for trace exports
 ```
 
@@ -121,7 +121,7 @@ mutation {
 }
 ```
 
-### The shipped pack: `demo/pipeline`
+### The shipped pack: `packs/pipeline`
 
 | Stage | Trigger | Tools | Produces |
 | --- | --- | --- | --- |
@@ -156,26 +156,26 @@ and `apply` / `validate` / `diff` read, plus a pack-local `schemas/`:
 ```text
 pipeline/
   schemas/*.graphql                              applied before config docs
-  agent-principal.json
-  inference-backends/<backend_id>/object.json
-  inference-profiles/<profile_id>/object.json
-  datastore-tool-surfaces/<surface_id>/object.json
-  tool-selections/<selection_id>/object.json
-  agent-behaviors/<behavior_id>/object.json      (+ system_prompt.md sidecar)
+  agent_principal.json
+  inference_backends/<backend_id>/object.json
+  inference_profiles/<profile_id>/object.json
+  datastore_tool_surfaces/<surface_id>/object.json
+  tool_selections/<selection_id>/object.json
+  agent_behaviors/<behavior_id>/object.json      (+ system_prompt.md sidecar)
   tasks/<task_id>/object.json                    (+ prompt.md sidecar)
   event_triggers/<trigger_id>/object.json        note: underscore dir name
 ```
 
 ```bash
-gents config validate --root demo/pipeline   # static, no server
-gents config apply    --root demo/pipeline --home <home> \
+gents config validate --root packs/pipeline   # static, no server
+gents config apply    --root packs/pipeline --home <home> \
   --graphql http://127.0.0.1:<port>/api/v0/graphql \
   --bind-agent-did home --force-rebind-concrete-did
 ```
 
 `config apply` registers `schemas/` on the node **before** the config
 documents, so trigger source collections and surface targets exist by the
-time live validation runs. `gents server --apply-root demo/pipeline`
+time live validation runs. `gents server --apply-root packs/pipeline`
 does the same against the in-process node at startup.
 
 `--bind-agent-did home` rebinds the root's placeholder DID to the target
@@ -185,14 +185,14 @@ placeholder principal. Layout reference:
 
 ### Running an experiment (operator path)
 
-Full detail: **`demo/pipeline/README.md`**. Summary:
+Full detail: **`packs/pipeline/README.md`**. Summary:
 
 1. `gents init` with `--inference-url http://100.73.235.38:8000/v1`,
    `--openai-wire-api chat-completions`, `--model-name d4f`
-2. `gents server --apply-root demo/pipeline` — one command: the pack's
+2. `gents server --apply-root packs/pipeline` — one command: the pack's
    `schemas/` register on the in-process node, then the config applies with
    the home DID rebind. (Equivalent two-step: start `gents server`, then
-   `gents config apply --root demo/pipeline` with the rebind flags.)
+   `gents config apply --root packs/pipeline` with the rebind flags.)
 3. Wait for log: `event source now observing source collection
    source_collection=ExperimentJob`
 4. POST one `create_ExperimentJob` with a fresh `job_id`
@@ -224,7 +224,7 @@ eval-jsonl; score offline.
 
 ## Non-goals (v1 / this PR)
 
-- New harness/runner code under `demo/` — packs are config + docs
+- New harness/runner code under `packs/` — packs are config + docs
 - **CI e2e** (`experiment_graph_e2e.rs`) or any new CI workflow for packs
   (optional follow-up only)
 - `event_kind: updated` / "on lifecycle completed" triggers
@@ -234,7 +234,7 @@ eval-jsonl; score offline.
 
 ## Decisions
 
-1. **Seed collections are pack-local SDL** in `demo/pipeline/schemas/`;
+1. **Seed collections are pack-local SDL** in `packs/pipeline/schemas/`;
    promote into `gents-schemas` only if productized.
 2. **Stage-1 findings** come from a create tool granted by the
    `experiment-writes` `DatastoreToolSurface` rather than inline
@@ -242,7 +242,7 @@ eval-jsonl; score offline.
    GraphQL when the model is weak.
 3. **Every kick goes through a trigger**, never a direct `AgentRequest`
    create, so the pack has one kick API.
-4. **Packs live at repo-root `demo/`** so apply paths are short
+4. **Packs live at repo-root `packs/`** so apply paths are short
    and runs are not mixed with design docs.
 5. **Packs are self-contained** — `schemas/` lives inside the pack and is
    applied ahead of the config documents, so one command bootstraps a run.
@@ -255,8 +255,8 @@ eval-jsonl; score offline.
 ## Success criteria (this deliverable)
 
 - The pipeline pack checks in as a desired-state root and passes
-  `gents config validate --root demo/pipeline`
-- `gents server --apply-root demo/pipeline` bootstraps schemas +
+  `gents config validate --root packs/pipeline`
+- `gents server --apply-root packs/pipeline` bootstraps schemas +
   config in one command against a fresh home
 - Operator README documents the rebind flags, EventSource ordering, the
   DeepSeek endpoint, and InferenceCall token measurement

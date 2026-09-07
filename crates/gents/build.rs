@@ -8,13 +8,16 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "src/pack_asset_path.rs"]
+mod pack_asset_path;
+
 const FIXTURE_PACKAGE: &str = "gents-callback-fixture-create-workspace";
 const FIXTURE_ARTIFACT: &str = "gents_callback_fixture_create_workspace.wasm";
 const FIXTURE_ENV: &str = "GENTS_CALLBACK_FIXTURE_CREATE_WORKSPACE_WASM_PATH";
 
 fn main() {
     let workspace_root = workspace_root();
-    generate_bundled_graph_packages(&workspace_root);
+    generate_bundled_packs(&workspace_root);
     let fixture_dir = workspace_root
         .join("crates")
         .join("gents-callbacks")
@@ -42,34 +45,92 @@ fn main() {
     );
 }
 
-fn generate_bundled_graph_packages(workspace_root: &Path) {
-    let root = workspace_root
-        .join("crates")
-        .join("gents")
-        .join("assets")
-        .join("graph_packages");
-    println!("cargo:rerun-if-changed={}", root.display());
-
-    let mut packages = std::fs::read_dir(&root)
-        .expect("read bundled graph package directory")
+fn generate_bundled_packs(workspace_root: &Path) {
+    println!("cargo:rerun-if-changed=src/pack_asset_path.rs");
+    let root = workspace_root.join("packs");
+    let catalog_path = root.join("catalog.json");
+    println!("cargo:rerun-if-changed={}", catalog_path.display());
+    let catalog: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(catalog_path).expect("pack catalog"))
+            .expect("catalog JSON");
+    assert_eq!(catalog["catalog_version"], 1);
+    let mut packages: Vec<_> = catalog["packs"]
+        .as_array()
+        .expect("registered pack names")
+        .iter()
+        .map(|value| value.as_str().expect("pack name").to_owned())
+        .collect();
+    packages.sort();
+    assert!(
+        packages.windows(2).all(|pair| pair[0] != pair[1]),
+        "duplicate pack registration"
+    );
+    let mut source_packages = std::fs::read_dir(&root)
+        .expect("read packs directory")
         .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter(|entry| entry.path().is_dir() && entry.path().join("manifest.json").is_file())
+        .map(|entry| {
+            entry
+                .file_name()
+                .into_string()
+                .expect("pack directory name must be UTF-8")
+        })
         .collect::<Vec<_>>();
-    packages.sort_by_key(|entry| entry.file_name());
+    source_packages.sort();
+    assert_eq!(
+        packages, source_packages,
+        "packs/catalog.json must register every directory containing manifest.json exactly once"
+    );
 
     let mut names = Vec::new();
+    let mut graph_names = Vec::new();
     let mut arms = Vec::new();
-    for package in packages {
-        let name = package.file_name().to_string_lossy().into_owned();
-        names.push(name.clone());
-        let mut files = Vec::new();
-        collect_files(
-            package.path().as_path(),
-            package.path().as_path(),
-            &mut files,
+    for name in packages {
+        assert!(
+            pack_asset_path::is_snake_case_name(&name),
+            "snake_case pack name"
         );
+        let package = root.join(&name);
+        names.push(name.clone());
+        let manifest_path = package.join("manifest.json");
+        let manifest: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&manifest_path).expect("pack manifest must exist"),
+        )
+        .expect("pack manifest must be JSON");
+        assert_eq!(
+            manifest["name"].as_str(),
+            Some(name.as_str()),
+            "pack directory/name mismatch"
+        );
+        if manifest["kind"] == "graph" {
+            graph_names.push(name.clone());
+        }
+        let mut files = Vec::new();
+        files.push(("manifest.json".to_owned(), manifest_path));
+        let canonical_root = package.canonicalize().expect("canonical pack root");
+        for asset in manifest["assets"].as_array().expect("declared pack assets") {
+            let relative = asset.as_str().expect("asset path string");
+            assert!(
+                pack_asset_path::is_distributable_asset(relative),
+                "private/run assets must not be bundled"
+            );
+            assert!(
+                pack_asset_path::has_canonical_asset_spelling(relative),
+                "pack asset path must use canonical snake_case handles"
+            );
+            let absolute = package
+                .join(relative)
+                .canonicalize()
+                .expect("declared asset exists");
+            assert!(
+                absolute.starts_with(&canonical_root),
+                "asset escapes package"
+            );
+            files.push((relative.to_owned(), absolute));
+        }
         files.sort();
         for (relative, absolute) in files {
+            println!("cargo:rerun-if-changed={}", absolute.display());
             arms.push(format!(
                 "        ({name:?}, {relative:?}) => Some(include_bytes!({absolute:?})),",
                 absolute = absolute.to_string_lossy(),
@@ -78,38 +139,17 @@ fn generate_bundled_graph_packages(workspace_root: &Path) {
     }
 
     let generated = format!(
-        "pub(crate) const BUNDLED_GRAPH_PACKAGE_NAMES: &[&str] = &{names:?};\n\
-         pub(crate) fn bundled_graph_package_asset(package: &str, path: &str) -> Option<&'static [u8]> {{\n\
+        "pub(crate) const BUNDLED_PACK_NAMES: &[&str] = &{names:?};\n\
+         pub(crate) const BUNDLED_GRAPH_PACKAGE_NAMES: &[&str] = &{graph_names:?};\n\
+         pub(crate) fn bundled_pack_asset(package: &str, path: &str) -> Option<&'static [u8]> {{\n\
              match (package, path) {{\n{}\n\
                  _ => None,\n\
              }}\n\
          }}\n",
         arms.join("\n"),
     );
-    let output =
-        PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bundled_graph_packages.rs");
+    let output = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR")).join("bundled_packs.rs");
     std::fs::write(output, generated).expect("write bundled graph package inventory");
-}
-
-fn collect_files(root: &Path, directory: &Path, output: &mut Vec<(String, PathBuf)>) {
-    let mut entries = std::fs::read_dir(directory)
-        .expect("read bundled graph package assets")
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
-    entries.sort_by_key(|entry| entry.file_name());
-    for entry in entries {
-        let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            collect_files(root, &path, output);
-        } else if entry.file_type().is_ok_and(|kind| kind.is_file()) {
-            let relative = path
-                .strip_prefix(root)
-                .expect("asset is beneath package root")
-                .to_string_lossy()
-                .replace(std::path::MAIN_SEPARATOR, "/");
-            output.push((relative, path));
-        }
-    }
 }
 
 fn build_fixture(workspace_root: &Path, pkg: &str, artifact_name: &str, env_var: &str) {

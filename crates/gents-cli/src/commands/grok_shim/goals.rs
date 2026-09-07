@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use gents::goal::{GoalDocument, GoalStatus};
 use serde_json::{json, Value};
+use std::sync::Arc;
 
 use super::projection::{ProjectionEngine, UpdateTimestamps};
 use super::turn::{PromptSender, PromptSenderLine};
@@ -82,7 +83,7 @@ impl GoalCommand {
     /// caller must authorize the exact attached session before invoking this.
     pub(super) async fn execute(
         &self,
-        node: &EmbeddedNode,
+        node: &Arc<EmbeddedNode>,
         principal: &str,
         session: &str,
     ) -> Result<String> {
@@ -105,9 +106,37 @@ impl GoalCommand {
         };
         let status = match self {
             Self::Pause => Some(GoalStatus::Paused),
-            Self::Resume => Some(GoalStatus::Active),
             _ => None,
         };
+        if *self == Self::Resume {
+            let state = goal.state().context("unrecognized persisted goal state")?;
+            if gents::goal::apply_operator_status_transition(state, GoalStatus::Active).is_err() {
+                return Ok(format!(
+                    "Goal remains {}. This control is not available in that state.",
+                    goal.status
+                ));
+            }
+            let Some(from_request_id) =
+                gents::goal::latest_goal_request_id(node, principal, session).await?
+            else {
+                return Ok(format!(
+                    "Goal remains {}. Resume requires a completed request in this session.",
+                    goal.status
+                ));
+            };
+            let identity = gents::RegisteredIdentity::from_registered_did(principal, None)?;
+            gents::goal::resume_goal_request(
+                &gents::ConfigAccess::Local(node.clone()),
+                &identity,
+                principal,
+                session,
+                &from_request_id,
+            )
+            .await?;
+            goal = gents::goal::load_canonical_goal(node, principal, session)
+                .await?
+                .context("resumed Goal row disappeared")?;
+        }
         if let Some(status) = status {
             let state = goal.state().context("unrecognized persisted goal state")?;
             // A legitimate but unavailable control is a host-command reply,

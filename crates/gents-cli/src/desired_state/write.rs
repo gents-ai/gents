@@ -35,11 +35,18 @@ pub(crate) fn check_filesystem_safe_id(id: &str) -> Result<(), String> {
 fn validate_handles(manifest: &DesiredStateManifest) -> Result<(), String> {
     fn validate_vec<T: HasUniqueId>(docs: &[T], collection_name: &str) -> Result<(), String> {
         let mut seen: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        let mut handles = std::collections::BTreeSet::new();
         for doc in docs {
             let id = doc.unique_id();
             check_filesystem_safe_id(id)?;
             if !seen.insert(id) {
                 return Err(format!("duplicate {collection_name} id '{id}' in manifest"));
+            }
+            if !handles.insert(super::document_handle(id)) {
+                return Err(format!(
+                    "{collection_name} IDs collide at filesystem handle '{}'",
+                    super::document_handle(id)
+                ));
             }
         }
         Ok(())
@@ -172,10 +179,10 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
             root.display()
         ));
     }
-    if !root.join("agent-principal.json").exists() {
+    if !root.join("agent_principal.json").exists() {
         return Err(format!(
             "refusing to overwrite {}: directory is non-empty and does not \
-             contain agent-principal.json (not a manifest root); remove the \
+             contain agent_principal.json (not a manifest root); remove the \
              directory manually or target an empty one",
             root.display()
         ));
@@ -207,7 +214,7 @@ where
     for doc in docs {
         let handle = doc.unique_id();
         check_filesystem_safe_id(handle)?;
-        let doc_dir = collection_dir.join(handle);
+        let doc_dir = collection_dir.join(super::document_handle(handle));
         fs::create_dir_all(&doc_dir)
             .map_err(|e| format!("creating {} failed: {e}", doc_dir.display()))?;
 
@@ -238,7 +245,7 @@ where
     for doc in docs {
         let handle = doc.unique_id();
         check_filesystem_safe_id(handle)?;
-        let doc_dir = collection_dir.join(handle);
+        let doc_dir = collection_dir.join(super::document_handle(handle));
         fs::create_dir_all(&doc_dir)
             .map_err(|e| format!("creating {} failed: {e}", doc_dir.display()))?;
 

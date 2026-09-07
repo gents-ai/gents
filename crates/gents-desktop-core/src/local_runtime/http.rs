@@ -24,7 +24,7 @@ pub(super) async fn http_get_json<T: for<'de> Deserialize<'de>>(
         if error.is_connect() {
             anyhow::Error::from(error).context(format!(
                 "no gents server found at {url}. Start one first with \
-                 `gents server` or `gents demo`. Remote runtimes must be added \
+                 `gents server`. Remote runtimes must be added \
                  through authenticated status enrollment in the desktop app."
             ))
         } else {

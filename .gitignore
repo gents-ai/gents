@@ -2,9 +2,9 @@
 /.DS_Store
 /crates/gents/proofs/.lake
 /crates/gents/proofs/build
-/demo/home/
-/demo/*.log
-/demo/*/runs/
+/packs/home/
+/packs/*.log
+/packs/*/runs/
 /vendor/
 
 # TLA+ tooling and TLC state output

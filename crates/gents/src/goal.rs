@@ -28,6 +28,31 @@ pub const CREATE_GOAL_TOOL_NAME: &str = "create_goal";
 pub const BLOCKED_AUDIT_THRESHOLD: i64 = 3;
 pub const MAX_INFRASTRUCTURE_RETRIES: i64 = 2;
 
+/// Resolve the authenticated causal head a user-facing client can pass to
+/// [`resume_goal_request`]. The resume transaction revalidates this choice, so
+/// a concurrent request can only make the subsequent operation fail closed.
+pub async fn latest_goal_request_id(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let Some(goal) = load_canonical_goal(node, agent_did, session_id).await? else {
+        return Ok(None);
+    };
+    let agent_did = escape_graphql_string(agent_did);
+    let session_id = escape_graphql_string(session_id);
+    let fields = crate::request_admission::SIGNED_REQUEST_FIELDS;
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{
+            agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }}
+        }}, order: [{{ created_at: DESC }}, {{ request_id: DESC }}]) {{ {fields} }} }}"#
+    );
+    let response =
+        graphql_with_transaction_retry(node, &query, "query latest goal request").await?;
+    let requests: Vec<gents_protocol::row::AgentRequestRow> = rows(&response, "AgentRequest")?;
+    Ok(latest_goal_request(&goal, &requests).map(|request| request.request_id.clone()))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GoalCreationFingerprint {
     pub owner: String,
