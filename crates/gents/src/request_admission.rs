@@ -207,7 +207,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
     doc_id: &str,
     agent_did: &str,
     reason: &str,
-    operation: &str,
+    operation: &'static str,
 ) -> Result<()> {
     let doc_id = escape_graphql_string(doc_id);
     let agent_did = escape_graphql_string(agent_did);
@@ -230,9 +230,11 @@ pub(crate) async fn terminalize_pending_request_rejection(
             ) {{ _docID }}
         }}"#
     );
-    crate::retry::execute_graphql_with_terminal_persistence_retry(node, &mutation, operation)
-        .await
-        .map(|_| ())
+    crate::config_client::ConfigAccess::write_local_idempotent_update_response(
+        node, operation, &mutation,
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Sign a target-runtime-authored request with the already-registered runtime

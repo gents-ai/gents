@@ -1,11 +1,9 @@
-use anyhow::Result;
-use gents::config_client::ConfigApplyTxn;
+use std::sync::Arc;
+
+use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::graphql_with_transaction_retry;
-use gents::retry::{
-    defradb_conflict_retry_backoff, is_defradb_transaction_conflict_text,
-    DEFRA_DB_CONFLICT_MAX_RETRIES,
-};
 use gents_protocol::transcript::present_persisted_message;
 use serde_json::{json, Value};
 
@@ -22,46 +20,16 @@ pub(super) async fn query_node_json(node: &EmbeddedNode, query: &str) -> Result<
     }))
 }
 
-/// Commit a mutation transactionally so DefraDB emits the `Update` event the
-/// runtime control watcher consumes. A conflicted cycle commits nothing; the
-/// bounded retry therefore preserves exactly one update for a successful call.
-pub(super) async fn execute_committed(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
-    let mut retry_index = 0;
-    loop {
-        match execute_committed_once(node, mutation).await {
-            Ok(value) => return Ok(value),
-            Err(error)
-                if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && is_defradb_transaction_conflict_text(&format!("{error:#}")) =>
-            {
-                let backoff = defradb_conflict_retry_backoff(retry_index);
-                retry_index += 1;
-                tracing::warn!(
-                    retry_count = retry_index,
-                    max_retries = DEFRA_DB_CONFLICT_MAX_RETRIES,
-                    backoff_ms = backoff.as_millis() as u64,
-                    error = %error,
-                    "retrying Codex shim committed mutation after transaction conflict"
-                );
-                tokio::time::sleep(backoff).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-async fn execute_committed_once(node: &EmbeddedNode, mutation: &str) -> Result<Value> {
-    let txn = ConfigApplyTxn::begin_local(node, None).await?;
-    match txn.execute(mutation).await {
-        Ok(response) => {
-            txn.commit().await?;
-            Ok(response)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error.context("GENTS Codex shim mutation failed"))
-        }
-    }
+/// Route a mutation through the canonical committed-write owner.
+pub(super) async fn write_committed(
+    node: &Arc<EmbeddedNode>,
+    operation: &'static str,
+    mutation: &str,
+) -> Result<Value> {
+    ConfigAccess::Local(node.clone())
+        .write(operation, mutation)
+        .await
+        .context("GENTS Codex shim mutation failed")
 }
 
 pub(super) async fn hydrate_materialized_response_content(

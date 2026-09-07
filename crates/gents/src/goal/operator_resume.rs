@@ -31,28 +31,29 @@ pub async fn resume_goal_request(
         identity.did() == agent_did,
         "goal resume requires the target principal's signing identity"
     );
-    let txn = match access {
+    match access {
         crate::ConfigAccess::Local(node) => {
-            ConfigApplyTxn::begin_local(
+            let did = ::identity::Did::new(identity.did().to_owned())?;
+            crate::config_client::ConfigAccess::transact_local(
                 node,
-                Some(::identity::Did::new(identity.did().to_owned())?),
+                Some(did),
+                "goal.resume_request",
+                move |txn| {
+                    Box::pin(async move {
+                        stage_resume(txn, identity, agent_did, session_id, from_request_id).await
+                    })
+                },
             )
-            .await?
+            .await
         }
-        crate::ConfigAccess::Graphql(_) => access.begin_apply_txn().await?,
-    };
-    match stage_resume(&txn, identity, agent_did, session_id, from_request_id).await {
-        Ok(receipt) => {
-            if receipt.created {
-                txn.commit().await?;
-            } else {
-                txn.discard().await?;
-            }
-            Ok(receipt)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
+        crate::ConfigAccess::Graphql(_) => {
+            access
+                .transact("goal.resume_request", move |txn| {
+                    Box::pin(async move {
+                        stage_resume(txn, identity, agent_did, session_id, from_request_id).await
+                    })
+                })
+                .await
         }
     }
 }

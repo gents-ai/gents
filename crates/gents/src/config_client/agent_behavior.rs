@@ -15,18 +15,11 @@ pub async fn write_agent_behavior_document(
     access: &ConfigAccess,
     behavior: &AgentBehavior,
 ) -> Result<String> {
-    let txn = access.begin_apply_txn().await?;
-    let result = write_agent_behavior_in_txn(&txn, behavior).await;
-    match result {
-        Ok(doc_id) => {
-            txn.commit().await?;
-            Ok(doc_id)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    access
+        .transact("config.agent_behavior.write", |txn| {
+            Box::pin(async move { write_agent_behavior_in_txn(txn, behavior).await })
+        })
+        .await
 }
 
 async fn write_agent_behavior_in_txn(

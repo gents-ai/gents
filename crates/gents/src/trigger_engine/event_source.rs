@@ -1164,13 +1164,13 @@ impl EventSource {
                 &now.to_rfc3339_opts(SecondsFormat::Millis, true)
             ),
         );
-        let response = crate::graphql::graphql_mutation_response_with_transaction_retry(
+        let response = crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "trigger.create_group_state",
             &mutation,
-            "create EventTriggerGroupState",
         )
         .await;
-        if !response.has_errors() {
+        if response.is_ok() {
             return Ok(now);
         }
 
@@ -1179,10 +1179,7 @@ impl EventSource {
         if let Some(row) = self.query_group_state(&group_key).await? {
             return Self::parse_group_first_seen(&row);
         }
-        anyhow::bail!(
-            "EventTriggerGroupState create failed: {:?}",
-            response.errors
-        )
+        Err(response.expect_err("failed response checked above"))
     }
 
     async fn persist_group_quiesced(
@@ -1213,10 +1210,10 @@ impl EventSource {
             ),
             reason = crate::graphql::escape_graphql_string(reason),
         );
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "trigger.quiesce_group_state",
             &mutation,
-            "quiesce EventTriggerGroupState",
         )
         .await?;
         Ok(())

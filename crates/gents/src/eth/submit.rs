@@ -15,7 +15,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha3::{Digest, Keccak256};
 
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 use super::keys::{address_from_secret, sign_prehash_recoverable};
 use super::rpc::{decode_revert_data, parse_hex_u64, EthRpcClient, JsonRpcTransport};
@@ -638,7 +638,12 @@ async fn create_submission(node: &EmbeddedNode, record: &SubmissionRecord) -> Re
         }}"#,
         record.chain_id, record.nonce
     );
-    graphql_mutation_with_transaction_retry(node, &mutation, "create EthSubmission").await?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "eth.create_submission",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }
 
@@ -666,7 +671,12 @@ async fn update_submission(
             ) {{ _docID }}
         }}"#
     );
-    graphql_mutation_with_transaction_retry(node, &mutation, "update EthSubmission").await?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "eth.update_submission",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }
 

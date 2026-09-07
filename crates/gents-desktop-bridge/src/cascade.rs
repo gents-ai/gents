@@ -32,19 +32,24 @@ impl GraphqlAccess {
         document: &str,
         operation: &str,
     ) -> Result<Value, String> {
-        let response = core.node().execute(document).await;
-        if response.has_errors() {
-            return Err(format!(
-                "{operation} failed: {}",
-                response
-                    .errors
-                    .iter()
-                    .map(|error| error.message.as_str())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ));
-        }
+        let response =
+            gents::graphql::graphql_with_transaction_retry(core.node(), document, operation)
+                .await
+                .map_err(|error| error.to_string())?;
         Ok(response.data.unwrap_or(Value::Null))
+    }
+
+    async fn write(
+        &self,
+        core: &Arc<ClientCore>,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<Value, String> {
+        gents::config_client::ConfigAccess::Local(core.node_arc())
+            .write(operation, mutation)
+            .await
+            .map(|response| response.get("data").cloned().unwrap_or(Value::Null))
+            .map_err(|error| format!("{operation} failed: {error}"))
     }
 }
 
@@ -461,7 +466,7 @@ pub async fn latch_root_interrupt(
     );
 
     let data = access
-        .execute(core, &mutation, "latch_root_interrupt update_AgentRequest")
+        .write(core, "desktop.interrupt.latch_root", &mutation)
         .await?;
     let updated = data
         .get("update_AgentRequest")
@@ -639,11 +644,7 @@ async fn latch_descendant_interrupt_with_access(
         }}"#
     );
     let data = access
-        .execute(
-            core,
-            &mutation,
-            &format!("cascade interrupt update_AgentRequest for {request_id}"),
-        )
+        .write(core, "desktop.interrupt.latch_descendant", &mutation)
         .await?;
     let updated = data
         .get("update_AgentRequest")

@@ -71,9 +71,12 @@ use super::projection::{
     RequestCursor, SessionUpdateChannel, UpdateTimestamps, SESSION_UPDATE_METHOD,
 };
 use super::server::AcpOutbound;
-use crate::request_helpers::{
-    graphql_error_is_transient, transient_graphql_retry_delay, MAX_TRANSIENT_GRAPHQL_RETRIES,
-};
+
+const MAX_TRANSIENT_GRAPHQL_READ_RETRIES: usize = 4;
+
+fn transient_graphql_read_retry_delay(retry: usize) -> Duration {
+    Duration::from_millis(50 * retry.max(1) as u64)
+}
 
 /// Poll cadence for watching the durable request terminalize. The embedded
 /// node exposes no subscription seam to the shim, so terminalization is
@@ -1769,7 +1772,7 @@ impl TurnManager {
                     );
                     if let Some(stop_reason) = wait_for_retry_or_cancel(
                         &mut response_rx,
-                        transient_graphql_retry_delay(consecutive_transient_read_failures),
+                        transient_graphql_read_retry_delay(consecutive_transient_read_failures),
                     )
                     .await?
                     {
@@ -1826,7 +1829,7 @@ impl TurnManager {
                     );
                     if let Some(stop_reason) = wait_for_retry_or_cancel(
                         &mut response_rx,
-                        transient_graphql_retry_delay(consecutive_transient_read_failures),
+                        transient_graphql_read_retry_delay(consecutive_transient_read_failures),
                     )
                     .await?
                     {
@@ -2324,7 +2327,9 @@ async fn wait_for_retry_or_cancel(
 }
 
 fn register_transient_read_retry(error: &anyhow::Error, consecutive: &mut usize) -> bool {
-    if !graphql_error_is_transient(error) || *consecutive >= MAX_TRANSIENT_GRAPHQL_RETRIES {
+    if !gents_protocol::graphql::graphql_error_is_retryable(error)
+        || *consecutive >= MAX_TRANSIENT_GRAPHQL_READ_RETRIES
+    {
         return false;
     }
     *consecutive += 1;
@@ -2809,7 +2814,7 @@ mod tests {
         let transient = anyhow::anyhow!("database is locked");
         let fatal = anyhow::anyhow!("invalid query");
         let mut consecutive = 0;
-        for expected in 1..=MAX_TRANSIENT_GRAPHQL_RETRIES {
+        for expected in 1..=MAX_TRANSIENT_GRAPHQL_READ_RETRIES {
             assert!(register_transient_read_retry(&transient, &mut consecutive));
             assert_eq!(consecutive, expected);
         }

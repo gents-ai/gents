@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::InferenceBackend;
 use gents_protocol::row::InferenceBackendRow;
@@ -153,21 +153,14 @@ mod validation_tests {
 
 pub async fn delete_inference_backend(node: &EmbeddedNode, backend_id: &str) -> Result<usize> {
     let mutation = build_delete_inference_backend_mutation(backend_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_inference_backend failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.inference_backend.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("delete_InferenceBackend"))
         .and_then(Value::as_array)
         .map(Vec::len)

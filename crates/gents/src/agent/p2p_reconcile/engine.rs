@@ -999,10 +999,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
                     ) {{ _docID }}
                 }}"#
             );
-            return crate::graphql::graphql_mutation_with_transaction_retry(
+            return crate::config_client::ConfigAccess::write_local_response(
                 &self.node,
+                "p2p.delete_pairing_applied",
                 &mutation,
-                "delete PeerPairingApplied",
             )
             .await
             .map(|_| ());
@@ -1045,10 +1045,10 @@ impl PairingStateStore for GraphqlPairingStateStore {
             )
         };
         let mutation = format!("mutation {{ {delete_duplicates} {save} }}");
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.save_pairing_applied",
             &mutation,
-            "save PeerPairingApplied",
         )
         .await
         .map(|_| ())

@@ -1,7 +1,6 @@
 use anyhow::Result;
 
 use crate::graphql::escape_graphql_string;
-use crate::session::execute_mutation_with_retry;
 use crate::truncation::{
     truncate_text, DefraSpillTruncator, TruncationLimits, TruncationMode, TruncationResult,
     TruncationTrigger, Truncator,
@@ -46,7 +45,12 @@ impl DefraSpillTruncator {
             session_id = self.session_id,
         );
 
-        let resp = execute_mutation_with_retry(&self.node, &mutation, "spill_tool_output").await?;
+        let resp = crate::config_client::ConfigAccess::write_local_response(
+            &self.node,
+            "spill_tool_output",
+            &mutation,
+        )
+        .await?;
 
         let doc_id = resp
             .data

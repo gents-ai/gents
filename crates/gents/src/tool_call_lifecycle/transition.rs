@@ -12,16 +12,23 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use defra_node::QueryResponse;
+use defra_node::{EmbeddedNode, QueryResponse};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
-use crate::session::execute_mutation_with_retry;
 use crate::toolset::CommandPolicyDenial;
 
 use super::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, CascadeIntent, ChildTerminal,
     FailureClass, ToolCallLifecycle, ToolCallState,
 };
+
+async fn execute_mutation_with_retry(
+    node: &EmbeddedNode,
+    mutation: &str,
+    operation: &'static str,
+) -> Result<QueryResponse> {
+    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
+}
 
 /// Error returned when a transition method is called from an illegal
 /// pre-state, or when a subagent-specific guard is violated.

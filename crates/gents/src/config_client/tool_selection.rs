@@ -33,18 +33,13 @@ pub async fn write_tool_selection_document_with_clear_fields(
             anyhow::bail!("unsupported ToolSelection clear field {field:?}");
         }
     }
-    let txn = access.begin_apply_txn().await?;
-    let result = write_tool_selection_in_txn(&txn, selection, clear_update_fields).await;
-    match result {
-        Ok(doc_id) => {
-            txn.commit().await?;
-            Ok(doc_id)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    access
+        .transact("config.tool_selection.write", |txn| {
+            Box::pin(async move {
+                write_tool_selection_in_txn(txn, selection, clear_update_fields).await
+            })
+        })
+        .await
 }
 
 async fn write_tool_selection_in_txn(

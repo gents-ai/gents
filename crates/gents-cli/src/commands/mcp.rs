@@ -99,7 +99,7 @@ async fn mcp_register(args: McpRegisterArgs) -> Result<()> {
     );
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     access
-        .execute_committed(&mutation)
+        .write("cli.mcp.register", &mutation)
         .await
         .context("registering MCP service")?;
     println!("registered {service_id} -> {}", args.endpoint.trim());

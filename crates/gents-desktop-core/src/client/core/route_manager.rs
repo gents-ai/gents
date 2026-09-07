@@ -492,10 +492,8 @@ impl ClientRouteManager {
                 .as_deref()
                 .context("enrollment record has no authorization expiry")?,
         );
-        let response = self
-            .node
-            .execute(&format!(
-                r#"mutation {{ upsert_PeerPairingDesired(
+        let mutation = format!(
+            r#"mutation {{ upsert_PeerPairingDesired(
                     filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
                     add: {{ peer_id: "{peer_id}", agent_did: "{agent_did}", collections: null,
                         template: "{CLIENT_TEMPLATE}", replicator_addresses: ["{address}"],
@@ -510,9 +508,14 @@ impl ClientRouteManager {
                         enrollment_authorization_expires_at: "{authorization_expires_at}",
                         profiles: null, updated_at: "{now}" }}
                 ) {{ _docID }} }}"#
-            ))
-            .await;
-        ensure_graphql_ok(&response, "write PeerPairingDesired")
+        );
+        gents::config_client::ConfigAccess::write_local(
+            &self.node,
+            "desktop.pairing_desired.upsert",
+            &mutation,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn teardown_remote(&self, record: &PeerRecord) -> Result<()> {
@@ -558,20 +561,20 @@ impl ClientRouteManager {
         ]
         .map(|id| format!(r#""{}""#, escape_graphql_string(&id)))
         .join(", ");
-        let response = self
-            .node
-            .execute(&format!(
-                r#"mutation {{
+        let mutation = format!(
+            r#"mutation {{
                     desired: delete_PeerPairingDesired(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
                     applied: delete_PeerPairingApplied(filter: {{ peer_id: {{ _in: [{ids}] }} }}) {{ _docID }}
                 }}"#
-            ))
-            .await;
-        ensure_graphql_ok(&response, "delete client pairing state")?;
+        );
+        let response = gents::config_client::ConfigAccess::write_local(
+            &self.node,
+            "desktop.pairing_state.delete",
+            &mutation,
+        )
+        .await?;
         Ok(response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("desired"))
+            .pointer("/data/desired")
             .and_then(|rows| rows.as_array())
             .is_some_and(|rows| !rows.is_empty()))
     }
@@ -999,21 +1002,6 @@ fn ensure_pairing_status<'a>(
             .push(PairingCollectionStatus::new(collection));
         status.pairing.last_mut().expect("pairing status inserted")
     }
-}
-
-fn ensure_graphql_ok(response: &defra_node::QueryResponse, operation: &str) -> Result<()> {
-    if response.has_errors() {
-        anyhow::bail!(
-            "{operation} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    Ok(())
 }
 
 #[cfg(test)]

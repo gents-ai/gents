@@ -109,10 +109,10 @@ async fn mark_background_tool_notification_delivered(
             ) {{ _docID }}
         }}"#
     );
-    crate::session::execute_mutation_with_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
-        &mutation,
         "mark_background_tool_notification_delivered",
+        &mutation,
     )
     .await?;
     Ok(())
@@ -185,10 +185,10 @@ async fn mark_background_tool_completion_side_effects_done(
             ) {{ _docID }}
         }}"#
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "mark_background_completion_side_effects_done",
         &mutation,
-        "mark background completion side effects done",
     )
     .await?;
     Ok(())

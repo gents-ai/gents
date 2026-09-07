@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 use super::serde_helpers::{
     default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
@@ -124,6 +124,11 @@ pub async fn upsert_agent_principal(
         }}"#
     );
 
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert AgentPrincipal").await?;
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "document.upsert_agent_principal",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }

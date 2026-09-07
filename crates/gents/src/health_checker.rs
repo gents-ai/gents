@@ -848,10 +848,10 @@ async fn upsert_persisted_health_state(
         k_max = entry.k_max,
     );
 
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         persistence.node,
+        "health_checker.upsert_service_state",
         &mutation,
-        "upsert ToolServiceHealthState",
     )
     .await?;
     Ok(())
@@ -873,16 +873,16 @@ async fn delete_persisted_health_state(
             ) {{ _docID }}
         }}"#
     );
-    let resp = crate::graphql::graphql_mutation_response_with_transaction_retry(
+    let resp = crate::config_client::ConfigAccess::write_local_response(
         persistence.node,
+        "health_checker.delete_stale_service_state",
         &mutation,
-        "delete stale ToolServiceHealthState",
     )
     .await;
-    if resp.has_errors() {
+    if let Err(error) = resp {
         tracing::warn!(
             service_id = %service_id,
-            errors = ?resp.errors,
+            error = %error,
             "failed to delete stale ToolServiceHealthState row",
         );
     }

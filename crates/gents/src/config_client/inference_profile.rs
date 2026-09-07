@@ -15,18 +15,11 @@ pub async fn write_inference_profile_document(
     access: &ConfigAccess,
     profile: &InferenceProfile,
 ) -> Result<String> {
-    let txn = access.begin_apply_txn().await?;
-    let result = write_inference_profile_in_txn(&txn, profile).await;
-    match result {
-        Ok(doc_id) => {
-            txn.commit().await?;
-            Ok(doc_id)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    access
+        .transact("config.inference_profile.write", |txn| {
+            Box::pin(async move { write_inference_profile_in_txn(txn, profile).await })
+        })
+        .await
 }
 
 async fn write_inference_profile_in_txn(

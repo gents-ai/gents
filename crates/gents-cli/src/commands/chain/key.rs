@@ -163,9 +163,9 @@ fn public_binding_json(doc: &ChainKeyBindingDocument) -> Value {
 
 async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
     access
-        .execute_mutation(
+        .write(
+            "cli.chain_key.binding.upsert",
             &upsert_chain_key_binding_mutation(doc),
-            "upsert ChainKeyBinding",
         )
         .await?;
     Ok(())
@@ -173,9 +173,9 @@ async fn write_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> 
 
 async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) -> Result<()> {
     access
-        .execute_mutation(
+        .write(
+            "cli.chain_key.binding.create",
             &create_chain_key_binding_mutation(doc),
-            "create ChainKeyBinding",
         )
         .await?;
     Ok(())
@@ -183,9 +183,9 @@ async fn create_binding(access: &ConfigAccess, doc: &ChainKeyBindingDocument) ->
 
 async fn delete_binding(access: &ConfigAccess, binding_id: &str) -> Result<()> {
     access
-        .execute_mutation(
+        .write(
+            "cli.chain_key.binding.delete_incomplete",
             &delete_chain_key_binding_mutation(binding_id),
-            "delete incomplete ChainKeyBinding",
         )
         .await?;
     Ok(())

@@ -24,6 +24,7 @@ use super::secscan;
 use super::server::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use crate::cli::args::{GraphScopeArgs, PackInitArgs, PackInstallArgs, PackRunArgs, PackSeedArgs};
 use crate::cli::output_format::OutputFormat;
+use crate::config_writes::ConfigAccess;
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
@@ -3224,7 +3225,8 @@ pub(crate) async fn seed(args: PackSeedArgs) -> Result<()> {
     }
 
     let mutation = seed_mutation(&manifest.seed, &job_id, &prompt)?;
-    post_graphql(&graphql, &mutation)
+    ConfigAccess::Graphql(graphql.clone())
+        .write("cli.pack.seed", &mutation)
         .await
         .context("seeding the pack")?;
 
@@ -3380,7 +3382,8 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
         }
 
         let mutation = seed_mutation(&manifest.seed, &job_id, &prompt)?;
-        post_graphql(&graphql, &mutation)
+        ConfigAccess::Graphql(graphql.clone())
+            .write("cli.pack.seed", &mutation)
             .await
             .context("seeding the pack")?;
         println!("seeded   1 {} document", manifest.seed.collection);

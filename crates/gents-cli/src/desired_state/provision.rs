@@ -142,7 +142,7 @@ async fn upsert_callback_binding(
         )
     };
     access
-        .execute_mutation(&mutation, "write CallbackBinding")
+        .write("cli.config_apply.callback_binding", &mutation)
         .await?;
     Ok(())
 }
@@ -194,7 +194,7 @@ async fn upsert_repository_placement(
         )
     };
     access
-        .execute_mutation(&mutation, "write RepositoryPlacement")
+        .write("cli.config_apply.repository_placement", &mutation)
         .await?;
     Ok(())
 }

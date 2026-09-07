@@ -171,7 +171,9 @@ async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()
         request_id = escape_graphql_string(request_id),
         now = escape_graphql_string(&now),
     );
-    post_graphql(graphql, &mutation).await?;
+    ConfigAccess::Graphql(graphql.to_string())
+        .write("cli.subagent.interrupt", &mutation)
+        .await?;
     Ok(())
 }
 

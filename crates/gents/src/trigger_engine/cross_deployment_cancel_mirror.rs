@@ -390,10 +390,10 @@ async fn write_child_interrupt_requested_at(
             ) {{ _docID }}
         }}"#
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "trigger.cancel_mirror.child_interrupt",
         &mutation,
-        "cancel mirror child interrupt write",
     )
     .await?;
     Ok(())

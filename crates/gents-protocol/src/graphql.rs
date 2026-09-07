@@ -258,15 +258,17 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
     }
 }
 
+/// Execute a GraphQL read. Mutation documents are rejected before network I/O.
 pub async fn execute_graphql_async(
     graphql: &str,
     query: &str,
     options: GraphqlRequestOptions,
 ) -> Result<serde_json::Value> {
+    ensure_query_document(query)?;
     execute_graphql_async_with_tx(graphql, query, options, None).await
 }
 
-pub async fn execute_graphql_async_with_tx(
+async fn execute_graphql_async_with_tx(
     graphql: &str,
     query: &str,
     options: GraphqlRequestOptions,
@@ -382,11 +384,14 @@ pub async fn execute_graphql_async_with_tx(
     Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
 }
 
+/// Execute a blocking GraphQL read. Mutation documents are rejected before
+/// network I/O.
 pub fn execute_graphql_blocking(
     graphql: &str,
     query: &str,
     options: GraphqlRequestOptions,
 ) -> Result<serde_json::Value> {
+    ensure_query_document(query)?;
     let client = reqwest::blocking::Client::builder()
         .timeout(options.timeout)
         .pool_max_idle_per_host(0)
@@ -493,6 +498,15 @@ pub fn execute_graphql_blocking(
     }
 
     Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
+}
+
+fn ensure_query_document(document: &str) -> Result<()> {
+    let document = document.trim_start();
+    if document.starts_with('{') || document.starts_with("query") {
+        Ok(())
+    } else {
+        anyhow::bail!("GraphQL read transport requires a query document")
+    }
 }
 
 pub fn extract_mutation_doc_id(
@@ -1277,6 +1291,33 @@ mod tx_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn execute_graphql_async_retries_database_locked_errors() {
         assert_execute_graphql_async_retries_error("database is locked").await;
+    }
+
+    #[tokio::test]
+    async fn public_async_transport_rejects_mutations_before_network_io() {
+        let error = execute_graphql_async(
+            "http://127.0.0.1:1/api/v0/graphql",
+            "mutation { create_X(input: {}) { _docID } }",
+            GraphqlRequestOptions::default(),
+        )
+        .await
+        .expect_err("public transport is query-only");
+        assert!(error
+            .to_string()
+            .contains("GraphQL read transport requires a query document"));
+    }
+
+    #[test]
+    fn public_blocking_transport_rejects_mutations_before_network_io() {
+        let error = execute_graphql_blocking(
+            "http://127.0.0.1:1/api/v0/graphql",
+            "mutation { create_X(input: {}) { _docID } }",
+            GraphqlRequestOptions::default(),
+        )
+        .expect_err("public transport is query-only");
+        assert!(error
+            .to_string()
+            .contains("GraphQL read transport requires a query document"));
     }
 
     #[test]

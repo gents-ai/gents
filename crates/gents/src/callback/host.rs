@@ -2,9 +2,7 @@ use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
-use crate::graphql::{
-    escape_graphql_string, first_row, graphql_mutation_with_transaction_retry, rows,
-};
+use crate::graphql::{escape_graphql_string, first_row, rows};
 
 const HOST_DEPLOYMENT_FIELDS: &str = "deployment_id display_name created_at updated_at";
 
@@ -34,8 +32,12 @@ pub async fn ensure_local_host_deployment(node: &EmbeddedNode) -> Result<String>
         deployment_id = escape_graphql_string(&deployment_id),
         now = escape_graphql_string(&now),
     );
-    let response =
-        graphql_mutation_with_transaction_retry(node, &mutation, "create_HostDeployment").await;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "callback.create_host_deployment",
+        &mutation,
+    )
+    .await;
     match response {
         Ok(_) => Ok(deployment_id),
         Err(error) => {

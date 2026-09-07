@@ -84,54 +84,33 @@ pub(crate) async fn persist_background_completion_with_message(
 
     let behavior_id = parent_behavior_id(node, parent).await?;
     let metadata = queue_metadata_json(&queue_hints);
+    let queue_key_ref = &queue_key;
+    let behavior_id = &behavior_id;
+    let metadata = &metadata;
 
-    let mut retry_index = 0;
-    let mut enqueued = loop {
-        let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        let attempt = background_completion_transaction_attempt(
-            &txn,
-            parent,
-            notification_content,
-            message_key,
-            &queue_key,
-            &behavior_id,
-            wake_content,
-            &metadata,
-            existing_notification_doc_id,
-        )
-        .await;
-        let result = match attempt {
-            Ok(enqueued) => txn.commit().await.map(|()| enqueued),
-            Err(error) => {
-                if let Err(discard_error) = txn.discard().await {
-                    tracing::warn!(
-                        error = %discard_error,
-                        "discarding failed background-completion transaction also failed"
-                    );
-                }
-                Err(error)
-            }
-        };
-        match result {
-            Ok(enqueued) => break enqueued,
-            Err(error)
-                if retry_index < DEFRA_DB_CONFLICT_MAX_RETRIES
-                    && steering_transaction_error_is_retryable(&error) =>
-            {
-                let backoff = defradb_conflict_retry_backoff(retry_index);
-                retry_index += 1;
-                tracing::warn!(
-                    queue_key,
-                    attempt = retry_index,
-                    backoff_ms = backoff.as_millis() as u64,
-                    error = %error,
-                    "retrying atomic background-completion persistence"
-                );
-                tokio::time::sleep(backoff).await;
-            }
-            Err(error) => return Err(error),
-        }
-    };
+    let mut enqueued = crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        "lifecycle.enqueue_background_completion",
+        move |txn| {
+            Box::pin(async move {
+                background_completion_transaction_attempt(
+                    txn,
+                    parent,
+                    notification_content,
+                    message_key,
+                    queue_key_ref,
+                    behavior_id,
+                    wake_content,
+                    metadata,
+                    existing_notification_doc_id,
+                )
+                .await
+            })
+        },
+    )
+    .await?;
 
     if let Some(created) = enqueued
         .request
@@ -563,12 +542,4 @@ pub(super) fn transaction_created_doc_id(response: &Value, collection: &str) -> 
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .with_context(|| format!("transaction create {collection} returned no _docID"))
-}
-
-pub(super) fn steering_transaction_error_is_retryable(error: &anyhow::Error) -> bool {
-    let text = error.to_string();
-    let lower = text.to_ascii_lowercase();
-    is_defradb_transaction_conflict_text(&text)
-        || lower.contains("unique")
-        || lower.contains("duplicate")
 }

@@ -4,7 +4,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use crate::graphql::escape_graphql_string;
 
 use super::graphql_fields;
 
@@ -196,7 +196,12 @@ pub async fn upsert_chain_key_binding(
     doc: &ChainKeyBindingDocument,
 ) -> Result<()> {
     let mutation = upsert_chain_key_binding_mutation(doc);
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert ChainKeyBinding").await?;
+    crate::config_client::ConfigAccess::write_local(
+        node,
+        "document.upsert_chain_key_binding",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }
 

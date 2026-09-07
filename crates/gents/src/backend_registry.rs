@@ -440,10 +440,10 @@ pub async fn set_backend_probe_status(
         escape_graphql_string(backend_id),
         escape_graphql_string(probe_status),
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "backend_registry.update_probe_status",
         &mutation,
-        "update InferenceBackend probe_status",
     )
     .await?;
     Ok(())
@@ -466,10 +466,10 @@ pub async fn set_backend_probe_status_with_last_probe(
         escape_graphql_string(probe_status),
         last_probe.to_rfc3339(),
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "backend_registry.update_probe_status_and_time",
         &mutation,
-        "update InferenceBackend probe status and last probe",
     )
     .await?;
     Ok(())

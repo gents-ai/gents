@@ -6,10 +6,7 @@ use defra_node::{EmbeddedNode, QueryResponse};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::{
-    escape_graphql_string, graphql_mutation_with_transaction_retry, graphql_with_transaction_retry,
-    rows,
-};
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 
 mod claimed_publication;
 mod operator_resume;
@@ -1120,45 +1117,34 @@ pub async fn create_goal_for_session(
     let requested_fingerprint = goal_creation_fingerprint(&create_request);
     let objective = requested_fingerprint.objective.as_str();
 
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None)
-        .await
-        .map_err(anyhow::Error::from)?;
-    let result = stage_goal_and_claim(
-        &txn,
-        agent_did,
-        session_id,
-        objective,
-        token_budget,
-        GoalState {
-            status: GoalStatus::Active,
-            blocked_audits: 0,
-            wrapup_requested: false,
-            wrapup_completed: false,
+    let result = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "goal.create_for_session",
+        move |txn| {
+            Box::pin(async move {
+                stage_goal_and_claim(
+                    txn,
+                    agent_did,
+                    session_id,
+                    objective,
+                    token_budget,
+                    GoalState {
+                        status: GoalStatus::Active,
+                        blocked_audits: 0,
+                        wrapup_requested: false,
+                        wrapup_completed: false,
+                    },
+                    &Utc::now().to_rfc3339(),
+                )
+                .await
+            })
         },
-        &Utc::now().to_rfc3339(),
     )
     .await;
 
     match result {
         Ok(outcome) => {
-            if let Err(commit_error) = txn.commit().await {
-                if let Some(existing) = load_canonical_goal(node, agent_did, session_id)
-                    .await
-                    .map_err(CreateGoalForSessionError::Storage)?
-                {
-                    if existing.objective.trim() == objective
-                        && existing.token_budget == token_budget
-                        && load_goal_creation_claim_fingerprint(node, agent_did, session_id)
-                            .await
-                            .map_err(CreateGoalForSessionError::Storage)?
-                            == Some(requested_fingerprint.clone())
-                    {
-                        return Ok(CreateGoalForSessionOutcome::Idempotent(existing));
-                    }
-                    return Err(CreateGoalForSessionError::Conflict);
-                }
-                return Err(CreateGoalForSessionError::Storage(commit_error));
-            }
             let goal = load_canonical_goal(node, agent_did, session_id)
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?
@@ -1170,7 +1156,6 @@ pub async fn create_goal_for_session(
             })
         }
         Err(error) => {
-            let _ = txn.discard().await;
             if let Some(existing) = load_canonical_goal(node, agent_did, session_id)
                 .await
                 .map_err(CreateGoalForSessionError::Storage)?
@@ -1535,36 +1520,35 @@ pub async fn submit_goal_backed_request(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<GoalBackedRequestDisposition> {
-    let txn = access.begin_apply_txn().await?;
-    let result = stage_goal_backed_request(
-        &txn,
-        agent_did,
-        session_id,
-        objective,
-        token_budget,
-        request,
-    )
-    .await
-    .and_then(authorize_goal_submission_commit);
-    match result {
-        Ok(disposition) => {
-            if let Err(commit_error) = txn.commit().await {
-                let recovery = load_goal_backed_request_by_retry_key_from_access(
-                    access,
+    let result = access
+        .transact("goal.submit_backed_request", move |txn| {
+            Box::pin(async move {
+                stage_goal_backed_request(
+                    txn,
                     agent_did,
                     session_id,
                     objective,
                     token_budget,
                     request,
                 )
-                .await;
-                return resolve_ambiguous_goal_submission_commit(commit_error, recovery);
-            }
-            Ok(disposition)
-        }
+                .await
+                .and_then(authorize_goal_submission_commit)
+            })
+        })
+        .await;
+    match result {
+        Ok(disposition) => Ok(disposition),
         Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
+            let recovery = load_goal_backed_request_by_retry_key_from_access(
+                access,
+                agent_did,
+                session_id,
+                objective,
+                token_budget,
+                request,
+            )
+            .await;
+            resolve_ambiguous_goal_submission_commit(error, recovery)
         }
     }
 }
@@ -1853,37 +1837,29 @@ pub async fn submit_goal_backed_request_local(
     token_budget: Option<i64>,
     request: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<crate::lifecycle::EnqueuedAgentRequest> {
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let staged = stage_goal_backed_request(
-        &txn,
-        agent_did,
-        session_id,
-        objective,
-        token_budget,
-        request,
-    )
-    .await
-    .and_then(authorize_goal_submission_commit);
-    match staged {
-        Ok(_) => {
-            if let Err(commit_error) = txn.commit().await {
-                if let Some(recovered) = load_goal_backed_request_by_retry_key(
-                    node,
+    let staged = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "goal.submit_backed_request_local",
+        move |txn| {
+            Box::pin(async move {
+                stage_goal_backed_request(
+                    txn,
                     agent_did,
                     session_id,
                     objective,
                     token_budget,
                     request,
                 )
-                .await?
-                {
-                    return Ok(recovered);
-                }
-                return Err(commit_error);
-            }
-        }
+                .await
+                .and_then(authorize_goal_submission_commit)
+            })
+        },
+    )
+    .await;
+    match staged {
+        Ok(_) => {}
         Err(error) => {
-            let _ = txn.discard().await;
             if let Some(recovered) = load_goal_backed_request_by_retry_key(
                 node,
                 agent_did,
@@ -1987,8 +1963,12 @@ pub async fn set_goal(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    finish_set_goal(txn, agent_did, session_id, objective, status, token_budget).await
+    crate::config_client::ConfigAccess::transact_local(node, None, "goal.set", move |txn| {
+        Box::pin(async move {
+            set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+        })
+    })
+    .await
 }
 
 /// Configure a goal through the same transactional policy for local and HTTP access.
@@ -2000,28 +1980,13 @@ pub async fn set_goal_from_access(
     status: Option<GoalStatus>,
     token_budget: Option<Option<i64>>,
 ) -> Result<GoalDocument> {
-    let txn = access.begin_apply_txn().await?;
-    finish_set_goal(txn, agent_did, session_id, objective, status, token_budget).await
-}
-
-async fn finish_set_goal(
-    txn: crate::config_client::ConfigApplyTxn<'_>,
-    agent_did: &str,
-    session_id: &str,
-    objective: Option<&str>,
-    status: Option<GoalStatus>,
-    token_budget: Option<Option<i64>>,
-) -> Result<GoalDocument> {
-    match set_goal_in_txn(&txn, agent_did, session_id, objective, status, token_budget).await {
-        Ok(goal) => {
-            txn.commit().await?;
-            Ok(goal)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    access
+        .transact("goal.set_from_access", move |txn| {
+            Box::pin(async move {
+                set_goal_in_txn(txn, agent_did, session_id, objective, status, token_budget).await
+            })
+        })
+        .await
 }
 
 pub(crate) async fn load_canonical_goal_in_txn(
@@ -2199,7 +2164,7 @@ pub async fn delete_goal(node: &EmbeddedNode, goal: &GoalDocument) -> Result<boo
             delete_Goal(filter: {{ _docID: {{ _eq: "{doc_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}) {{ _docID }}
         }}"#
     );
-    let response = execute_goal_mutation_response(node, &mutation, "delete goal").await?;
+    let response = execute_goal_mutation_response(node, &mutation, "goal.delete").await?;
     Ok(response
         .data
         .as_ref()
@@ -2218,45 +2183,43 @@ pub async fn delete_goals_for_session(
 ) -> Result<usize> {
     let agent_did = escape_graphql_string(agent_did);
     let session_id = escape_graphql_string(session_id);
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let result = async {
-        let response = txn
-            .execute(&format!(
-                r#"mutation {{
+    let agent_did = &agent_did;
+    let session_id = &session_id;
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "goal.delete_for_session",
+        move |txn| {
+            Box::pin(async move {
+                let response = txn
+                    .execute(&format!(
+                        r#"mutation {{
             delete_Goal(filter: {{
                 agent_did: {{ _eq: "{agent_did}" }},
                 session_id: {{ _eq: "{session_id}" }}
             }}) {{ _docID }}
         }}"#
-            ))
-            .await?;
-        txn.execute(&format!(
-            r#"mutation {{
+                    ))
+                    .await?;
+                txn.execute(&format!(
+                    r#"mutation {{
                 delete_GoalCreationClaim(filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
                     session_id: {{ _eq: "{session_id}" }}
                 }}) {{ _docID }}
             }}"#
-        ))
-        .await?;
-        Ok::<_, anyhow::Error>(
-            response
-                .pointer("/data/delete_Goal")
-                .map(mutation_row_count)
-                .unwrap_or_default(),
-        )
-    }
-    .await;
-    match result {
-        Ok(count) => {
-            txn.commit().await?;
-            Ok(count)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+                ))
+                .await?;
+                Ok::<_, anyhow::Error>(
+                    response
+                        .pointer("/data/delete_Goal")
+                        .map(mutation_row_count)
+                        .unwrap_or_default(),
+                )
+            })
+        },
+    )
+    .await
 }
 
 /// Apply controller-owned fields only while both the observed status and
@@ -2285,12 +2248,8 @@ pub async fn update_goal_fields_if_status(
             ) {{ _docID }}
         }}"#
     );
-    let response = execute_goal_mutation_response(
-        node,
-        &mutation,
-        "conditionally update goal controller fields",
-    )
-    .await?;
+    let response =
+        execute_goal_mutation_response(node, &mutation, "goal.update_controller_fields").await?;
     Ok(response
         .data
         .as_ref()
@@ -2330,7 +2289,7 @@ pub async fn claim_continuation(
         }}"#
     );
     let response =
-        graphql_mutation_with_transaction_retry(node, &mutation, "claim goal continuation").await?;
+        execute_goal_mutation_response(node, &mutation, "goal.claim_continuation").await?;
     Ok(response
         .data
         .as_ref()
@@ -2377,12 +2336,8 @@ pub async fn claim_retry_continuation(
             ) {{ _docID }}
         }}"#
     );
-    let response = graphql_mutation_with_transaction_retry(
-        node,
-        &mutation,
-        "atomically charge and claim goal retry",
-    )
-    .await?;
+    let response =
+        execute_goal_mutation_response(node, &mutation, "goal.claim_retry_continuation").await?;
     Ok(response
         .data
         .as_ref()
@@ -2481,9 +2436,11 @@ pub async fn refresh_goal_usage(node: &EmbeddedNode, goal: &GoalDocument) -> Res
 async fn execute_goal_mutation_response(
     node: &EmbeddedNode,
     mutation: &str,
-    label: &str,
+    operation: &'static str,
 ) -> Result<QueryResponse> {
-    graphql_mutation_with_transaction_retry(node, mutation, label).await
+    let response =
+        crate::config_client::ConfigAccess::write_local(node, operation, mutation).await?;
+    serde_json::from_value(response).context("decoding committed goal mutation response")
 }
 
 fn mutation_returned_rows(value: &serde_json::Value) -> bool {

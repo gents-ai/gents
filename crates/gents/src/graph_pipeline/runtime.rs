@@ -274,14 +274,19 @@ async fn load_visible_package_artifact_ids_for_revision(
         return Ok(BTreeSet::new());
     };
     verify_package_role_bindings(&package, agent_did)?;
-    let txn = ConfigApplyTxn::begin_local(node, None).await?;
-    let readiness = async {
-        verify_package_schemas_in_txn(&txn, &package).await?;
-        verify_package_artifacts_in_txn(&txn, &package).await
-    }
-    .await;
-    let _ = txn.discard().await;
-    readiness?;
+    let package_ref = &package;
+    ConfigAccess::transact_local(
+        node,
+        None,
+        "graph_pipeline.verify_package_artifacts",
+        move |txn| {
+            Box::pin(async move {
+                verify_package_schemas_in_txn(txn, package_ref).await?;
+                verify_package_artifacts_in_txn(txn, package_ref).await
+            })
+        },
+    )
+    .await?;
     Ok(package
         .artifacts
         .into_iter()
@@ -630,12 +635,6 @@ async fn update_document(
     Ok(())
 }
 
-async fn discard_with_context(txn: ConfigApplyTxn<'_>, operation: &str) {
-    if let Err(error) = txn.discard().await {
-        tracing::warn!(operation, error = %error, "failed to discard graph pipeline transaction");
-    }
-}
-
 /// Persist a compiled revision and its revision-derived EventTriggers in one
 /// transaction. Stage Tasks are ordinary package/operator configuration and
 /// must already exist and be enabled. The triggers remain invisible to runtime
@@ -652,18 +651,17 @@ pub async fn materialize_graph_revision(
     digest_hex(&plan.digest)?;
     let plan_json = serde_json::to_string(plan)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    let result = materialize_in_txn(&txn, owner_did, plan, &plan_json, &now).await;
-    match result {
-        Ok(receipt) => {
-            txn.commit().await.context("commit graph materialization")?;
-            Ok(receipt)
-        }
-        Err(error) => {
-            discard_with_context(txn, "materialize").await;
-            Err(error)
-        }
-    }
+    let plan_json = &plan_json;
+    let now = &now;
+    ConfigAccess::transact_local(
+        node,
+        identity,
+        "graph_pipeline.materialize_revision",
+        move |txn| {
+            Box::pin(async move { materialize_in_txn(txn, owner_did, plan, plan_json, now).await })
+        },
+    )
+    .await
 }
 
 /// Publish through the immutable revision machinery while preserving the
@@ -936,18 +934,18 @@ pub async fn activate_graph_revision(
 ) -> Result<ActivationReceipt> {
     digest_hex(digest)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    let result = activate_in_txn(&txn, owner_did, graph_id, digest, expected_previous, &now).await;
-    match result {
-        Ok(receipt) => {
-            txn.commit().await.context("commit graph activation")?;
-            Ok(receipt)
-        }
-        Err(error) => {
-            discard_with_context(txn, "activate").await;
-            Err(error)
-        }
-    }
+    let now = &now;
+    ConfigAccess::transact_local(
+        node,
+        identity,
+        "graph_pipeline.activate_revision",
+        move |txn| {
+            Box::pin(async move {
+                activate_in_txn(txn, owner_did, graph_id, digest, expected_previous, now).await
+            })
+        },
+    )
+    .await
 }
 
 /// Activate through the existing local-or-GraphQL control-plane seam used by
@@ -961,18 +959,14 @@ pub async fn activate_graph_revision_with_access(
 ) -> Result<ActivationReceipt> {
     digest_hex(digest)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let txn = access.begin_apply_txn().await?;
-    let result = activate_in_txn(&txn, owner_did, graph_id, digest, expected_previous, &now).await;
-    match result {
-        Ok(receipt) => {
-            txn.commit().await.context("commit graph activation")?;
-            Ok(receipt)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let now = &now;
+    access
+        .transact("graph_pipeline.activate_revision", move |txn| {
+            Box::pin(async move {
+                activate_in_txn(txn, owner_did, graph_id, digest, expected_previous, now).await
+            })
+        })
+        .await
 }
 
 async fn activate_in_txn(
@@ -1139,10 +1133,11 @@ pub async fn load_active_graph_plan_with_access(
     owner_did: &str,
     graph_id: &str,
 ) -> Result<Option<GraphPlan>> {
-    let txn = access.begin_apply_txn().await?;
-    let result = load_active_graph_plan_in_txn(&txn, owner_did, graph_id).await;
-    let _ = txn.discard().await;
-    result
+    access
+        .transact("graph_pipeline.load_active_plan", move |txn| {
+            Box::pin(async move { load_active_graph_plan_in_txn(txn, owner_did, graph_id).await })
+        })
+        .await
 }
 
 async fn set_graph_enabled_in_txn(
@@ -1205,22 +1200,15 @@ pub async fn set_graph_enabled_with_access(
     graph_id: &str,
     enabled: bool,
 ) -> Result<()> {
-    let txn = access.begin_apply_txn().await?;
-    let result = set_graph_enabled_in_txn(
-        &txn,
-        owner_did,
-        graph_id,
-        enabled,
-        &chrono::Utc::now().to_rfc3339(),
-    )
-    .await;
-    match result {
-        Ok(()) => txn.commit().await.context("commit graph enabled state"),
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let now = &now;
+    access
+        .transact("graph_pipeline.set_enabled", move |txn| {
+            Box::pin(async move {
+                set_graph_enabled_in_txn(txn, owner_did, graph_id, enabled, now).await
+            })
+        })
+        .await
 }
 
 /// Pin a run to the active immutable manifest and seed exactly one compiled
@@ -1234,26 +1222,27 @@ pub async fn start_graph_run(
     entry_name: &str,
     input: Value,
 ) -> Result<GraphRunReceipt> {
-    let txn = ConfigApplyTxn::begin_local(node, identity).await?;
-    let result = start_run_in_txn(
-        &txn,
-        caller_did,
-        graph_id,
-        expected_revision_digest,
-        entry_name,
-        input,
-    )
-    .await;
-    match result {
-        Ok(receipt) => {
-            txn.commit().await.context("commit graph run start")?;
-            Ok(receipt)
-        }
-        Err(error) => {
-            discard_with_context(txn, "start_run").await;
-            Err(error)
-        }
-    }
+    let input = &input;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let run_id = &run_id;
+    let now = chrono::Utc::now().to_rfc3339();
+    let now = &now;
+    ConfigAccess::transact_local(node, identity, "graph_pipeline.start_run", move |txn| {
+        Box::pin(async move {
+            start_run_in_txn(
+                txn,
+                caller_did,
+                graph_id,
+                expected_revision_digest,
+                entry_name,
+                input,
+                run_id,
+                now,
+            )
+            .await
+        })
+    })
+    .await
 }
 
 /// Start through the ordinary local-or-GraphQL transaction seam.
@@ -1265,26 +1254,28 @@ pub async fn start_graph_run_with_access(
     entry_name: &str,
     input: Value,
 ) -> Result<GraphRunReceipt> {
-    let txn = access.begin_apply_txn().await?;
-    let result = start_run_in_txn(
-        &txn,
-        caller_did,
-        graph_id,
-        expected_revision_digest,
-        entry_name,
-        input,
-    )
-    .await;
-    match result {
-        Ok(receipt) => {
-            txn.commit().await.context("commit graph run start")?;
-            Ok(receipt)
-        }
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let input = &input;
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let run_id = &run_id;
+    let now = chrono::Utc::now().to_rfc3339();
+    let now = &now;
+    access
+        .transact("graph_pipeline.start_run", move |txn| {
+            Box::pin(async move {
+                start_run_in_txn(
+                    txn,
+                    caller_did,
+                    graph_id,
+                    expected_revision_digest,
+                    entry_name,
+                    input,
+                    run_id,
+                    now,
+                )
+                .await
+            })
+        })
+        .await
 }
 
 async fn start_run_in_txn(
@@ -1293,7 +1284,9 @@ async fn start_run_in_txn(
     graph_id: &str,
     expected_revision_digest: Option<&str>,
     entry_name: &str,
-    input: Value,
+    input: &Value,
+    run_id: &str,
+    now: &str,
 ) -> Result<GraphRunReceipt> {
     let definition = query_graph_definition(txn, graph_id)
         .await?
@@ -1353,21 +1346,19 @@ async fn start_run_in_txn(
     validate_collection_identifier(&entry.collection)?;
 
     let mut input = match input {
-        Value::Object(object) => object,
+        Value::Object(object) => object.clone(),
         _ => anyhow::bail!("graph entry input must be a JSON object"),
     };
-    let run_id = uuid::Uuid::new_v4().to_string();
     if let Some(existing) = input.get(&entry.correlation_field) {
-        if existing.as_str() != Some(run_id.as_str()) {
+        if existing.as_str() != Some(run_id) {
             anyhow::bail!("entry input may not override the run correlation field");
         }
     }
     input.insert(
         entry.correlation_field.clone(),
-        Value::String(run_id.clone()),
+        Value::String(run_id.to_owned()),
     );
     let canonical_input = Value::Object(input.clone());
-    let now = chrono::Utc::now().to_rfc3339();
     create_document(
         txn,
         "GraphRun",
@@ -1398,11 +1389,11 @@ async fn start_run_in_txn(
     let seed_doc_id = create_document(txn, &entry.collection, &canonical_input).await?;
 
     Ok(GraphRunReceipt {
-        run_id: run_id.clone(),
+        run_id: run_id.to_owned(),
         graph_id: graph_id.to_owned(),
         revision_digest: digest.to_owned(),
         entry_name: entry_name.to_owned(),
-        correlation: run_id,
+        correlation: run_id.to_owned(),
         seed_doc_id,
     })
 }

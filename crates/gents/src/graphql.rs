@@ -16,8 +16,6 @@
 //! `EventTrigger.filter` is by the trigger engine's filter probe — is
 //! covered by neither. See #1038.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -25,69 +23,33 @@ use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryResponse};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
-use tokio::sync::Mutex;
 
 pub use gents_protocol::graphql::{
     escape_graphql_string, validate_collection_identifier, validate_graphql_filter_fragment,
     validate_graphql_name,
 };
 
-pub const DEFRA_DB_CONFLICT_MAX_RETRIES: u32 = 3;
-pub const DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS: u64 = 100;
+const GRAPHQL_READ_MAX_RETRIES: u32 = 3;
+const GRAPHQL_READ_INITIAL_BACKOFF_MS: u64 = 100;
 
 const GRAPHQL_RETRY_POLICY: ExecuteRetryPolicy = ExecuteRetryPolicy::new(
-    DEFRA_DB_CONFLICT_MAX_RETRIES,
-    Duration::from_millis(DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS),
+    GRAPHQL_READ_MAX_RETRIES,
+    Duration::from_millis(GRAPHQL_READ_INITIAL_BACKOFF_MS),
     Duration::from_millis(800),
 );
-const GRAPHQL_SINGLE_ATTEMPT_POLICY: ExecuteRetryPolicy =
-    ExecuteRetryPolicy::new(0, Duration::ZERO, Duration::ZERO);
-
-type MutationWriteGate = Mutex<()>;
-
-pub(crate) trait GraphqlExecution: Sync {
-    async fn execute(&self, graphql: &str, retry_policy: ExecuteRetryPolicy) -> QueryResponse;
-}
-
-impl GraphqlExecution for EmbeddedNode {
-    async fn execute(&self, graphql: &str, retry_policy: ExecuteRetryPolicy) -> QueryResponse {
-        self.execute_with_retry(graphql, retry_policy).await
-    }
-}
-
-/// DefraDB commits auto-committed mutations at a database-wide revision
-/// boundary. Keep ordinary writes and explicit transactions on the same gate;
-/// the retry policy below then covers conflicts with transactions outside this
-/// process instead of making in-process writers race until one exhausts it.
-pub(crate) fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
-    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
-
-    let node_key = node as *const EmbeddedNode as usize;
-    let mut gates = GATES
-        .get_or_init(|| StdMutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
-        return gate;
-    }
-
-    gates.retain(|_, gate| gate.strong_count() > 0);
-    let gate = Arc::new(Mutex::new(()));
-    gates.insert(node_key, Arc::downgrade(&gate));
-    gate
-}
-
-async fn graphql_response_with_policy<E>(
-    executor: &E,
+async fn graphql_response_with_policy(
+    node: &EmbeddedNode,
     graphql: &str,
     operation: &str,
     retry_policy: ExecuteRetryPolicy,
-) -> QueryResponse
-where
-    E: GraphqlExecution + ?Sized,
-{
+) -> QueryResponse {
     let started = std::time::Instant::now();
-    let response = executor.execute(graphql, retry_policy).await;
+    let response = crate::config_client::ConfigAccess::execute_local_response_with_retry(
+        node,
+        graphql,
+        retry_policy,
+    )
+    .await;
     let elapsed = started.elapsed();
     if elapsed > Duration::from_secs(1) {
         tracing::warn!(
@@ -113,8 +75,9 @@ pub async fn graphql_response_with_transaction_retry(
     node: &EmbeddedNode,
     graphql: &str,
     operation: &str,
-) -> QueryResponse {
-    graphql_response_with_policy(node, graphql, operation, GRAPHQL_RETRY_POLICY).await
+) -> Result<QueryResponse> {
+    crate::config_client::ensure_query_document(graphql)?;
+    Ok(graphql_response_with_policy(node, graphql, operation, GRAPHQL_RETRY_POLICY).await)
 }
 
 /// Execute identity-aware GraphQL with transaction-conflict retry and fail on
@@ -124,49 +87,12 @@ pub async fn graphql_with_transaction_retry(
     graphql: &str,
     operation: &str,
 ) -> Result<QueryResponse> {
-    let response = graphql_response_with_transaction_retry(node, graphql, operation).await;
+    let response = graphql_response_with_transaction_retry(node, graphql, operation).await?;
     ensure_no_errors(&response, operation)?;
     Ok(response)
 }
 
-/// Execute an auto-committed GraphQL mutation through the single node-scoped
-/// write path. This low-level form is for callers that intentionally inspect
-/// GraphQL errors; most mutation callers should use
-/// [`graphql_mutation_with_transaction_retry`].
-pub async fn graphql_mutation_response_with_transaction_retry(
-    node: &EmbeddedNode,
-    graphql: &str,
-    operation: &str,
-) -> QueryResponse {
-    graphql_mutation_response_with_policy(node, node, graphql, operation, GRAPHQL_RETRY_POLICY)
-        .await
-}
-
-async fn graphql_mutation_response_with_policy<E>(
-    node: &EmbeddedNode,
-    executor: &E,
-    graphql: &str,
-    operation: &str,
-    retry_policy: ExecuteRetryPolicy,
-) -> QueryResponse
-where
-    E: GraphqlExecution + ?Sized,
-{
-    let gate = mutation_write_gate(node);
-    let _write_guard = gate.lock().await;
-    let response = graphql_response_with_policy(executor, graphql, operation, retry_policy).await;
-    if !response.has_errors() {
-        let affected_documents = mutation_affected_documents(&response);
-        tracing::debug!(
-            operation,
-            affected_documents,
-            "DefraDB GraphQL mutation completed"
-        );
-    }
-    response
-}
-
-fn mutation_affected_documents(response: &QueryResponse) -> usize {
+pub(crate) fn mutation_affected_documents(response: &QueryResponse) -> usize {
     response
         .data
         .as_ref()
@@ -182,65 +108,6 @@ fn mutation_affected_documents(response: &QueryResponse) -> usize {
                 .sum()
         })
         .unwrap_or_default()
-}
-
-/// Execute an auto-committed GraphQL mutation through the single node-scoped
-/// write path, with identity propagation, conflict retry, timing, and GraphQL
-/// error handling applied consistently.
-pub async fn graphql_mutation_with_transaction_retry(
-    node: &EmbeddedNode,
-    graphql: &str,
-    operation: &str,
-) -> Result<QueryResponse> {
-    graphql_mutation_with_transaction_retry_using(node, node, graphql, operation).await
-}
-
-pub(crate) async fn graphql_mutation_with_transaction_retry_using<E>(
-    node: &EmbeddedNode,
-    executor: &E,
-    graphql: &str,
-    operation: &str,
-) -> Result<QueryResponse>
-where
-    E: GraphqlExecution + ?Sized,
-{
-    graphql_mutation_with_policy(node, executor, graphql, operation, GRAPHQL_RETRY_POLICY).await
-}
-
-async fn graphql_mutation_with_policy<E>(
-    node: &EmbeddedNode,
-    executor: &E,
-    graphql: &str,
-    operation: &str,
-    retry_policy: ExecuteRetryPolicy,
-) -> Result<QueryResponse>
-where
-    E: GraphqlExecution + ?Sized,
-{
-    let response =
-        graphql_mutation_response_with_policy(node, executor, graphql, operation, retry_policy)
-            .await;
-    ensure_no_errors(&response, operation)?;
-    Ok(response)
-}
-
-pub(crate) async fn graphql_mutation_once_with_executor<E>(
-    node: &EmbeddedNode,
-    executor: &E,
-    graphql: &str,
-    operation: &str,
-) -> Result<QueryResponse>
-where
-    E: GraphqlExecution + ?Sized,
-{
-    graphql_mutation_with_policy(
-        node,
-        executor,
-        graphql,
-        operation,
-        GRAPHQL_SINGLE_ATTEMPT_POLICY,
-    )
-    .await
 }
 
 pub fn ensure_no_errors(response: &QueryResponse, operation: &str) -> Result<()> {
@@ -477,16 +344,6 @@ pub async fn composite_commits(
             .then_with(|| left.cid.cmp(&right.cid))
     });
     Ok(commits)
-}
-
-pub fn is_defradb_transaction_conflict_text(text: &str) -> bool {
-    text.to_ascii_lowercase().contains("transaction conflict")
-}
-
-pub fn defradb_conflict_retry_backoff(retry_index: u32) -> Duration {
-    Duration::from_millis(
-        DEFRA_DB_CONFLICT_INITIAL_BACKOFF_MS.saturating_mul(1u64 << retry_index.min(10)),
-    )
 }
 
 pub fn response_has_documents(value: &serde_json::Value) -> bool {

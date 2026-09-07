@@ -308,18 +308,6 @@ async fn upsert_inference_backend(
     backend_id: &str,
     backend: &AgentBackendConfig,
 ) -> Result<()> {
-    let txn = gents::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let validation = async {
-        let existing =
-            gents::config_client::load_inference_backend_in_txn(&txn, backend_id).await?;
-        live_backend_candidate(existing, backend_id, backend).validate(None)
-    }
-    .await;
-    if let Err(error) = validation {
-        let _ = txn.discard().await;
-        return Err(error);
-    }
-
     let escaped_backend_id = escape_graphql_string(backend_id);
     let escaped_endpoint = escape_graphql_string(&backend.endpoint);
     let escaped_provider_kind = escape_graphql_string(backend.provider_kind.as_str());
@@ -359,13 +347,22 @@ async fn upsert_inference_backend(
             ) {{ _docID }}
         }}"#
     );
-    match txn.execute(&mutation).await {
-        Ok(_) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    let mutation_ref = &mutation;
+    gents::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "desktop.fixture.inference_backend.upsert",
+        move |txn| {
+            Box::pin(async move {
+                let existing =
+                    gents::config_client::load_inference_backend_in_txn(txn, backend_id).await?;
+                live_backend_candidate(existing, backend_id, backend).validate(None)?;
+                txn.execute(mutation_ref).await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }
 
 fn live_backend_candidate(

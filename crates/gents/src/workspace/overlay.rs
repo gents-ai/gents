@@ -10,10 +10,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use crate::graphql::{
-    escape_graphql_string, first_row, graphql_mutation_with_transaction_retry,
-    graphql_with_transaction_retry, rows,
-};
+use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 use crate::tool_surface::{resolve_configured_tool_root, FileToolMode};
 use crate::toolset::{workspace_write_sandbox_enforced, WorkspaceAuthority};
 use crate::watcher::AgentRequest;
@@ -629,7 +626,7 @@ pub(super) async fn persist_workspace_binding_docs(
     } else {
         workspace_bindings_upsert_mutation(docs)
     };
-    graphql_mutation_with_transaction_retry(node, &mutation, "upsert_WorkspaceBinding")
+    crate::config_client::ConfigAccess::write_local(node, "workspace.upsert_binding", &mutation)
         .await
         .with_context(|| {
             format!(

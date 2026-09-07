@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use defra_node::EmbeddedNode;
-use gents_protocol::graphql::{execute_graphql_async, GraphqlRequestOptions};
+use gents_protocol::graphql::GraphqlRequestOptions;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
-use super::retry::log_mutation_timing;
 use crate::graphql::escape_graphql_string;
 
 const DEFAULT_BATCH_MUTATION_SIZE: usize = 50;
@@ -50,6 +49,12 @@ impl GraphqlExecuteResponse {
 #[async_trait]
 pub trait GraphqlExecutor: Send + Sync {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse>;
+
+    async fn execute_mutation(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<GraphqlExecuteResponse>;
 }
 
 #[async_trait]
@@ -61,8 +66,18 @@ impl GraphqlExecutor for EmbeddedNode {
                 query,
                 "session fork GraphQL",
             )
-            .await,
+            .await?,
         ))
+    }
+
+    async fn execute_mutation(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<GraphqlExecuteResponse> {
+        let value =
+            crate::config_client::ConfigAccess::write_local(self, operation, mutation).await?;
+        Ok(GraphqlExecuteResponse::from_http_value(value))
     }
 }
 
@@ -91,7 +106,19 @@ impl HttpGraphqlExecutor {
 #[async_trait]
 impl GraphqlExecutor for HttpGraphqlExecutor {
     async fn execute_graphql(&self, query: &str) -> Result<GraphqlExecuteResponse> {
-        let value = execute_graphql_async(&self.endpoint, query, self.options).await?;
+        let value =
+            crate::config_client::query_graphql_with_options(&self.endpoint, query, self.options)
+                .await?;
+        Ok(GraphqlExecuteResponse::from_http_value(value))
+    }
+
+    async fn execute_mutation(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<GraphqlExecuteResponse> {
+        let access = crate::config_client::ConfigAccess::Graphql(self.endpoint.clone());
+        let value = access.write(operation, mutation).await?;
         Ok(GraphqlExecuteResponse::from_http_value(value))
     }
 }
@@ -511,7 +538,8 @@ async fn copy_messages(
             requester_did = nullable_string_literal(requester_did),
         ));
     }
-    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_messages").await?;
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "session.fork_copy_messages")
+        .await?;
     Ok(mutation_fields.len() as u32)
 }
 
@@ -641,7 +669,8 @@ async fn copy_tool_calls(
             requester_did = nullable_string_literal(requester_did),
         ));
     }
-    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_tool_calls").await?;
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "session.fork_copy_tool_calls")
+        .await?;
     Ok(mutation_fields.len() as u32)
 }
 
@@ -718,7 +747,7 @@ async fn copy_tool_results(
             created_at_escaped = escape_graphql_string(created_at),
         ));
     }
-    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_tool_results")
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "session.fork_copy_tool_results")
         .await?;
     Ok(mutation_fields.len() as u32)
 }
@@ -807,7 +836,7 @@ async fn copy_compaction_entries(
             created_at_escaped = escape_graphql_string(created_at),
         ));
     }
-    execute_batch_mutation_with_retry(executor, &mutation_fields, "fork::copy_compaction_entries")
+    execute_batch_mutation_with_retry(executor, &mutation_fields, "session.fork_copy_compactions")
         .await?;
     Ok(mutation_fields.len() as u32)
 }
@@ -841,7 +870,7 @@ async fn create_child_session_and_conversation(
             }}) {{ _docID }}
         }}"#
     );
-    execute_mutation_with_retry(executor, &session_mutation, "fork::create_session").await?;
+    execute_mutation_with_retry(executor, &session_mutation, "session.fork_create_session").await?;
 
     let conv_mutation = format!(
         r#"mutation {{
@@ -862,18 +891,17 @@ async fn create_child_session_and_conversation(
             }}) {{ _docID }}
         }}"#
     );
-    execute_mutation_with_retry(executor, &conv_mutation, "fork::create_conversation").await?;
+    execute_mutation_with_retry(executor, &conv_mutation, "session.fork_create_conversation")
+        .await?;
     Ok(())
 }
 
 async fn execute_mutation_with_retry(
     executor: &(impl GraphqlExecutor + ?Sized),
     mutation: &str,
-    operation: &str,
+    operation: &'static str,
 ) -> Result<GraphqlExecuteResponse> {
-    let started = std::time::Instant::now();
-    let response = executor.execute_graphql(mutation).await?;
-    log_mutation_timing(operation, started.elapsed());
+    let response = executor.execute_mutation(operation, mutation).await?;
     if response.has_errors() {
         anyhow::bail!("{operation} failed: {}", render_graphql_errors(&response));
     }
@@ -883,7 +911,7 @@ async fn execute_mutation_with_retry(
 async fn execute_batch_mutation_with_retry(
     executor: &(impl GraphqlExecutor + ?Sized),
     mutation_fields: &[String],
-    operation: &str,
+    operation: &'static str,
 ) -> Result<()> {
     if mutation_fields.is_empty() {
         return Ok(());

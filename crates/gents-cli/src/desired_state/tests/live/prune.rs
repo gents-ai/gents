@@ -22,7 +22,6 @@ fn backend_entry(backend_id: &str) -> super::super::DesiredInferenceBackend {
 #[tokio::test]
 async fn diff_prune_detects_and_deletes_live_only_inference_backends() -> Result<()> {
     use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
-    use crate::config_import::apply_desired_state_changes;
     use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
 
     let tempdir = tempfile::tempdir()?;
@@ -52,9 +51,7 @@ async fn diff_prune_detects_and_deletes_live_only_inference_backends() -> Result
         false,
     );
     let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &bundle, &planned).await?;
 
     // Rename openai-sol-high -> openai-sol in the manifest; the live
     // document for the old id is now referenced by nothing.
@@ -92,9 +89,7 @@ async fn diff_prune_detects_and_deletes_live_only_inference_backends() -> Result
         planned.collections.inference_backends
     );
     let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &bundle, &planned).await?;
 
     let rows = crate::graphql_rows(
         &access,
@@ -122,7 +117,6 @@ async fn diff_prune_detects_and_deletes_live_only_inference_backends() -> Result
 #[tokio::test]
 async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
     use crate::config_bundle::{build_desired_state_live_bundle, live_manifest_from_bundle};
-    use crate::config_import::apply_desired_state_changes;
     use crate::desired_state::{diff_manifests, export_bundle_from_manifest};
 
     let tempdir = tempfile::tempdir()?;
@@ -149,9 +143,7 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
         false,
     );
     let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &bundle, &planned).await?;
 
     access
         .execute(
@@ -213,9 +205,7 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
     );
 
     let bundle = export_bundle_from_manifest(&manifest, access.mode())?;
-    let txn = access.begin_apply_txn().await?;
-    apply_desired_state_changes(&txn, &bundle, &planned).await?;
-    txn.commit().await?;
+    apply_live_desired_state(&access, &bundle, &planned).await?;
 
     let rows = crate::graphql_rows(
         &access,

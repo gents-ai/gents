@@ -796,40 +796,33 @@ pub async fn install_bundled_graph_package(
     // additive, idempotent prerequisite; package artifacts and the immutable
     // revision are committed together below.
     let prepared = prepare_bundled_graph_package_install(access, package_name, bindings).await?;
-    let preflight = access.begin_apply_txn().await?;
-    let preflight_result = crate::config_client::verify_existing_desired_state_plan(
-        &preflight,
-        &prepared.desired_state,
-    )
-    .await;
-    let discard_result = preflight.discard().await;
-    preflight_result?;
-    discard_result.context("discard graph package install preflight")?;
+    let desired_state = &prepared.desired_state;
+    access
+        .transact("graph_package.install_preflight", move |txn| {
+            Box::pin(async move {
+                crate::config_client::verify_existing_desired_state_plan(txn, desired_state).await
+            })
+        })
+        .await?;
 
     let package = load_bundled_graph_package(package_name)?;
     ensure_package_schemas(access, &package).await?;
 
-    let txn = access.begin_apply_txn().await?;
-    let result = async {
-        crate::config_client::verify_existing_desired_state_plan(&txn, &prepared.desired_state)
-            .await?;
-        apply_desired_state_plan(&txn, &prepared.desired_state).await?;
-        crate::graph_pipeline::materialize_graph_revision_in_txn(
-            &txn,
-            &bindings.owner_did,
-            &prepared.plan,
-        )
+    let desired_state = &prepared.desired_state;
+    let owner_did = bindings.owner_did.as_str();
+    let plan = &prepared.plan;
+    access
+        .transact("graph_package.install", move |txn| {
+            Box::pin(async move {
+                crate::config_client::verify_existing_desired_state_plan(txn, desired_state)
+                    .await?;
+                apply_desired_state_plan(txn, desired_state).await?;
+                crate::graph_pipeline::materialize_graph_revision_in_txn(txn, owner_did, plan)
+                    .await?;
+                Ok(())
+            })
+        })
         .await?;
-        Result::<()>::Ok(())
-    }
-    .await;
-    if let Err(error) = result {
-        let _ = txn.discard().await;
-        return Err(error);
-    }
-    txn.commit()
-        .await
-        .context("commit graph package installation")?;
 
     let package_plan = prepared.plan.package.as_ref().expect("bound package plan");
     Ok(GraphPackageInstallReceipt {

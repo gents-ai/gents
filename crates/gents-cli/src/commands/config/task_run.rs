@@ -298,7 +298,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
             })?
     } else {
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
-        let response = access.execute(&mutation).await?;
+        let response = access.write("cli.task_run.request", &mutation).await?;
         if let Some(errs) = response.get("errors").and_then(|v| v.as_array()) {
             if !errs.is_empty() {
                 anyhow::bail!("create manual AgentRequest failed: {errs:?}");

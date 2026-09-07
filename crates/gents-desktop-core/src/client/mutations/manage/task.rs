@@ -515,22 +515,11 @@ pub async fn upsert_event_trigger(node: &EmbeddedNode, row: &EventTriggerRow) ->
 
 pub async fn delete_task(node: &EmbeddedNode, task_id: &str) -> Result<usize> {
     let mutation = build_delete_task_mutation(task_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_task failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response =
+        super::super::graphql::execute_mutation_response(node, &mutation, "desktop.task.delete")
+            .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_Task"))
+        .pointer("/data/delete_Task")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
@@ -550,22 +539,14 @@ fn build_delete_task_mutation(task_id: &str) -> Result<String> {
 
 pub async fn delete_schedule(node: &EmbeddedNode, schedule_id: &str) -> Result<usize> {
     let mutation = build_delete_schedule_mutation(schedule_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_schedule failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.schedule.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_Schedule"))
+        .pointer("/data/delete_Schedule")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))
@@ -585,22 +566,14 @@ fn build_delete_schedule_mutation(schedule_id: &str) -> Result<String> {
 
 pub async fn delete_event_trigger(node: &EmbeddedNode, trigger_id: &str) -> Result<usize> {
     let mutation = build_delete_event_trigger_mutation(trigger_id)?;
-    let response = node.execute(&mutation).await;
-    if response.has_errors() {
-        bail!(
-            "delete_event_trigger failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = super::super::graphql::execute_mutation_response(
+        node,
+        &mutation,
+        "desktop.event_trigger.delete",
+    )
+    .await?;
     Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("delete_EventTrigger"))
+        .pointer("/data/delete_EventTrigger")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0))

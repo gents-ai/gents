@@ -13,9 +13,8 @@ use serde_json::{json, Value};
 
 use crate::document_config::{WriteToolDecl, WriteToolField};
 use crate::graphql::{
-    ensure_no_errors, escape_graphql_string, graphql_mutation_response_with_transaction_retry,
-    graphql_mutation_with_transaction_retry, graphql_with_transaction_retry, rows,
-    single_mutation_document, validate_collection_identifier, validate_graphql_name,
+    escape_graphql_string, graphql_with_transaction_retry, rows, single_mutation_document,
+    validate_collection_identifier, validate_graphql_name,
 };
 use crate::llm::tool::ToolDefinition;
 
@@ -535,13 +534,13 @@ pub async fn stamp_create_with_close_collections(
         deadline_at = optional_string_field("deadline_at", args.deadline_at.as_deref()),
         now = escape_graphql_string(&now),
     );
-    let response = graphql_mutation_response_with_transaction_retry(
+    let response = crate::config_client::ConfigAccess::write_local_response(
         node,
+        "mailbox.create_stamped_item",
         &mutation,
-        "create stamped mailbox item",
     )
     .await;
-    if !response.has_errors() {
+    if let Ok(response) = &response {
         let document = single_mutation_document(&response, "create_MailboxItem")?
             .context("create stamped mailbox item returned no row")?;
         return serde_json::from_value(document.clone()).context("decode created MailboxItem");
@@ -560,8 +559,8 @@ pub async fn stamp_create_with_close_collections(
         }
         bail!("mailbox unique-key collision did not match an open stamped owner/source tuple");
     }
-    ensure_no_errors(&response, "create stamped mailbox item")?;
-    unreachable!("error response was checked")
+    Err(response.expect_err("successful mailbox write returned above"))
+        .context("create stamped mailbox item")
 }
 
 #[derive(Debug)]
@@ -750,8 +749,12 @@ async fn transition_open_item(
         escape_graphql_string(&now),
         escape_graphql_string(&now),
     );
-    let response =
-        graphql_mutation_with_transaction_retry(node, &mutation, "close mailbox item").await?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "mailbox.close_item",
+        &mutation,
+    )
+    .await?;
     Ok(single_mutation_document(&response, "update_MailboxItem")?.is_some())
 }
 

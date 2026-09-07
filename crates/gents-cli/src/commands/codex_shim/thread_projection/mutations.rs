@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use gents::graphql::{escape_graphql_string, response_has_documents};
 use gents_codex_protocol as codex;
 
-use crate::commands::codex_shim::store::query_node_json;
+use crate::commands::codex_shim::store::write_committed;
 use crate::commands::codex_shim::ShimState;
 
 use super::{load_codex_thread, CodexThreadRecord};
@@ -74,7 +74,7 @@ pub(in crate::commands::codex_shim) async fn set_codex_thread_name(
             ) {{ _docID }}
         }}"#
     );
-    let response = query_node_json(&state.node, &mutation).await?;
+    let response = write_committed(&state.node, "codex.thread.set_name", &mutation).await?;
     let updated = response
         .pointer("/data/update_AgentConversation")
         .is_some_and(response_has_documents);

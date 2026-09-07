@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::graphql::{
-    escape_graphql_string, first_row, graphql_mutation_with_transaction_retry,
-    graphql_with_transaction_retry,
-};
+use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
 use crate::lifecycle::WorkspaceLineage;
 use crate::toolset::WorkspaceAuthority;
 use crate::watcher::AgentRequest;
@@ -592,14 +589,18 @@ async fn flush_seal_outcome(
         &outcome.receipt,
         &now,
     );
-    graphql_mutation_with_transaction_retry(node, &mutation, "seal workspace docs")
-        .await
-        .with_context(|| {
-            format!(
-                "persist sealed workspace {} receipt {}",
-                outcome.workspace.workspace_id, outcome.receipt.receipt_id
-            )
-        })?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "workspace.seal_documents",
+        &mutation,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "persist sealed workspace {} receipt {}",
+            outcome.workspace.workspace_id, outcome.receipt.receipt_id
+        )
+    })?;
     Ok(())
 }
 
@@ -608,14 +609,18 @@ async fn flush_integrate_outcome(
     outcome: &IntegrateWorkspaceOutcome,
 ) -> Result<()> {
     let mutation = workspace_integrate_docs_mutation(&[], &outcome.receipt);
-    graphql_mutation_with_transaction_retry(node, &mutation, "integrate workspace docs")
-        .await
-        .with_context(|| {
-            format!(
-                "persist integrator receipt {} for workspace {}",
-                outcome.receipt.receipt_id, outcome.workspace.workspace_id
-            )
-        })?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "workspace.integrate_documents",
+        &mutation,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "persist integrator receipt {} for workspace {}",
+            outcome.receipt.receipt_id, outcome.workspace.workspace_id
+        )
+    })?;
     Ok(())
 }
 
@@ -639,14 +644,18 @@ async fn release_integrate_binding(
         return Ok(());
     }
     let mutation = workspace_integrate_docs_mutation(&released, &outcome.receipt);
-    graphql_mutation_with_transaction_retry(node, &mutation, "release integrate binding")
-        .await
-        .with_context(|| {
-            format!(
-                "release Integrate binding for receipt {}",
-                outcome.receipt.receipt_id
-            )
-        })?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "workspace.release_integrate_binding",
+        &mutation,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "release Integrate binding for receipt {}",
+            outcome.receipt.receipt_id
+        )
+    })?;
     Ok(())
 }
 
@@ -662,14 +671,18 @@ async fn flush_cleanup_outcome(
         .cloned()
         .collect();
     let mutation = workspace_cleanup_docs_mutation(&outcome.workspace, &bindings);
-    graphql_mutation_with_transaction_retry(node, &mutation, "cleanup workspace docs")
-        .await
-        .with_context(|| {
-            format!(
-                "persist cleaned workspace {}",
-                outcome.workspace.workspace_id
-            )
-        })?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "workspace.cleanup_documents",
+        &mutation,
+    )
+    .await
+    .with_context(|| {
+        format!(
+            "persist cleaned workspace {}",
+            outcome.workspace.workspace_id
+        )
+    })?;
     Ok(())
 }
 

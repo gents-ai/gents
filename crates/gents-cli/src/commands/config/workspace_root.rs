@@ -82,7 +82,9 @@ pub(super) async fn workspace_root_set(args: WorkspaceRootUpsertArgs) -> Result<
             ) {{ _docID }}
         }}"#
     );
-    let response = access.execute(&mutation).await?;
+    let response = access
+        .write("cli.config.workspace_root.upsert", &mutation)
+        .await?;
     let doc_id = extract_mutation_doc_id(&response, "WorkspaceRoot")?;
     print_json(&json!({
         "doc_id": doc_id,
@@ -107,7 +109,9 @@ pub(super) async fn workspace_root_rm(args: ConfigShowArgs) -> Result<()> {
     let mutation = format!(
         r#"mutation {{ delete_WorkspaceRoot(filter: {{ root_path: {{ _eq: "{root_path_escaped}" }} }}) {{ _docID }} }}"#
     );
-    let response = access.execute(&mutation).await?;
+    let response = access
+        .write("cli.config.workspace_root.delete", &mutation)
+        .await?;
     let deleted = response
         .get("data")
         .and_then(|data| data.get("delete_WorkspaceRoot"))

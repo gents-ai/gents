@@ -133,10 +133,10 @@ async fn consume_operator_nonce(
             }}) {{ _docID }}
         }}"#
     );
-    match gents::graphql::graphql_mutation_with_transaction_retry(
+    match gents::config_client::ConfigAccess::write_local(
         node,
+        "cli.enrollment.consume_operator_nonce",
         &mutation,
-        "consume enrollment operator nonce",
     )
     .await
     {
@@ -402,10 +402,10 @@ pub(crate) async fn ensure_enrollment_network(
                     }}) {{ _docID }}
                 }}"#
             );
-            gents::graphql::graphql_mutation_with_transaction_retry(
+            gents::config_client::ConfigAccess::write_local(
                 node,
+                "cli.enrollment.create_agent_network",
                 &mutation,
-                "create_enrollment_agent_network",
             )
             .await?;
             Ok(record)

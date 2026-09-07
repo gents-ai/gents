@@ -91,10 +91,10 @@ async fn drain_pending_session_requests_where(
                 ) {{ _docID }}
             }}"#
         );
-        let response = crate::retry::execute_graphql_with_terminal_persistence_retry(
+        let response = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
             node,
-            &mutation,
             "drain_automated_wakeup",
+            &mutation,
         )
         .await?;
         if response

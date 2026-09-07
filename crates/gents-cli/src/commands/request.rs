@@ -1138,7 +1138,9 @@ async fn request_interrupt(args: RequestInterruptArgs) -> Result<()> {
             request_id = escape_graphql_string(&request_id),
             now_escaped = escape_graphql_string(&now),
         );
-        post_graphql(&graphql, &mutation).await?;
+        ConfigAccess::Graphql(graphql.clone())
+            .write("cli.request.interrupt", &mutation)
+            .await?;
     }
 
     let mut row = fetch_interrupt_request_row(&graphql, &request_id).await?;

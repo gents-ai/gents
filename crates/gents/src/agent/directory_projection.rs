@@ -585,10 +585,10 @@ impl DirectoryStore for GraphqlDirectoryStore {
     async fn upsert_directory_entry(&self, entry: &DirectoryEntry) -> Result<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let mutation = upsert_directory_entry_mutation(entry, &now);
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.upsert_agent_directory",
             &mutation,
-            "upsert AgentDirectoryEntry",
         )
         .await
         .map(|_| ())
@@ -596,10 +596,10 @@ impl DirectoryStore for GraphqlDirectoryStore {
 
     async fn delete_directory_entry(&self, source_did: &str, agent_did: &str) -> Result<()> {
         let mutation = delete_directory_entry_mutation(source_did, agent_did);
-        crate::graphql::graphql_mutation_with_transaction_retry(
+        crate::config_client::ConfigAccess::write_local_response(
             &self.node,
+            "p2p.delete_agent_directory",
             &mutation,
-            "delete AgentDirectoryEntry",
         )
         .await
         .map(|_| ())

@@ -154,7 +154,7 @@ pub async fn write_inference_backend_document(
         update_fields = update_fields,
     );
     let response = access
-        .execute_mutation(&mutation, "upsert InferenceBackend")
+        .write("config.inference_backend.upsert", &mutation)
         .await?;
     gents_protocol::graphql::extract_mutation_doc_id(&response, "InferenceBackend")
 }

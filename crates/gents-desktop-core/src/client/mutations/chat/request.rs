@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::config_client::ConfigApplyTxn;
+use gents::config_client::{ConfigAccess, ConfigApplyTxn, IdempotentTransactionRetry};
 use gents::lifecycle::{ExecutionOrigin, TriggerLineage, DEFAULT_REQUEST_MAX_RETRIES};
 use gents::skills::prompt_slash_skill_selection;
 use gents::{
@@ -19,8 +19,6 @@ use super::super::graphql::{
     escape_graphql_string, execute_mutation, normalize_optional_string, normalize_required,
 };
 use super::binding::resolve_agent_binding;
-
-const RETRY_TRANSACTION_ATTEMPTS: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SubmittedRequest {
@@ -323,42 +321,30 @@ async fn retry_request_with_request_id(
     )?;
     let requester_did = normalize_required("requester_did", requester_did)?;
 
-    let mut last_error = None;
-    for attempt in 0..RETRY_TRANSACTION_ATTEMPTS {
-        let txn = ConfigApplyTxn::begin_local(node, None).await?;
-        match retry_request_in_txn(
-            &txn,
-            store,
-            parent_request_id,
-            agent_did,
-            requester_did,
-            signer,
-            admission.clone(),
-            &request_id,
-        )
-        .await
-        {
-            Ok(submitted) => match txn.commit().await {
-                Ok(()) => return Ok(submitted),
-                Err(error) => {
-                    last_error = Some(error.context("committing retry transaction"));
-                }
-            },
-            Err(error) => {
-                let retryable = retry_transaction_error_is_retryable(&error);
-                let _ = txn.discard().await;
-                if !retryable {
-                    return Err(error);
-                }
-                last_error = Some(error);
-            }
-        }
-        if attempt + 1 < RETRY_TRANSACTION_ATTEMPTS {
-            tokio::time::sleep(gents::retry::defradb_conflict_retry_backoff(attempt as u32)).await;
-        }
-    }
-    Err(last_error
-        .unwrap_or_else(|| anyhow::anyhow!("retry transaction exhausted without an error")))
+    let request_id_ref = &request_id;
+    ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        IdempotentTransactionRetry::FiveAttempts,
+        "desktop.request.retry",
+        move |txn| {
+            let admission = admission.clone();
+            Box::pin(async move {
+                retry_request_in_txn(
+                    txn,
+                    store,
+                    parent_request_id,
+                    agent_did,
+                    requester_did,
+                    signer,
+                    admission,
+                    request_id_ref,
+                )
+                .await
+            })
+        },
+    )
+    .await
 }
 
 async fn retry_request_in_txn(
@@ -469,14 +455,6 @@ async fn retry_request_in_txn(
 
 fn retry_successor_key(parent_request_doc_id: &str) -> String {
     format!("retry:doc:{parent_request_doc_id}")
-}
-
-fn retry_transaction_error_is_retryable(error: &anyhow::Error) -> bool {
-    let text = error.to_string().to_ascii_lowercase();
-    gents::retry::is_defradb_transaction_conflict_text(&text)
-        || text.contains("unique")
-        || text.contains("constraint")
-        || text.contains("database is locked")
 }
 
 async fn load_retry_successor_in_txn(

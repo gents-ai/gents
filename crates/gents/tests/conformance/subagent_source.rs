@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::graphql::graphql_response_with_transaction_retry as execute_graphql_with_conflict_retry;
 use gents::interrupt::{fetch_interrupt_requested_at, interrupt_request};
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id,
@@ -2132,8 +2131,7 @@ async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_graphql_with_conflict_retry(node, &mutation, "mark test request dead").await;
+    let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
         "mark_request_dead failed: {:?}",
@@ -2153,8 +2151,7 @@ async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response =
-        execute_graphql_with_conflict_retry(node, &mutation, "mark test request completed").await;
+    let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
         "mark_request_completed failed: {:?}",
@@ -2535,12 +2532,7 @@ async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
             ) {{ _docID }}
         }}"#
     );
-    let response = execute_graphql_with_conflict_retry(
-        node,
-        &mutation,
-        "mark interrupted request in subagent conformance",
-    )
-    .await;
+    let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
         "mark_request_interrupted failed: {:?}",

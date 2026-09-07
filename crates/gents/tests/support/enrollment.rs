@@ -3,10 +3,7 @@ use std::time::{Duration, Instant};
 
 use gents::agent::p2p_reconcile::GraphqlEnrollmentStore;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{
-    escape_graphql_string,
-    graphql_response_with_transaction_retry as execute_graphql_with_conflict_retry,
-};
+use gents::graphql::escape_graphql_string;
 use gents::AgentIdentity;
 use gents_protocol::enrollment::{
     derive_enrollment_id, encode_offer, enrollment_schema_fingerprint, EnrollmentDecisionKind,
@@ -110,12 +107,7 @@ pub async fn authorize_enrollment_peer(
             ) {{ _docID }}
         }}"#
     );
-    let response = execute_graphql_with_conflict_retry(
-        node.as_ref(),
-        &network_mutation,
-        "seed enrollment AgentNetwork",
-    )
-    .await;
+    let response = node.execute(&network_mutation).await;
     assert!(
         !response.has_errors(),
         "upsert AgentNetwork failed: {:?}",
@@ -235,12 +227,7 @@ pub async fn authorize_enrollment_peer(
         field(&request.expires_at),
         candidate_sig,
     );
-    let response = execute_graphql_with_conflict_retry(
-        node.as_ref(),
-        &request_mutation,
-        "seed enrollment request",
-    )
-    .await;
+    let response = node.execute(&request_mutation).await;
     assert!(
         !response.has_errors(),
         "create enrollment request failed: {:?}",

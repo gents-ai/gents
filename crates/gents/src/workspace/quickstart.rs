@@ -70,7 +70,9 @@ async fn upsert_repository_placement(
     };
     let mutation =
         repository_placement_upsert_mutation(&placement, &chrono::Utc::now().to_rfc3339())?;
-    access.execute_committed(&mutation).await?;
+    access
+        .write("workspace.repository_placement.upsert", &mutation)
+        .await?;
     Ok(())
 }
 
@@ -81,30 +83,22 @@ async fn flush_workspace_documents(
     if documents.workspaces.is_empty() && documents.placements.is_empty() {
         return Ok(());
     }
-    let txn = access.begin_apply_txn().await?;
-    let result = async {
-        for workspace in documents.workspaces.values() {
-            txn.execute(&isolated_workspace_upsert_mutation(workspace))
-                .await?;
-        }
-        let now = chrono::Utc::now().to_rfc3339();
-        for placement in documents.placements.values() {
-            txn.execute(&workspace_placement_upsert_mutation(placement, &now))
-                .await?;
-        }
-        Result::<()>::Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn
-            .commit()
-            .await
-            .context("commit graph workspace placement"),
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    access
+        .transact("workspace.documents.flush", move |txn| {
+            Box::pin(async move {
+                for workspace in documents.workspaces.values() {
+                    txn.execute(&isolated_workspace_upsert_mutation(workspace))
+                        .await?;
+                }
+                let now = chrono::Utc::now().to_rfc3339();
+                for placement in documents.placements.values() {
+                    txn.execute(&workspace_placement_upsert_mutation(placement, &now))
+                        .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
 }
 
 /// Create a Git worktree at an immutable head commit and persist its ordinary

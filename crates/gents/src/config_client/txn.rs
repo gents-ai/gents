@@ -1,199 +1,396 @@
-//! Open-write transaction wrapper around [`ConfigAccess`].
-//!
-//! `ConfigApplyTxn` is the only access type passed through the apply pipeline
-//! once `config apply` has begun a transaction. The top-level orchestrator
-//! drives `begin_apply_txn` → `apply_desired_state_changes` → `commit` (on
-//! success) or `discard` (on error). The runtime self-config tools drive the
-//! same shape per patch via [`ConfigApplyTxn::begin_local`], with the agent
-//! DID attached so DefraDB ACP checks every statement.
-//!
-//! Discard semantics differ between backends:
-//! - **Embedded.** `runner.rollback_txn` returns `TransactionError` only in
-//!   pathological cases (handle already finalized, lock poisoned). The
-//!   underlying `db_txn` is dropped in any case.
-//! - **HTTP.** `DELETE /api/v0/tx/{id}` is a network call; it can fail for
-//!   reasons unrelated to the apply error. Even if the DELETE never reaches
-//!   the server, transaction **atomicity** guarantees the apply has no
-//!   committed effect: a transaction that never sees a `commit` yields no
-//!   externally-visible mutations. The orphaned handle is bounded by
-//!   DefraDB's per-request HTTP timeout (30s default), not an active idle-GC
-//!   sweep.
-//!
-//! Both return `Result<()>` so callers can log discrepancies, but neither
-//! changes operator-facing behavior on failure: the apply error is what
-//! surfaces, and the DB ends at the pre-apply snapshot via atomicity.
+//! Canonical committed-write owner for embedded and HTTP DefraDB access.
+
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::future::Future;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
-use defra_node::{EmbeddedNode, QueryRequest};
-use gents_protocol::graphql::{execute_graphql_async_with_tx, GraphqlRequestOptions};
+use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
+use futures::future::BoxFuture;
 use identity::Did;
 use query::TransactionHandle;
 use serde_json::{json, Value};
 
-use super::{graphql_api_base, graphql_diagnostic_hint, ConfigAccess};
+use super::graphql;
+use super::retry;
+use super::write_telemetry::{
+    ConflictSource, ReceiptRecovery, RetryOwner, RollbackStatus, WriteAttemptEvent,
+    WriteAttemptOrdinal, WriteBackend, WriteMode, WriteOperation, WriteOutcome,
+};
+use super::{graphql_api_base, ConfigAccess};
 
 enum TxnBackend<'a> {
-    /// Numeric txn id parsed from `POST /api/v0/tx`. Identity cannot ride
-    /// this path (`QueryRequest.identity` is `#[serde(skip)]`): without an
-    /// authenticated HTTP bearer the ACP actor is anonymous, while committed
-    /// mutations are still signed by the server node.
-    Graphql {
+    Http {
         endpoint: &'a str,
         id: String,
-        http_client: reqwest::Client,
+        client: reqwest::Client,
     },
-    /// Embedded transaction handle returned by `runner.begin_txn(false)`.
-    /// When `identity` is set, every statement carries it as the DefraDB
-    /// document-ACP actor.
-    Local {
+    Embedded {
         node: &'a EmbeddedNode,
         handle: TransactionHandle,
         identity: Option<Did>,
     },
 }
 
-pub struct ConfigApplyTxn<'a> {
-    backend: TxnBackend<'a>,
-    rollback_on_drop: Option<LocalRollback>,
+type MutationWriteGate = tokio::sync::Mutex<()>;
+
+fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
+    static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
+
+    let node_key = node as *const EmbeddedNode as usize;
+    let mut gates = GATES
+        .get_or_init(|| StdMutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(gate) = gates.get(&node_key).and_then(Weak::upgrade) {
+        return gate;
+    }
+
+    gates.retain(|_, gate| gate.strong_count() > 0);
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    gates.insert(node_key, Arc::downgrade(&gate));
+    gate
 }
 
-/// The registry owns open transactions independently of their handles. Keep
-/// cleanup armed across awaits, including a cancelled commit/discard future.
-/// Remove this shim after upstream adoption: https://github.com/gents-ai/gents/issues/1372.
-struct LocalRollback {
-    runner: std::sync::Arc<dyn query::QueryExecutor>,
-    handle: Option<TransactionHandle>,
-    write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+enum RollbackOnDrop {
+    Http {
+        endpoint: String,
+        id: String,
+        client: reqwest::Client,
+        armed: bool,
+    },
+    Embedded {
+        runner: Arc<dyn query::QueryExecutor>,
+        handle: Option<TransactionHandle>,
+        write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+        armed: bool,
+    },
 }
 
-impl Drop for LocalRollback {
-    fn drop(&mut self) {
-        let Some(handle) = self.handle.take() else {
-            return;
+impl RollbackOnDrop {
+    fn disarm(&mut self) {
+        match self {
+            Self::Http { armed, .. } | Self::Embedded { armed, .. } => *armed = false,
+        }
+    }
+
+    fn set_embedded_handle(&mut self, transaction_handle: TransactionHandle) {
+        let Self::Embedded { handle, .. } = self else {
+            unreachable!("only embedded rollback owners receive native handles")
         };
+        *handle = Some(transaction_handle);
+    }
+}
+
+impl Drop for RollbackOnDrop {
+    fn drop(&mut self) {
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let runner = self.runner.clone();
-        let write_guard = self.write_guard.take();
-        runtime.spawn(async move {
-            let _write_guard = write_guard;
-            if let Err(error) = runner.rollback_txn(&handle).await {
-                tracing::debug!(%error, transaction = %handle, "dropped transaction was already finalized or rollback failed");
+        match self {
+            Self::Http {
+                endpoint,
+                id,
+                client,
+                armed,
+            } => {
+                if !*armed {
+                    return;
+                }
+                let endpoint = endpoint.clone();
+                let id = id.clone();
+                let client = client.clone();
+                runtime.spawn(async move {
+                    if let Err(error) = graphql::txn_discard(&endpoint, &id, &client).await {
+                        tracing::debug!(%error, "discarding cancelled HTTP transaction");
+                    }
+                });
             }
-        });
+            Self::Embedded {
+                runner,
+                handle,
+                write_guard,
+                armed,
+            } => {
+                if !*armed {
+                    return;
+                }
+                let Some(handle) = handle.take() else {
+                    return;
+                };
+                let runner = runner.clone();
+                let write_guard = write_guard.take();
+                runtime.spawn(async move {
+                    let _write_guard = write_guard;
+                    if let Err(error) = runner.rollback_txn(&handle).await {
+                        tracing::debug!(%error, "discarding cancelled embedded transaction");
+                    }
+                });
+            }
+        }
     }
 }
 
+async fn begin_embedded_owned<F, Fut>(
+    runner: Arc<dyn query::QueryExecutor>,
+    write_guard: tokio::sync::OwnedMutexGuard<()>,
+    cancellation_rollback_scheduled: Arc<AtomicBool>,
+    after_begin: F,
+) -> Result<(RollbackOnDrop, TransactionHandle)>
+where
+    F: FnOnce(TransactionHandle) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    // Construct the cleanup owner before begin. The caller deliberately runs
+    // this future in a detached task: if its JoinHandle is cancelled after
+    // DefraDB registers the transaction, dropping the task output still owns
+    // and rolls back the handle before releasing the write gate.
+    let mut rollback = RollbackOnDrop::Embedded {
+        runner: Arc::clone(&runner),
+        handle: None,
+        write_guard: Some(write_guard),
+        armed: true,
+    };
+    let handle = runner
+        .begin_txn(false)
+        .await
+        .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+    rollback.set_embedded_handle(handle.clone());
+    cancellation_rollback_scheduled.store(true, Ordering::Release);
+    after_begin(handle.clone()).await;
+    Ok((rollback, handle))
+}
+
+async fn begin_http_owned(
+    endpoint: String,
+    cancellation_rollback_scheduled: Arc<AtomicBool>,
+) -> Result<(reqwest::Client, String, RollbackOnDrop)> {
+    // Keep the response owner alive if the caller is cancelled while DefraDB
+    // is returning the newly registered ID. Once the ID arrives, dropping the
+    // detached task output schedules DELETE through `RollbackOnDrop`.
+    let (client, id) = graphql::txn_begin(&endpoint).await?;
+    let rollback = RollbackOnDrop::Http {
+        endpoint,
+        id: id.clone(),
+        client: client.clone(),
+        armed: true,
+    };
+    cancellation_rollback_scheduled.store(true, Ordering::Release);
+    Ok((client, id, rollback))
+}
+
+#[derive(Clone, Copy)]
+enum CommitCleanup {
+    NotNeeded,
+    Required,
+}
+
+struct CommitFailure {
+    error: anyhow::Error,
+    cleanup: CommitCleanup,
+}
+
+/// Bounded replay policy for transactions whose callbacks are safe to repeat
+/// because every created document has a stable identity and every update is
+/// guarded by durable state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdempotentTransactionRetry {
+    /// One initial attempt plus three retries.
+    Standard,
+    /// One initial attempt plus four retries.
+    FiveAttempts,
+}
+
+impl IdempotentTransactionRetry {
+    const fn max_attempts(self) -> u32 {
+        match self {
+            Self::Standard => 4,
+            Self::FiveAttempts => 5,
+        }
+    }
+}
+
+/// Result of a transaction whose caller treats a competing commit as a new
+/// observation to reload rather than an operation failure.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TransactionOutcome<T> {
+    Committed(T),
+    ConflictObserved,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TransactionMode {
+    ConflictRetry,
+    Idempotent(IdempotentTransactionRetry),
+    ObserveConflict,
+}
+
+impl TransactionMode {
+    const fn max_attempts(self) -> u32 {
+        match self {
+            Self::ConflictRetry => retry::TRANSACT_CONFLICT_MAX_RETRIES + 1,
+            Self::Idempotent(policy) => policy.max_attempts(),
+            Self::ObserveConflict => 1,
+        }
+    }
+
+    const fn retry_owner(self) -> RetryOwner {
+        match self {
+            Self::Idempotent(_) => RetryOwner::GentsIdempotentTransaction,
+            Self::ConflictRetry | Self::ObserveConflict => RetryOwner::GentsTransaction,
+        }
+    }
+
+    const fn retries_generic_errors(self) -> bool {
+        matches!(self, Self::Idempotent(_))
+    }
+
+    fn retries_callback_error(self, error: &anyhow::Error) -> bool {
+        matches!(self, Self::Idempotent(_)) && retry::is_transaction_storage_failure(error)
+    }
+
+    const fn observes_conflicts(self) -> bool {
+        matches!(self, Self::ObserveConflict)
+    }
+}
+
+/// An open explicit transaction. Callers receive this only inside
+/// [`ConfigAccess::transact`] callbacks once migrations are complete.
+///
+/// The raw begin/commit/discard transport lives in the crate-private
+/// `graphql` submodule and is not nameable from outside `gents`; external
+/// callers must go through the owned [`ConfigAccess::write`] and
+/// [`ConfigAccess::transact`] entry points:
+///
+/// ```compile_fail
+/// use gents::config_client::graphql::txn_begin;
+/// // The `graphql` transport module is private to `gents`, so this import
+/// // fails with E0603 and raw transactions cannot be driven directly.
+/// let _ = txn_begin("http://127.0.0.1:1/api/v0/graphql");
+/// ```
+pub struct ConfigApplyTxn<'a> {
+    backend: TxnBackend<'a>,
+    rollback_on_drop: Option<RollbackOnDrop>,
+    affected_documents: AtomicU64,
+}
+
 impl<'a> ConfigApplyTxn<'a> {
-    /// Begin an embedded-node transaction, optionally executing under a
-    /// specific DID identity so document ACP applies to every statement.
-    /// When omitted, DefraDB supplies the embedded node DID and signer.
-    ///
-    /// This is the runtime self-config entry point; the CLI apply path goes
-    /// through [`ConfigAccess::begin_apply_txn`]. Embedded access defaults to
-    /// the node DID; HTTP access needs bearer authentication for a caller ACP
-    /// identity even though the server node signs its commits.
-    pub async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
-        let write_guard = crate::graphql::mutation_write_gate(node).lock_owned().await;
+    async fn begin_local_owned(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        cancellation_rollback_scheduled: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        let write_guard = mutation_write_gate(node).lock_owned().await;
         let runner = node.runner().clone();
-        // Native begin registers an independently owned transaction. Let it
-        // finish even if this caller is cancelled, so the returned rollback
-        // guard cleans up the handle before releasing the shared write gate.
-        let rollback = tokio::spawn(async move {
-            let mut rollback = LocalRollback {
-                runner,
-                handle: None,
-                write_guard: Some(write_guard),
-            };
-            let handle = rollback
-                .runner
-                .begin_txn(false)
-                .await
-                .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
-            rollback.handle = Some(handle);
-            Ok::<_, anyhow::Error>(rollback)
-        })
+        let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
+            runner,
+            write_guard,
+            cancellation_rollback_scheduled,
+            |_| std::future::ready(()),
+        ))
         .await
         .context("begin embedded transaction task")??;
-        let handle = rollback
-            .handle
-            .as_ref()
-            .expect("successful begin has a handle")
-            .clone();
         Ok(Self {
-            rollback_on_drop: Some(rollback),
-            backend: TxnBackend::Local {
+            backend: TxnBackend::Embedded {
                 node,
-                handle,
+                handle: handle.clone(),
                 identity,
             },
+            rollback_on_drop: Some(rollback_on_drop),
+            affected_documents: AtomicU64::new(0),
         })
     }
 
-    /// Execute a GraphQL query within this transaction.
-    pub async fn execute(&self, query: &str) -> Result<Value> {
-        match &self.backend {
-            TxnBackend::Graphql {
+    #[cfg(test)]
+    pub(crate) async fn begin_local(node: &'a EmbeddedNode, identity: Option<Did>) -> Result<Self> {
+        Self::begin_local_owned(node, identity, Arc::new(AtomicBool::new(false))).await
+    }
+
+    async fn begin_http(
+        endpoint: &'a str,
+        cancellation_rollback_scheduled: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        let (client, id, rollback_on_drop) = tokio::spawn(begin_http_owned(
+            endpoint.to_owned(),
+            cancellation_rollback_scheduled,
+        ))
+        .await
+        .context("begin HTTP transaction task")??;
+        let txn = Self {
+            backend: TxnBackend::Http {
+                endpoint,
+                id: id.clone(),
+                client: client.clone(),
+            },
+            rollback_on_drop: Some(rollback_on_drop),
+            affected_documents: AtomicU64::new(0),
+        };
+        Ok(txn)
+    }
+
+    /// Execute exactly once inside this snapshot. Conflict replay belongs to
+    /// the outer `transact` owner and always begins a fresh transaction.
+    pub async fn execute(&self, document: &str) -> Result<Value> {
+        let response = match &self.backend {
+            TxnBackend::Http {
                 endpoint,
                 id,
-                http_client: _,
-            } => execute_graphql_async_with_tx(
-                endpoint,
-                query,
-                GraphqlRequestOptions {
-                    timeout: std::time::Duration::from_secs(30),
-                    max_attempts: 5,
-                    retry_backoff: std::time::Duration::from_millis(100),
-                },
-                Some(id),
-            )
-            .await
-            .map_err(|error| anyhow::anyhow!("{error}\n{}", graphql_diagnostic_hint(endpoint))),
-            TxnBackend::Local {
+                client,
+            } => graphql::txn_execute(endpoint, id, client, document)
+                .await
+                .map_err(retry::transaction_storage_failure)?,
+            TxnBackend::Embedded {
                 node,
                 handle,
                 identity,
             } => {
-                let request = QueryRequest::new(query).with_identity(identity.clone());
-                let response = node.execute_request_in_txn(request, handle).await;
-                if response.has_errors() {
-                    anyhow::bail!("graphql returned errors: {:?}", response.errors);
+                let response = node
+                    .execute_request_in_txn(
+                        QueryRequest::new(document).with_identity(identity.clone()),
+                        handle,
+                    )
+                    .await;
+                if response.is_transaction_conflict() {
+                    return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
                 }
-                Ok(json!({ "data": response.data.unwrap_or(Value::Null) }))
+                if response.has_errors() {
+                    return Err(retry::transaction_storage_failure(anyhow::anyhow!(
+                        "graphql returned errors: {:?}",
+                        response.errors
+                    )));
+                }
+                json!({"data": response.data.unwrap_or(Value::Null)})
             }
+        };
+        if document.trim_start().starts_with("mutation") {
+            self.affected_documents
+                .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
         }
+        Ok(response)
     }
 
-    /// Return the active collection version through the same local-or-HTTP
-    /// backend as this transaction. DefraDB schema registration is additive
-    /// and lives outside document transactions, so this is the authoritative
-    /// schema-readiness view for transactional package checks.
     pub async fn collection_version(&self, collection: &str) -> Result<Option<Value>> {
         crate::graphql::validate_collection_identifier(collection)?;
         match &self.backend {
-            TxnBackend::Local { node, .. } => node
+            TxnBackend::Embedded { node, .. } => node
                 .get_collection(collection)?
                 .map(serde_json::to_value)
                 .transpose()
                 .context("serializing active collection version"),
-            TxnBackend::Graphql {
-                endpoint,
-                http_client,
-                ..
+            TxnBackend::Http {
+                endpoint, client, ..
             } => {
-                let api_base = graphql_api_base(endpoint)?;
-                let url = format!("{api_base}/collections/versions");
-                let versions: Value = http_client
+                let url = format!("{}/collections/versions", graphql_api_base(endpoint)?);
+                let versions: Value = client
                     .get(&url)
                     .send()
-                    .await
-                    .with_context(|| format!("fetching collection versions from {url}"))?
-                    .error_for_status()
-                    .with_context(|| format!("fetching collection versions from {url}"))?
+                    .await?
+                    .error_for_status()?
                     .json()
-                    .await
-                    .with_context(|| format!("decoding collection versions from {url}"))?;
+                    .await?;
                 Ok(versions.as_array().and_then(|versions| {
                     versions
                         .iter()
@@ -210,16 +407,11 @@ impl<'a> ConfigApplyTxn<'a> {
         }
     }
 
-    /// Execute against an embedded transaction while preserving the native
-    /// response envelope, including composite-version metadata. Runtime
-    /// lifecycle transitions need that exact commit identity; converting to
-    /// JSON would discard the typed version join used by rendered-request
-    /// capture. HTTP config-apply callers intentionally cannot use this seam.
     pub(crate) async fn execute_local_response(
         &self,
-        query: &str,
+        document: &str,
     ) -> Result<defra_node::QueryResponse> {
-        let TxnBackend::Local {
+        let TxnBackend::Embedded {
             node,
             handle,
             identity,
@@ -227,389 +419,845 @@ impl<'a> ConfigApplyTxn<'a> {
         else {
             anyhow::bail!("native transaction responses require embedded access");
         };
-        let request = QueryRequest::new(query).with_identity(identity.clone());
-        let response = node.execute_request_in_txn(request, handle).await;
+        let response = node
+            .execute_request_in_txn(
+                QueryRequest::new(document).with_identity(identity.clone()),
+                handle,
+            )
+            .await;
+        if response.is_transaction_conflict() {
+            return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
+        }
         if response.has_errors() {
-            anyhow::bail!("graphql returned errors: {:?}", response.errors);
+            return Err(retry::transaction_storage_failure(anyhow::anyhow!(
+                "graphql returned errors: {:?}",
+                response.errors
+            )));
+        }
+        if document.trim_start().starts_with("mutation") {
+            let envelope = json!({"data": response.data.as_ref().unwrap_or(&Value::Null)});
+            self.affected_documents
+                .fetch_add(graphql::affected_documents(&envelope), Ordering::Relaxed);
         }
         Ok(response)
     }
 
-    /// Commit the transaction. Apply is durable after this returns Ok.
-    pub async fn commit(mut self) -> Result<()> {
-        let result = match self.backend {
-            TxnBackend::Graphql {
+    async fn commit_inner(&mut self) -> std::result::Result<(), CommitFailure> {
+        match &self.backend {
+            TxnBackend::Http {
                 endpoint,
                 id,
-                http_client,
-            } => {
-                let api_base = graphql_api_base(endpoint)?;
-                let status;
-                let bytes;
-                {
-                    let response = http_client
-                        .post(format!("{api_base}/tx/{id}"))
-                        .send()
-                        .await
-                        .with_context(|| format!("posting tx commit to {endpoint}"))?;
-                    status = response.status();
-                    bytes = response
-                        .bytes()
-                        .await
-                        .with_context(|| format!("reading tx commit body from {endpoint}"))?;
-                }
-                if !status.is_success() {
-                    anyhow::bail!(
-                        "tx commit returned HTTP {status} from {endpoint}: {}",
-                        String::from_utf8_lossy(&bytes)
-                    );
-                }
-                Ok(())
-            }
-            TxnBackend::Local { node, handle, .. } => node
-                .runner()
-                .commit_txn(&handle)
+                client,
+            } => graphql::txn_commit(endpoint, id, client)
                 .await
-                .map_err(|error| anyhow::anyhow!("commit_txn: {error}")),
-        };
-        if result.is_ok() {
-            if let Some(guard) = self.rollback_on_drop.as_mut() {
-                guard.handle = None;
+                .map_err(|failure| match failure {
+                    graphql::TxnCommitError::CleanupRequired(error) => CommitFailure {
+                        error,
+                        cleanup: CommitCleanup::Required,
+                    },
+                    graphql::TxnCommitError::TransactionConsumed(error) => CommitFailure {
+                        error,
+                        cleanup: CommitCleanup::NotNeeded,
+                    },
+                }),
+            TxnBackend::Embedded { node, handle, .. } => {
+                match node.runner().commit_txn(handle).await {
+                    Ok(()) => Ok(()),
+                    Err(error) => {
+                        let conflict = matches!(
+                            &error,
+                            query::TransactionError::Execution(message)
+                                if retry::is_transaction_conflict_text(message)
+                        );
+                        if conflict {
+                            Err(CommitFailure {
+                                error: retry::transaction_conflict(ConflictSource::TypedError),
+                                cleanup: CommitCleanup::NotNeeded,
+                            })
+                        } else {
+                            Err(CommitFailure {
+                                error: anyhow::anyhow!("commit_txn: {error}"),
+                                cleanup: CommitCleanup::NotNeeded,
+                            })
+                        }
+                    }
+                }
             }
         }
-        result
     }
 
-    /// Discard the transaction. Returns the underlying error if the explicit
-    /// round-trip fails; callers are expected to log and swallow that error so
-    /// the original apply error remains what surfaces to the operator.
-    pub async fn discard(mut self) -> Result<()> {
-        let result = match self.backend {
-            TxnBackend::Graphql {
+    async fn rollback_inner(&mut self) -> Result<()> {
+        let result = match &self.backend {
+            TxnBackend::Http {
                 endpoint,
                 id,
-                http_client,
-            } => {
-                let api_base = graphql_api_base(endpoint)?;
-                let status;
-                let bytes;
-                {
-                    let response = http_client
-                        .delete(format!("{api_base}/tx/{id}"))
-                        .send()
-                        .await
-                        .with_context(|| format!("posting tx discard to {endpoint}"))?;
-                    status = response.status();
-                    bytes = response
-                        .bytes()
-                        .await
-                        .with_context(|| format!("reading tx discard body from {endpoint}"))?;
-                }
-                if !status.is_success() {
-                    anyhow::bail!(
-                        "tx discard returned HTTP {status} from {endpoint}: {}",
-                        String::from_utf8_lossy(&bytes)
-                    );
-                }
-                Ok(())
-            }
-            TxnBackend::Local { node, handle, .. } => node
+                client,
+            } => graphql::txn_discard(endpoint, id, client).await,
+            TxnBackend::Embedded { node, handle, .. } => node
                 .runner()
-                .rollback_txn(&handle)
+                .rollback_txn(handle)
                 .await
                 .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
         };
         if result.is_ok() {
-            if let Some(guard) = self.rollback_on_drop.as_mut() {
-                guard.handle = None;
-            }
+            self.disarm_rollback();
         }
         result
     }
+
+    fn disarm_rollback(&mut self) {
+        if let Some(rollback) = self.rollback_on_drop.as_mut() {
+            rollback.disarm();
+        }
+        self.rollback_on_drop = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn commit(mut self) -> Result<()> {
+        let result = self.commit_inner().await;
+        match &result {
+            Ok(())
+            | Err(CommitFailure {
+                cleanup: CommitCleanup::NotNeeded,
+                ..
+            }) => self.disarm_rollback(),
+            Err(CommitFailure {
+                cleanup: CommitCleanup::Required,
+                ..
+            }) => {
+                if let Err(error) = self.rollback_inner().await {
+                    tracing::debug!(%error, "rolling back ambiguous failed transaction");
+                }
+            }
+        }
+        result.map_err(|failure| failure.error)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn discard(mut self) -> Result<()> {
+        self.rollback_inner().await
+    }
+
+    fn affected_documents(&self) -> u64 {
+        self.affected_documents.load(Ordering::Relaxed)
+    }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::identity::commit_signer_identity_for_did;
-    use crate::{AgentIdentity, KeyIdentity};
-
-    struct AfterFinalization<'a> {
-        entered: std::sync::atomic::AtomicBool,
-        node: &'a EmbeddedNode,
-        handle: TransactionHandle,
+fn backend_for_access(access: &ConfigAccess) -> WriteBackend {
+    match access {
+        ConfigAccess::Graphql(_) => WriteBackend::Http,
+        ConfigAccess::Local(_) => WriteBackend::Embedded,
     }
+}
 
-    impl crate::graphql::GraphqlExecution for AfterFinalization<'_> {
-        async fn execute(
-            &self,
-            graphql: &str,
-            policy: defra_node::ExecuteRetryPolicy,
-        ) -> defra_node::QueryResponse {
-            self.entered
-                .store(true, std::sync::atomic::Ordering::SeqCst);
-            // This runs only after the ordinary mutation has acquired the
-            // shared gate. Cleanup must have finished before it enters.
-            let old_transaction = self
-                .node
-                .execute_request_in_txn(
-                    QueryRequest::new("{ GatedTransactionFact { value } }"),
-                    &self.handle,
-                )
-                .await;
-            assert!(
-                old_transaction.has_errors(),
-                "write entered before native transaction finalized"
-            );
-            self.node.execute_with_retry(graphql, policy).await
-        }
-    }
+fn auto_commit_telemetry(
+    operation: WriteOperation,
+    backend: WriteBackend,
+) -> Result<AttemptTelemetry> {
+    Ok(AttemptTelemetry {
+        operation,
+        backend,
+        mode: WriteMode::AutoCommit,
+        retry_owner: RetryOwner::DefraDb,
+        ordinal: WriteAttemptOrdinal::new(1, 1)?,
+        started: Instant::now(),
+        finished: Cell::new(false),
+        cancelled_rollback: RollbackStatus::NotNeeded,
+        cancellation_rollback_scheduled: None,
+        dispatch: tracing::dispatcher::get_default(Clone::clone),
+    })
+}
 
-    #[tokio::test]
-    async fn explicit_transaction_excludes_ordinary_writes_until_commit_discard_or_abort() {
-        use std::future::Future;
-        for finish in ["commit", "discard", "abort"] {
-            let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
-            node.add_schema("type GatedTransactionFact { value: String }")
-                .await
-                .unwrap();
-            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-            let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
-            let worker_node = node.clone();
-            let worker = tokio::spawn(async move {
-                let txn = ConfigApplyTxn::begin_local(&worker_node, None)
-                    .await
-                    .unwrap();
-                txn.execute(r#"mutation { create_GatedTransactionFact(input: {value: "explicit"}) { _docID } }"#).await.unwrap();
-                let TxnBackend::Local { handle, .. } = &txn.backend else {
-                    unreachable!()
-                };
-                ready_tx.send(handle.clone()).unwrap();
-                finish_rx.await.unwrap();
-                match finish {
-                    "commit" => txn.commit().await.unwrap(),
-                    "discard" => txn.discard().await.unwrap(),
-                    _ => unreachable!(),
-                }
-            });
-            let handle = ready_rx.await.unwrap();
-            let executor = AfterFinalization {
-                entered: std::sync::atomic::AtomicBool::new(false),
-                node: &node,
-                handle,
-            };
-            let mut ordinary_write = Box::pin(
-                crate::graphql::graphql_mutation_with_transaction_retry_using(
-                    &node,
-                    &executor,
-                    r#"mutation { create_GatedTransactionFact(input: {value: "ordinary"}) { _docID } }"#,
-                    "write after explicit transaction",
-                ),
-            );
-            // Poll the actual writer into the gate wait; no timing assumption.
-            std::future::poll_fn(|cx| {
-                assert!(ordinary_write.as_mut().poll(cx).is_pending());
-                std::task::Poll::Ready(())
-            })
-            .await;
-            assert!(
-                !executor.entered.load(std::sync::atomic::Ordering::SeqCst),
-                "ordinary executor entered while explicit transaction held the gate"
-            );
-            if finish == "abort" {
-                worker.abort();
-                assert!(worker.await.unwrap_err().is_cancelled());
-            } else {
-                finish_tx.send(()).unwrap();
-                worker.await.unwrap();
+fn finish_auto_commit<T>(
+    telemetry: &AttemptTelemetry,
+    result: Result<T>,
+    affected_documents: impl FnOnce(&T) -> u64,
+) -> Result<T> {
+    let affected_documents = result.as_ref().ok().map(affected_documents).or(Some(0));
+    telemetry.record(AttemptReport {
+        outcome: if result.is_ok() {
+            WriteOutcome::Committed
+        } else {
+            WriteOutcome::Failed
+        },
+        conflict_source: ConflictSource::None,
+        backoff: None,
+        affected_documents,
+        rollback: RollbackStatus::NotNeeded,
+    });
+    result
+}
+
+async fn receipt_with_retry<F, Fut>(receipt: &F) -> Result<bool>
+where
+    F: Fn() -> Fut + Send + Sync,
+    Fut: Future<Output = Result<bool>> + Send,
+{
+    for retry_index in 0..=retry::RECEIPT_WRITE_MAX_RETRIES {
+        match receipt().await {
+            Ok(present) => return Ok(present),
+            Err(error)
+                if retry::is_retryable_ambiguous_write(&error)
+                    && retry_index < retry::RECEIPT_WRITE_MAX_RETRIES =>
+            {
+                tokio::time::sleep(retry::receipt_write_backoff(retry_index)).await;
             }
-            tokio::time::timeout(std::time::Duration::from_secs(5), ordinary_write)
-                .await
-                .expect("write gate remained held after finalization")
-                .unwrap();
-            assert!(executor.entered.load(std::sync::atomic::Ordering::SeqCst));
-            let response = node.execute("{ GatedTransactionFact { value } }").await;
-            let rows = crate::graphql::rows::<Value>(&response, "GatedTransactionFact").unwrap();
-            assert_eq!(rows.len(), if finish == "commit" { 2 } else { 1 });
-            assert!(rows.iter().any(|row| row["value"] == "ordinary"));
-            node.shutdown().await;
+            Err(error) => return Err(error),
         }
     }
+    unreachable!("bounded receipt loop returns on its final attempt")
+}
 
-    #[tokio::test]
-    async fn aborted_local_transaction_is_removed_from_registry_without_committing() {
-        let node = std::sync::Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        node.add_schema("type CancelledTransactionFact { value: String }")
-            .await
-            .unwrap();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
-        let worker_node = node.clone();
-        let worker = tokio::spawn(async move {
-            let txn = ConfigApplyTxn::begin_local(&worker_node, None)
-                .await
-                .unwrap();
-            txn.execute(r#"mutation { create_CancelledTransactionFact(input: {value: "uncommitted"}) { _docID } }"#)
-                .await.unwrap();
-            let TxnBackend::Local { handle, .. } = &txn.backend else {
-                unreachable!()
-            };
-            ready_tx.send(handle.clone()).unwrap();
-            std::future::pending::<()>().await;
-            txn.commit().await.unwrap();
+struct AttemptReport {
+    outcome: WriteOutcome,
+    conflict_source: ConflictSource,
+    backoff: Option<std::time::Duration>,
+    affected_documents: Option<u64>,
+    rollback: RollbackStatus,
+}
+
+struct AttemptTelemetry {
+    operation: WriteOperation,
+    backend: WriteBackend,
+    mode: WriteMode,
+    retry_owner: RetryOwner,
+    ordinal: WriteAttemptOrdinal,
+    started: Instant,
+    finished: Cell<bool>,
+    cancelled_rollback: RollbackStatus,
+    cancellation_rollback_scheduled: Option<Arc<AtomicBool>>,
+    dispatch: tracing::Dispatch,
+}
+
+impl AttemptTelemetry {
+    fn record(&self, report: AttemptReport) {
+        self.record_with_receipt(report, ReceiptRecovery::NotAttempted);
+    }
+
+    fn record_with_receipt(&self, report: AttemptReport, receipt_recovery: ReceiptRecovery) {
+        if self.finished.replace(true) {
+            return;
+        }
+        let event = WriteAttemptEvent {
+            operation: self.operation,
+            backend: self.backend,
+            mode: self.mode,
+            retry_owner: self.retry_owner,
+            ordinal: self.ordinal,
+            outcome: report.outcome,
+            conflict_source: report.conflict_source,
+            receipt_recovery,
+            backoff: report.backoff,
+            elapsed: self.started.elapsed(),
+            affected_documents: report.affected_documents,
+            rollback: report.rollback,
+        };
+        tracing::dispatcher::with_default(&self.dispatch, || {
+            event.record();
         });
-        let handle = ready_rx.await.unwrap();
-        worker.abort();
-        assert!(worker.await.unwrap_err().is_cancelled());
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let response = node
-                    .execute_request_in_txn(
-                        QueryRequest::new("{ CancelledTransactionFact { value } }"),
-                        &handle,
-                    )
-                    .await;
-                if response.has_errors() {
-                    assert!(
-                        response
-                            .errors
-                            .iter()
-                            .any(|error| error.message == format!("transaction '{handle}' not found or has been committed/rolled back")),
-                        "unexpected transaction query error: {:?}",
-                        response.errors
-                    );
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("aborted transaction remained in registry");
-        let response = node.execute("{ CancelledTransactionFact { value } }").await;
-        assert!(!response.has_errors());
-        assert_eq!(
-            response.data.unwrap()["CancelledTransactionFact"],
-            json!([])
-        );
-        node.shutdown().await;
     }
+}
 
-    #[tokio::test]
-    async fn local_transaction_is_signed_by_the_node_identity() {
-        let dir = tempfile::tempdir().unwrap();
-        let identity = KeyIdentity::load_or_create(dir.path().join("node.key"), None).unwrap();
-        let did = identity.did().to_string();
-        let expected_signer = commit_signer_identity_for_did(&did).unwrap();
-        let node = EmbeddedNode::builder()
-            .with_node_identity_did(&did)
-            .build()
-            .await
-            .unwrap();
-        node.add_schema("type SignedTransactionFact { value: String }")
-            .await
-            .unwrap();
+impl Drop for AttemptTelemetry {
+    fn drop(&mut self) {
+        let rollback = if self
+            .cancellation_rollback_scheduled
+            .as_ref()
+            .is_some_and(|scheduled| scheduled.load(Ordering::Acquire))
+        {
+            RollbackStatus::Scheduled
+        } else {
+            self.cancelled_rollback
+        };
+        self.record(AttemptReport {
+            outcome: WriteOutcome::Cancelled,
+            conflict_source: ConflictSource::None,
+            backoff: None,
+            affected_documents: Some(0),
+            rollback,
+        });
+    }
+}
 
-        let txn = ConfigApplyTxn::begin_local(&node, None).await.unwrap();
-        let response = txn
-            .execute(
-                r#"mutation {
-                    create_SignedTransactionFact(input: {value: "durable"}) { _docID }
-                }"#,
-            )
-            .await
-            .unwrap();
-        let doc_id = response["data"]["add_SignedTransactionFact"][0]["_docID"]
-            .as_str()
-            .expect("created document ID")
-            .to_string();
-        txn.commit().await.unwrap();
+struct TransactionAttemptFailure {
+    error: anyhow::Error,
+    rollback: RollbackStatus,
+    retry_generic: bool,
+}
 
-        let commits =
-            crate::graphql::composite_commits(&node, &doc_id, "load signed explicit transaction")
-                .await
-                .unwrap();
-        assert!(commits.iter().any(|commit| {
-            commit
-                .signature
-                .as_ref()
-                .map(|signature| signature.identity.as_str())
-                == Some(expected_signer.as_str())
-        }));
+enum FailureDisposition {
+    Observe,
+    Retry(std::time::Duration),
+    Fail,
+}
 
-        node.shutdown().await;
+fn failure_disposition(
+    mode: TransactionMode,
+    conflict: Option<ConflictSource>,
+    retry_generic: bool,
+    attempt: u32,
+    max_attempts: u32,
+) -> FailureDisposition {
+    if conflict.is_some() && mode.observes_conflicts() {
+        FailureDisposition::Observe
+    } else if attempt < max_attempts && (conflict.is_some() || retry_generic) {
+        FailureDisposition::Retry(retry::transaction_backoff(attempt - 1))
+    } else {
+        FailureDisposition::Fail
+    }
+}
+
+fn transact_owned<'a, T, F, B>(
+    operation: &'static str,
+    backend: WriteBackend,
+    mode: TransactionMode,
+    mut begin: B,
+    callback: F,
+) -> BoxFuture<'a, Result<TransactionOutcome<T>>>
+where
+    T: Send + 'a,
+    F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    B: FnMut(Arc<AtomicBool>) -> BoxFuture<'a, Result<ConfigApplyTxn<'a>>> + Send + 'a,
+{
+    Box::pin(async move {
+        let operation = WriteOperation::new(operation)?;
+        let max_attempts = mode.max_attempts();
+        for attempt in 1..=max_attempts {
+            let ordinal = WriteAttemptOrdinal::new(attempt, max_attempts)?;
+            let cancellation_rollback_scheduled = Arc::new(AtomicBool::new(false));
+            let mut telemetry = AttemptTelemetry {
+                operation,
+                backend,
+                mode: WriteMode::Transaction,
+                retry_owner: mode.retry_owner(),
+                ordinal,
+                started: Instant::now(),
+                finished: Cell::new(false),
+                cancelled_rollback: RollbackStatus::NotNeeded,
+                cancellation_rollback_scheduled: Some(Arc::clone(&cancellation_rollback_scheduled)),
+                dispatch: tracing::dispatcher::get_default(Clone::clone),
+            };
+            let mut txn = match begin(cancellation_rollback_scheduled).await {
+                Ok(txn) => txn,
+                Err(_error) if mode.retries_generic_errors() && attempt < max_attempts => {
+                    let backoff = retry::transaction_backoff(attempt - 1);
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Retrying,
+                        conflict_source: ConflictSource::None,
+                        backoff: Some(backoff),
+                        affected_documents: Some(0),
+                        rollback: RollbackStatus::NotNeeded,
+                    });
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+                Err(error) => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Failed,
+                        conflict_source: ConflictSource::None,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback: RollbackStatus::NotNeeded,
+                    });
+                    return Err(error);
+                }
+            };
+            telemetry.cancelled_rollback = RollbackStatus::Scheduled;
+            let attempt_result: Result<(), TransactionAttemptFailure> = match callback(&txn).await {
+                Ok(value) => {
+                    let affected_documents = txn.affected_documents();
+                    match txn.commit_inner().await {
+                        Ok(()) => {
+                            txn.disarm_rollback();
+                            telemetry.record(AttemptReport {
+                                outcome: WriteOutcome::Committed,
+                                conflict_source: ConflictSource::None,
+                                backoff: None,
+                                affected_documents: Some(affected_documents),
+                                rollback: RollbackStatus::NotNeeded,
+                            });
+                            return Ok(TransactionOutcome::Committed(value));
+                        }
+                        Err(CommitFailure { error, cleanup }) => {
+                            let rollback = match cleanup {
+                                CommitCleanup::NotNeeded => {
+                                    txn.disarm_rollback();
+                                    RollbackStatus::NotNeeded
+                                }
+                                CommitCleanup::Required if txn.rollback_inner().await.is_ok() => {
+                                    RollbackStatus::Succeeded
+                                }
+                                CommitCleanup::Required => RollbackStatus::Scheduled,
+                            };
+                            Err(TransactionAttemptFailure {
+                                error,
+                                rollback,
+                                retry_generic: mode.retries_generic_errors(),
+                            })
+                        }
+                    }
+                }
+                Err(error) => {
+                    let retry_generic = mode.retries_callback_error(&error);
+                    let rollback = if txn.rollback_inner().await.is_ok() {
+                        RollbackStatus::Succeeded
+                    } else {
+                        RollbackStatus::Scheduled
+                    };
+                    Err(TransactionAttemptFailure {
+                        error,
+                        rollback,
+                        retry_generic,
+                    })
+                }
+            };
+            let failure = match attempt_result {
+                Err(failure) => failure,
+                Ok(_) => unreachable!("successful attempt returns after commit"),
+            };
+            let TransactionAttemptFailure {
+                error,
+                rollback,
+                retry_generic,
+            } = failure;
+            let conflict_source = retry::classified_transaction_conflict(&error);
+            let source = conflict_source.unwrap_or(ConflictSource::None);
+            match failure_disposition(mode, conflict_source, retry_generic, attempt, max_attempts) {
+                FailureDisposition::Observe => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::ConflictObserved,
+                        conflict_source: source,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    return Ok(TransactionOutcome::ConflictObserved);
+                }
+                FailureDisposition::Retry(backoff) => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Retrying,
+                        conflict_source: source,
+                        backoff: Some(backoff),
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    tokio::time::sleep(backoff).await;
+                }
+                FailureDisposition::Fail => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Failed,
+                        conflict_source: source,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback,
+                    });
+                    return Err(error);
+                }
+            }
+        }
+        unreachable!("bounded transaction loop returns on its final attempt")
+    })
+}
+
+fn expect_committed<T>(outcome: TransactionOutcome<T>) -> T {
+    match outcome {
+        TransactionOutcome::Committed(value) => value,
+        TransactionOutcome::ConflictObserved => {
+            unreachable!("only observing transactions expose observed conflicts")
+        }
     }
 }
 
 impl ConfigAccess {
-    /// Execute and commit one statement through the authoritative path for the
-    /// selected backend.
-    ///
-    /// Embedded nodes use `EmbeddedNode::execute_with_retry` via
-    /// `ConfigAccess::execute`, which installs the node's commit-signing
-    /// context. HTTP uses an explicit transaction so the server publishes the
-    /// commit event consumed by a running runtime.
-    pub async fn execute_committed(&self, query: &str) -> Result<Value> {
-        if matches!(self, Self::Local(_)) {
-            return self.execute(query).await;
-        }
-        let txn = self.begin_apply_txn().await?;
-        match txn.execute(query).await {
-            Ok(response) => {
-                txn.commit().await?;
-                Ok(response)
+    pub(crate) async fn execute_local_response_with_retry(
+        node: &EmbeddedNode,
+        document: &str,
+        retry_policy: ExecuteRetryPolicy,
+    ) -> defra_node::QueryResponse {
+        node.execute_with_retry(document, retry_policy).await
+    }
+
+    async fn begin_apply_txn(
+        &self,
+        cancellation_rollback_scheduled: Arc<AtomicBool>,
+    ) -> Result<ConfigApplyTxn<'_>> {
+        match self {
+            Self::Graphql(endpoint) => {
+                ConfigApplyTxn::begin_http(endpoint, cancellation_rollback_scheduled).await
             }
-            Err(error) => {
-                let _ = txn.discard().await;
-                Err(error)
+            Self::Local(node) => {
+                ConfigApplyTxn::begin_local_owned(node, None, cancellation_rollback_scheduled).await
             }
         }
     }
 
-    /// Begin a write transaction on the underlying backend.
-    pub async fn begin_apply_txn(&self) -> Result<ConfigApplyTxn<'_>> {
-        match self {
-            ConfigAccess::Graphql(endpoint) => {
-                let api_base = graphql_api_base(endpoint)?;
-                let client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(30))
-                    .build()?;
-                let response = client
-                    .post(format!("{api_base}/tx"))
-                    .send()
-                    .await
-                    .with_context(|| format!("posting tx begin to {endpoint}"))?;
-                let status = response.status();
-                let bytes = response
-                    .bytes()
-                    .await
-                    .with_context(|| format!("reading tx begin body from {endpoint}"))?;
-                if !status.is_success() {
-                    anyhow::bail!(
-                        "tx begin returned HTTP {status} from {endpoint}: {}",
-                        String::from_utf8_lossy(&bytes)
-                    );
+    /// Commit one mutation through DefraDB's native auto-commit owner.
+    pub async fn write(&self, operation: &'static str, mutation: &str) -> Result<Value> {
+        graphql::ensure_mutation_document(mutation)?;
+        let operation = WriteOperation::new(operation)?;
+        let backend = backend_for_access(self);
+        let telemetry = auto_commit_telemetry(operation, backend)?;
+        let result = match self {
+            Self::Graphql(endpoint) => graphql::auto_commit(endpoint, mutation).await,
+            Self::Local(node) => Self::write_local_inner(node, operation, mutation).await,
+        };
+        finish_auto_commit(&telemetry, result, graphql::affected_documents)
+    }
+
+    /// Commit a stable-id HTTP mutation with bounded ambiguous-result recovery.
+    ///
+    /// Each mutation is posted exactly once. A retryable response or transport
+    /// failure is ambiguous, so the owner checks the caller's stable receipt
+    /// before it may repost. Receipt reads are retried separately; a mutation
+    /// is replayed only after a successful receipt read confirms absence.
+    /// Embedded access has no ambiguous HTTP response and uses [`Self::write`].
+    pub async fn write_with_receipt<F, Fut>(
+        &self,
+        operation: &'static str,
+        mutation: &str,
+        receipt: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> Fut + Send + Sync,
+        Fut: Future<Output = Result<bool>> + Send,
+    {
+        graphql::ensure_mutation_document(mutation)?;
+        let Self::Graphql(endpoint) = self else {
+            self.write(operation, mutation).await?;
+            return Ok(());
+        };
+        let operation = WriteOperation::new(operation)?;
+        let max_attempts = retry::RECEIPT_WRITE_MAX_RETRIES + 1;
+
+        for attempt in 1..=max_attempts {
+            let telemetry = AttemptTelemetry {
+                operation,
+                backend: WriteBackend::Http,
+                mode: WriteMode::AutoCommit,
+                retry_owner: RetryOwner::GentsReceipt,
+                ordinal: WriteAttemptOrdinal::new(attempt, max_attempts)?,
+                started: Instant::now(),
+                finished: Cell::new(false),
+                cancelled_rollback: RollbackStatus::NotNeeded,
+                cancellation_rollback_scheduled: None,
+                dispatch: tracing::dispatcher::get_default(Clone::clone),
+            };
+            let error = match graphql::auto_commit(endpoint, mutation).await {
+                Ok(response) => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Committed,
+                        conflict_source: ConflictSource::None,
+                        backoff: None,
+                        affected_documents: Some(graphql::affected_documents(&response)),
+                        rollback: RollbackStatus::NotNeeded,
+                    });
+                    return Ok(());
                 }
-                let body: Value = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("decoding tx begin body from {endpoint}"))?;
-                // DefraDB returns `{"id": uint64}` (numeric); accept both string
-                // and number forms so the recording test harness can use either.
-                let id = body
-                    .get("id")
-                    .and_then(|v| {
-                        v.as_str()
-                            .map(ToOwned::to_owned)
-                            .or_else(|| v.as_u64().map(|n| n.to_string()))
-                    })
-                    .ok_or_else(|| anyhow::anyhow!("tx begin missing id: {body}"))?;
-                Ok(ConfigApplyTxn {
-                    rollback_on_drop: None,
-                    backend: TxnBackend::Graphql {
-                        endpoint,
-                        id,
-                        http_client: client,
-                    },
-                })
+                Err(error) if retry::is_retryable_ambiguous_write(&error) => error,
+                Err(error) => {
+                    telemetry.record(AttemptReport {
+                        outcome: WriteOutcome::Failed,
+                        conflict_source: ConflictSource::None,
+                        backoff: None,
+                        affected_documents: Some(0),
+                        rollback: RollbackStatus::NotNeeded,
+                    });
+                    return Err(error);
+                }
+            };
+
+            let receipt_status = receipt_with_retry(&receipt).await;
+            match receipt_status {
+                Ok(true) => {
+                    telemetry.record_with_receipt(
+                        AttemptReport {
+                            outcome: WriteOutcome::Recovered,
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: None,
+                            rollback: RollbackStatus::NotNeeded,
+                        },
+                        ReceiptRecovery::StableIdConfirmed,
+                    );
+                    return Ok(());
+                }
+                Ok(false) if attempt < max_attempts => {
+                    let backoff = retry::receipt_write_backoff(attempt - 1);
+                    telemetry.record_with_receipt(
+                        AttemptReport {
+                            outcome: WriteOutcome::Retrying,
+                            conflict_source: ConflictSource::None,
+                            backoff: Some(backoff),
+                            affected_documents: Some(0),
+                            rollback: RollbackStatus::NotNeeded,
+                        },
+                        ReceiptRecovery::StableIdAbsent,
+                    );
+                    tokio::time::sleep(backoff).await;
+                }
+                Ok(false) => {
+                    telemetry.record_with_receipt(
+                        AttemptReport {
+                            outcome: WriteOutcome::Failed,
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: Some(0),
+                            rollback: RollbackStatus::NotNeeded,
+                        },
+                        ReceiptRecovery::StableIdAbsent,
+                    );
+                    return Err(error);
+                }
+                Err(receipt_error) => {
+                    telemetry.record_with_receipt(
+                        AttemptReport {
+                            outcome: WriteOutcome::Failed,
+                            conflict_source: ConflictSource::None,
+                            backoff: None,
+                            affected_documents: Some(0),
+                            rollback: RollbackStatus::NotNeeded,
+                        },
+                        ReceiptRecovery::StableIdReadFailed,
+                    );
+                    return Err(receipt_error).context("checking stable write receipt");
+                }
             }
-            ConfigAccess::Local(node) => ConfigApplyTxn::begin_local(node, None).await,
         }
+        unreachable!("bounded receipt write loop returns on its final attempt")
+    }
+
+    /// Borrowed embedded-node auto-commit seam for runtime and desktop code.
+    pub async fn write_local(
+        node: &EmbeddedNode,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<Value> {
+        graphql::ensure_mutation_document(mutation)?;
+        let operation = WriteOperation::new(operation)?;
+        let telemetry = auto_commit_telemetry(operation, WriteBackend::Embedded)?;
+        let result = Self::write_local_inner(node, operation, mutation).await;
+        finish_auto_commit(&telemetry, result, graphql::affected_documents)
+    }
+
+    /// Embedded auto-commit seam for callers that need DefraDB's typed
+    /// response metadata.
+    pub(crate) async fn write_local_response(
+        node: &EmbeddedNode,
+        operation: &'static str,
+        mutation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        graphql::ensure_mutation_document(mutation)?;
+        let operation = WriteOperation::new(operation)?;
+        let telemetry = auto_commit_telemetry(operation, WriteBackend::Embedded)?;
+        let result = Self::write_local_response_inner(node, operation, mutation).await;
+        finish_auto_commit(&telemetry, result, |response| {
+            crate::graphql::mutation_affected_documents(response) as u64
+        })
+    }
+
+    /// Replay an embedded update through the canonical transaction owner.
+    /// Creates need their own stable identity and durable reconciliation.
+    pub(crate) async fn write_local_idempotent_update_response<'a>(
+        node: &'a EmbeddedNode,
+        operation: &'static str,
+        mutation: &'a str,
+    ) -> Result<defra_node::QueryResponse> {
+        graphql::ensure_mutation_document(mutation)?;
+        anyhow::ensure!(
+            !mutation.contains("create_"),
+            "idempotent update seam does not accept creates"
+        );
+        Self::transact_local_idempotent(
+            node,
+            None,
+            IdempotentTransactionRetry::Standard,
+            operation,
+            move |txn| Box::pin(async move { txn.execute_local_response(mutation).await }),
+        )
+        .await
+    }
+
+    async fn write_local_inner(
+        node: &EmbeddedNode,
+        operation: WriteOperation,
+        mutation: &str,
+    ) -> Result<Value> {
+        let response = Self::write_local_response_inner(node, operation, mutation).await?;
+        Ok(json!({"data": response.data.unwrap_or(Value::Null)}))
+    }
+
+    async fn write_local_response_inner(
+        node: &EmbeddedNode,
+        operation: WriteOperation,
+        mutation: &str,
+    ) -> Result<defra_node::QueryResponse> {
+        let retry_policy = ExecuteRetryPolicy::new(
+            retry::TRANSACT_CONFLICT_MAX_RETRIES,
+            std::time::Duration::from_millis(100),
+            std::time::Duration::from_millis(800),
+        );
+        Self::execute_local_mutation(node, operation, mutation, retry_policy).await
+    }
+
+    async fn execute_local_mutation(
+        node: &EmbeddedNode,
+        operation: WriteOperation,
+        mutation: &str,
+        retry_policy: ExecuteRetryPolicy,
+    ) -> Result<defra_node::QueryResponse> {
+        let gate = mutation_write_gate(node);
+        let _write_guard = gate.lock().await;
+        let response = node.execute_with_retry(mutation, retry_policy).await;
+        crate::graphql::ensure_no_errors(&response, operation.as_str())?;
+        Ok(response)
+    }
+
+    pub async fn transact<'a, T, F>(&'a self, operation: &'static str, callback: F) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ConflictRetry,
+            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    /// Replay a stable-key transaction after any callback or commit error.
+    ///
+    /// Callers must make the callback idempotent across an ambiguous commit:
+    /// creates need stable unique identities and retries must reconcile an
+    /// already-durable winner before attempting another create.
+    pub async fn transact_idempotent<'a, T, F>(
+        &'a self,
+        retry_policy: IdempotentTransactionRetry,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::Idempotent(retry_policy),
+            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    pub(crate) async fn transact_observing_conflict<'a, T, F>(
+        &'a self,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<TransactionOutcome<T>>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            backend_for_access(self),
+            TransactionMode::ObserveConflict,
+            move |rollback| Box::pin(async move { self.begin_apply_txn(rollback).await }),
+            callback,
+        )
+        .await
+    }
+
+    /// Borrowed embedded-node transaction seam preserving the supplied ACP DID.
+    pub async fn transact_local<'a, T, F>(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ConflictRetry,
+            move |rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    /// Borrowed embedded variant of [`Self::transact_idempotent`].
+    pub async fn transact_local_idempotent<'a, T, F>(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        retry_policy: IdempotentTransactionRetry,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<T>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::Idempotent(retry_policy),
+            move |rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                })
+            },
+            callback,
+        )
+        .await
+        .map(expect_committed)
+    }
+
+    pub(crate) async fn transact_local_observing_conflict<'a, T, F>(
+        node: &'a EmbeddedNode,
+        identity: Option<Did>,
+        operation: &'static str,
+        callback: F,
+    ) -> Result<TransactionOutcome<T>>
+    where
+        T: Send + 'a,
+        F: for<'txn> Fn(&'txn ConfigApplyTxn<'a>) -> BoxFuture<'txn, Result<T>> + Send + 'a,
+    {
+        transact_owned(
+            operation,
+            WriteBackend::Embedded,
+            TransactionMode::ObserveConflict,
+            move |rollback| {
+                let identity = identity.clone();
+                Box::pin(async move {
+                    ConfigApplyTxn::begin_local_owned(node, identity, rollback).await
+                })
+            },
+            callback,
+        )
+        .await
     }
 }
+
+#[cfg(test)]
+#[path = "txn_owner_tests.rs"]
+mod owner_tests;
+
+#[cfg(test)]
+#[path = "receipt_owner_tests.rs"]
+mod receipt_owner_tests;

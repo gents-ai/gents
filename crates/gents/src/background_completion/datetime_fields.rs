@@ -16,10 +16,10 @@ pub(super) async fn clear_cancel_pending_ack(node: &EmbeddedNode, doc_id: &str) 
             ) {{ _docID }}
         }}"#
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(
+    crate::config_client::ConfigAccess::write_local_response(
         node,
+        "background_completion.clear_cancel_pending_ack",
         &mutation,
-        "clear cancel_pending_remote_ack",
     )
     .await?;
     Ok(())
@@ -42,8 +42,12 @@ pub(super) async fn set_stuck_since(
             ) {{ _docID }}
         }}"#
     );
-    crate::graphql::graphql_mutation_with_transaction_retry(node, &mutation, "set stuck_since")
-        .await?;
+    crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "background_completion.set_stuck_since",
+        &mutation,
+    )
+    .await?;
     Ok(())
 }
 

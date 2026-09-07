@@ -29,8 +29,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{escape_graphql_string, graphql_mutation_with_transaction_retry};
+use gents::graphql::escape_graphql_string;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -78,7 +79,7 @@ async fn create_task(node: &EmbeddedNode, task_id: &str, behavior_id: &str, prom
             }}) {{ _docID }}
         }}"#
     );
-    graphql_mutation_with_transaction_retry(node, &mutation, "create P2P trigger Task fixture")
+    ConfigAccess::write_local(node, "test.create_p2p_trigger_task", &mutation)
         .await
         .expect("create Task");
 }
@@ -110,7 +111,7 @@ async fn create_event_trigger_with_filter(
             }}) {{ _docID }}
         }}"#
     );
-    graphql_mutation_with_transaction_retry(node, &mutation, "create P2P EventTrigger fixture")
+    ConfigAccess::write_local(node, "test.create_p2p_event_trigger", &mutation)
         .await
         .expect("create EventTrigger");
 }
@@ -241,13 +242,11 @@ async fn write_replicated_event(node: &EmbeddedNode, external_id: &str, kind: &s
             }}) {{ _docID }}
         }}"#
     );
-    let response =
-        graphql_mutation_with_transaction_retry(node, &mutation, "add P2P ReplicatedEvent fixture")
-            .await
-            .expect("add ReplicatedEvent");
+    let response = ConfigAccess::write_local(node, "test.add_p2p_replicated_event", &mutation)
+        .await
+        .expect("add ReplicatedEvent");
     let data = response
-        .data
-        .as_ref()
+        .get("data")
         .expect("add_ReplicatedEvent response missing data");
     let field = data
         .get("add_ReplicatedEvent")

@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::query::load_session_document_optional;
-use super::retry::{execute_mutation_with_retry, execute_query_timed, retry_operation};
+use super::retry::execute_query_timed;
 use super::*;
 
 #[cfg(test)]
@@ -47,7 +47,7 @@ async fn create_session_with_behavior_id_and_requester_did(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let requester_did_field = super::requester_did_create_field(requester_did);
 
-    let created = retry_operation("create_session", || async {
+    let created = async {
         let now = chrono::Utc::now().to_rfc3339();
         let existing = load_session_document_optional(node, session_id).await?;
         let created = existing.is_none();
@@ -83,9 +83,9 @@ async fn create_session_with_behavior_id_and_requester_did(
             }}"#
         );
 
-        execute_mutation_with_retry(node, &mutation, "create_session").await?;
-        Ok(created)
-    })
+        crate::config_client::ConfigAccess::write_local(node, "session.create", &mutation).await?;
+        Ok::<bool, anyhow::Error>(created)
+    }
     .await?;
 
     let log_message = if created {
@@ -136,7 +136,7 @@ pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Resul
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "max_sequence").await;
+    let resp = execute_query_timed(node, &query, "max_sequence").await?;
     if resp.has_errors() {
         anyhow::bail!(
             "loading max sequence for session_id={}: {:?}",
@@ -157,25 +157,20 @@ pub(crate) async fn max_sequence(node: &EmbeddedNode, session_id: &str) -> Resul
 }
 
 pub async fn close_session(node: &EmbeddedNode, session_id: &str) -> Result<()> {
-    retry_operation("close_session", || async {
-        let now = chrono::Utc::now().to_rfc3339();
-        let escaped_session_id = escape_graphql_string(session_id);
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentSession(
-                    filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                    input: {{
-                        status: "completed",
-                        ended: "{now}"
-                    }}
-                ) {{ _docID }}
-            }}"#,
-        );
-
-        execute_mutation_with_retry(node, &mutation, "close_session").await?;
-        Ok(())
-    })
-    .await?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let escaped_session_id = escape_graphql_string(session_id);
+    let mutation = format!(
+        r#"mutation {{
+            update_AgentSession(
+                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                input: {{
+                    status: "completed",
+                    ended: "{now}"
+                }}
+            ) {{ _docID }}
+        }}"#,
+    );
+    crate::config_client::ConfigAccess::write_local(node, "session.close", &mutation).await?;
 
     tracing::info!(session_id = %session_id, "session closed");
     Ok(())

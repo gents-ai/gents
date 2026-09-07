@@ -136,18 +136,7 @@ pub(super) async fn execute_local_graphql_query(
     query: &str,
     operation: &str,
 ) -> Result<Value> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "{operation} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let response = gents::graphql::graphql_with_transaction_retry(node, query, operation).await?;
     response
         .data
         .with_context(|| format!("{operation} returned no data"))
@@ -157,18 +146,8 @@ pub(super) async fn load_rows<T>(node: &EmbeddedNode, root: &str, query: &str) -
 where
     T: DeserializeOwned,
 {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        bail!(
-            "query for {root} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let operation = format!("query for {root}");
+    let response = gents::graphql::graphql_with_transaction_retry(node, query, &operation).await?;
 
     let data = response
         .data

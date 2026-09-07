@@ -223,7 +223,7 @@ pub(crate) async fn execute_query(
     let query = build_query(params, scope)?;
     // Keep the raw response here because this tool enriches DefraDB's error
     // with a collection-schema diagnostic before returning it to the agent.
-    let resp = graphql_response_with_transaction_retry(node, &query, "defra_query").await;
+    let resp = graphql_response_with_transaction_retry(node, &query, "defra_query").await?;
     if resp.has_errors() {
         let raw = format!("{:?}", resp.errors);
         let diagnostic = match fetch_collection_schema(node, &params.collection).await {

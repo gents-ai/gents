@@ -355,23 +355,22 @@ pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
     profile: &InferenceProfile,
 ) -> Result<()> {
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let result = async {
-        crate::config_client::effective_inference_profile(&txn, profile)
-            .await?
-            .validate()?;
-        txn.execute(&upsert_inference_profile_mutation(profile))
-            .await?;
-        Ok(())
-    }
-    .await;
-    match result {
-        Ok(()) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "document_config.inference_profile.upsert",
+        |txn| {
+            Box::pin(async move {
+                crate::config_client::effective_inference_profile(txn, profile)
+                    .await?
+                    .validate()?;
+                txn.execute(&upsert_inference_profile_mutation(profile))
+                    .await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }
 
 pub(crate) fn upsert_inference_profile_mutation(profile: &InferenceProfile) -> String {

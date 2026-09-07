@@ -6,7 +6,6 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
 use crate::graphql::escape_graphql_string;
-use crate::session::execute_mutation_with_retry;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
@@ -191,9 +190,13 @@ async fn recover_inference_call_row(
     // Recovery must consume the observed live state. InferenceCall's terminal
     // states have no outgoing transitions; a delayed sweep cannot overwrite
     // a completion or a later queued-to-running transition.
-    let response = execute_mutation_with_retry(node, &mutation, "recover_inference_call")
-        .await
-        .context("recover inference call mutation")?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "recover_inference_call",
+        &mutation,
+    )
+    .await
+    .context("recover inference call mutation")?;
     Ok(!crate::graphql::rows::<serde_json::Value>(&response, "update_InferenceCall")?.is_empty())
 }
 

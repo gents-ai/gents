@@ -215,78 +215,74 @@ async fn seed_demo_documents(
 }
 
 async fn upsert_demo_backend(node: &EmbeddedNode, backend_id: &str, endpoint: &str) -> Result<()> {
-    let txn = gents::config_client::ConfigApplyTxn::begin_local(node, None).await?;
-    let existing = match gents::config_client::load_inference_backend_in_txn(&txn, backend_id).await
-    {
-        Ok(existing) => existing,
-        Err(error) => {
-            let _ = txn.discard().await;
-            return Err(error);
-        }
-    };
-    let candidate = match existing {
-        Some(mut existing) => {
-            // The update clause below deliberately preserves provider,
-            // credential, queue, and model fields.
-            existing.name = backend_id.to_string();
-            existing.endpoint = endpoint.to_string();
-            existing.max_concurrent = 2;
-            existing.enabled = true;
-            existing.probe_status = "healthy".to_string();
-            existing
-        }
-        None => InferenceBackend {
-            backend_id: backend_id.to_string(),
-            name: backend_id.to_string(),
-            provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: None,
-            endpoint: endpoint.to_string(),
-            api_key: None,
-            api_key_env_var: None,
-            max_concurrent: 2,
-            max_queue_depth: 100,
-            enabled: true,
-            models: vec!["default".to_string()],
-            probe_status: "healthy".to_string(),
-        },
-    };
-    if let Err(error) = candidate.validate(None) {
-        let _ = txn.discard().await;
-        return Err(error);
-    }
+    gents::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "example.upsert_demo_backend",
+        move |txn| {
+            Box::pin(async move {
+                let candidate =
+                    match gents::config_client::load_inference_backend_in_txn(txn, backend_id)
+                        .await?
+                    {
+                        Some(mut existing) => {
+                            // The update clause below deliberately preserves provider,
+                            // credential, queue, and model fields.
+                            existing.name = backend_id.to_string();
+                            existing.endpoint = endpoint.to_string();
+                            existing.max_concurrent = 2;
+                            existing.enabled = true;
+                            existing.probe_status = "healthy".to_string();
+                            existing
+                        }
+                        None => InferenceBackend {
+                            backend_id: backend_id.to_string(),
+                            name: backend_id.to_string(),
+                            provider_kind: BackendProviderKind::OpenAiCompatible,
+                            openai_wire_api: None,
+                            endpoint: endpoint.to_string(),
+                            api_key: None,
+                            api_key_env_var: None,
+                            max_concurrent: 2,
+                            max_queue_depth: 100,
+                            enabled: true,
+                            models: vec!["default".to_string()],
+                            probe_status: "healthy".to_string(),
+                        },
+                    };
+                candidate.validate(None)?;
 
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    backend_id: "{backend_id}",
-                    name: "{backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{endpoint}",
-                    max_concurrent: 2,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["default"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{backend_id}",
-                    endpoint: "{endpoint}",
-                    max_concurrent: 2,
-                    enabled: true,
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        backend_id = escape_graphql_string(backend_id),
-        endpoint = escape_graphql_string(endpoint),
-    );
-    match txn.execute(&mutation).await {
-        Ok(_) => txn.commit().await,
-        Err(error) => {
-            let _ = txn.discard().await;
-            Err(error)
-        }
-    }
+                let mutation = format!(
+                    r#"mutation {{
+                        upsert_InferenceBackend(
+                            filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                            add: {{
+                                backend_id: "{backend_id}",
+                                name: "{backend_id}",
+                                provider_kind: "OpenAiCompatible",
+                                endpoint: "{endpoint}",
+                                max_concurrent: 2,
+                                max_queue_depth: 100,
+                                enabled: true,
+                                models: ["default"],
+                                probe_status: "healthy"
+                            }},
+                            update: {{
+                                name: "{backend_id}",
+                                endpoint: "{endpoint}",
+                                max_concurrent: 2,
+                                enabled: true,
+                                probe_status: "healthy"
+                            }}
+                        ) {{ _docID }}
+                    }}"#,
+                    backend_id = escape_graphql_string(backend_id),
+                    endpoint = escape_graphql_string(endpoint),
+                );
+                txn.execute(&mutation).await?;
+                Ok(())
+            })
+        },
+    )
+    .await
 }

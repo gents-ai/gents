@@ -1688,10 +1688,12 @@ impl ClientCore {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&mutation).await;
-        if !response.errors.is_empty() {
-            anyhow::bail!("upsert SessionHydrationRequest: {:?}", response.errors);
-        }
+        gents::config_client::ConfigAccess::write_local(
+            &self.node,
+            "desktop.session_hydration.request",
+            &mutation,
+        )
+        .await?;
         Ok(())
     }
 
