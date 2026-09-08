@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -12,10 +12,7 @@ use defra_p2p_adapter::{
 use tokio::sync::Notify;
 
 use super::route_manager::cleanup_saved_peer_p2p;
-use super::supervisor::{
-    probe_p2p_health, repair_saved_peer, request_client_recovery_for_ready_peers,
-    saved_peer_needs_repair,
-};
+use super::supervisor::{probe_p2p_health, repair_saved_peer, saved_peer_needs_repair};
 use super::*;
 use crate::client::{PeerDirectory, PeerRecord};
 
@@ -31,7 +28,6 @@ struct RecordingP2P {
     connect_error: StdRwLock<Option<String>>,
     connect_gate: StdRwLock<Option<Arc<Notify>>>,
     add_replicator_calls: StdRwLock<Vec<String>>,
-    sync_branchable_calls: StdRwLock<Vec<String>>,
     cleanup_calls: StdRwLock<Vec<String>>,
     replicators: StdRwLock<Vec<ReplicatorInfo>>,
     replicators_error: StdRwLock<Option<String>>,
@@ -123,13 +119,6 @@ impl RecordingP2P {
         self.add_replicator_calls
             .read()
             .expect("add replicator calls lock poisoned")
-            .clone()
-    }
-
-    fn sync_branchable_calls(&self) -> Vec<String> {
-        self.sync_branchable_calls
-            .read()
-            .expect("sync branchable calls lock poisoned")
             .clone()
     }
 
@@ -337,12 +326,10 @@ impl P2POps for RecordingP2P {
         Ok(())
     }
 
-    async fn sync_branchable_collection(&self, collection_id: &str) -> P2PResult<()> {
-        self.sync_branchable_calls
-            .write()
-            .expect("sync branchable calls lock poisoned")
-            .push(collection_id.to_string());
-        Ok(())
+    async fn sync_branchable_collection(&self, _collection_id: &str) -> P2PResult<()> {
+        panic!(
+            "client repair must use database-owned delivery recovery, not collection-wide replay"
+        )
     }
 
     async fn sync_collection_versions(&self, _version_ids: Vec<String>) -> P2PResult<()> {
@@ -476,160 +463,6 @@ async fn expired_enrollment_is_persistently_demoted_before_submit_can_write() {
         .await
         .unwrap();
     assert!(!persisted[0].pairing_ready);
-
-    core.shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn recovery_sync_targets_the_session_index_and_runtime_readiness() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tmp.path().to_path_buf()),
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("client core");
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
-    let p2p: Arc<dyn P2POps> = recording.clone();
-
-    let requested = super::bootstrap::request_client_recovery_sync(core.node(), &p2p)
-        .await
-        .expect("request index sync");
-    assert_eq!(
-        requested,
-        [
-            "AgentConversation",
-            "AgentSession",
-            "MailboxItem",
-            "AgentBehaviorReadiness"
-        ]
-    );
-
-    let mut expected = crate::client::schema::client_recovery_collection_names()
-        .into_iter()
-        .map(|name| {
-            core.node()
-                .get_collection(name)
-                .expect("get collection")
-                .expect("collection exists")
-                .collection_id
-        })
-        .collect::<Vec<_>>();
-    let mut actual = recording.sync_branchable_calls();
-    expected.sort();
-    actual.sort();
-    assert_eq!(actual, expected);
-
-    core.shutdown().await.expect("shutdown");
-}
-
-#[tokio::test]
-async fn supervisor_requests_index_for_new_and_reconnected_peers_and_surfaces_failures() {
-    use crate::client::paths::DesktopPaths;
-
-    let tmp = tempfile::TempDir::new().expect("tmpdir");
-    let core = ClientCore::start_with_paths_and_options(
-        DesktopPaths::from_root(tmp.path().to_path_buf()),
-        ClientCoreOptions::local_only(),
-    )
-    .await
-    .expect("client core");
-    let recording = Arc::new(RecordingP2P::default());
-    recording.set_connected_peers(vec!["peer-alpha".to_string()]);
-    let p2p: Arc<dyn P2POps> = recording.clone();
-    let node = core.node_arc();
-    let mut saved_record = PeerRecord::new("Alpha", "peer-alpha", "did:key:alpha");
-    saved_record.peer_id = "saved-alpha".to_string();
-    let (_sync_tempdir, sync_state) = sync_state::ClientSyncStateOwner::for_test(
-        vec![saved_record],
-        vec![ClientPeerStatus {
-            peer_id: "saved-alpha".to_string(),
-            label: "Alpha".to_string(),
-            agent_did: "did:key:alpha".to_string(),
-            addr: "peer-alpha".to_string(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-        }],
-    )
-    .await;
-    let mut saved = BTreeSet::from(["saved-alpha".to_string()]);
-    let mut requested_for = BTreeMap::new();
-    let recovery_collection_count = crate::client::schema::client_recovery_collection_names().len();
-
-    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
-        .await;
-    assert_eq!(
-        recording.sync_branchable_calls().len(),
-        recovery_collection_count
-    );
-    assert_eq!(
-        requested_for.keys().cloned().collect::<BTreeSet<_>>(),
-        saved
-    );
-
-    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
-        .await;
-    assert_eq!(
-        recording.sync_branchable_calls().len(),
-        recovery_collection_count
-    );
-
-    let mut beta_record = PeerRecord::new("Beta", "peer-beta", "did:key:beta");
-    beta_record.peer_id = "saved-beta".to_string();
-    sync_state
-        .upsert_for_test(beta_record.clone())
-        .await
-        .unwrap();
-    assert!(sync_state.replace_peer(
-        &beta_record,
-        ClientPeerStatus {
-            peer_id: "saved-beta".to_string(),
-            label: "Beta".to_string(),
-            agent_did: "did:key:beta".to_string(),
-            addr: "peer-beta".to_string(),
-            dial_succeeded: true,
-            last_error: None,
-            pairing: Vec::new(),
-            routes: Vec::new(),
-        }
-    ));
-    saved.insert("saved-beta".to_string());
-    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
-        .await;
-    assert_eq!(
-        recording.sync_branchable_calls().len(),
-        recovery_collection_count * 2
-    );
-    assert_eq!(
-        requested_for.keys().cloned().collect::<BTreeSet<_>>(),
-        saved
-    );
-
-    requested_for.remove("saved-alpha");
-    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
-        .await;
-    assert_eq!(
-        recording.sync_branchable_calls().len(),
-        recovery_collection_count * 3
-    );
-
-    requested_for.remove("saved-alpha");
-    recording.set_connected_peers(Vec::new());
-    request_client_recovery_for_ready_peers(&node, &p2p, &sync_state, &saved, &mut requested_for)
-        .await;
-    assert!(sync_state
-        .snapshot()
-        .peers
-        .iter()
-        .find(|status| status.peer_id == "saved-alpha")
-        .and_then(|status| status.last_error.as_deref())
-        .is_some_and(|error| error.contains("no connected peers")));
-    assert!(!requested_for.contains_key("saved-alpha"));
 
     core.shutdown().await.expect("shutdown");
 }

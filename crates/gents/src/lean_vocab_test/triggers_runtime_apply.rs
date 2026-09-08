@@ -186,6 +186,13 @@ pub(crate) struct LeanApplyReconcileCase {
     pub(crate) delete_safety_holds: bool,
 }
 
+/// Semantic readiness publication traces, independent of elapsed idle time.
+#[derive(Debug, Deserialize)]
+pub(crate) struct LeanReadinessPublicationCase {
+    pub(crate) states: Vec<u64>,
+    pub(crate) publishes: Vec<bool>,
+}
+
 /// Startup-readiness vectors for the bounded build-failure barrier (#559).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanStartupReadinessCase {

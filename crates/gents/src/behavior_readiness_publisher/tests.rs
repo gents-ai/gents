@@ -55,30 +55,58 @@ impl BehaviorReadinessWriter for ControlledWriter {
 }
 
 #[tokio::test(start_paused = true)]
-async fn unchanged_readiness_is_republished_as_a_heartbeat() {
-    let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-    let writer = Arc::new(ControlledWriter {
-        plans: std::sync::Mutex::new(VecDeque::from([WritePlan::Success, WritePlan::Success])),
-        attempts: attempts_tx,
-        release: Semaphore::new(0),
-        persisted: tokio::sync::Mutex::new(Vec::new()),
-    });
-    let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
-        writer,
-        "did:test:heartbeat-readiness-writer",
-        Duration::from_millis(1),
-    );
-    publisher.initialize("general").await.unwrap();
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Recovering)
-    );
-    tokio::time::advance(READINESS_HEARTBEAT_INTERVAL).await;
-    assert_eq!(
-        attempts_rx.recv().await,
-        Some(BehaviorReadinessProcessState::Recovering)
-    );
-    owner.close().await.unwrap();
+async fn generated_readiness_publication_traces_write_only_semantic_changes() {
+    let cases = crate::lean_vocab_test::lean_readiness_publication_cases();
+    assert_eq!(cases.len(), 2);
+    for case in cases {
+        let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
+        let writer = Arc::new(ControlledWriter {
+            plans: std::sync::Mutex::new(VecDeque::from(vec![
+                WritePlan::Success;
+                case.states.len()
+            ])),
+            attempts: attempts_tx,
+            release: Semaphore::new(0),
+            persisted: tokio::sync::Mutex::new(Vec::new()),
+        });
+        let (owner, publisher) = BehaviorReadinessPublisherHandle::start_with_writer(
+            writer,
+            "did:test:semantic-readiness-writer",
+            Duration::from_millis(1),
+        );
+        assert_eq!(case.states.len(), case.publishes.len());
+        for (index, (&state, &publishes)) in case.states.iter().zip(&case.publishes).enumerate() {
+            let (process, expected) = match state {
+                0 => (
+                    ProcessLifecycleState::Recovering,
+                    BehaviorReadinessProcessState::Recovering,
+                ),
+                1 => (
+                    ProcessLifecycleState::Ready,
+                    BehaviorReadinessProcessState::Ready,
+                ),
+                2 => (
+                    ProcessLifecycleState::Shutdown,
+                    BehaviorReadinessProcessState::Shutdown,
+                ),
+                other => panic!("unmodeled readiness state {other}"),
+            };
+            if index == 0 {
+                assert_eq!(state, 0);
+                publisher.initialize("general").await.unwrap();
+            } else {
+                publisher.set_process_state(process).await.unwrap();
+            }
+            assert_eq!(attempts_rx.try_recv().ok(), publishes.then_some(expected));
+            tokio::time::advance(Duration::from_secs(3600)).await;
+            tokio::task::yield_now().await;
+            assert!(
+                attempts_rx.try_recv().is_err(),
+                "idle time must not publish readiness"
+            );
+        }
+        owner.close().await.unwrap();
+    }
 }
 
 #[tokio::test]
