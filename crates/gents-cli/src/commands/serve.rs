@@ -1393,9 +1393,9 @@ fn resolve_server_p2p_config(
         rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags,
-        // Gents deployments may be multi-hop. DefraDB verifies every block
-        // before a relay re-announces it as a transport-routable origin.
-        rebroadcast_on_merge: true,
+        // Verified merges already fan out to explicit downstream replicators.
+        // Do not serialize the merge loop behind optional gossip rebroadcast.
+        rebroadcast_on_merge: false,
     }))
 }
 
@@ -1750,6 +1750,10 @@ mod shim_host_tests {
             .expect("resolve p2p config")
             .expect("p2p enabled");
 
+        assert!(
+            !config.rebroadcast_on_merge,
+            "merge delivery must not wait for gossip"
+        );
         assert_eq!(config.max_pending_dags, p2p::sync::DEFAULT_MAX_PENDING_DAGS);
         assert_eq!(
             config.max_concurrent_push_tasks,

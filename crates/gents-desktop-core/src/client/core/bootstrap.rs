@@ -165,10 +165,9 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         rate_limit_rate: options.rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags: options.max_pending_dags,
-        // Desktop peers commonly sit behind a runtime relay. Re-announce only
-        // after DefraDB has verified and merged the block so downstream peers
-        // can fetch it from a transport-routable origin.
-        rebroadcast_on_merge: true,
+        // DefraDB forwards merges to explicit downstream replicators itself.
+        // Gossip rebroadcast adds a coalescing wait inside the merge loop.
+        rebroadcast_on_merge: false,
     }
 }
 
@@ -385,6 +384,10 @@ mod tests {
 
         let config = desktop_p2p_config(&paths, &options);
 
+        assert!(
+            !config.rebroadcast_on_merge,
+            "merge delivery must not wait for gossip"
+        );
         assert_eq!(config.max_pending_dags, 77);
         assert_eq!(
             config.max_doc_sync_request_doc_ids,
