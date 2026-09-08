@@ -448,7 +448,7 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "routeNotReady",
-      hint: "The agent is connected, but its signed conversation route is not ready yet.",
+      hint: "The pairing request was sent and is waiting for the agent to accept it.",
     });
   });
 
