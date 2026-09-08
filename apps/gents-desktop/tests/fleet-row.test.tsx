@@ -64,7 +64,9 @@ describe("FleetRow", () => {
       },
     );
 
-    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent("Preparing");
+    expect(screen.getByTestId("fleet-status-peer-1")).toHaveTextContent(
+      "Waiting for pairing",
+    );
     expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
     fireEvent.click(screen.getByTestId("fleet-chat-peer-1"));
     expect(props.onOpenChat).not.toHaveBeenCalled();

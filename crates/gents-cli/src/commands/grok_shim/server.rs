@@ -182,11 +182,11 @@ const NEAR_LIMIT_PATH_BYTES: usize = 100;
 /// The values are the OS ABI constants that `libc` and `nix` define per target.
 /// Unsupported Unix targets fail the build rather than silently opening a lock
 /// path through a symlink.
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
 compile_error!("the grok shim leader lock needs this target's O_NOFOLLOW value; add it here");
 #[cfg(target_os = "linux")]
 const O_NOFOLLOW: i32 = 0x0000_8000;
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 const O_NOFOLLOW: i32 = 0x0000_0040;
 
 // ---------------------------------------------------------------------------

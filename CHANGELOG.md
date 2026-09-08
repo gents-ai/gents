@@ -6,6 +6,26 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.16.1 - 2026-09-07
+
+### Fixed
+
+- Enrollment data-plane routes honor the `client-to-runtime` /
+  `runtime-to-client` suffix so phone and desktop chat requests reach the
+  runtime. Unsuffixed enrollment base routes still default to
+  runtime-to-client.
+- Consumption clients keep last-known-good behavior readiness when the
+  local replica of `AgentBehaviorReadiness` is older than 45s, instead of
+  treating lease lag as "the agent is gone." Local host runtimes still
+  fail closed.
+- Pending enrollment copy is "Waiting for pairing request acceptance",
+  and Add Agent stays available while a request is outstanding. Enrolled
+  peers use the advertised agent name instead of "Enrolled Agent."
+- Default behavior for chat no longer requires a gossiped
+  `AgentPrincipal`; the principal stays on the node.
+- iOS builds compile the grok shim (`O_NOFOLLOW`) and auto-start a fresh
+  mobile client so enrollment can run.
+
 ## 0.16.0 - 2026-09-07
 
 ### Added

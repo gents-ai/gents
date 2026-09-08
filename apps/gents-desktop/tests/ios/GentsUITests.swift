@@ -186,7 +186,7 @@ final class GentsUITests: XCTestCase {
 
     private func paste(_ value: String) {
         UIPasteboard.general.string = value
-        app.typeKey("v", modifierFlags: .command)
+        app.typeText(value)
     }
 
     private func dismissKeyboard() {

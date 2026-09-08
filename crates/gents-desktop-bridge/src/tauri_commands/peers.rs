@@ -65,7 +65,7 @@ pub async fn desktop_peer_enroll_status(
         .ok_or_else(|| {
             BridgeError::untyped("server does not advertise authenticated status enrollment")
         })?;
-    core.request_status_enrollment(token)
+    core.request_status_enrollment_with_label(token, server_label.as_deref())
         .await
         .map(|result| {
             let mut view = EnrollmentRequestView::from(result);

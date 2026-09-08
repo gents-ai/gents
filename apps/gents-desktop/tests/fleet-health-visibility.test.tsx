@@ -56,7 +56,7 @@ describe("fleet health visibility", () => {
     );
   });
 
-  it("does not call a connected peer online when runtime readiness is stale", () => {
+  it("keeps enrolled chat available when last-known readiness is lagged", () => {
     const stale = {
       ...deployment,
       source: "enrollment",
@@ -72,9 +72,9 @@ describe("fleet health visibility", () => {
       pendingDagCount: 1,
       exhaustedFetchCount: 1,
     });
-    expect(deploymentStatus(stale, syncing).label).toBe("Runtime unavailable");
+    expect(deploymentStatus(stale, syncing).label).toBe("Syncing");
     renderRow(stale, syncing);
-    expect(screen.getByTestId("fleet-chat-peer-1")).toBeDisabled();
+    expect(screen.getByTestId("fleet-chat-peer-1")).toBeEnabled();
   });
 
   it("shows a visible error line with remediation-aware copy on failing rows", () => {

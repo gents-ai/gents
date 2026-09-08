@@ -1266,16 +1266,20 @@ fn data_plane_desired_from_pairing_row(
     let template = resolve_template(template_id)
         .with_context(|| format!("unknown data-plane pairing scope template {template_id:?}"))?;
     let client_route_direction = if template.scope == Scope::ClientRoute {
-        if row.source.as_deref() == Some("enrollment") {
-            super::policy::PairingDirection::RuntimeToClient
-        } else {
-            let route_id = row
-                .peer_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|route_id| !route_id.is_empty())
-                .context("client data-plane pairing row is missing its durable route key")?;
-            super::policy::client_route_direction(route_id)?
+        let route_id = row
+            .peer_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|route_id| !route_id.is_empty())
+            .context("client data-plane pairing row is missing its durable route key")?;
+        match super::policy::client_route_direction(route_id) {
+            Ok(direction) => direction,
+            Err(_) if row.source.as_deref() == Some("enrollment") => {
+                // Runtime-owned enrollment base routes are keyed by the
+                // member peer, not a directional suffix.
+                super::policy::PairingDirection::RuntimeToClient
+            }
+            Err(error) => return Err(error),
         }
     } else {
         super::policy::PairingDirection::RuntimeToClient

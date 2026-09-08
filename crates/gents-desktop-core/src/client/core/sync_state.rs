@@ -1,4 +1,5 @@
-use std::sync::Arc;
+use std::collections::BTreeMap;
+use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
@@ -22,6 +23,7 @@ type LastErrorPatch = (Option<String>, Option<String>);
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
     directory: Arc<RwLock<PeerDirectory>>,
+    advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
 }
 
 impl ClientSyncStateOwner {
@@ -70,7 +72,29 @@ impl ClientSyncStateOwner {
             directory: records,
             peers,
         });
-        Self { tx, directory }
+        Self {
+            tx,
+            directory,
+            advertised_enrollment_labels: Arc::new(StdRwLock::new(BTreeMap::new())),
+        }
+    }
+
+    pub(super) fn remember_enrollment_label(&self, server_peer: &str, label: &str) {
+        let label = label.trim();
+        if server_peer.trim().is_empty() || label.is_empty() {
+            return;
+        }
+        if let Ok(mut labels) = self.advertised_enrollment_labels.write() {
+            labels.insert(server_peer.to_string(), label.to_string());
+        }
+    }
+
+    pub(super) fn advertised_enrollment_label(&self, server_peer: &str) -> Option<String> {
+        self.advertised_enrollment_labels
+            .read()
+            .ok()?
+            .get(server_peer)
+            .cloned()
     }
 
     pub(super) fn snapshot(&self) -> ClientSyncStateSnapshot {

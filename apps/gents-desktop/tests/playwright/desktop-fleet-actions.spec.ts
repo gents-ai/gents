@@ -9,15 +9,14 @@ test.describe("fleet deployment navigation", () => {
     await page.getByTestId("fleet-fetch-status").click();
 
     await expect(page.getByTestId("fleet-enrollment-pending")).toContainText(
-      "Waiting for Bombadil UI Agent approval",
+      "Waiting for pairing request acceptance",
     );
     await expect(page.getByTestId("fleet-enrollment-pending")).toContainText(
       "enrollment-request-harness",
     );
-    await expect(page.getByTestId("fleet-add-server-address")).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "Enrollment requested" }),
-    ).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Add Agent", exact: true })).toBeEnabled();
+    await page.getByRole("button", { name: "Add Agent", exact: true }).click();
+    await expect(page.getByTestId("fleet-add-server-address")).toBeVisible();
     await expect(page.getByTestId(`fleet-row-${PEER_ID}`)).toHaveCount(1);
   });
 

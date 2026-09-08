@@ -127,7 +127,7 @@ export function FleetDashboard({
             <strong>
               {request.state === "approved"
                 ? "Approval received · finishing secure route"
-                : `Waiting for ${request.serverLabel ?? request.ownerAgent} approval`}
+                : "Waiting for pairing request acceptance"}
             </strong>
             <p className="muted">
               Request <span className="mono">{request.requestId}</span> · expires{" "}
@@ -138,7 +138,7 @@ export function FleetDashboard({
       ))}
     </div>
   ) : null;
-  const enrollmentBlocked = enrollmentRequests === null || enrollmentRequests.length > 0;
+  const enrollmentBlocked = enrollmentRequests === null;
 
   if (!hasDeployments) {
     return (
@@ -154,7 +154,8 @@ export function FleetDashboard({
             </p>
           </div>
           {localRuntimeSetup}
-          {enrollmentNotice ?? (
+          {enrollmentNotice}
+          {enrollmentRequests !== null ? (
             <details
               className="fleet-remote-disclosure"
               data-testid="fleet-remote-disclosure"
@@ -171,7 +172,7 @@ export function FleetDashboard({
                 onRequestStatusEnrollment={requestStatusEnrollment}
               />
             </details>
-          )}
+          ) : null}
         </div>
       </section>
     );
@@ -203,7 +204,7 @@ export function FleetDashboard({
             }}
             type="button"
           >
-            {enrollmentRequests?.length ? "Enrollment requested" : "Add Agent"}
+            Add Agent
           </button>
         </div>
       </header>

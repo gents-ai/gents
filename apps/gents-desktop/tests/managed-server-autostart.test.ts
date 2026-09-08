@@ -122,4 +122,20 @@ describe("managed server launch restoration", () => {
       ),
     ).toBe(true);
   });
+
+  it("starts the client on a fresh mobile profile so enrollment can run", () => {
+    expect(
+      shouldAutoStartDesktopClient(
+        {
+          bootstrap: {
+            clientStateExists: false,
+            savedPeers: [],
+          },
+          client: null,
+        } as never,
+        false,
+        { mobile: true },
+      ),
+    ).toBe(true);
+  });
 });

@@ -372,6 +372,9 @@ pub fn project_behavior_readiness_summary(
 
 /// Project the runtime-authored row into the only legal client readiness
 /// states. Configured identifiers are validated exactly, never normalized.
+/// A lagged replica reports `ReadinessStale` without wiping last-known
+/// dispatcher states: consumption clients cannot treat a 45s lease miss as
+/// "the agent is gone."
 pub fn project_behavior_readiness<'a>(
     row: Option<&AgentBehaviorReadinessRow>,
     expected_agent_did: &str,
@@ -412,9 +415,7 @@ pub fn project_behavior_readiness<'a>(
         Ok(snapshot) => snapshot,
         Err(reason) => return unknown_projection(behavior_ids, reason),
     };
-    if !readiness_row_is_fresh(row, observed_at) {
-        return unknown_projection(behavior_ids, BehaviorReadinessUnknownReason::ReadinessStale);
-    }
+    let observation_stale = !readiness_row_is_fresh(row, observed_at);
 
     let entries = snapshot
         .behaviors
@@ -463,7 +464,8 @@ pub fn project_behavior_readiness<'a>(
         router_generation: Some(snapshot.router_generation),
         default_behavior_id: Some(snapshot.default_behavior_id),
         updated_at: Some(row.updated_at.clone()),
-        unknown_reason: global_unknown,
+        unknown_reason: global_unknown
+            .or(observation_stale.then_some(BehaviorReadinessUnknownReason::ReadinessStale)),
         behaviors,
     }
 }

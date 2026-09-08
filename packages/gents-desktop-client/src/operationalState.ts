@@ -83,6 +83,29 @@ function behaviorLabel(deployment: DeploymentView, behaviorId: string): string {
   );
 }
 
+function fallbackBehaviorId(deployment: DeploymentView): string | null {
+  const principalDefault = deployment.agentPrincipal.defaultBehaviorId?.trim();
+  if (
+    principalDefault &&
+    deployment.behaviors.some((behavior) => behavior.behaviorId === principalDefault)
+  ) {
+    return principalDefault;
+  }
+  const markedDefault = deployment.behaviors.find((behavior) => behavior.isDefault);
+  if (markedDefault) {
+    return markedDefault.behaviorId;
+  }
+  const conventional = `${deployment.agentDid}:default`;
+  if (
+    deployment.behaviors.some((behavior) => behavior.behaviorId === conventional)
+  ) {
+    return conventional;
+  }
+  return (
+    deployment.behaviors.find((behavior) => behavior.enabled)?.behaviorId ?? null
+  );
+}
+
 /** Keep an explicit selection only while its database behavior row exists. */
 export function selectedBehaviorIdForDeployment(
   deployment: DeploymentView | null,
@@ -97,7 +120,7 @@ export function selectedBehaviorIdForDeployment(
   ) {
     return selectedBehaviorId;
   }
-  return deployment.agentPrincipal.defaultBehaviorId;
+  return fallbackBehaviorId(deployment);
 }
 
 /** Select one runtime-authored readiness verdict for admission and display. */
@@ -111,8 +134,12 @@ export function selectedBehaviorReadinessDecision(
 
   const readiness = deployment.behaviorReadiness;
   const behaviorId =
-    selectedBehaviorId ?? deployment.agentPrincipal.defaultBehaviorId ?? null;
-  if (readiness.source.state === "unknown") {
+    selectedBehaviorId ?? fallbackBehaviorId(deployment);
+  const replicaLag =
+    readiness.source.state === "unknown" &&
+    readiness.source.reason === "readiness_stale" &&
+    !isLocalRuntimeSource(deployment.source);
+  if (readiness.source.state === "unknown" && !replicaLag) {
     return { kind: "unknown", behaviorId, reason: readiness.source.reason };
   }
   if (!behaviorId) {
@@ -286,26 +313,39 @@ export function projectDeploymentTransportStatus(
 
 export function projectRouteOperationalStatus(
   routeReady: boolean,
+  pairingPending = false,
 ): OperationalStatus {
-  return routeReady
-    ? status({
-        kind: "ready",
-        layer: "route",
-        reason: "route_ready",
-        label: "Secure route is ready",
-        shortLabel: "Route ready",
-        detail: "The signed conversation route is ready.",
-      })
-    : status({
-        kind: "waiting",
-        layer: "route",
-        reason: "route_not_ready",
-        label: "Preparing the secure route",
-        shortLabel: "Preparing",
-        detail:
-          "The agent is connected, but its signed conversation route is not ready yet.",
-        action: "reconnect",
-      });
+  if (routeReady) {
+    return status({
+      kind: "ready",
+      layer: "route",
+      reason: "route_ready",
+      label: "Secure route is ready",
+      shortLabel: "Route ready",
+      detail: "The signed conversation route is ready.",
+    });
+  }
+  if (pairingPending) {
+    return status({
+      kind: "waiting",
+      layer: "route",
+      reason: "pairing_not_accepted",
+      label: "Waiting for pairing request acceptance",
+      shortLabel: "Waiting for pairing",
+      detail:
+        "The pairing request was sent and is waiting for the agent to accept it.",
+    });
+  }
+  return status({
+    kind: "waiting",
+    layer: "route",
+    reason: "route_not_ready",
+    label: "Preparing the secure route",
+    shortLabel: "Preparing",
+    detail:
+      "The agent is connected, but its signed conversation route is not ready yet.",
+    action: "reconnect",
+  });
 }
 
 export function projectDeploymentOperationalState(
@@ -315,7 +355,12 @@ export function projectDeploymentOperationalState(
 ): DeploymentOperationalState {
   const transport = projectDeploymentTransportStatus(deployment.dialSucceeded);
 
-  const route = projectRouteOperationalStatus(deployment.chatSafe);
+  const pairingPending =
+    !isLocalRuntimeSource(deployment.source) && !deployment.chatSafe;
+  const route = projectRouteOperationalStatus(
+    deployment.chatSafe,
+    pairingPending,
+  );
   const localRuntime = isLocalRuntimeSource(deployment.source);
   const sync = projectSyncOperationalStatus(syncHealth);
 

@@ -1001,3 +1001,34 @@ async fn agent_scope_isolation_under_drop_recovery() -> Result<()> {
     core.shutdown().await?;
     Ok(())
 }
+
+#[test]
+fn default_behavior_id_does_not_require_a_gossiped_agent_principal() {
+    let agent_did = "did:key:z6MkAmy";
+    let behavior_id = gents::default_behavior_id_for_agent(agent_did);
+    let store = ClientStore::from_rows(ClientStoreRows {
+        behaviors: vec![gents_protocol::row::AgentBehaviorRow {
+            behavior_id: behavior_id.clone(),
+            agent_did: Some(agent_did.to_string()),
+            display_name: Some("Amy".to_string()),
+            system_prompt: None,
+            backend_id: None,
+            model_name: None,
+            tool_selection_id: None,
+            inference_profile_id: None,
+            compaction_strategy: None,
+            compaction_threshold: None,
+            enabled: Some(true),
+            skill_refs: Vec::new(),
+            skill_excludes: Vec::new(),
+            created_at: None,
+        }],
+        ..ClientStoreRows::default()
+    });
+
+    assert!(store.agent_principals.is_empty());
+    assert_eq!(
+        store.default_behavior_id_for_agent(agent_did),
+        Some(behavior_id.as_str())
+    );
+}

@@ -106,30 +106,70 @@ describe("deployment operational state", () => {
     expect(state.route).toMatchObject({
       layer: "route",
       kind: "waiting",
-      shortLabel: "Preparing",
+      reason: "pairing_not_accepted",
+      label: "Waiting for pairing request acceptance",
+      shortLabel: "Waiting for pairing",
     });
   });
 
-  it("keeps stale runtime readiness attributed to the runtime", () => {
+  it("does not wait for a gossiped AgentPrincipal after pairing", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        agentPrincipal: {
+          agentDid: "did:key:agent",
+          defaultBehaviorId: null,
+        } as DeploymentView["agentPrincipal"],
+        behaviors: [
+          {
+            behaviorId: "did:key:agent:default",
+            displayName: "Amy",
+            enabled: true,
+            isDefault: false,
+          },
+        ],
+        readinessStatus: {
+          state: "ready",
+          behaviorId: "did:key:agent:default",
+        },
+      }),
+    );
+
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.behavior).toMatchObject({
+      kind: "ready",
+      shortLabel: "Online",
+    });
+    expect(state.behavior.shortLabel).not.toBe("Waiting for runtime");
+  });
+
+  it("does not block an enrolled chat on a lagged ready replica", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
       }),
     );
 
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.behavior).toMatchObject({
+      kind: "ready",
+      shortLabel: "Online",
+    });
+  });
+
+  it("still fails closed when the local host stops publishing readiness", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({
+        source: "local-standard",
+        readinessSource: { state: "unknown", reason: "readiness_stale" },
+      }),
+    );
+
     expect(state.admissionBlocker).toBe(state.behavior);
-    expect(state.summary).toBe(state.behavior);
     expect(state.behavior).toMatchObject({
       layer: "runtime",
       kind: "waiting",
       reason: "readiness_stale",
       shortLabel: "Runtime unavailable",
-      action: null,
-    });
-    expect(state.sync).toMatchObject({
-      layer: "sync",
-      reason: "sync_not_observed",
-      shortLabel: "Checking sync",
     });
   });
 
@@ -149,7 +189,7 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("keeps database work separate from stale runtime readiness", () => {
+  it("does not let replica lag block chat while database sync is catching up", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
@@ -162,22 +202,17 @@ describe("deployment operational state", () => {
       }),
     );
 
-    expect(state.admissionBlocker).toBe(state.behavior);
-    expect(state.summary).toBe(state.behavior);
-    expect(state.behavior).toMatchObject({
-      layer: "runtime",
-      reason: "readiness_stale",
-      shortLabel: "Runtime unavailable",
-    });
+    expect(state.admissionBlocker).toBeNull();
+    expect(state.behavior.kind).toBe("ready");
+    expect(state.summary).toBe(state.sync);
     expect(state.sync).toMatchObject({
       layer: "sync",
       kind: "syncing",
-      reason: "syncing",
       shortLabel: "Syncing",
     });
   });
 
-  it("keeps stale runtime reporting distinct when database sync is healthy", () => {
+  it("keeps an enrolled agent online from last-known readiness when sync is healthy", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         readinessSource: { state: "unknown", reason: "readiness_stale" },
@@ -186,11 +221,10 @@ describe("deployment operational state", () => {
       syncHealth(),
     );
 
-    expect(state.admissionBlocker).toBe(state.behavior);
+    expect(state.admissionBlocker).toBeNull();
     expect(state.behavior).toMatchObject({
-      layer: "runtime",
-      shortLabel: "Runtime unavailable",
-      action: null,
+      kind: "ready",
+      shortLabel: "Online",
     });
   });
 

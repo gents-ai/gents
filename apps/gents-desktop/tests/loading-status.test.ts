@@ -182,7 +182,7 @@ describe("conversation loading projection", () => {
     ).toMatchObject({ layer: "p2p", phase: "blocked", action: "reconnect" });
   });
 
-  it("keeps stale readiness attributed to the runtime", () => {
+  it("does not block a new enrolled chat on a lagged ready replica", () => {
     expect(
       project({
         operationalState: projectDeploymentOperationalState(
@@ -205,7 +205,7 @@ describe("conversation loading projection", () => {
           },
         ),
       }),
-    ).toMatchObject({ layer: "runtime", action: null });
+    ).toBeNull();
   });
 
   it("offers inference configuration only for an explicit local backend failure", () => {

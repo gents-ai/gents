@@ -11,6 +11,7 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
+import { isMobileTauriShell } from "../lib/shellPlatform";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
@@ -98,7 +99,11 @@ export function useDesktopShellEffects({
       return;
     }
 
-    if (!shouldAutoStartDesktopClient(snapshot, localServerAvailable.current)) {
+    if (
+      !shouldAutoStartDesktopClient(snapshot, localServerAvailable.current, {
+        mobile: isMobileTauriShell(),
+      })
+    ) {
       return;
     }
 
@@ -274,7 +279,11 @@ export function useDesktopShellEffects({
 export function shouldAutoStartDesktopClient(
   snapshot: DesktopClientSnapshot,
   localServerAvailable: boolean | null,
+  options: { mobile?: boolean } = {},
 ): boolean {
+  if (options.mobile) {
+    return true;
+  }
   return (
     snapshot.bootstrap.clientStateExists ||
     snapshot.bootstrap.savedPeers.some(

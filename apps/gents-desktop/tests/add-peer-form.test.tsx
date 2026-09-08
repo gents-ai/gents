@@ -49,7 +49,7 @@ describe("AddPeerForm", () => {
         "http://127.0.0.1:9181",
       );
       expect(screen.getByTestId("fleet-import-status")).toHaveTextContent(
-        "Enrollment request enrollment-request-1 sent",
+        "Enrollment request enrollment-request-1 sent · waiting for pairing request acceptance",
       );
     });
   });

@@ -77,6 +77,15 @@ impl ClientCore {
         &self,
         offer_token: &str,
     ) -> Result<EnrollmentRequestResult> {
+        self.request_status_enrollment_with_label(offer_token, None)
+            .await
+    }
+
+    pub async fn request_status_enrollment_with_label(
+        &self,
+        offer_token: &str,
+        advertised_label: Option<&str>,
+    ) -> Result<EnrollmentRequestResult> {
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
         anyhow::ensure!(
             offer.schema_fingerprint == enrollment_schema_fingerprint(),
@@ -201,6 +210,10 @@ impl ClientCore {
             }
         };
         push_enrollment_request(&self.p2p, &offer, &request.request_id, &document_id).await?;
+        if let Some(label) = advertised_label {
+            self.sync_state
+                .remember_enrollment_label(&offer.server_peer, label);
+        }
 
         Ok(EnrollmentRequestResult {
             request_id: request.request_id,
@@ -786,10 +799,13 @@ pub(super) async fn reconcile_status_enrollment_approvals(
             .into_iter()
             .find(|record| record.peer_id == approval.server_peer);
         let applied = async {
+            let label = sync_state
+                .advertised_enrollment_label(&approval.server_peer)
+                .unwrap_or_else(|| "Enrolled Agent".to_string());
             let record = sync_state
                 .upsert_enrollment_peer(
                     &approval.server_peer,
-                    "Enrolled Agent",
+                    &label,
                     &approval.server_ticket,
                     &approval.owner_agent,
                     &approval.network_id,

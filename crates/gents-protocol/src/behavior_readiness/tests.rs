@@ -77,10 +77,16 @@ fn ready_snapshot_expires_without_a_runtime_heartbeat() {
     let stale_at = DateTime::parse_from_rfc3339("2026-08-28T00:00:46Z")
         .unwrap()
         .with_timezone(&Utc);
+    let projection =
+        project_behavior_readiness(Some(&row), "did:test:agent", ["a"], Some("a"), stale_at);
     assert_eq!(
-        project_behavior_readiness(Some(&row), "did:test:agent", ["a"], Some("a"), stale_at)
-            .unknown_reason,
+        projection.unknown_reason,
         Some(BehaviorReadinessUnknownReason::ReadinessStale)
+    );
+    assert_eq!(
+        projection.behaviors.get("a"),
+        Some(&ProjectedBehaviorReadiness::Ready),
+        "a lagged replica must keep last-known dispatcher readiness"
     );
 }
 

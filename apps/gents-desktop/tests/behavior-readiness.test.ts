@@ -139,7 +139,6 @@ describe("selectedBehaviorReadinessDecision", () => {
     "readiness_missing",
     "readiness_malformed",
     "readiness_version_unsupported",
-    "readiness_stale",
     "process_not_ready",
     "router_generation_stale",
     "behavior_not_assigned",
@@ -158,22 +157,36 @@ describe("selectedBehaviorReadinessDecision", () => {
     },
   );
 
-  it("uses only explicit selection or the database principal default", () => {
+  it("keeps last-known ready for an enrolled replica whose readiness lease aged out", () => {
+    const lagged = deployment(
+      { state: "ready", behaviorId: "default" },
+      { sourceReason: "readiness_stale" },
+    );
+    expect(selectedBehaviorReadinessDecision(lagged, null)).toEqual({
+      kind: "ready",
+      behaviorId: "default",
+      behaviorLabel: "Default",
+    });
+  });
+
+  it("keeps an explicit unassigned selection unknown", () => {
     const current = deployment({ state: "ready", behaviorId: "default" });
     expect(selectedBehaviorReadinessDecision(current, "unassigned")).toEqual({
       kind: "unknown",
       behaviorId: "unassigned",
       reason: "behavior_not_assigned",
     });
+  });
 
+  it("falls back to the gossiped behavior when AgentPrincipal is absent", () => {
     const noPrincipalDefault = deployment(
       { state: "ready", behaviorId: "default" },
       { principalDefault: null },
     );
     expect(selectedBehaviorReadinessDecision(noPrincipalDefault, null)).toEqual({
-      kind: "unknown",
-      behaviorId: null,
-      reason: "behavior_not_assigned",
+      kind: "ready",
+      behaviorId: "default",
+      behaviorLabel: "Default",
     });
   });
 

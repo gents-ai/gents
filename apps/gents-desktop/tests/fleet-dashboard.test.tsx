@@ -179,10 +179,10 @@ describe("FleetHostDashboard add connection flow", () => {
     );
     await waitFor(() => {
       expect(screen.getByTestId("fleet-enrollment-pending")).toHaveTextContent(
-        "Waiting for Amy approval",
+        "Waiting for pairing request acceptance",
       );
     });
-    expect(screen.queryByTestId("fleet-add-server-address")).not.toBeInTheDocument();
+    expect(screen.getByTestId("fleet-add-server-address")).toBeInTheDocument();
   });
 
   it("never turns the status endpoint label into rename authority", async () => {

@@ -2,12 +2,27 @@ use super::*;
 
 impl ClientStore {
     pub fn default_behavior_id_for_agent(&self, agent_did: &str) -> Option<&str> {
-        self.agent_principals
+        let from_principal = self
+            .agent_principals
             .iter()
             .find(|row| row.agent_did == agent_did)
             .and_then(|row| row.default_behavior_id.as_deref())
             .map(str::trim)
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty());
+        if from_principal.is_some() {
+            return from_principal;
+        }
+
+        let behaviors = self.behavior_rows(agent_did);
+        let conventional = gents::default_behavior_id_for_agent(agent_did);
+        if let Some(row) = behaviors.iter().find(|row| row.behavior_id == conventional) {
+            return Some(row.behavior_id.as_str());
+        }
+        let enabled = behaviors
+            .iter()
+            .filter(|row| row.enabled.unwrap_or(true))
+            .collect::<Vec<_>>();
+        (enabled.len() == 1).then_some(enabled[0].behavior_id.as_str())
     }
 
     pub fn behavior_rows(&self, agent_did: &str) -> Vec<&AgentBehaviorRow> {

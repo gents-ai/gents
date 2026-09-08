@@ -33,7 +33,7 @@ export function useStatusEnrollment({
     try {
       const enrollment = await onRequestStatusEnrollment(trimmed);
       setImportStatus(
-        `Enrollment request ${enrollment.requestId} sent · awaiting server approval`,
+        `Enrollment request ${enrollment.requestId} sent · waiting for pairing request acceptance`,
       );
       setImportError(false);
       return enrollment;

@@ -351,6 +351,7 @@ fn enrolled_client_outbound_route_preserves_directional_authority() {
             agent_did: Some("did:key:phone".to_string()),
             replicator_addresses: Some(vec![signed_endpoint.address.clone()]),
             template: Some("client".to_string()),
+            source: Some("enrollment".to_string()),
             ..Default::default()
         },
         &signed_endpoint,
