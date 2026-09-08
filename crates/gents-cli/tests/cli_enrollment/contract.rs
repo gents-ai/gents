@@ -15,10 +15,13 @@ const ENROLL_BUDGET: Duration = Duration::from_secs(30);
 const TURN_BUDGET: Duration = Duration::from_secs(20);
 const RECONNECT_BUDGET: Duration = Duration::from_secs(20);
 const MODEL_DELAY: Duration = Duration::from_secs(2);
+const RETURN_TO_OBSERVER_BUDGET: Duration = Duration::from_secs(2);
 const REPLY: &str = "PAIRING_CONTRACT_ASSISTANT_REPLY";
 const OFFLINE_REPLY: &str = "PAIRING_CONTRACT_OFFLINE_REPLY";
 const FOLLOWUP_REPLY: &str = "PAIRING_CONTRACT_CONTINUED_REPLY";
 const OFFLINE_PROMPT: &str = "Reply while the app is closed";
+#[path = "contract/streaming.rs"]
+mod streaming;
 const FOLLOWUP_PROMPT: &str = "Continue our existing conversation";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -32,6 +35,28 @@ async fn fresh_app_pairs_with_aged_runtime_with_bounded_latency() -> Result<()> 
 }
 
 async fn run_contract(readiness_revisions: usize) -> Result<()> {
+    run_contract_with_streaming(readiness_revisions, false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn streaming_content_reaches_client_before_provider_completion() -> Result<()> {
+    run_contract_with_streaming(0, true).await
+}
+
+async fn run_contract_with_streaming(readiness_revisions: usize, streaming: bool) -> Result<()> {
+    run_contract_with_streaming_cadence(readiness_revisions, streaming, false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn buffered_stream_chunk_reaches_client_during_provider_pause() -> Result<()> {
+    run_contract_with_streaming_cadence(0, true, true).await
+}
+
+async fn run_contract_with_streaming_cadence(
+    readiness_revisions: usize,
+    streaming: bool,
+    paced: bool,
+) -> Result<()> {
     let _guard = enrollment_e2e_lock().lock().await;
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -42,6 +67,10 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         .try_init();
     let offline_gate = Arc::new(tokio::sync::Semaphore::new(0));
     let model_gate = Arc::clone(&offline_gate);
+    let stream_gate = streaming.then(|| Arc::new(tokio::sync::Semaphore::new(0)));
+    let followup_stream_gate = streaming.then(|| Arc::new(tokio::sync::Semaphore::new(0)));
+    let model_stream_gate = stream_gate.clone();
+    let model_followup_stream_gate = followup_stream_gate.clone();
     let model = FakeLlm::start(
         "pairing-contract",
         None,
@@ -65,7 +94,39 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
                 } else {
                     REPLY
                 };
-                ChatAction::DelayThenSse(MODEL_DELAY, completion_text_sse(reply))
+                let selected_stream_gate =
+                    if request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT) {
+                        &model_followup_stream_gate
+                    } else {
+                        &model_stream_gate
+                    };
+                if let Some(gate) = selected_stream_gate.as_ref().filter(|_| {
+                    request_contains_role_text(&latest, "user", "First conversation turn")
+                        || request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT)
+                }) {
+                    let body = completion_text_sse(reply);
+                    let (first, rest) = body.split_once("\n\n").expect("SSE content frame");
+                    let chunks = if paced {
+                        let (prefix, suffix) = reply.split_at(reply.len() / 2);
+                        [prefix, suffix]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, text)| {
+                                let body = completion_text_sse(text);
+                                let frame = body.split_once("\n\n").expect("SSE content frame").0;
+                                (
+                                    Duration::from_millis(if index == 0 { 0 } else { 20 }),
+                                    format!("{frame}\n\n"),
+                                )
+                            })
+                            .collect()
+                    } else {
+                        vec![(Duration::ZERO, format!("{first}\n\n"))]
+                    };
+                    ChatAction::GatedSse(chunks, gate.clone(), rest.to_owned())
+                } else {
+                    ChatAction::DelayThenSse(MODEL_DELAY, completion_text_sse(reply))
+                }
             }
         }),
     )?;
@@ -129,9 +190,10 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
             bail!("enroll/approve/readiness exceeded 30s or failed: {enrollment:?}; {diagnostics}");
         }
         tracing::info!(elapsed_ms = enrollment_started.elapsed().as_millis(), "app enrollment ready");
+        assert_observer_did_not_overflow(&core).await?;
 
         let session = Uuid::new_v4().to_string();
-        visible_turn(&core, &graphql, &agent_did, &behavior, &session, "First conversation turn").await?;
+        visible_turn(&core, &graphql, &agent_did, &behavior, &session, "First conversation turn", stream_gate.as_deref()).await?;
 
         // A request reaches the runtime, then the app closes before inference
         // finishes. Reopen exactly the same home: no re-enrollment, identity
@@ -164,8 +226,9 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         let reopened = core.peer_records().await;
         anyhow::ensure!(records.len() == reopened.len() && records.iter().zip(&reopened).all(|(old, new)| old.peer_id == new.peer_id && old.enrollment_request_id == new.enrollment_request_id), "reopen changed enrollment identity");
         tracing::info!(elapsed_ms = reconnect_started.elapsed().as_millis(), "app recovered offline reply");
-        visible_turn(&core, &graphql, &agent_did, &behavior, &session, FOLLOWUP_PROMPT).await?;
+        visible_turn(&core, &graphql, &agent_did, &behavior, &session, FOLLOWUP_PROMPT, followup_stream_gate.as_deref()).await?;
         assert_local_pagination(&core, &session, &agent_did).await?;
+        assert_observer_did_not_overflow(&core).await?;
         anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "reopen replicated runtime principal");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
@@ -175,6 +238,10 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         }), "continued conversation lost its prior assistant transcript");
         Ok(())
     }).await;
+    if debug_filter.is_some() {
+        let (stdout, stderr) = server.captured_output()?;
+        tracing::debug!(target: "cli_enrollment::server", %stdout, %stderr, "paired runtime trace");
+    }
     if result.is_err() {
         let retained = temp.keep();
         tracing::error!(path = %retained.display(), "retained failed pairing fixture for investigation");
@@ -189,11 +256,13 @@ async fn visible_turn(
     behavior: &str,
     session: &str,
     prompt: &str,
+    stream_gate: Option<&tokio::sync::Semaphore>,
 ) -> Result<()> {
     let started = Instant::now();
     let result = timeout(TURN_BUDGET, async {
         core.submit_request(session, agent, prompt, Some(behavior))
             .await?;
+        let local_submit_completed = started.elapsed();
         let (request, _, _) =
             wait_for_runtime_agent_request(graphql, core.node(), agent, prompt).await?;
         let request_arrived = started.elapsed();
@@ -208,11 +277,27 @@ async fn visible_turn(
             },
             async {
                 let expected = if prompt == FOLLOWUP_PROMPT { FOLLOWUP_REPLY } else { REPLY };
+                if let Some(gate) = stream_gate {
+                    let visibility = streaming::wait_for_visible_content(core, &request, expected).await;
+                    gate.add_permits(1);
+                    visibility?;
+                }
                 wait_for_replicated_reply(core, session, agent, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
+        let return_budget = if stream_gate.is_some() {
+            Duration::from_millis(500)
+        } else {
+            RETURN_TO_OBSERVER_BUDGET
+        };
+        anyhow::ensure!(
+            client_visible.saturating_sub(runtime_completed) <= return_budget,
+            "completed reply took too long to reach the client projection: runtime={runtime_completed:?}, client={client_visible:?}",
+        );
         tracing::info!(
+            local_submit_ms = local_submit_completed.as_millis(),
+            submit_to_runtime_observed_ms = request_arrived.saturating_sub(local_submit_completed).as_millis(),
             request_delivery_ms = request_arrived.as_millis(),
             selection_admission_ms = selection_admitted.as_millis(),
             runtime_completion_ms = runtime_completed.as_millis(),
@@ -238,6 +323,17 @@ async fn visible_turn(
         prompt,
         "completed assistant reply visible in app store"
     );
+    assert_observer_did_not_overflow(core).await?;
+    Ok(())
+}
+
+async fn assert_observer_did_not_overflow(core: &ClientCore) -> Result<()> {
+    let metrics = core.observer_metrics().await.context("observer running")?;
+    anyhow::ensure!(
+        metrics.drop_recoveries == 0,
+        "history overflowed the state observer: {metrics:?}"
+    );
+    tracing::info!(?metrics, "bounded client observation");
     Ok(())
 }
 
@@ -256,7 +352,8 @@ async fn select_session(core: &ClientCore, session: &str, agent: &str) -> Result
 }
 
 /// No hydration, repair, UI refresh, or remote reads here: success is a
-/// completed conversation present in the phone-side database itself.
+/// completed conversation in the phone-side database AND the observed response
+/// projection consumed by the app. A healthy DB with a stuck observer must fail.
 async fn wait_for_replicated_reply(
     core: &ClientCore,
     session: &str,
@@ -278,6 +375,9 @@ async fn wait_for_replicated_reply(
         AgentMessage(filter: {{{filter}}}) {{role content}}
     }}"#
     );
+    let visibility_started = Instant::now();
+    let mut database_ready_at = None;
+    let mut stages_seen = [false; 3];
     loop {
         let result = core.node().execute(&query).await;
         anyhow::ensure!(
@@ -309,8 +409,54 @@ async fn wait_for_replicated_reply(
             })
             .collect::<Vec<_>>()
             .join("\n");
+        for (index, (stage, ready)) in [
+            (
+                "request_completed",
+                requests
+                    .iter()
+                    .any(|row| row["lifecycle_state"] == "completed"),
+            ),
+            (
+                "response_complete",
+                responses.iter().any(|row| row["status"] == "complete"),
+            ),
+            ("transcript_materialized", body.contains(expected_reply)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if ready && !stages_seen[index] {
+                stages_seen[index] = true;
+                tracing::info!(
+                    request,
+                    stage,
+                    elapsed_ms = visibility_started.elapsed().as_millis(),
+                    "client replica delivery stage"
+                );
+            }
+        }
         if completed && body.contains(expected_reply) {
-            return Ok(());
+            let database_ready = *database_ready_at.get_or_insert_with(Instant::now);
+            let observer_ready = core
+                .store()
+                .snapshot()
+                .latest_response_for_request(request)
+                .is_some_and(|response| response.status.as_deref() == Some("complete"));
+            if observer_ready {
+                tracing::info!(
+                    request,
+                    database_visible_ms = database_ready
+                        .duration_since(visibility_started)
+                        .as_millis(),
+                    observer_after_database_ms = database_ready.elapsed().as_millis(),
+                    "local database and observer visibility",
+                );
+                return Ok(());
+            }
+            anyhow::ensure!(
+                database_ready.elapsed() < Duration::from_millis(500),
+                "local DB has the completed reply but the observer has not projected it in 500ms"
+            );
         }
         anyhow::ensure!(
             !responses.iter().any(|row| row["status"] == "error"),
@@ -336,8 +482,8 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
         Err(_) => None,
     };
     format!(
-        "database_now={database_now:?}; runtime_database={runtime_database:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
-        sync.database_sync, sync.peers
+        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
+        core.observer_metrics().await, sync.database_sync, sync.peers
     )
 }
 

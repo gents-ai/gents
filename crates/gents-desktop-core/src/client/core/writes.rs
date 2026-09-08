@@ -1769,8 +1769,10 @@ fn hydration_start_evidence_is_ready(
     progress: &gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress,
     evidence: &LocalHydrationStartEvidence,
 ) -> bool {
-    (evidence.owned_session_present || progress.merged_count > 0)
-        && !evidence.nonterminal_request_present
+    // SessionHydration.canStartInitial: once the owned header exists, waiting
+    // for request completion would prevent this session from receiving its stream.
+    evidence.owned_session_present
+        || (progress.merged_count > 0 && !evidence.nonterminal_request_present)
 }
 
 async fn load_local_hydration_start_evidence(
@@ -2189,7 +2191,7 @@ mod delete_source_tests {
                 nonterminal_request_present: false,
             },
         ));
-        assert!(!hydration_start_evidence_is_ready(
+        assert!(hydration_start_evidence_is_ready(
             &ClientHydrationProgress {
                 merged_count: 1,
                 ..idle
@@ -2217,6 +2219,37 @@ mod delete_source_tests {
             format!("{error:#}").contains("notARequestState"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn initial_hydration_matches_receiver_start_truth_table() {
+        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationProgress;
+        // SessionHydration.canStartInitial, including a live request with an
+        // owned header and a pending compose request without one.
+        for (owned, documents, active, expected) in [
+            (false, false, false, false),
+            (false, false, true, false),
+            (false, true, false, true),
+            (false, true, true, false),
+            (true, false, false, true),
+            (true, false, true, true),
+            (true, true, false, true),
+            (true, true, true, true),
+        ] {
+            let progress = ClientHydrationProgress {
+                merged_count: usize::from(documents),
+                ..Default::default()
+            };
+            let evidence = LocalHydrationStartEvidence {
+                owned_session_present: owned,
+                nonterminal_request_present: active,
+            };
+            assert_eq!(
+                hydration_start_evidence_is_ready(&progress, &evidence),
+                expected,
+                "owned={owned}, documents={documents}, active={active}"
+            );
+        }
     }
 
     #[test]
