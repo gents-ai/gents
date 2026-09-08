@@ -19,6 +19,8 @@ pub const AGENT_CONVERSATION_NAME: &str = "AgentConversation";
 pub const AGENT_CONVERSATION: &str = include_str!("../schemas/agent/agent_conversation.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
+pub const EXECUTION_BUDGET_NAME: &str = "ExecutionBudget";
+pub const EXECUTION_BUDGET: &str = include_str!("../schemas/agent/execution_budget.graphql");
 pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
 pub const AGENT_RESPONSE: &str = include_str!("../schemas/agent/agent_response.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
@@ -152,6 +154,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_RESULT,
     AGENT_CONVERSATION,
     AGENT_REQUEST,
+    EXECUTION_BUDGET,
     AGENT_RESPONSE,
     AGENT_TOOL_RESULT,
     AGENT_SESSION,
@@ -210,6 +213,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
     AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
+    EXECUTION_BUDGET_NAME,
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
     AGENT_SESSION_NAME,
@@ -487,6 +491,63 @@ mod tests {
         assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("workspace_owner_deployment_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("workspace_seal_hash: String @immutable"));
+    }
+
+    #[test]
+    fn execution_budget_allocation_is_immutable_except_for_release() {
+        let immutable_fields = [
+            "budget_id",
+            "budget_group_id",
+            "parent_budget_id",
+            "request_doc_id",
+            "agent_did",
+            "depth",
+            "allocation_json",
+            "derivation_json",
+            "created_at",
+        ];
+        // Release is the only mutation an ExecutionBudget ever takes;
+        // consumption is derived from append-only rows, never stored here.
+        let mutable_release_fields = ["released_at", "release_reason"];
+        let field_line = |field: &str| {
+            EXECUTION_BUDGET
+                .lines()
+                .map(str::trim)
+                .find(|line| line.starts_with(&format!("{field}:")))
+                .unwrap_or_else(|| panic!("ExecutionBudget is missing field {field}"))
+        };
+
+        assert!(type_declaration(EXECUTION_BUDGET_NAME).contains("@branchable"));
+        assert!(field_line("budget_id").contains("@index(unique: true)"));
+        for field in immutable_fields {
+            assert!(
+                field_line(field).contains("@immutable"),
+                "ExecutionBudget.{field} must be immutable"
+            );
+        }
+        for field in mutable_release_fields {
+            assert!(
+                !field_line(field).contains("@immutable"),
+                "ExecutionBudget.{field} is release state and must remain mutable"
+            );
+        }
+        // Subtree walks (`budget_group_id`) and one-hop parent lookups
+        // (`parent_budget_id`) are query paths, not scans.
+        for field in ["budget_group_id", "parent_budget_id", "request_doc_id"] {
+            assert!(
+                field_line(field).contains("@index"),
+                "ExecutionBudget.{field} is a lookup key and must be indexed"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_request_carries_immutable_budget_lineage() {
+        // Stamped at mint and never rewritten: an immutable column cannot be
+        // retrofitted onto rows that already exist, so the lineage keys must
+        // be present from the first write.
+        assert!(AGENT_REQUEST.contains("budget_group_id: String @index @immutable"));
+        assert!(AGENT_REQUEST.contains("budget_id: String @index @immutable"));
     }
 
     fn type_declaration(name: &str) -> &'static str {

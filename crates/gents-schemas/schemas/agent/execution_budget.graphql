@@ -1,0 +1,18 @@
+type ExecutionBudget @branchable {
+    budget_id: String @index(unique: true) @immutable
+    budget_group_id: String @index @immutable      # the subtree this budget governs
+    parent_budget_id: String @index @immutable     # null at the root; one hop up
+    request_doc_id: String @index @immutable       # the AgentRequest this was minted for
+    agent_did: String @index @immutable
+    depth: Int @immutable
+
+    # The allocation. Immutable, exactly like GraphRun.limits_json.
+    allocation_json: String @immutable
+    # How this budget was derived from its parent. Immutable.
+    derivation_json: String @immutable
+
+    # Mutable only for release, never for consumption accounting.
+    released_at: DateTime @index
+    release_reason: String
+    created_at: DateTime @index @immutable
+}
