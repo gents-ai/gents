@@ -9,7 +9,9 @@
 //! message back as a `user_message_chunk` `session/update` notification, and
 //! then defers the JSON-RPC response until the durable request terminalizes.
 //! The response result is a `stopReason` projection of the durable lifecycle —
-//! never a persisted field.
+//! never a persisted field. A turn that ended in error is a JSON-RPC error
+//! carrying `AgentResponse.error_message`: ACP has no `error` stop reason, and
+//! a result the pager cannot decode hides the real failure.
 //!
 //! `session/cancel` parses the audited notification shape (sessionId plus
 //! `_meta.cancelSubagents` / `_meta.cancelTrigger` / `_meta.rewindIfNoOutput`
@@ -190,6 +192,37 @@ impl StopReason {
             StopReason::Error => "error",
         }
     }
+}
+
+/// Terminal state of a submitted request, as the pager's response needs it.
+#[derive(Debug)]
+struct TerminalOutcome {
+    stop_reason: StopReason,
+    /// `AgentResponse.error_message` when the turn ended in error.
+    error_message: Option<String>,
+}
+
+impl From<StopReason> for TerminalOutcome {
+    fn from(stop_reason: StopReason) -> Self {
+        Self {
+            stop_reason,
+            error_message: None,
+        }
+    }
+}
+
+/// The deferred `session/prompt` response. ACP has no `error` stop reason, so
+/// an errored turn is a JSON-RPC error carrying the runtime's message rather
+/// than a result the pager cannot decode.
+fn prompt_result(outcome: TerminalOutcome) -> Result<Value> {
+    if outcome.stop_reason == StopReason::Error {
+        let message = outcome
+            .error_message
+            .filter(|message| !message.trim().is_empty())
+            .unwrap_or_else(|| "gents request failed".to_string());
+        anyhow::bail!("{message}");
+    }
+    Ok(json!({"stopReason": outcome.stop_reason.wire_name()}))
 }
 
 /// How a turn sends notifications to the connected client.
@@ -1295,7 +1328,7 @@ impl TurnManager {
         // refine existing tool/child cards without opening another prompt;
         // actual durable continuation requests receive their own identity.
         let outcome = outcome?;
-        Ok(json!({"stopReason": outcome.wire_name()}))
+        prompt_result(outcome)
     }
 
     /// Re-read immutable submission data for an observed human turn. No
@@ -1730,7 +1763,7 @@ impl TurnManager {
         projections: &ProjectionEngine,
         progress: &mut ObservedRequest,
         mut response_rx: oneshot::Receiver<Result<Value>>,
-    ) -> Result<StopReason> {
+    ) -> Result<TerminalOutcome> {
         // Request-local token-observation high-water: one per pending
         // request, so sequential requests accumulate per-request deltas into
         // the session total without double-counting and a retry-replaced
@@ -1752,9 +1785,9 @@ impl TurnManager {
                     .get("stopReason")
                     .and_then(Value::as_str)
                     .unwrap_or(StopReason::Cancelled.wire_name());
-                return Ok(stop_reason_from_wire(stop_reason));
+                return Ok(stop_reason_from_wire(stop_reason).into());
             }
-            let terminal = match self.request_stop_reason(request_id).await {
+            let terminal = match self.request_terminal(request_id).await {
                 Ok(terminal) => terminal,
                 Err(error)
                     if register_transient_read_retry(
@@ -1776,7 +1809,7 @@ impl TurnManager {
                     )
                     .await?
                     {
-                        return Ok(stop_reason);
+                        return Ok(stop_reason.into());
                     }
                     continue;
                 }
@@ -1833,7 +1866,7 @@ impl TurnManager {
                     )
                     .await?
                     {
-                        return Ok(stop_reason);
+                        return Ok(stop_reason.into());
                     }
                     continue;
                 }
@@ -1853,12 +1886,12 @@ impl TurnManager {
                 }
             }
             consecutive_transient_read_failures = 0;
-            if let Some(stop_reason) = terminal {
+            if let Some(outcome) = terminal {
                 // Terminalized: the final projection pass above already
                 // flushed the stream. Remove the pending entry; the response
-                // value is built by the caller from the returned stop reason.
+                // value is built by the caller from the returned outcome.
                 self.take_entry_if_generation(key, generation).await;
-                return Ok(stop_reason);
+                return Ok(outcome);
             }
             tokio::select! {
                 _ = tokio::time::sleep(TERMINAL_POLL_INTERVAL) => {}
@@ -1869,10 +1902,10 @@ impl TurnManager {
                             .get("stopReason")
                             .and_then(Value::as_str)
                             .unwrap_or(StopReason::Cancelled.wire_name());
-                        return Ok(stop_reason_from_wire(stop_reason));
+                        return Ok(stop_reason_from_wire(stop_reason).into());
                     }
                     // Sender dropped without resolving: treat as cancelled.
-                    return Ok(StopReason::Cancelled);
+                    return Ok(StopReason::Cancelled.into());
                 }
             }
         }
@@ -2239,6 +2272,15 @@ impl TurnManager {
     /// Query the durable request's terminal state and project a `stopReason`.
     /// Returns `None` while the request is still non-terminal.
     async fn request_stop_reason(&self, request_id: &str) -> Result<Option<StopReason>> {
+        Ok(self
+            .request_terminal(request_id)
+            .await?
+            .map(|outcome| outcome.stop_reason))
+    }
+
+    /// Terminal projection plus the runtime's error text, for the one caller
+    /// that answers the pager's deferred prompt.
+    async fn request_terminal(&self, request_id: &str) -> Result<Option<TerminalOutcome>> {
         let escaped_request_id = escape_graphql_string(request_id);
         let query = format!(
             r#"{{
@@ -2258,6 +2300,7 @@ impl TurnManager {
                 ) {{
                     request_id
                     status
+                    error_message
                     interrupted_at
                 }}
             }}"#
@@ -2296,11 +2339,19 @@ impl TurnManager {
             .get("interrupted_at")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let error_message = response_row
+            .get("error_message")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
         Ok(stop_reason_from_rows(
             lifecycle_state,
             response_status.as_deref(),
             interrupted_at.as_deref(),
-        ))
+        )
+        .map(|stop_reason| TerminalOutcome {
+            stop_reason,
+            error_message,
+        }))
     }
 }
 
@@ -2731,6 +2782,30 @@ mod tests {
         assert_eq!(
             stop_reason_from_rows("superseded", None, None),
             Some(StopReason::Error)
+        );
+    }
+
+    #[test]
+    fn prompt_result_reports_an_errored_turn_as_a_jsonrpc_error() {
+        // ACP has no `error` stop reason: a result carrying one is undecodable
+        // by the pager, so the runtime's message must travel as the error.
+        let error = prompt_result(TerminalOutcome {
+            stop_reason: StopReason::Error,
+            error_message: Some("fail-closed: tool_use observed (bash_unrestricked)".to_string()),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("bash_unrestricked"), "{error}");
+
+        let error = prompt_result(StopReason::Error.into()).unwrap_err();
+        assert_eq!(error.to_string(), "gents request failed");
+
+        assert_eq!(
+            prompt_result(StopReason::EndTurn.into()).unwrap(),
+            json!({"stopReason": "end_turn"})
+        );
+        assert_eq!(
+            prompt_result(StopReason::Cancelled.into()).unwrap(),
+            json!({"stopReason": "cancelled"})
         );
     }
 
