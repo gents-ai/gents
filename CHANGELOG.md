@@ -6,6 +6,23 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.16.2 - 2026-09-08
+
+### Fixed
+
+- Let DefraDB own durable reconnect recovery and immediate replication wakeups;
+  remove redundant application-wide replay and unchanged readiness heartbeats.
+- Batch deep-history merge writes and remove the extra pre-send delay.
+- Preserve HTTP transaction-conflict retries using DefraDB's own classifier.
+- Verify fresh and aged enrollment, completed conversations, offline reply
+  recovery, transcript continuity, and local pagination with canonical tests.
+
+### Upgrade
+
+- Upgrade phone/desktop clients and runtimes together. The updated DefraDB
+  dependency uses multiplexed Iroh; mixed old/new protocol peers are not
+  supported. Preserve existing stores, identities, and enrollment state.
+
 ## 0.16.1 - 2026-09-07
 
 ### Fixed

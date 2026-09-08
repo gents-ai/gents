@@ -46,7 +46,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.16.1"
+version = "0.16.2"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/gents-ai/gents"
