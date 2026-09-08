@@ -146,7 +146,8 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
     apply_live_desired_state(&access, &bundle, &planned).await?;
 
     access
-        .execute(
+        .write(
+            "test.desired_state.seed_backend",
             r#"mutation { create_InferenceBackend(input: {
                     backend_id: "other-agent-backend",
                     name: "other-agent-backend",
@@ -159,7 +160,8 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
         )
         .await?;
     access
-        .execute(
+        .write(
+            "test.desired_state.seed_behavior",
             r#"mutation { create_AgentBehavior(input: {
                     behavior_id: "other-agent-behavior",
                     agent_did: "did:key:some-other-agent",
@@ -169,7 +171,8 @@ async fn prune_spares_backends_referenced_by_other_agents() -> Result<()> {
         )
         .await?;
     access
-        .execute(
+        .write(
+            "test.desired_state.seed_backend",
             r#"mutation { create_InferenceBackend(input: {
                     backend_id: "stale-backend",
                     name: "stale-backend",

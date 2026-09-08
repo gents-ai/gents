@@ -18,7 +18,8 @@ async fn explicit_null_clears_task_goals_and_tool_goal_capabilities() -> Result<
     let access = ConfigAccess::Local(std::sync::Arc::new(node));
 
     access
-        .execute(
+        .write(
+            "test.desired_state.seed_principal",
             r#"mutation {
                 create_AgentPrincipal(input: {
                     agent_did: "did:test:test",
@@ -130,7 +131,7 @@ async fn all_subagent_fields_persist_and_apply_is_idempotent() -> Result<()> {
         use gents::graphql::escape_graphql_string;
         let did = escape_graphql_string("did:key:test-subagent-idempotency");
         access
-                .execute(&format!(
+                .write("test.desired_state.seed_principal", &format!(
                     r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
                 ))
                 .await?;
@@ -327,7 +328,7 @@ async fn behavior_description_and_summary_persist_and_apply_is_idempotent() -> R
         use gents::graphql::escape_graphql_string;
         let did = escape_graphql_string("did:key:test-behavior-desc-idempotency");
         access
-                .execute(&format!(
+                .write("test.desired_state.seed_principal", &format!(
                     r#"mutation {{ create_AgentPrincipal(input: {{ agent_did: "{did}", enabled: true }}) {{ _docID }} }}"#
                 ))
                 .await?;
