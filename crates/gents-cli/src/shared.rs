@@ -51,23 +51,14 @@ pub(crate) struct InitSummary {
     pub(crate) created_default_behavior: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct StoredInitConfig {
-    pub(crate) home: String,
-    pub(crate) agent_name: String,
-    pub(crate) agent_did: String,
-    pub(crate) key_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) identity_backend: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) keychain_label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) secure_enclave_label: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) tool_package: Option<ToolPackageArg>,
-    pub(crate) tool_ceiling: ToolCeilingArg,
-    pub(crate) tool_root: Option<String>,
-}
+/// This home's persisted `init.json`, in gents-cli's own CLI-facing
+/// tool-policy vocabulary. The struct itself now lives in `gents::home`
+/// (moved so `gc-cell`, which provisions gents homes from outside this
+/// binary, writes the exact same shape rather than a second, drifting
+/// copy); this alias keeps every existing field access in this crate
+/// (`config.tool_ceiling`, `StoredInitConfig { .. }` literals, and so on)
+/// unchanged.
+pub(crate) type StoredInitConfig = gents::home::StoredInitConfig<ToolPackageArg, ToolCeilingArg>;
 
 /// Operator-visible P2P admission bounds in effect for this server process.
 ///
