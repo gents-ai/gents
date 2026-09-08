@@ -27,6 +27,7 @@ use tokio::sync::{oneshot, Notify};
 pub enum ChatAction {
     Sse(String),
     DelayThenSse(Duration, String),
+    WaitThenSse(Arc<tokio::sync::Semaphore>, String),
     Hang,
 }
 
@@ -210,6 +211,26 @@ async fn handle_chat(
             let _ = tokio::time::timeout(delay, state.stop.notified()).await;
             sse_response(body)
         }
+        ChatAction::WaitThenSse(gate, body) => loop {
+            if state.stopped.load(Ordering::Relaxed) {
+                return json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"error":"shutting down"}"#.to_string(),
+                );
+            }
+            if let Ok(permit) =
+                tokio::time::timeout(Duration::from_millis(50), gate.acquire()).await
+            {
+                if let Ok(permit) = permit {
+                    permit.forget();
+                    return sse_response(body);
+                }
+                return json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    r#"{"error":"gate closed"}"#.to_string(),
+                );
+            }
+        },
         ChatAction::Hang => {
             while !state.stopped.load(Ordering::Relaxed) {
                 let _ =

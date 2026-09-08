@@ -356,8 +356,8 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
     },
 ];
 
-/// Requester-scoped session-index grant. Complete historical index hydration
-/// is handled separately by the desktop's node-global branchable pull.
+/// Requester-scoped session-index grant. The database replicator owns initial
+/// replay and reconnect recovery; desktop paging reads its local replica.
 pub const CLIENT_INDEX_COLLECTIONS: [&str; 3] =
     ["AgentConversation", "AgentSession", "MailboxItem"];
 

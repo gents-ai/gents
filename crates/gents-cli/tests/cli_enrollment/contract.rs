@@ -16,6 +16,10 @@ const TURN_BUDGET: Duration = Duration::from_secs(20);
 const RECONNECT_BUDGET: Duration = Duration::from_secs(20);
 const MODEL_DELAY: Duration = Duration::from_secs(2);
 const REPLY: &str = "PAIRING_CONTRACT_ASSISTANT_REPLY";
+const OFFLINE_REPLY: &str = "PAIRING_CONTRACT_OFFLINE_REPLY";
+const FOLLOWUP_REPLY: &str = "PAIRING_CONTRACT_CONTINUED_REPLY";
+const OFFLINE_PROMPT: &str = "Reply while the app is closed";
+const FOLLOWUP_PROMPT: &str = "Continue our existing conversation";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn app_enrollment_conversation_survives_reopen_with_bounded_latency() -> Result<()> {
@@ -36,12 +40,33 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         )
         .with_test_writer()
         .try_init();
+    let offline_gate = Arc::new(tokio::sync::Semaphore::new(0));
+    let model_gate = Arc::clone(&offline_gate);
     let model = FakeLlm::start(
         "pairing-contract",
         None,
-        Arc::new(|_| {
+        Arc::new(move |request| {
             tracing::info!("deterministic provider received inference request");
-            ChatAction::DelayThenSse(MODEL_DELAY, completion_text_sse(REPLY))
+            let latest = request
+                .get("messages")
+                .and_then(Value::as_array)
+                .and_then(|messages| {
+                    messages
+                        .iter()
+                        .rev()
+                        .find(|message| message["role"] == "user")
+                });
+            let latest = serde_json::json!({"messages": [latest]});
+            if request_contains_role_text(&latest, "user", OFFLINE_PROMPT) {
+                ChatAction::WaitThenSse(Arc::clone(&model_gate), completion_text_sse(OFFLINE_REPLY))
+            } else {
+                let reply = if request_contains_role_text(&latest, "user", FOLLOWUP_PROMPT) {
+                    FOLLOWUP_REPLY
+                } else {
+                    REPLY
+                };
+                ChatAction::DelayThenSse(MODEL_DELAY, completion_text_sse(reply))
+            }
         }),
     )?;
     let temp = tempfile::tempdir()?;
@@ -78,7 +103,7 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
 
     let result = server.capturing(async {
         wait_for_runtime_ready(&graphql, &agent_did, ENROLL_BUDGET).await?;
-        seed_readiness_history(&graphql, &agent_did, readiness_revisions).await?;
+        let readiness_timestamp = seed_readiness_history(&graphql, &agent_did, readiness_revisions).await?;
         let core = ClientCore::start_with_paths_and_options(
             DesktopPaths::from_root(&client_home), ClientCoreOptions::local_only(),
         ).await?;
@@ -92,6 +117,9 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
             run_cli_json(&runtime_home, &["p2p", "enrollment", "approve", &pending.request_id, "--home", home])?;
             wait_for_chat_ready_enrollment(&core, &agent_did).await?;
             wait_for_client_behavior_readiness(&core, &agent_did).await?;
+            if let Some(expected) = readiness_timestamp.as_deref() {
+                wait_for_readiness_revision(&core, &agent_did, expected).await?;
+            }
             anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "runtime principal replicated to app");
             Ok::<_, anyhow::Error>(())
         }).await;
@@ -109,12 +137,13 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         // finishes. Reopen exactly the same home: no re-enrollment, identity
         // reset, injected desired rows, or hand-installed return replicator.
         let records = core.peer_records().await;
-        core.submit_request(&session, &agent_did, "Reply while the app is closed", Some(&behavior)).await?;
+        core.submit_request(&session, &agent_did, OFFLINE_PROMPT, Some(&behavior)).await?;
         let (request, _, _) = timeout(TURN_BUDGET, wait_for_runtime_agent_request(
-            &graphql, core.node(), &agent_did, "Reply while the app is closed",
+            &graphql, core.node(), &agent_did, OFFLINE_PROMPT,
         )).await.context("second request did not reach runtime in 20s")??;
         core.shutdown().await?;
         drop(core);
+        offline_gate.add_permits(1);
         wait_for_complete_agent_response(&graphql, &request, TURN_BUDGET).await?;
 
         let reconnect_started = Instant::now();
@@ -125,7 +154,7 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         let recovered = timeout(RECONNECT_BUDGET.saturating_sub(reconnect_started.elapsed()), async {
             wait_for_chat_ready_enrollment(&core, &agent_did).await?;
             wait_for_client_behavior_readiness(&core, &agent_did).await?;
-            wait_for_replicated_reply(&core, &session, &agent_did, &request).await
+            wait_for_replicated_reply(&core, &session, &agent_did, &request, OFFLINE_REPLY).await
         }).await;
         if !matches!(recovered, Ok(Ok(()))) {
             let diagnostics = pairing_diagnostics(&core, &graphql).await;
@@ -135,13 +164,14 @@ async fn run_contract(readiness_revisions: usize) -> Result<()> {
         let reopened = core.peer_records().await;
         anyhow::ensure!(records.len() == reopened.len() && records.iter().zip(&reopened).all(|(old, new)| old.peer_id == new.peer_id && old.enrollment_request_id == new.enrollment_request_id), "reopen changed enrollment identity");
         tracing::info!(elapsed_ms = reconnect_started.elapsed().as_millis(), "app recovered offline reply");
-        visible_turn(&core, &graphql, &agent_did, &behavior, &session, "Continue our existing conversation").await?;
+        visible_turn(&core, &graphql, &agent_did, &behavior, &session, FOLLOWUP_PROMPT).await?;
         assert_local_pagination(&core, &session, &agent_did).await?;
         anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "reopen replicated runtime principal");
         core.shutdown().await?;
         anyhow::ensure!(model.captured_chat_requests().iter().any(|request| {
-            request_contains_role_text(request, "user", "Continue our existing conversation")
+            request_contains_role_text(request, "user", FOLLOWUP_PROMPT)
                 && request_contains_role_text(request, "assistant", REPLY)
+                && request_contains_role_text(request, "assistant", OFFLINE_REPLY)
         }), "continued conversation lost its prior assistant transcript");
         Ok(())
     }).await;
@@ -177,7 +207,8 @@ async fn visible_turn(
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
-                wait_for_replicated_reply(core, session, agent, &request).await?;
+                let expected = if prompt == FOLLOWUP_PROMPT { FOLLOWUP_REPLY } else { REPLY };
+                wait_for_replicated_reply(core, session, agent, &request, expected).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
         )?;
@@ -231,6 +262,7 @@ async fn wait_for_replicated_reply(
     session: &str,
     agent: &str,
     request: &str,
+    expected_reply: &str,
 ) -> Result<()> {
     let filter = format!(
         r#"request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: "{}"}}"#,
@@ -277,7 +309,7 @@ async fn wait_for_replicated_reply(
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if completed && body.contains(REPLY) {
+        if completed && body.contains(expected_reply) {
             return Ok(());
         }
         anyhow::ensure!(
@@ -310,7 +342,19 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
 }
 
 async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) -> Result<()> {
-    let intent_query = "{ SessionHydrationRequest { _docID } PeerPairingDesired { _docID } }";
+    timeout(TURN_BUDGET, async {
+        use gents::agent::p2p_reconcile::session_hydration::ClientHydrationPhase;
+        loop {
+            match core.session_hydration_progress(session, agent).await?.phase {
+                ClientHydrationPhase::Complete => return Ok::<_, anyhow::Error>(()),
+                ClientHydrationPhase::Failed => bail!("session hydration failed before pagination"),
+                _ => sleep(Duration::from_millis(100)).await,
+            }
+        }
+    })
+    .await
+    .context("session hydration did not settle before pagination")??;
+    let intent_query = "{ SessionHydrationRequest { _docID request_key status status_detail served_doc_count served_manifest_json processed_at outcome_signer_did outcome_signature } PeerPairingDesired { _docID peer_id collections profiles template source enrollment_request_digest enrollment_authorization_sequence enrollment_authorization_expires_at updated_at } }";
     let before = core.node().execute(intent_query).await;
     anyhow::ensure!(!before.has_errors(), "local intent query failed");
     let mut cursor = None;
@@ -363,9 +407,13 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
 /// Production Amy had about 2,500 readiness revisions when a clean mobile
 /// client enrolled. Seed real signed runtime writes before creating the app;
 /// this must not become a dependency on old history for current readiness.
-async fn seed_readiness_history(graphql: &str, agent: &str, revisions: usize) -> Result<()> {
+async fn seed_readiness_history(
+    graphql: &str,
+    agent: &str,
+    revisions: usize,
+) -> Result<Option<String>> {
     if revisions == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let agent = escape_graphql_string(agent);
     let readiness = graphql_query(graphql, &format!(
@@ -391,10 +439,11 @@ async fn seed_readiness_history(graphql: &str, agent: &str, revisions: usize) ->
         }
         graphql_query(graphql, &format!("mutation {{ {fields} }}")).await?;
     }
+    let final_timestamp = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
     if revisions > 0 {
         graphql_query(graphql, &format!(
             r#"mutation {{ update_AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{agent}"}}}}, input: {{updated_at: "{}"}}) {{_docID}} }}"#,
-            escape_graphql_string(&Utc::now().to_rfc3339()),
+            escape_graphql_string(&final_timestamp),
         )).await?;
         tracing::info!(
             revisions,
@@ -402,5 +451,45 @@ async fn seed_readiness_history(graphql: &str, agent: &str, revisions: usize) ->
             "aged runtime readiness fixture ready"
         );
     }
-    Ok(())
+    Ok(Some(final_timestamp))
+}
+
+async fn wait_for_readiness_revision(core: &ClientCore, agent: &str, expected: &str) -> Result<()> {
+    let query = format!(
+        r#"{{ AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{}"}}}}) {{agent_did snapshot_json updated_at}} }}"#,
+        escape_graphql_string(agent)
+    );
+    loop {
+        let result = core.node().execute(&query).await;
+        anyhow::ensure!(
+            !result.has_errors(),
+            "readiness convergence query failed: {:?}",
+            result.errors
+        );
+        if let Some(row) = result
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentBehaviorReadiness"].as_array())
+            .and_then(|rows| rows.first())
+        {
+            let row: gents_protocol::row::AgentBehaviorReadinessRow =
+                serde_json::from_value(row.clone())?;
+            let actual = chrono::DateTime::parse_from_rfc3339(&row.updated_at)?;
+            if actual >= chrono::DateTime::parse_from_rfc3339(expected)? {
+                anyhow::ensure!(
+                    matches!(
+                        gents_protocol::row::project_behavior_readiness_summary(
+                            Some(&row),
+                            agent,
+                            Utc::now()
+                        ),
+                        gents_protocol::row::ProjectedBehaviorReadinessSummary::Observed(_)
+                    ),
+                    "latest readiness revision is not a usable semantic snapshot"
+                );
+                return Ok(());
+            }
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
 }

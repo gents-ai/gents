@@ -216,6 +216,7 @@ pub enum BehaviorReadinessUnknownReason {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
+    /// Legacy wire value retained for older clients; current projections do not emit it.
     ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
