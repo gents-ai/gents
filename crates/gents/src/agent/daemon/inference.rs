@@ -456,6 +456,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         let mut stream_error = None;
 
                         loop {
+                            let flush_deadline = processor.next_flush_deadline().await;
                             let item = match tokio::select! {
                                 biased;
                                 _ = shutdown.changed() => {
@@ -523,6 +524,15 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                         return Err(error);
                                     }
                                     lease_poll.reset();
+                                    continue;
+                                }
+                                _ = async {
+                                    match flush_deadline {
+                                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                                        None => std::future::pending::<()>().await,
+                                    }
+                                } => {
+                                    processor.flush_pending().await?;
                                     continue;
                                 }
                                 result = await_with_request_deadline(

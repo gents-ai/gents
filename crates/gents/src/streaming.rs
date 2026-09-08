@@ -84,6 +84,22 @@ struct StreamBufferSnapshot {
 }
 
 impl DefraStreamWriter {
+    pub(crate) async fn next_flush_deadline(&self, doc_id: &str) -> Option<tokio::time::Instant> {
+        let buffers = self.buffers.lock().await;
+        let buffer = buffers.get(doc_id)?;
+        if buffer.content == buffer.persisted.content
+            && buffer.reasoning == buffer.persisted.reasoning
+            && buffer.token_count == buffer.persisted.token_count
+            && buffer.reasoning_progress_seq == buffer.persisted.reasoning_progress_seq
+        {
+            return None;
+        }
+        buffer
+            .last_flush_at
+            .checked_add(self.batch_interval)
+            .map(tokio::time::Instant::from_std)
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, agent_did: &str, batch_interval: Duration) -> Self {
         let response_write_gate = response_write_gate(&node);
         Self {
@@ -204,7 +220,9 @@ impl DefraStreamWriter {
         let buf = buffers
             .get_mut(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-        if !force && buf.last_flush_at.elapsed() < self.batch_interval {
+        let first_visible_content = (buf.persisted.content.is_empty() && !buf.content.is_empty())
+            || (buf.persisted.reasoning.is_empty() && !buf.reasoning.is_empty());
+        if !force && !first_visible_content && buf.last_flush_at.elapsed() < self.batch_interval {
             return Ok(None);
         }
         let snapshot = StreamBufferSnapshot {
