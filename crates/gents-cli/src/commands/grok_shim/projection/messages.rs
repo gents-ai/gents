@@ -2518,6 +2518,7 @@ mod tests {
                     return defra_node::QueryResponse {
                         data: None,
                         errors: Vec::new(),
+                        extensions: Default::default(),
                     };
                 }
                 if query.contains("depth: 1") {

@@ -11,7 +11,7 @@ checksum = "fe438c63458706e03479442743baae6c88256498e6431708f6dfc520a26515d3"
 [[package]]
 name = "acp"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -1036,6 +1036,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-server"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1df331683d982a0b9492b38127151e6453639cd34926eb9c07d4cd8c6d22bfc"
+dependencies = [
+ "arc-swap",
+ "bytes",
+ "either",
+ "fs-err",
+ "http",
+ "http-body",
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "rustls",
+ "rustls-pki-types",
+ "tokio",
+ "tokio-rustls",
+ "tower-service",
+]
+
+[[package]]
 name = "backon"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1249,7 +1271,7 @@ dependencies = [
 [[package]]
 name = "blockstore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2056,7 +2078,7 @@ dependencies = [
 [[package]]
 name = "crdt"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2117,7 +2139,7 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "crypto"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "aes-gcm",
  "blst",
@@ -2244,7 +2266,7 @@ dependencies = [
 [[package]]
 name = "cursor"
 version = "0.1.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2395,7 +2417,7 @@ dependencies = [
 [[package]]
 name = "datastore"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -2410,7 +2432,7 @@ dependencies = [
 [[package]]
 name = "db"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "anyhow",
@@ -2475,7 +2497,7 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 [[package]]
 name = "defra-core"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-trait",
  "bytes",
@@ -2500,12 +2522,13 @@ dependencies = [
 [[package]]
 name = "defra-http"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "async-stream",
  "async-trait",
  "axum",
+ "axum-server",
  "base64 0.22.1",
  "cid",
  "crypto",
@@ -2520,6 +2543,7 @@ dependencies = [
  "lens",
  "query",
  "rand 0.8.5",
+ "rustls",
  "schema",
  "serde",
  "serde_json",
@@ -2535,7 +2559,7 @@ dependencies = [
 [[package]]
 name = "defra-node"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "anyhow",
@@ -2569,7 +2593,7 @@ dependencies = [
 [[package]]
 name = "defra-p2p-adapter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "async-trait",
@@ -2601,7 +2625,7 @@ dependencies = [
 [[package]]
 name = "defra-version"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "serde",
 ]
@@ -2850,7 +2874,7 @@ dependencies = [
 [[package]]
 name = "document"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -3181,7 +3205,7 @@ dependencies = [
 [[package]]
 name = "events"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -3443,6 +3467,16 @@ checksum = "e076045bb43dac435333ed5f04caf35c7463631d0dae2deb2638d94dd0a5b872"
 dependencies = [
  "lazy_static",
  "num",
+]
+
+[[package]]
+name = "fs-err"
+version = "3.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b91aa448ca50d7e79433bdf3ee8d99215430d2ec02ade5aefab2a073a1822e8a"
+dependencies = [
+ "autocfg",
+ "tokio",
 ]
 
 [[package]]
@@ -4913,7 +4947,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 [[package]]
 name = "identity"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "base64 0.22.1",
  "crypto",
@@ -4924,6 +4958,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "web-time",
 ]
 
 [[package]]
@@ -5627,7 +5662,7 @@ dependencies = [
 [[package]]
 name = "kms"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "async-channel",
@@ -5748,7 +5783,7 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 [[package]]
 name = "lens"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -6999,7 +7034,7 @@ dependencies = [
 [[package]]
 name = "p2p"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "anyhow",
@@ -7841,7 +7876,7 @@ dependencies = [
 [[package]]
 name = "query"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "acp",
  "async-graphql",
@@ -8271,7 +8306,7 @@ dependencies = [
 [[package]]
 name = "replication-filter"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "p2p",
  "query",
@@ -8730,7 +8765,7 @@ dependencies = [
 [[package]]
 name = "schema"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "cid",
  "defra-core",
@@ -9565,7 +9600,7 @@ dependencies = [
 [[package]]
 name = "storage"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -10146,7 +10181,7 @@ dependencies = [
 [[package]]
 name = "telemetry"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "tracing",
 ]
@@ -12605,7 +12640,7 @@ dependencies = [
 [[package]]
 name = "zanzibar"
 version = "0.5.0"
-source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=7a0010be1e1f95b83c042c1a8b96675137c66716#7a0010be1e1f95b83c042c1a8b96675137c66716"
+source = "git+https://github.com/sourcenetwork/defradb.rs.git?rev=287a934d3fe55800ef665b0cba74bf6d64cd0de7#287a934d3fe55800ef665b0cba74bf6d64cd0de7"
 dependencies = [
  "async-lock",
  "async-trait",
