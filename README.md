@@ -29,11 +29,11 @@ For worked document-driven scenarios, use `gents pack list` and see the
 
 The binary also carries an immutable catalog of useful graphs. Cataloging is
 read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex
-OAuth, Grok OAuth, a local model, or a custom endpoint. A bundled graph inherits
-that default backend when it is installed:
+OAuth, Grok OAuth, Claude subscription OAuth, a local model, or a custom
+endpoint. A bundled graph inherits that default backend when it is installed:
 
 ```bash
-gents init                 # choose ChatGPT / Codex and complete OAuth
+gents init                 # choose ChatGPT / Codex, Grok, or Claude and complete OAuth
 gents server               # keep this running in another terminal
 
 gents pack show code_review
