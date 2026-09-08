@@ -256,26 +256,20 @@ theorem demotion_persists_when_unchanged (standing : BehaviorStanding) :
 theorem change_restores_the_budget (standing : BehaviorStanding) :
     acrossGeneration true standing = seeded := rfl
 
-/- A durable Ready row is only an observation lease. A client must see a
-runtime heartbeat no further than `maxAge` behind its current clock. -/
-def observationFresh (publishedAt observedAt maxAge : Nat) : Bool :=
-  decide (publishedAt ≤ observedAt ∧ observedAt - publishedAt ≤ maxAge)
+/- Readiness is durable semantic state, not a transport lease. A newly
+started publisher has no committed snapshot and must publish Recovering;
+subsequent publication requires a semantic change, not elapsed time. -/
+def shouldPublish {α : Type} [DecidableEq α] (previous : Option α) (next : α) : Bool :=
+  decide (previous ≠ some next)
 
-theorem future_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
-    (hFuture : observedAt < publishedAt) :
-    observationFresh publishedAt observedAt maxAge = false := by
-  simp [observationFresh, Nat.not_le.mpr hFuture]
+theorem initial_state_publishes {α : Type} [DecidableEq α] (next : α) :
+    shouldPublish none next = true := by simp [shouldPublish]
 
-theorem expired_readiness_fails_closed (publishedAt observedAt maxAge : Nat)
-    (hPublished : publishedAt ≤ observedAt)
-    (hExpired : maxAge < observedAt - publishedAt) :
-    observationFresh publishedAt observedAt maxAge = false := by
-  simp [observationFresh, hPublished, Nat.not_le.mpr hExpired]
+theorem unchanged_state_does_not_publish {α : Type} [DecidableEq α] (state : α) :
+    shouldPublish (some state) state = false := by simp [shouldPublish]
 
-theorem current_readiness_is_fresh (publishedAt observedAt maxAge : Nat)
-    (hPublished : publishedAt ≤ observedAt)
-    (hCurrent : observedAt - publishedAt ≤ maxAge) :
-    observationFresh publishedAt observedAt maxAge = true := by
-  simp [observationFresh, hPublished, hCurrent]
+theorem changed_state_publishes {α : Type} [DecidableEq α] (previous next : α)
+    (hChanged : previous ≠ next) :
+    shouldPublish (some previous) next = true := by simp [shouldPublish, hChanged]
 
 end RuntimeReconcile.StartupReadiness

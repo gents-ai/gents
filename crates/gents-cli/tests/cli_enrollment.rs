@@ -3,6 +3,8 @@
 //! `/status` offer, operator approve, two-leg client route — not the
 //! hand-installed replicators used by the live desktop fixture.
 
+#[path = "cli_enrollment/contract.rs"]
+mod contract;
 mod support;
 use support::*;
 
@@ -172,7 +174,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
                 "live inference response missing {reply_token}: {runtime_response}"
             );
 
-            wait_for_client_complete_response(&core, &request_id, &reply_token).await?;
+            wait_for_client_complete_response(&core, &session_id, &agent_did, &request_id, &reply_token).await?;
 
             let runtime_principals = graphql_query(
                 &graphql,
@@ -404,24 +406,20 @@ async fn assistant_message_text(graphql: &str, request_id: &str) -> Result<Strin
                 .is_some_and(|role| role == "assistant" || role == "agent")
         })
         .filter_map(|row| {
-            row.get("content")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+            row.get("content").and_then(Value::as_str).map(|content| {
+                gents_protocol::transcript::present_persisted_message("assistant", content)
+                    .body_markdown
+            })
         })
         .collect::<Vec<_>>()
         .join("\n"))
 }
 
 fn response_visible_text(row: &Value) -> String {
-    [
-        row.get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-        row.get("reasoning")
-            .and_then(Value::as_str)
-            .unwrap_or_default(),
-    ]
-    .join("\n")
+    row.get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 async fn wait_for_complete_agent_response(
@@ -506,39 +504,55 @@ async fn wait_for_complete_agent_response(
 
 async fn wait_for_client_complete_response(
     core: &ClientCore,
+    session_id: &str,
+    agent_did: &str,
     request_id: &str,
     token: &str,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
+        // Match desktop_session_snapshot: transcript rows deliberately do not
+        // live in the global observer. Read the app's bounded, scoped page.
+        core.ensure_session_hydration_started(session_id, agent_did)
+            .await?;
+        core.refresh_local_request(agent_did, request_id).await?;
+        let page = gents_desktop_core::client::load_session_transcript_page(
+            core.node(),
+            session_id,
+            Some(agent_did),
+            Some(core.principal().did()),
+            None,
+            Some(40),
+        )
+        .await?;
         let snapshot = core.store().snapshot();
         let response_text = snapshot
             .responses
             .iter()
             .filter(|row| row.request_id.as_deref() == Some(request_id))
-            .map(|row| {
-                [
-                    row.content.as_deref().unwrap_or_default(),
-                    row.reasoning.as_deref().unwrap_or_default(),
-                ]
-                .join("\n")
-            })
+            .map(|row| row.content.as_deref().unwrap_or_default())
             .collect::<Vec<_>>()
             .join("\n");
-        let message_text = snapshot
+        let message_text = page
+            .store
             .messages
             .iter()
             .filter(|row| row.request_id.as_deref() == Some(request_id))
+            .filter(|row| matches!(row.role.as_deref(), Some("assistant" | "agent")))
             .map(|row| {
-                [
+                gents_protocol::transcript::present_persisted_message(
+                    "assistant",
                     row.content.as_deref().unwrap_or_default(),
-                    row.reasoning.as_deref().unwrap_or_default(),
-                ]
-                .join("\n")
+                )
+                .body_markdown
             })
             .collect::<Vec<_>>()
             .join("\n");
-        if response_text.contains(token) || message_text.contains(token) {
+        let complete = snapshot.responses.iter().any(|row| {
+            row.request_id.as_deref() == Some(request_id)
+                && row.status.as_deref() == Some("complete")
+        });
+        if complete && (response_text.contains(token) || message_text.contains(token)) {
             return Ok(());
         }
         if snapshot.responses.iter().any(|row| {

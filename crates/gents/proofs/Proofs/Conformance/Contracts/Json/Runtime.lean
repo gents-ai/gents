@@ -1,9 +1,21 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
+import Proofs.RuntimeReconcile.StartupReadiness
 
 namespace Conformance.Contracts
 
 open Conformance.ContractCases
+
+def readinessPublicationTrace (previous : Option Nat) : List Nat → List Bool
+  | [] => []
+  | next :: rest =>
+      RuntimeReconcile.StartupReadiness.shouldPublish previous next ::
+        readinessPublicationTrace (some next) rest
+
+def readinessPublicationCasesJson : String :=
+  jsonArray ([ [0, 0, 0, 1, 1, 2], [0, 1, 0, 0, 2] ].map fun states =>
+    "{\"states\":" ++ jsonArray (states.map toString) ++
+    ",\"publishes\":" ++ jsonArray ((readinessPublicationTrace none states).map boolString) ++ "}")
 
 def runtimeReconcileCaseJson (witness : RuntimeReconcileCase) : String :=
   "{"

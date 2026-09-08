@@ -241,7 +241,8 @@ async fn generic_override_recreates_a_tombstoned_tool_selection() -> Result<()> 
     let first_doc_id = tool_selection_doc_id(&access).await?;
 
     access
-        .execute(
+        .write(
+            "test.config_import.delete_tool_selection",
             r#"mutation {
                     delete_ToolSelection(filter: { selection_id: { _eq: "tools-a" } }) { _docID }
                 }"#,

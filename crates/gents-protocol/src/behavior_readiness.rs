@@ -3,8 +3,8 @@
 //! Runtime configuration is never treated as proof that a behavior can accept
 //! work. The source projector admits only installed dispatchers not vetoed by
 //! explicit unavailability or a generation-owned startup demotion. The client
-//! projector then fails closed on missing, malformed, non-ready, or stale
-//! observations.
+//! projector then fails closed on missing, malformed, non-ready, or generation-
+//! skewed observations. This is last-known application state, not connectivity.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,7 +12,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const BEHAVIOR_READINESS_FORMAT_VERSION: u32 = 1;
-pub const BEHAVIOR_READINESS_MAX_AGE_SECONDS: i64 = 45;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BehaviorReadinessProcessState {
@@ -217,6 +216,7 @@ pub enum BehaviorReadinessUnknownReason {
     ReadinessMissing,
     ReadinessMalformed,
     ReadinessVersionUnsupported,
+    /// Legacy wire value retained for older clients; current projections do not emit it.
     ReadinessStale,
     ProcessNotReady,
     RouterGenerationStale,
@@ -319,10 +319,12 @@ pub fn decode_behavior_readiness_snapshot(
 /// Strict operational summary from the sole durable readiness authority.
 /// Missing, malformed, non-ready, or generation-skewed observations fail
 /// closed and never manufacture behavior counts from configuration rows.
+/// The clock argument is retained for source compatibility; document age does
+/// not establish runtime liveness. Transport health has its own database owner.
 pub fn project_behavior_readiness_summary(
     row: Option<&AgentBehaviorReadinessRow>,
     expected_agent_did: &str,
-    observed_at: DateTime<Utc>,
+    _observed_at: DateTime<Utc>,
 ) -> ProjectedBehaviorReadinessSummary {
     let Some(row) = row else {
         return ProjectedBehaviorReadinessSummary::Unknown(
@@ -333,11 +335,6 @@ pub fn project_behavior_readiness_summary(
         Ok(snapshot) => snapshot,
         Err(reason) => return ProjectedBehaviorReadinessSummary::Unknown(reason),
     };
-    if !readiness_row_is_fresh(row, observed_at) {
-        return ProjectedBehaviorReadinessSummary::Unknown(
-            BehaviorReadinessUnknownReason::ReadinessStale,
-        );
-    }
     if !snapshot.process_state.accepts_work() {
         return ProjectedBehaviorReadinessSummary::Unknown(
             BehaviorReadinessUnknownReason::ProcessNotReady,
@@ -372,15 +369,14 @@ pub fn project_behavior_readiness_summary(
 
 /// Project the runtime-authored row into the only legal client readiness
 /// states. Configured identifiers are validated exactly, never normalized.
-/// A lagged replica reports `ReadinessStale` without wiping last-known
-/// dispatcher states: consumption clients cannot treat a 45s lease miss as
-/// "the agent is gone."
+/// Readiness changes only when the runtime publishes a semantic change.
+/// The clock argument is retained for source compatibility, not a liveness lease.
 pub fn project_behavior_readiness<'a>(
     row: Option<&AgentBehaviorReadinessRow>,
     expected_agent_did: &str,
     configured_behavior_ids: impl IntoIterator<Item = &'a str>,
     configured_default_behavior_id: Option<&str>,
-    observed_at: DateTime<Utc>,
+    _observed_at: DateTime<Utc>,
 ) -> BehaviorReadinessProjection {
     let mut behavior_ids = BTreeSet::new();
     let mut configured_ids_malformed = false;
@@ -415,7 +411,6 @@ pub fn project_behavior_readiness<'a>(
         Ok(snapshot) => snapshot,
         Err(reason) => return unknown_projection(behavior_ids, reason),
     };
-    let observation_stale = !readiness_row_is_fresh(row, observed_at);
 
     let entries = snapshot
         .behaviors
@@ -464,21 +459,9 @@ pub fn project_behavior_readiness<'a>(
         router_generation: Some(snapshot.router_generation),
         default_behavior_id: Some(snapshot.default_behavior_id),
         updated_at: Some(row.updated_at.clone()),
-        unknown_reason: global_unknown
-            .or(observation_stale.then_some(BehaviorReadinessUnknownReason::ReadinessStale)),
+        unknown_reason: global_unknown,
         behaviors,
     }
-}
-
-fn readiness_row_is_fresh(row: &AgentBehaviorReadinessRow, observed_at: DateTime<Utc>) -> bool {
-    DateTime::parse_from_rfc3339(&row.updated_at)
-        .ok()
-        .map(|updated_at| updated_at.with_timezone(&Utc))
-        .is_some_and(|updated_at| {
-            updated_at <= observed_at
-                && observed_at.signed_duration_since(updated_at).num_seconds()
-                    <= BEHAVIOR_READINESS_MAX_AGE_SECONDS
-        })
 }
 
 #[cfg(test)]
