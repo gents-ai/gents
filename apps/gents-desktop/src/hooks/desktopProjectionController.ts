@@ -68,14 +68,6 @@ export function createDesktopProjectionController({
     while (!disposed && pending !== 0) {
       const work = pending;
       pending = 0;
-      if (work & SNAPSHOT) {
-        try {
-          await refreshSnapshot();
-        } catch (error) {
-          onError(error);
-        }
-      }
-
       try {
         const sessionId = currentSessionId();
         if (work & SESSION) {
@@ -98,6 +90,15 @@ export function createDesktopProjectionController({
         }
       } catch (error) {
         onError(error);
+      }
+      // Foreground/full refresh must show the selected chat without waiting
+      // for the unrelated fleet/index projection.
+      if (work & SNAPSHOT) {
+        try {
+          await refreshSnapshot();
+        } catch (error) {
+          onError(error);
+        }
       }
     }
   };
