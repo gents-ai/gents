@@ -37,6 +37,7 @@ mod goals;
 pub(crate) mod projection;
 pub(crate) mod protocol;
 pub(crate) mod server;
+mod session_record;
 mod sessions;
 mod task_control;
 pub(crate) mod turn;
@@ -202,6 +203,7 @@ impl AcpDelegateFactoryInputs {
                     name: inputs.bound.model_name.clone(),
                     total_context_tokens: inputs.bound.total_context_tokens,
                 },
+                grok_home: crate::commands::grok_shim::session_record::default_grok_home(),
             },
             turns,
             projections,

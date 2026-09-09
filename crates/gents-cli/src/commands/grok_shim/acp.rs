@@ -221,6 +221,9 @@ pub(crate) struct AcpServiceConfig {
     pub(crate) behavior_id: Arc<str>,
     /// Bound model the runtime serves for this behavior.
     pub(crate) current_model: BoundModel,
+    /// Grok home the pager reads its `/resume` records from (`$GROK_HOME`,
+    /// else `~/.grok`). `None` disables the record write.
+    pub(crate) grok_home: Option<std::path::PathBuf>,
 }
 
 impl AcpServiceConfig {
@@ -912,6 +915,7 @@ impl AcpService {
 
         let session_id = preferred.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         ensure_session_document(&self.config, &session_id).await?;
+        self.write_pager_session_record(request, &session_id);
 
         {
             let mut sessions = self.sessions.lock().await;
@@ -960,6 +964,38 @@ impl AcpService {
 
     /// Replay existing observations, then attach after the RPC response.
     /// Loading does not reactivate or otherwise mutate AgentSession rows.
+    /// Stock grok lists every session the leader returns but only sends
+    /// `session/load` for one that also has a local record under its grok
+    /// home; the shim writes that record so `/resume` can reattach. A write
+    /// failure is logged, never surfaced: the durable session is the
+    /// `AgentSession` document, not grok's file.
+    fn write_pager_session_record(&self, request: &AcpRequest, session_id: &str) {
+        let Some(grok_home) = self.config.grok_home.as_deref() else {
+            return;
+        };
+        let cwd = request
+            .params
+            .get("cwd")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        match super::session_record::write_record(grok_home, cwd, session_id) {
+            Ok(Some(path)) => tracing::debug!(
+                %session_id,
+                path = %path.display(),
+                "grok shim wrote the pager's session record"
+            ),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(
+                %error,
+                %session_id,
+                grok_home = %grok_home.display(),
+                "grok shim could not write the pager's session record; grok will list this \
+                 session but not resume it"
+            ),
+        }
+    }
+
     async fn handle_session_load(
         &self,
         request: &AcpRequest,
@@ -1766,6 +1802,7 @@ mod tests {
                 agent_name: Arc::from("grok-shim-test"),
                 behavior_id: Arc::from("did:test:grok-shim:default"),
                 current_model: bound_model(),
+                grok_home: None,
             },
         )
     }
@@ -2447,6 +2484,7 @@ mod tests {
             agent_name: Arc::from("grok-shim-test"),
             behavior_id: Arc::from(behavior_id.as_str()),
             current_model: bound_model(),
+            grok_home: None,
         };
         gents::schema::ensure_runtime_schemas(config.node.as_ref())
             .await
@@ -3268,6 +3306,38 @@ mod tests {
             !staging_root.exists(),
             "the whole staging directory must be cleaned up, not abandoned"
         );
+    }
+
+    #[tokio::test]
+    async fn session_new_writes_the_grok_record_the_resume_picker_needs() {
+        // Stock grok only sends session/load for a listed session that also has
+        // a local summary.json under <grok home>/sessions/<encoded cwd>/<id>/.
+        let (_staging, mut service) = test_service().await;
+        let home = tempfile::tempdir().expect("grok home");
+        service.config.grok_home = Some(home.path().to_path_buf());
+        let dispatch = service
+            .handle_acp_payload(&request_payload(
+                "session/new",
+                json!({
+                    "cwd": "/Users/edjroz/Repos/gents",
+                    "mcpServers": [],
+                    "_meta": { "sessionId": "grok-resume-record" },
+                }),
+            ))
+            .await;
+        let response = parse_response(dispatch.response.as_deref().expect("response"));
+        assert_eq!(response["result"]["sessionId"], "grok-resume-record");
+
+        let path = home
+            .path()
+            .join("sessions/%2FUsers%2Fedjroz%2FRepos%2Fgents/grok-resume-record/summary.json");
+        let record: Value = serde_json::from_slice(
+            &std::fs::read(&path).expect("session/new writes the pager's session record"),
+        )
+        .expect("record is json");
+        assert_eq!(record["info"]["id"], "grok-resume-record");
+        assert_eq!(record["info"]["cwd"], "/Users/edjroz/Repos/gents");
+        assert_eq!(record["chat_format_version"], 1);
     }
 
     #[tokio::test]
