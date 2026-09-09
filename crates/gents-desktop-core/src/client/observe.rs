@@ -27,6 +27,11 @@ const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
 const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
+enum ObserverWake {
+    Changes(events::DocumentChangeBatch),
+    Retry,
+}
+
 pub struct ObserverHandle {
     stop_tx: watch::Sender<bool>,
     task: tokio::task::JoinHandle<()>,
@@ -64,7 +69,7 @@ pub fn spawn_observer_with_selection(
         let mut resync_pending = false;
 
         loop {
-            let next = tokio::select! {
+            let wake = tokio::select! {
                 changed = stop_rx.changed() => match changed {
                     Ok(()) if *stop_rx.borrow() => {
                         tracing::debug!("desktop observation requested shutdown");
@@ -73,50 +78,54 @@ pub fn spawn_observer_with_selection(
                     Ok(()) => continue,
                     Err(_) => break,
                 },
-                msg = subscription.recv() => msg,
+                msg = subscription.recv() => match msg {
+                    Some(msg) => ObserverWake::Changes(msg),
+                    None => {
+                        tracing::debug!("desktop observation subscription closed");
+                        break;
+                    }
+                },
                 _ = tokio::time::sleep(if resync_pending { RESYNC_RETRY_DELAY } else { FETCH_RETRY_DELAY }), if resync_pending || !dirty.is_empty() => {
-                    Some(events::DocumentChangeBatch::default())
+                    ObserverWake::Retry
                 }
             };
-            let Some(msg) = next else {
-                tracing::debug!("desktop observation subscription closed");
-                break;
-            };
-            metrics_for_task
-                .events_received
-                .fetch_add(msg.updates, Ordering::Relaxed);
-            metrics_for_task
-                .document_change_batches
-                .fetch_add(1, Ordering::Relaxed);
-            if !msg.resync_required {
-                metrics_for_task.coalesced_updates.fetch_add(
-                    msg.updates.saturating_sub(msg.changes.len() as u64),
-                    Ordering::Relaxed,
-                );
-            }
-
-            for update in &msg.changes {
-                accumulate_dirty(
-                    &mut dirty,
-                    resolver.as_ref(),
-                    node.as_ref(),
-                    &update.collection_id,
-                    &update.doc_id,
-                    !update.has_local_write,
-                    metrics_for_task.as_ref(),
-                )
-                .await;
-            }
-
-            if msg.resync_required {
-                tracing::warn!(
-                    updates = msg.updates,
-                    "desktop observation distinct-document capacity exceeded; performing scoped reload"
-                );
+            if let ObserverWake::Changes(msg) = wake {
                 metrics_for_task
-                    .drop_recoveries
+                    .events_received
+                    .fetch_add(msg.updates, Ordering::Relaxed);
+                metrics_for_task
+                    .document_change_batches
                     .fetch_add(1, Ordering::Relaxed);
-                resync_pending = true;
+                if !msg.resync_required {
+                    metrics_for_task.coalesced_updates.fetch_add(
+                        msg.updates.saturating_sub(msg.changes.len() as u64),
+                        Ordering::Relaxed,
+                    );
+                }
+
+                for update in &msg.changes {
+                    accumulate_dirty(
+                        &mut dirty,
+                        resolver.as_ref(),
+                        node.as_ref(),
+                        &update.collection_id,
+                        &update.doc_id,
+                        !update.has_local_write,
+                        metrics_for_task.as_ref(),
+                    )
+                    .await;
+                }
+
+                if msg.resync_required {
+                    tracing::warn!(
+                        updates = msg.updates,
+                        "desktop observation distinct-document capacity exceeded; performing scoped reload"
+                    );
+                    metrics_for_task
+                        .drop_recoveries
+                        .fetch_add(1, Ordering::Relaxed);
+                    resync_pending = true;
+                }
             }
             if resync_pending {
                 dirty.clear();
