@@ -39,5 +39,6 @@ ts-rs = { version = "10.1", default-features = false, features = [
 uuid.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
 gents-lean-contract.workspace = true
 wiremock = "0.6"

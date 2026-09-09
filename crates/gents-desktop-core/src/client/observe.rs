@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use defra_node::EmbeddedNode;
-use events::Subscription;
+use events::DocumentChangeSubscription;
 use tokio::sync::watch;
 
 use super::collection_resolver::CollectionResolver;
@@ -22,7 +22,8 @@ pub use projection_store::{
     StoreUpdateNotice,
 };
 
-const OBSERVER_DEBOUNCE: Duration = Duration::from_millis(150);
+const FETCH_RETRY_DELAY: Duration = Duration::from_millis(10);
+const RESYNC_RETRY_DELAY: Duration = Duration::from_millis(250);
 const FETCH_RETRY_LIMIT: u32 = 3;
 const SESSION_HYDRATION_REQUEST: &str = "SessionHydrationRequest";
 
@@ -48,7 +49,7 @@ pub fn spawn_observer_with_selection(
     store: Arc<ObservedStore>,
     configured_peers: ClientSyncStateOwner,
     requester_did: String,
-    subscription: Subscription,
+    subscription: DocumentChangeSubscription,
     selected_agent_did_rx: watch::Receiver<Option<String>>,
 ) -> ObserverHandle {
     let (stop_tx, mut stop_rx) = watch::channel(false);
@@ -60,6 +61,7 @@ pub fn spawn_observer_with_selection(
         let mut subscription = subscription;
         let mut dirty: HashMap<&'static str, HashSet<String>> = HashMap::new();
         let mut redundant_fetches_pending: HashMap<(String, String), u32> = HashMap::new();
+        let mut resync_pending = false;
 
         loop {
             let next = tokio::select! {
@@ -72,6 +74,9 @@ pub fn spawn_observer_with_selection(
                     Err(_) => break,
                 },
                 msg = subscription.recv() => msg,
+                _ = tokio::time::sleep(if resync_pending { RESYNC_RETRY_DELAY } else { FETCH_RETRY_DELAY }), if resync_pending || !dirty.is_empty() => {
+                    Some(events::DocumentChangeBatch::default())
+                }
             };
             let Some(msg) = next else {
                 tracing::debug!("desktop observation subscription closed");
@@ -79,50 +84,41 @@ pub fn spawn_observer_with_selection(
             };
             metrics_for_task
                 .events_received
+                .fetch_add(msg.updates, Ordering::Relaxed);
+            metrics_for_task
+                .document_change_batches
                 .fetch_add(1, Ordering::Relaxed);
+            if !msg.resync_required {
+                metrics_for_task.coalesced_updates.fetch_add(
+                    msg.updates.saturating_sub(msg.changes.len() as u64),
+                    Ordering::Relaxed,
+                );
+            }
 
-            if let Some(update) = msg.as_update() {
+            for update in &msg.changes {
                 accumulate_dirty(
                     &mut dirty,
                     resolver.as_ref(),
                     node.as_ref(),
                     &update.collection_id,
                     &update.doc_id,
-                    update.is_relay,
+                    !update.has_local_write,
                     metrics_for_task.as_ref(),
                 )
                 .await;
             }
 
-            tokio::time::sleep(OBSERVER_DEBOUNCE).await;
-
-            while let Ok(msg) = subscription.try_recv() {
-                metrics_for_task
-                    .events_received
-                    .fetch_add(1, Ordering::Relaxed);
-                if let Some(update) = msg.as_update() {
-                    accumulate_dirty(
-                        &mut dirty,
-                        resolver.as_ref(),
-                        node.as_ref(),
-                        &update.collection_id,
-                        &update.doc_id,
-                        update.is_relay,
-                        metrics_for_task.as_ref(),
-                    )
-                    .await;
-                }
-            }
-
-            let dropped = subscription.check_and_reset_dropped();
-            if dropped > 0 {
+            if msg.resync_required {
                 tracing::warn!(
-                    dropped,
-                    "desktop observation subscription dropped messages; performing scoped reload"
+                    updates = msg.updates,
+                    "desktop observation distinct-document capacity exceeded; performing scoped reload"
                 );
                 metrics_for_task
                     .drop_recoveries
                     .fetch_add(1, Ordering::Relaxed);
+                resync_pending = true;
+            }
+            if resync_pending {
                 dirty.clear();
                 redundant_fetches_pending.clear();
 
@@ -145,6 +141,7 @@ pub fn spawn_observer_with_selection(
                 };
                 match result {
                     Ok(snapshot) => {
+                        resync_pending = false;
                         match scope.as_deref() {
                             Some(did) => store.replace_agent_snapshot(did, snapshot),
                             None => store.replace_snapshot(snapshot),
@@ -247,6 +244,7 @@ pub fn spawn_observer_with_selection(
                                     }
                                 },
                                 Err(error) => {
+                                    resync_pending = true;
                                     tracing::warn!(
                                         collection = collection_name,
                                         error = %error,
@@ -301,9 +299,10 @@ pub fn spawn_observer_with_selection(
                                     collection = collection_name,
                                     doc_id = %id,
                                     limit = FETCH_RETRY_LIMIT,
-                                    "fetch_doc_patch failed too many times; dropping"
+                                    "fetch_doc_patch retry limit reached; scheduling scoped resync"
                                 );
                                 redundant_fetches_pending.remove(&key);
+                                resync_pending = true;
                             } else {
                                 dirty.entry(collection_name).or_default().insert(id.clone());
                             }

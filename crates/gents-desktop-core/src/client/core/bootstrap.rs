@@ -65,7 +65,7 @@ impl ClientCore {
         ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
         subscribe_all_collections(node.as_ref()).await?;
 
-        let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
+        let observer_subscription = node.subscribe_document_changes();
 
         let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
 
