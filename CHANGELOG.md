@@ -20,6 +20,8 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
   startup schema, migration, and subscription work.
 - Use the merged DefraDB and Regolith releases that provide native catch-up,
   backpressure, and current Iroh transport behavior.
+- Route discovered-model catalog updates through the canonical committed-write
+  owner instead of the read-only GraphQL helper.
 
 ### Validation
 
