@@ -291,10 +291,6 @@ async fn visible_turn(
         } else {
             RETURN_TO_OBSERVER_BUDGET
         };
-        anyhow::ensure!(
-            client_visible.saturating_sub(runtime_completed) <= return_budget,
-            "completed reply took too long to reach the client projection: runtime={runtime_completed:?}, client={client_visible:?}",
-        );
         tracing::info!(
             local_submit_ms = local_submit_completed.as_millis(),
             submit_to_runtime_observed_ms = request_arrived.saturating_sub(local_submit_completed).as_millis(),
@@ -310,6 +306,10 @@ async fn visible_turn(
             AgentResponse(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at completed_at materialized_at}}
         }}"#, escape_graphql_string(&request), escape_graphql_string(&request))).await?;
         tracing::info!(timestamps = ?lifecycle, "runtime lifecycle timing evidence");
+        anyhow::ensure!(
+            client_visible.saturating_sub(runtime_completed) <= return_budget,
+            "completed reply took too long to reach the client projection: runtime={runtime_completed:?}, client={client_visible:?}",
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await;
@@ -370,9 +370,9 @@ async fn wait_for_replicated_reply(
     );
     let query = format!(
         r#"{{
-        AgentRequest(filter: {{{filter}}}) {{lifecycle_state}}
-        AgentResponse(filter: {{{filter}}}) {{status content}}
-        AgentMessage(filter: {{{filter}}}) {{role content}}
+        AgentRequest(filter: {{{filter}}}) {{_docID lifecycle_state}}
+        AgentResponse(filter: {{{filter}}}) {{_docID status content}}
+        AgentMessage(filter: {{{filter}}}) {{_docID role content}}
     }}"#
     );
     let visibility_started = Instant::now();
@@ -427,6 +427,7 @@ async fn wait_for_replicated_reply(
         {
             if ready && !stages_seen[index] {
                 stages_seen[index] = true;
+                tracing::debug!(request, stage, documents = ?[&requests, &responses, &messages][index].iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
                 tracing::info!(
                     request,
                     stage,
