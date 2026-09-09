@@ -10,19 +10,15 @@ use crate::graphql::{
     canonical_positive_count, escape_graphql_string, graphql_with_transaction_retry,
 };
 
+// The gate seam (the trait the loop calls) and the unmet-obligation record
+// moved to gents-loop (G-1); this module keeps the DefraDB-backed check.
+use gents_loop::output_obligation::OutputObligationCheck;
+pub(crate) use gents_loop::output_obligation::{continuation_message, UnmetOutputObligation};
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ActiveOutputObligation {
     pub(crate) tool_name: String,
     pub(crate) contract: crate::document_config::WriteToolOutputObligation,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UnmetOutputObligation {
-    tool_name: String,
-    minimum_writes: usize,
-    completed_writes: usize,
-    expected_writes: Option<usize>,
-    expected_count_field: Option<String>,
 }
 
 fn active_for_request(
@@ -189,6 +185,16 @@ impl OutputObligationGate {
             }
         }
         Ok(unmet)
+    }
+}
+
+impl OutputObligationCheck for OutputObligationGate {
+    fn unmet<'a>(
+        &'a self,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<UnmetOutputObligation>>> + Send + 'a>,
+    > {
+        Box::pin(OutputObligationGate::unmet(self))
     }
 }
 

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::llm::message::{
+use gents_protocol::message::{
     AssistantContent, Message, Text, ToolCall, ToolResult, ToolResultContent, UserContent,
 };
 
@@ -425,8 +425,8 @@ pub(super) fn split_messages_for_summary(
     keep_recent_tokens: usize,
 ) -> (Vec<Message>, Vec<Message>) {
     let counter = crate::provider_input::ProviderInputCounter::new(
-        crate::BackendProviderKind::OpenAiCompatible,
-        crate::OpenAiWireApi::ChatCompletions,
+        crate::backend_provider::BackendProviderKind::OpenAiCompatible,
+        crate::openai_wire::OpenAiWireApi::ChatCompletions,
         "test-model",
     );
     split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)

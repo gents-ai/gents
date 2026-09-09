@@ -13,6 +13,7 @@ members = [
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
     "crates/gents-lean-contract",
+    "crates/gents-loop",
     "crates/gents-migration",
     "crates/gents-lenses/fixture_add_label",
     "crates/gents-lenses/workspace_capability",
@@ -40,6 +41,7 @@ default-members = [
     "crates/gents-desktop",
     "crates/gents-desktop-bridge",
     "crates/gents-desktop-core",
+    "crates/gents-loop",
     "crates/gents-migration",
     "crates/gents-protocol",
     "crates/gents-schemas",
@@ -66,6 +68,7 @@ acp = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "03e1035f
 crypto = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "03e1035f364dc0914016e9cf8bde4e4f1a000f06" }
 defra-core = { git = "https://github.com/sourcenetwork/defradb.rs.git", rev = "03e1035f364dc0914016e9cf8bde4e4f1a000f06" }
 gents-protocol = { path = "crates/gents-protocol" }
+gents-loop = { path = "crates/gents-loop" }
 gents-chatgpt-login = { path = "crates/gents-chatgpt-login" }
 gents-claude-login = { path = "crates/gents-claude-login" }
 gents-codex-protocol = { path = "crates/gents-codex-protocol" }

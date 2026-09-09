@@ -3,22 +3,26 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use super::STDERR_BOUNDARY;
 use crate::truncation::LIVE_STREAM_CAPACITY_BYTES;
 
+/// Rendered between stdout and stderr when a live buffer's combined stream
+/// starts carrying stderr bytes. Matches the finished-result renderer in
+/// `gents::background_tools`, which imports this same constant.
+pub const STDERR_BOUNDARY: &str = "\n--- stderr ---\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LiveOutputStream {
+pub enum LiveOutputStream {
     Stdout,
     Stderr,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct LiveToolOutputRegistry {
+pub struct LiveToolOutputRegistry {
     inner: Arc<Mutex<HashMap<String, LiveToolOutputBuffer>>>,
 }
 
 impl LiveToolOutputRegistry {
-    pub(crate) async fn writer_for(&self, tool_call_id: impl Into<String>) -> LiveToolOutputWriter {
+    pub async fn writer_for(&self, tool_call_id: impl Into<String>) -> LiveToolOutputWriter {
         let tool_call_id = tool_call_id.into();
         self.inner
             .lock()
@@ -32,11 +36,11 @@ impl LiveToolOutputRegistry {
     }
 
     /// Ids of every tool call currently holding a live buffer.
-    pub(crate) async fn live_ids(&self) -> Vec<String> {
+    pub async fn live_ids(&self) -> Vec<String> {
         self.inner.lock().await.keys().cloned().collect()
     }
 
-    pub(crate) async fn snapshot(&self, tool_call_id: &str) -> Option<LiveToolOutputSnapshot> {
+    pub async fn snapshot(&self, tool_call_id: &str) -> Option<LiveToolOutputSnapshot> {
         self.inner
             .lock()
             .await
@@ -44,7 +48,7 @@ impl LiveToolOutputRegistry {
             .map(LiveToolOutputBuffer::snapshot)
     }
 
-    pub(crate) async fn remove(&self, tool_call_id: &str) {
+    pub async fn remove(&self, tool_call_id: &str) {
         self.inner.lock().await.remove(tool_call_id);
     }
 
@@ -62,13 +66,13 @@ impl LiveToolOutputRegistry {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LiveToolOutputWriter {
+pub struct LiveToolOutputWriter {
     registry: LiveToolOutputRegistry,
     tool_call_id: String,
 }
 
 impl LiveToolOutputWriter {
-    pub(crate) async fn append(&self, stream: LiveOutputStream, bytes: &[u8]) {
+    pub async fn append(&self, stream: LiveOutputStream, bytes: &[u8]) {
         self.registry
             .append(&self.tool_call_id, stream, bytes)
             .await;
@@ -76,17 +80,17 @@ impl LiveToolOutputWriter {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LiveToolOutputSnapshot {
-    pub(crate) combined: LiveOutputStreamSnapshot,
-    pub(crate) stdout_bytes: u64,
-    pub(crate) stderr_bytes: u64,
+pub struct LiveToolOutputSnapshot {
+    pub combined: LiveOutputStreamSnapshot,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct LiveOutputStreamSnapshot {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) first_offset: u64,
-    pub(crate) total_bytes_seen: u64,
+pub struct LiveOutputStreamSnapshot {
+    pub bytes: Vec<u8>,
+    pub first_offset: u64,
+    pub total_bytes_seen: u64,
 }
 
 #[derive(Debug, Default)]

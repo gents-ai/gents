@@ -12,7 +12,7 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
 mod execution_lease;
-pub(crate) mod execution_policy;
+pub(crate) use gents_loop::execution_policy;
 pub(crate) use execution_lease::{
     recover_execution_generation, revoke_execution_generation, ExecutionWriteFence,
     ExecutionWriteKind, RequestExecutionLease,
@@ -207,29 +207,9 @@ pub(crate) fn is_claim_admission_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<ClaimAdmissionError>().is_some()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutionOrigin {
-    Interactive,
-    Scheduled,
-}
-
-impl ExecutionOrigin {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Interactive => "interactive",
-            Self::Scheduled => "scheduled",
-        }
-    }
-
-    pub fn from_persisted(value: Option<&str>) -> anyhow::Result<Self> {
-        match value {
-            Some("interactive") => Ok(Self::Interactive),
-            Some("scheduled") => Ok(Self::Scheduled),
-            Some(other) => anyhow::bail!("unknown execution_origin {other:?}"),
-            None => anyhow::bail!("execution_origin is required"),
-        }
-    }
-}
+// Moved to gents-loop (G-1): the loop's completion-retry policy switches on
+// it. Re-exported so `crate::lifecycle::ExecutionOrigin` is unchanged.
+pub use gents_loop::execution_origin::ExecutionOrigin;
 
 #[derive(Debug, Clone, Default)]
 pub struct TriggerLineage {
@@ -493,6 +473,17 @@ pub struct TerminalRedriveReport {
 impl TerminalRedriveReport {
     pub fn is_noop(&self) -> bool {
         self.reasserted == 0
+    }
+}
+
+#[async_trait::async_trait]
+impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
+    async fn validate_owned_execution(&self) -> anyhow::Result<()> {
+        RequestLifecycle::validate_owned_execution(self).await
+    }
+
+    async fn advance(&mut self) -> anyhow::Result<()> {
+        RequestLifecycle::advance(self).await
     }
 }
 

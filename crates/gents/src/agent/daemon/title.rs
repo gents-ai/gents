@@ -66,7 +66,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         // exceed Tokio's default worker stack before this task is spawned.
         tokio::spawn(Box::pin(async move {
             if let Err(error) = admission::scope_request(admission_context, async move {
-                crate::rendered_request::scope::scope_request_if_configured(
+                crate::rendered_request::scope_request_if_configured(
                     capture_context,
                     capture_factory.as_ref(),
                     maybe_generate_conversation_title(

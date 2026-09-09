@@ -248,4 +248,5 @@ fn provider_message_is_transport_failure(message_lower: &str) -> bool {
 }
 
 #[cfg(test)]
+#[path = "error_tests.rs"]
 mod tests;

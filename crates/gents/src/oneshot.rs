@@ -231,7 +231,7 @@ where
                 );
             }
         };
-    let capture_scope = crate::rendered_request::scope::scope_from_factory(
+    let capture_scope = crate::rendered_request::scope_from_factory(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: request.doc_id.clone(),
             request_commit_cid,

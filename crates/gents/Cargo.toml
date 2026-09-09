@@ -43,6 +43,7 @@ crypto.workspace = true
 defra-core.workspace = true
 defra-p2p-adapter.workspace = true
 gents-fs-runner = { path = "../gents-fs-runner" }
+gents-loop = { workspace = true, features = ["native"] }
 gents-protocol.workspace = true
 gents-migration = { path = "../gents-migration" }
 defra-node.workspace = true

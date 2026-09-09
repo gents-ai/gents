@@ -40,22 +40,9 @@ fn response_write_gate(node: &Arc<EmbeddedNode>) -> Arc<ResponseWriteGate> {
     gate
 }
 
-pub trait StreamWriter: Send + Sync {
-    fn write_tokens(
-        &self,
-        doc_id: &str,
-        tokens: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
-
-    fn write_reasoning(
-        &self,
-        doc_id: &str,
-        reasoning: &str,
-    ) -> impl std::future::Future<Output = Result<bool>> + Send;
-
-    fn flush_pending(&self, doc_id: &str)
-        -> impl std::future::Future<Output = Result<bool>> + Send;
-}
+// Moved to gents-loop (G-1): `StreamProcessor` is generic over `W:
+// StreamWriter`. Re-exported so `crate::streaming::StreamWriter` is unchanged.
+pub use gents_loop::stream_writer::StreamWriter;
 
 pub struct DefraStreamWriter {
     node: Arc<EmbeddedNode>,
@@ -376,6 +363,10 @@ impl StreamWriter for DefraStreamWriter {
 
     async fn flush_pending(&self, doc_id: &str) -> Result<bool> {
         DefraStreamWriter::flush_pending(self, doc_id).await
+    }
+
+    async fn reset_tail(&self, doc_id: &str) -> Result<()> {
+        DefraStreamWriter::reset_tail(self, doc_id).await
     }
 }
 

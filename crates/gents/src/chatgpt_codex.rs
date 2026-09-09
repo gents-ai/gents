@@ -12,6 +12,7 @@ use rig::http_client::{
 use rig::http_client::{MultipartForm, StreamingResponse};
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
+use gents_loop::provider_patches::patch_instructions_body;
 
 #[cfg(test)]
 use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
@@ -190,79 +191,6 @@ impl crate::oauth_http::OAuthHttpPolicy for ChatGptCodexPolicy {
 pub type ChatGptCodexHttpClient<S, H = ReqwestClient> =
     crate::oauth_http::BearerAuthHttpClient<S, ChatGptCodexPolicy, H>;
 
-pub(crate) fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
-    let mut value = serde_json::from_slice::<Value>(body).ok()?;
-    let mut changed = false;
-
-    if value.get("instructions").is_none() {
-        let instructions = first_system_text(value.get("input")?)?;
-        value["instructions"] = Value::String(instructions);
-        if let Some(input) = value.get_mut("input") {
-            strip_system_items(input);
-        }
-        changed = true;
-    }
-    if value.get("store").is_none() {
-        value["store"] = Value::Bool(false);
-        changed = true;
-    }
-    if value.get("stream").is_none() {
-        value["stream"] = Value::Bool(true);
-        changed = true;
-    }
-    for unsupported in CHATGPT_CODEX_UNSUPPORTED_PARAMS {
-        if let Some(object) = value.as_object_mut() {
-            if object.remove(*unsupported).is_some() {
-                changed = true;
-            }
-        }
-    }
-    if let Some(tools) = value.get_mut("tools").and_then(Value::as_array_mut) {
-        for tool in tools {
-            if let Some(object) = tool.as_object_mut() {
-                if object.get("strict") != Some(&Value::Bool(false)) {
-                    object.insert("strict".to_string(), Value::Bool(false));
-                    changed = true;
-                }
-            }
-        }
-    }
-    if !changed {
-        return None;
-    }
-    serde_json::to_vec(&value).ok().map(Bytes::from)
-}
-
-const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] = &["max_output_tokens", "temperature", "top_p"];
-
-fn first_system_text(input: &Value) -> Option<String> {
-    match input {
-        Value::Array(items) => items.iter().find_map(system_item_text),
-        Value::Object(_) => system_item_text(input),
-        _ => None,
-    }
-}
-
-fn system_item_text(item: &Value) -> Option<String> {
-    if item.get("role").and_then(Value::as_str) != Some("system") {
-        return None;
-    }
-    content_text(item.get("content")?)
-}
-
-fn strip_system_items(input: &mut Value) {
-    match input {
-        Value::Array(items) => {
-            items.retain(|item| item.get("role").and_then(Value::as_str) != Some("system"));
-        }
-        Value::Object(item) if item.get("role").and_then(Value::as_str) == Some("system") => {
-            item.clear();
-        }
-        Value::Object(_) => {}
-        _ => {}
-    }
-}
-
 fn synthesize_completion_response(request_body: &[u8], sse_body: &str) -> Bytes {
     if let Some(response) = completed_response(sse_body) {
         if let Ok(body) = serde_json::to_vec(&response) {
@@ -366,25 +294,6 @@ fn sse_events(sse_body: &str) -> Vec<Value> {
         .collect()
 }
 
-fn content_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => {
-            let text = parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.trim().is_empty()).then_some(text)
-        }
-        Value::Object(part) => part
-            .get("text")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        _ => None,
-    }
-}
-
 pub async fn build_responses_client(
     node: Arc<EmbeddedNode>,
     agent_did: &str,
@@ -416,7 +325,7 @@ pub async fn build_responses_client(
     // request this backend never receives.
     let http = ChatGptCodexHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+        crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
     );
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",

@@ -12,6 +12,14 @@ use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
 use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
+// Pure command-policy vocabulary moved to gents-loop (G-1): the loop's tool
+// dispatch classifies a denial into `ToolOutcome` with no process spawn, and
+// this crate's own enforcement (below) needs the same enum, not a copy.
+pub use gents_loop::tool_policy::{
+    normalize_workspace_lifecycle_state, CommandExecutionMode, CommandNetworkMode,
+    WorkspaceAuthority,
+};
+
 const OUTPUT_META_PREFIX: &str = "gents_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 #[cfg(target_os = "macos")]
@@ -35,125 +43,6 @@ const CORE_ENV_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandExecutionMode {
-    ReadOnly,
-    WorkspaceWrite,
-    ArtifactWrite,
-    Unrestricted,
-}
-
-impl CommandExecutionMode {
-    pub fn parse(value: &str) -> Result<Self> {
-        match value.trim() {
-            "" | "read_only" | "ReadOnly" => Ok(Self::ReadOnly),
-            "workspace_write" | "WorkspaceWrite" | "managed_write" | "ManagedWrite" => {
-                Ok(Self::WorkspaceWrite)
-            }
-            "artifact_write" | "ArtifactWrite" => Ok(Self::ArtifactWrite),
-            "unrestricted" | "Unrestricted" => Ok(Self::Unrestricted),
-            other => bail!("unknown command execution policy mode {other}"),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "read_only",
-            Self::WorkspaceWrite => "workspace_write",
-            Self::ArtifactWrite => "artifact_write",
-            Self::Unrestricted => "unrestricted",
-        }
-    }
-
-    /// Intersect effects: source writes and private artifact writes are incomparable.
-    pub fn meet(self, other: Self) -> Self {
-        if self == other {
-            return self;
-        }
-        match (self, other) {
-            (Self::Unrestricted, mode) | (mode, Self::Unrestricted) => mode,
-            _ => Self::ReadOnly,
-        }
-    }
-}
-
-/// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
-/// never Unrestricted. Integrate is inspect-only (no bash writes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceAuthority {
-    ReadOnly,
-    ReadWrite,
-    Integrate,
-}
-
-impl WorkspaceAuthority {
-    pub fn parse(value: &str) -> Result<Self> {
-        match value.trim() {
-            "readOnly" | "ReadOnly" | "read_only" => Ok(Self::ReadOnly),
-            "readWrite" | "ReadWrite" | "read_write" => Ok(Self::ReadWrite),
-            "integrate" | "Integrate" => Ok(Self::Integrate),
-            other => bail!("unknown workspace authority {other}"),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ReadOnly => "readOnly",
-            Self::ReadWrite => "readWrite",
-            Self::Integrate => "integrate",
-        }
-    }
-
-    pub fn command_mode(self) -> CommandExecutionMode {
-        match self {
-            Self::ReadOnly | Self::Integrate => CommandExecutionMode::ReadOnly,
-            Self::ReadWrite => CommandExecutionMode::WorkspaceWrite,
-        }
-    }
-
-    pub fn allows_file_writes(self) -> bool {
-        matches!(self, Self::ReadWrite)
-    }
-
-    /// Greatest lower bound. Child spawn cannot outrank a bound parent.
-    pub fn infimum(self, other: Self) -> Self {
-        if self.rank() <= other.rank() {
-            self
-        } else {
-            other
-        }
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Self::ReadOnly => 0,
-            Self::Integrate => 1,
-            Self::ReadWrite => 2,
-        }
-    }
-
-    pub fn bindable_lifecycle_state(self, state: &str) -> bool {
-        match (self, normalize_workspace_lifecycle_state(state)) {
-            (Self::ReadWrite, Some("ready")) => true,
-            (Self::ReadOnly, Some("ready" | "sealed")) => true,
-            (Self::Integrate, Some("sealed")) => true,
-            _ => false,
-        }
-    }
-}
-
-pub(crate) fn normalize_workspace_lifecycle_state(value: &str) -> Option<&'static str> {
-    match value.trim() {
-        "provisioning" | "Provisioning" => Some("provisioning"),
-        "ready" | "Ready" => Some("ready"),
-        "provisionFailed" | "provision_failed" | "ProvisionFailed" => Some("provisionFailed"),
-        "sealed" | "Sealed" => Some("sealed"),
-        "cleaning" | "Cleaning" => Some("cleaning"),
-        "cleaned" | "Cleaned" => Some("cleaned"),
-        _ => None,
-    }
-}
 
 /// Meet the baked command policy with the request's workspace authority.
 pub(crate) fn apply_workspace_authority(
@@ -190,53 +79,6 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CommandNetworkMode {
-    Inherit,
-    Disabled,
-    Enabled,
-}
-
-impl CommandNetworkMode {
-    pub fn parse(value: &str) -> Result<Self> {
-        match value.trim() {
-            "" | "inherit" | "Inherit" => Ok(Self::Inherit),
-            "disabled" | "Disabled" | "off" | "Off" => Ok(Self::Disabled),
-            "enabled" | "Enabled" | "on" | "On" => Ok(Self::Enabled),
-            other => bail!("unknown command network mode {other}"),
-        }
-    }
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Inherit => "inherit",
-            Self::Disabled => "disabled",
-            Self::Enabled => "enabled",
-        }
-    }
-
-    fn allows_network(self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
-
-    /// More restrictive mode wins: Disabled < Inherit < Enabled.
-    pub fn meet(self, other: Self) -> Self {
-        if self.rank() <= other.rank() {
-            self
-        } else {
-            other
-        }
-    }
-
-    fn rank(self) -> u8 {
-        match self {
-            Self::Disabled => 0,
-            Self::Inherit => 1,
-            Self::Enabled => 2,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandExecutionPolicy {

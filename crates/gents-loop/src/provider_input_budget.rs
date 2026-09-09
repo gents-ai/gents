@@ -5,7 +5,7 @@
 //! dispatch whether or not reduction is available.
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ContextBudgetError {
+pub enum ContextBudgetError {
     #[error(
         "provider_input_has_no_output_capacity: estimated_input_tokens={estimated_input_tokens}, \
          context_window={context_window}, effective_max_output_tokens={effective_max_output_tokens}"
@@ -23,7 +23,7 @@ pub(crate) enum ContextBudgetError {
 /// decision after this conversion uses exact integer arithmetic. Rounding
 /// recovers percentage/basis-point configuration values such as 57%, whose
 /// binary floating-point representation lies just below the exact value.
-pub(crate) fn threshold_basis_points(threshold: f64) -> u64 {
+pub fn threshold_basis_points(threshold: f64) -> u64 {
     if !threshold.is_finite() || threshold <= 0.0 {
         return 0;
     }
@@ -43,13 +43,13 @@ pub fn effective_input_budget(context_window: usize, threshold: f64) -> usize {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ThresholdDecision {
+pub enum ThresholdDecision {
     NotNeeded,
     ReduceEligible,
 }
 
 /// The single equality-sensitive provider-input threshold decision.
-pub(crate) fn threshold_decision(
+pub fn threshold_decision(
     input_tokens: usize,
     effective_input_budget: usize,
 ) -> ThresholdDecision {
@@ -63,7 +63,7 @@ pub(crate) fn threshold_decision(
 /// Preserve one interpretation of an optional provider output ceiling across
 /// pointer widths. `None` retains the provider-unbounded configuration meaning;
 /// dispatch preparation always replaces it with an explicit dynamic ceiling.
-pub(crate) fn configured_output_ceiling(max_tokens: Option<u64>) -> usize {
+pub fn configured_output_ceiling(max_tokens: Option<u64>) -> usize {
     max_tokens
         .map(|value| usize::try_from(value).unwrap_or(usize::MAX))
         .unwrap_or(usize::MAX)
@@ -71,7 +71,7 @@ pub(crate) fn configured_output_ceiling(max_tokens: Option<u64>) -> usize {
 
 /// Pair-safe recent-history target after fixed provider layers. One quarter of
 /// the remaining input capacity is reserved for the checkpoint and framing.
-pub(crate) fn compaction_retention_target(
+pub fn compaction_retention_target(
     configured_keep_recent: usize,
     effective_input_budget: usize,
     fixed_input_tokens: usize,
@@ -82,7 +82,7 @@ pub(crate) fn compaction_retention_target(
 
 /// Bound an internal summary's configured ceiling to one rounded-up quarter of
 /// its actual context window.
-pub(crate) fn summary_output_ceiling(
+pub fn summary_output_ceiling(
     configured_max_output_tokens: usize,
     context_window: usize,
 ) -> usize {
@@ -91,7 +91,7 @@ pub(crate) fn summary_output_ceiling(
 
 /// Maximum rolling-summary input that preserves the configured summary output
 /// whenever that ceiling can coexist with non-empty input.
-pub(crate) fn rolling_summary_input_budget(
+pub fn rolling_summary_input_budget(
     context_window: usize,
     configured_max_output_tokens: usize,
 ) -> usize {
@@ -103,7 +103,7 @@ pub(crate) fn rolling_summary_input_budget(
 }
 
 /// Dynamic output allowance after the complete provider-shaped input is known.
-pub(crate) fn effective_output_budget(
+pub fn effective_output_budget(
     input_tokens: usize,
     context_window: usize,
     configured_max_output_tokens: usize,
@@ -113,7 +113,7 @@ pub(crate) fn effective_output_budget(
 
 /// A request is dispatchable only with strictly positive output capacity and
 /// an overflow-safe total that fits the context.
-pub(crate) fn can_dispatch(
+pub fn can_dispatch(
     input_tokens: usize,
     context_window: usize,
     configured_max_output_tokens: usize,

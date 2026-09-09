@@ -252,32 +252,9 @@ pub(crate) fn sampling_for_request(
     }
 }
 
-pub(crate) fn merge_optional_params(
-    left: Option<serde_json::Value>,
-    right: Option<serde_json::Value>,
-) -> Option<serde_json::Value> {
-    match (left, right) {
-        (Some(left), Some(right)) => Some(merge_json_values(left, right)),
-        (Some(value), None) | (None, Some(value)) => Some(value),
-        (None, None) => None,
-    }
-}
-
-fn merge_json_values(left: serde_json::Value, right: serde_json::Value) -> serde_json::Value {
-    match (left, right) {
-        (serde_json::Value::Object(mut left), serde_json::Value::Object(right)) => {
-            for (key, right_value) in right {
-                let value = left
-                    .remove(&key)
-                    .map(|left_value| merge_json_values(left_value, right_value.clone()))
-                    .unwrap_or(right_value);
-                left.insert(key, value);
-            }
-            serde_json::Value::Object(left)
-        }
-        (_, right) => right,
-    }
-}
+// Moved to gents-loop (G-1): compaction's per-turn summary request also
+// merges additional_params, with no dependency on AgentBehavior otherwise.
+pub(crate) use gents_loop::compaction::merge_optional_params;
 
 /// Maps the inference profile's reasoning effort into each provider's wire
 /// contract. An absent profile setting injects no reasoning default, except for

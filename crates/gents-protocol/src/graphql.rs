@@ -242,6 +242,7 @@ impl Default for GraphqlRequestOptions {
     }
 }
 
+#[cfg(feature = "native")]
 pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOptions) -> bool {
     let client = match reqwest::Client::builder().timeout(options.timeout).build() {
         Ok(client) => client,
@@ -259,6 +260,7 @@ pub async fn graphql_endpoint_available(graphql: &str, options: GraphqlRequestOp
 }
 
 /// Execute a GraphQL read. Mutation documents are rejected before network I/O.
+#[cfg(feature = "native")]
 pub async fn execute_graphql_async(
     graphql: &str,
     query: &str,
@@ -268,6 +270,7 @@ pub async fn execute_graphql_async(
     execute_graphql_async_with_tx(graphql, query, options, None).await
 }
 
+#[cfg(feature = "native")]
 async fn execute_graphql_async_with_tx(
     graphql: &str,
     query: &str,
@@ -386,6 +389,7 @@ async fn execute_graphql_async_with_tx(
 
 /// Execute a blocking GraphQL read. Mutation documents are rejected before
 /// network I/O.
+#[cfg(feature = "native")]
 pub fn execute_graphql_blocking(
     graphql: &str,
     query: &str,
@@ -500,6 +504,7 @@ pub fn execute_graphql_blocking(
     Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
 }
 
+#[cfg(feature = "native")]
 fn ensure_query_document(document: &str) -> Result<()> {
     let document = document.trim_start();
     if document.starts_with('{') || document.starts_with("query") {
@@ -889,6 +894,7 @@ fn graphql_response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
     ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }
 
+#[cfg(feature = "native")]
 fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<serde_json::Value> {
     let errors = value
         .get("errors")
@@ -904,6 +910,7 @@ fn finish_graphql_response(graphql: &str, value: serde_json::Value) -> Result<se
     Ok(value)
 }
 
+#[cfg(feature = "native")]
 fn retryable_graphql_error_message(value: &serde_json::Value) -> Option<String> {
     let errors = value
         .get("errors")
@@ -927,6 +934,7 @@ pub fn retryable_graphql_error_text(message: &str) -> bool {
         || message.contains("database is locked")
 }
 
+#[cfg(feature = "native")]
 fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
     if error.is_timeout() || error.is_connect() || error.is_request() {
         return true;
@@ -947,6 +955,7 @@ fn graphql_transport_error_is_retryable(error: &reqwest::Error) -> bool {
 ///
 /// Inspecting the full cause chain matters because callers normally attach
 /// endpoint/operation context above the original `reqwest::Error`.
+#[cfg(feature = "native")]
 pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -956,6 +965,7 @@ pub fn graphql_error_is_retryable(error: &anyhow::Error) -> bool {
     })
 }
 
+#[cfg(feature = "native")]
 fn scale_backoff(base: Duration, attempt: usize) -> Duration {
     let multiplier = attempt.saturating_add(1) as u32;
     base.saturating_mul(multiplier)

@@ -79,54 +79,10 @@ impl ToolCallState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum FailureClass {
-    ApprovalDenied,
-    ArgumentInvalid,
-    ServiceUnavailable,
-    Transport,
-    ToolReturnedError,
-    PolicyDenied,
-    External,
-}
-
-impl FailureClass {
-    pub const ALL: [Self; 7] = [
-        Self::ApprovalDenied,
-        Self::ArgumentInvalid,
-        Self::ServiceUnavailable,
-        Self::Transport,
-        Self::ToolReturnedError,
-        Self::PolicyDenied,
-        Self::External,
-    ];
-
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::ApprovalDenied => "approvalDenied",
-            Self::ArgumentInvalid => "argumentInvalid",
-            Self::ServiceUnavailable => "serviceUnavailable",
-            Self::Transport => "transport",
-            Self::ToolReturnedError => "toolReturnedError",
-            Self::PolicyDenied => "policyDenied",
-            Self::External => "external",
-        }
-    }
-
-    pub fn from_persisted(value: &str) -> Option<Self> {
-        match value {
-            "approvalDenied" => Some(Self::ApprovalDenied),
-            "argumentInvalid" => Some(Self::ArgumentInvalid),
-            "serviceUnavailable" => Some(Self::ServiceUnavailable),
-            "transport" => Some(Self::Transport),
-            "toolReturnedError" => Some(Self::ToolReturnedError),
-            "policyDenied" => Some(Self::PolicyDenied),
-            "external" => Some(Self::External),
-            _ => None,
-        }
-    }
-}
+// FailureClass and ToolOutcome moved to gents-loop (G-1): the loop's tool
+// dispatch classifies outcomes with no DefraDB dependency. Re-exported below
+// (with the rest of this module's `pub use` block) so `crate::tool_call_lifecycle`
+// keeps every symbol this crate's callers already use.
 
 /// Whether the parent's narrative is blocked on this tool's terminal state.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -275,7 +231,7 @@ pub use recovery::{
     OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
     ToolCallRecoveryReport,
 };
-pub use runtime::ToolOutcome;
+pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,

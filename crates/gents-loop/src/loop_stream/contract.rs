@@ -8,7 +8,7 @@ use super::*;
 /// threaded tool-result content, the post-compaction message list, and which
 /// builder produced it are all in-memory facts that die with the loop. See
 /// `crate::rendered_request::AssemblyTrace`.
-pub(crate) type RenderedRequestSink = Arc<
+pub type RenderedRequestSink = Arc<
     dyn Fn(
             usize,
             u32,
@@ -20,15 +20,15 @@ pub(crate) type RenderedRequestSink = Arc<
 >;
 
 #[derive(Clone, Debug)]
-pub(crate) struct TurnCompactionRequest {
-    pub(crate) messages: Vec<Message>,
-    pub(crate) admission: crate::compaction::ReductionAdmission,
-    pub(crate) turn_index: usize,
-    pub(crate) prior_reduction_keys: Vec<String>,
+pub struct TurnCompactionRequest {
+    pub messages: Vec<Message>,
+    pub admission: crate::compaction::ReductionAdmission,
+    pub turn_index: usize,
+    pub prior_reduction_keys: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) enum TurnCompactionOutcome {
+pub enum TurnCompactionOutcome {
     ProviderViewRepaired {
         messages: Vec<Message>,
     },
@@ -39,7 +39,7 @@ pub(crate) enum TurnCompactionOutcome {
     CannotFit,
 }
 
-pub(crate) type TurnCompactor = Arc<
+pub type TurnCompactor = Arc<
     dyn Fn(
             TurnCompactionRequest,
         ) -> Pin<Box<dyn Future<Output = anyhow::Result<TurnCompactionOutcome>> + Send>>
@@ -54,13 +54,13 @@ pub(crate) type TurnCompactor = Arc<
 /// retract-and-resample lifecycle instead of bypassing persistence and hooks
 /// through `rig::Agent::prompt_typed`.
 #[derive(Clone)]
-pub(crate) struct StructuredOutputConfig {
+pub struct StructuredOutputConfig {
     pub(super) schema: schemars::Schema,
     pub(super) validate: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
 }
 
 impl StructuredOutputConfig {
-    pub(crate) fn for_type<T>() -> Self
+    pub fn for_type<T>() -> Self
     where
         T: DeserializeOwned + schemars::JsonSchema + 'static,
     {
@@ -93,7 +93,7 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub(crate) enum LoopStreamItem<R> {
+pub enum LoopStreamItem<R> {
     Item(MultiTurnStreamItem<R>),
     TurnRetracted {
         turn: usize,
@@ -117,37 +117,37 @@ pub(crate) enum LoopStreamItem<R> {
 }
 
 #[derive(Clone)]
-pub(crate) struct LoopConfig {
+pub struct LoopConfig {
     /// One backend/wire-selected provider projection shared by every budget
     /// decision in this completion loop and its nested compactor.
-    pub(crate) provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
-    pub(crate) preamble: Option<String>,
-    pub(crate) context_message: Option<Message>,
-    pub(crate) temperature: Option<f64>,
-    pub(crate) max_tokens: Option<u64>,
+    pub provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
+    pub preamble: Option<String>,
+    pub context_message: Option<Message>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<u64>,
     /// One request-scoped ledger shared by the owned inference loop and every
     /// nested provider call it admits (notably compaction). `None` preserves
     /// the unbounded interactive behavior.
-    pub(crate) aggregate_token_budget: Option<AggregateTokenBudget>,
-    pub(crate) additional_params: Option<serde_json::Value>,
-    pub(crate) structured_output: Option<StructuredOutputConfig>,
-    pub(crate) tool_choice: Option<ToolChoice>,
-    pub(crate) on_rendered_request: Option<RenderedRequestSink>,
+    pub aggregate_token_budget: Option<AggregateTokenBudget>,
+    pub additional_params: Option<serde_json::Value>,
+    pub structured_output: Option<StructuredOutputConfig>,
+    pub tool_choice: Option<ToolChoice>,
+    pub on_rendered_request: Option<RenderedRequestSink>,
     /// Provider-view compaction used between completion turns. The callback
     /// must durably create or verify its reduction fact before returning.
-    pub(crate) turn_compactor: Option<TurnCompactor>,
+    pub turn_compactor: Option<TurnCompactor>,
     /// The one newest reduction fact that shapes the sticky provider
     /// projection. Empty on a fresh request.
-    pub(crate) active_reduction_keys: Vec<String>,
+    pub active_reduction_keys: Vec<String>,
     /// Every durable reduction for this request, including consumed facts that
     /// order the next identity but no longer shape the active provider view.
-    pub(crate) reduction_chain_keys: Vec<String>,
+    pub reduction_chain_keys: Vec<String>,
     /// Turn index to resume at an unconsumed durable checkpoint.
-    pub(crate) initial_turn_index: usize,
-    pub(crate) context_window: usize,
-    pub(crate) compaction_threshold: f64,
-    pub(crate) retry_policy: CompletionRetryPolicy,
-    pub(crate) deadline: Option<DateTime<Utc>>,
-    pub(crate) max_turns: usize,
-    pub(crate) output_obligation_gate: Option<OutputObligationGate>,
+    pub initial_turn_index: usize,
+    pub context_window: usize,
+    pub compaction_threshold: f64,
+    pub retry_policy: CompletionRetryPolicy,
+    pub deadline: Option<DateTime<Utc>>,
+    pub max_turns: usize,
+    pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,
 }

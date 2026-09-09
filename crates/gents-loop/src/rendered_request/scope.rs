@@ -50,8 +50,8 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use super::{AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext};
-use crate::agent::loop_stream::RenderedRequestSink;
+use super::{AdmissionJoin, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext};
+use crate::loop_stream::RenderedRequestSink;
 
 // Re-exported here as well: the arming call sites name the kind through this
 // module (`rendered_request::scope::CaptureScopeKind`), and the type's home is
@@ -60,11 +60,11 @@ pub use super::CaptureScopeKind;
 
 /// One armed provider attempt, waiting for the transport to supply its body.
 #[derive(Clone, Debug)]
-pub(crate) struct PendingCapture {
-    pub(crate) capture_scope: String,
-    pub(crate) turn_index: usize,
-    pub(crate) attempt: u32,
-    pub(crate) assembly_trace: AssemblyTrace,
+pub struct PendingCapture {
+    pub capture_scope: String,
+    pub turn_index: usize,
+    pub attempt: u32,
+    pub assembly_trace: AssemblyTrace,
 }
 
 #[derive(Default)]
@@ -99,27 +99,48 @@ struct ScopeState {
     armed_labels: Vec<String>,
 }
 
+/// Looks up the admission-controller call this capture belongs to, if any,
+/// for the provenance record. Native (`gents::admission` reads a live
+/// task-local); the loop and tests default to `|_| None` since neither has
+/// an admission controller.
+pub type AdmissionJoinLookup =
+    Arc<dyn Fn(&str) -> Option<AdmissionJoin> + Send + Sync>;
+
+fn no_admission_join(_capture_scope: &str) -> Option<AdmissionJoin> {
+    None
+}
+
 /// Everything the transport needs to turn a body into a durable row.
-pub(crate) struct RequestCaptureScope {
+pub struct RequestCaptureScope {
     context: RenderedRequestContext,
     sink: RenderedRequestCaptureSink,
     state: Mutex<ScopeState>,
+    admission_join_lookup: AdmissionJoinLookup,
 }
 
 impl RequestCaptureScope {
-    pub(crate) fn new(context: RenderedRequestContext, sink: RenderedRequestCaptureSink) -> Self {
+    pub fn new(context: RenderedRequestContext, sink: RenderedRequestCaptureSink) -> Self {
         Self {
             context,
             sink,
             state: Mutex::new(ScopeState::default()),
+            admission_join_lookup: Arc::new(no_admission_join),
         }
     }
 
-    pub(crate) fn context(&self) -> &RenderedRequestContext {
+    /// Install the native admission-join lookup. `gents`'s own scope
+    /// constructors call this; the loop's default (`no_admission_join`)
+    /// stands wherever no admission controller exists.
+    pub fn with_admission_join_lookup(mut self, lookup: AdmissionJoinLookup) -> Self {
+        self.admission_join_lookup = lookup;
+        self
+    }
+
+    pub fn context(&self) -> &RenderedRequestContext {
         &self.context
     }
 
-    pub(crate) fn sink(&self) -> &RenderedRequestCaptureSink {
+    pub fn sink(&self) -> &RenderedRequestCaptureSink {
         &self.sink
     }
 
@@ -149,7 +170,7 @@ impl RequestCaptureScope {
     /// Remember that the exact body for the currently claimed attempt is
     /// durable. Coordinate checks prevent a late completion from poisoning a
     /// newer arm's reconnect cache.
-    pub(crate) fn mark_claimed_durable(&self, pending: &PendingCapture, fingerprint: [u8; 32]) {
+    pub fn mark_claimed_durable(&self, pending: &PendingCapture, fingerprint: [u8; 32]) {
         let mut state = self.lock();
         let still_current = state.claimed.as_ref().is_some_and(|claimed| {
             claimed.capture_scope == pending.capture_scope
@@ -173,21 +194,21 @@ tokio::task_local! {
 /// (`rig::http_client::sse::GenericEventSource`), so the HTTP send frequently
 /// happens while the loop is polling rather than while it is awaiting the
 /// model's stream constructor.
-pub(crate) async fn scope_request<T>(
+pub async fn scope_request<T>(
     scope: Arc<RequestCaptureScope>,
     future: impl std::future::Future<Output = T>,
 ) -> T {
     CAPTURE_SCOPE.scope(scope, future).await
 }
 
-pub(crate) fn current_scope() -> Option<Arc<RequestCaptureScope>> {
+pub fn current_scope() -> Option<Arc<RequestCaptureScope>> {
     CAPTURE_SCOPE.try_with(Arc::clone).ok()
 }
 
 /// Arm this attempt's capture. Idempotent per attempt; a second arm before the
 /// transport consumes the first replaces it, which is what a pre-stream retry
 /// that never reached the network should do.
-pub(crate) fn arm(
+pub fn arm(
     kind: CaptureScopeKind,
     turn_index: usize,
     attempt: u32,
@@ -226,7 +247,7 @@ pub(crate) fn arm(
 
 /// What a completion body observed inside a capture scope is entitled to do.
 #[derive(Clone, Debug)]
-pub(crate) enum CaptureClaim {
+pub enum CaptureClaim {
     /// The arm this send was expected to consume. Capture, then forward.
     Armed(PendingCapture),
     /// No arm is pending, but this scope has already claimed one: a
@@ -248,7 +269,7 @@ pub(crate) enum CaptureClaim {
 /// `None` means no scope is installed at all — a `gents` embedding outside any
 /// request. Inside a scope the answer is never "nothing to do": it is `Armed`,
 /// `Resend`, or `Unexplained`, and the last of those is a refusal.
-pub(crate) fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
+pub fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)> {
     let scope = current_scope()?;
     let claim = {
         let mut state = scope.lock();
@@ -271,7 +292,7 @@ pub(crate) fn claim_pending() -> Option<(Arc<RequestCaptureScope>, CaptureClaim)
 
 /// Whether an armed capture is still waiting. `true` after a provider response
 /// has arrived means the send did not pass through the capturing transport.
-pub(crate) fn pending_is_armed() -> bool {
+pub fn pending_is_armed() -> bool {
     current_scope().is_some_and(|scope| scope.lock().pending.is_some())
 }
 
@@ -285,7 +306,7 @@ pub(crate) fn pending_is_armed() -> bool {
 /// is refused, so a loop that forgets to arm fails loudly instead of quietly.
 /// The fail-closed obligation lives where the write does, in
 /// `transport::RenderedRequestCapturingHttpClient`.
-pub(crate) fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
+pub fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink {
     Arc::new(move |turn_index, attempt, _request, assembly_trace| {
         let armed = arm(kind, turn_index, attempt, assembly_trace);
         Box::pin(async move {
@@ -304,7 +325,7 @@ pub(crate) fn ambient_arming_sink(kind: CaptureScopeKind) -> RenderedRequestSink
 
 /// Build a scope from a context and an optional factory. `None` when capture is
 /// not configured.
-pub(crate) fn scope_from_factory(
+pub fn scope_from_factory(
     context: RenderedRequestContext,
     factory: Option<&super::RenderedRequestCaptureFactory>,
 ) -> Option<Arc<RequestCaptureScope>> {
@@ -315,7 +336,7 @@ pub(crate) fn scope_from_factory(
 
 /// Run `future` under a capture scope when one can be built, and unchanged
 /// otherwise.
-pub(crate) async fn scope_request_if_configured<T>(
+pub async fn scope_request_if_configured<T>(
     context: RenderedRequestContext,
     factory: Option<&super::RenderedRequestCaptureFactory>,
     future: impl std::future::Future<Output = T>,
@@ -329,7 +350,7 @@ pub(crate) async fn scope_request_if_configured<T>(
 /// Result of a capture attempt, kept separate from `anyhow` so the transport
 /// can log the failing stage without inspecting error text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CaptureFailureStage {
+pub enum CaptureFailureStage {
     /// The outbound body was not valid JSON, so no fact could be built.
     DecodeBody,
     /// Building the DTO (hashing, key derivation, provenance) failed.
@@ -339,7 +360,7 @@ pub(crate) enum CaptureFailureStage {
 }
 
 impl CaptureFailureStage {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::DecodeBody => "decode_body",
             Self::BuildFact => "build_fact",
@@ -352,7 +373,7 @@ impl CaptureFailureStage {
 ///
 /// Fail-closed by construction: the caller must not forward the body unless
 /// this returns `Ok`.
-pub(crate) async fn capture_body(
+pub async fn capture_body(
     scope: &RequestCaptureScope,
     pending: PendingCapture,
     source: super::RenderedRequestSource,
@@ -362,6 +383,7 @@ pub(crate) async fn capture_body(
     let request_json: serde_json::Value = serde_json::from_slice(body)
         .map_err(|error| (CaptureFailureStage::DecodeBody, anyhow::Error::from(error)))?;
     let components = super::RenderedRequestComponents::from_provider_body(request_json, source);
+    let admission_join = (scope.admission_join_lookup)(&pending.capture_scope);
     let rendered = super::build_rendered_completion_request(
         scope.context(),
         &pending.capture_scope,
@@ -371,6 +393,7 @@ pub(crate) async fn capture_body(
         pending.attempt,
         pending.assembly_trace,
         components,
+        admission_join,
     )
     .map_err(|error| (CaptureFailureStage::BuildFact, error))?;
 
@@ -393,7 +416,7 @@ pub(crate) async fn capture_body(
 
 /// The refusal for a completion body that arrived inside a capture scope with
 /// nothing armed and nothing previously claimed.
-pub(crate) fn unexplained_send_message(context: &RenderedRequestContext, path: &str) -> String {
+pub fn unexplained_send_message(context: &RenderedRequestContext, path: &str) -> String {
     format!(
         "a completion request to {path} reached the provider transport for request {} \
          with no armed rendered-request capture; the completion loop that issued it does not \
@@ -404,7 +427,7 @@ pub(crate) fn unexplained_send_message(context: &RenderedRequestContext, path: &
 }
 
 /// Typed error the transport turns into a refusal to send.
-pub(crate) fn capture_failure_message(
+pub fn capture_failure_message(
     stage: CaptureFailureStage,
     capture_scope: &str,
     turn_index: usize,
@@ -420,7 +443,7 @@ pub(crate) fn capture_failure_message(
 
 /// Escape hatch used only by tests that need a scope without a daemon.
 #[cfg(test)]
-pub(crate) fn test_scope(
+pub fn test_scope(
     context: RenderedRequestContext,
     sink: RenderedRequestCaptureSink,
 ) -> Arc<RequestCaptureScope> {
@@ -429,7 +452,7 @@ pub(crate) fn test_scope(
 
 /// Every scope label armed inside the current scope, in order.
 #[cfg(test)]
-pub(crate) fn armed_labels() -> Vec<String> {
+pub fn armed_labels() -> Vec<String> {
     current_scope()
         .map(|scope| scope.lock().armed_labels.clone())
         .unwrap_or_default()

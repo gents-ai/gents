@@ -94,7 +94,7 @@ pub(crate) async fn build_backend_client(
                     api_key,
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                        crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
                     ),
                 )
                 .with_context(|| build_context.clone())?;
@@ -105,7 +105,7 @@ pub(crate) async fn build_backend_client(
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::inference_http::ResponsesNormalizingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::default(),
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
                         ),
                     ),
                     Default::default(),
@@ -124,7 +124,7 @@ pub(crate) async fn build_backend_client(
             > = rig::providers::openrouter::Client::builder()
                 .api_key(api_key)
                 .base_url(&behavior.backend_endpoint)
-                .http_client(crate::rendered_request::RenderedRequestCapturingHttpClient::default())
+                .http_client(crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default())
                 .build()
                 .with_context(|| build_context.clone())?;
             Ok(BackendClient::OpenRouter(client))

@@ -49,7 +49,7 @@ use std::future::Future;
 
 use bytes::Bytes;
 use rig::http_client::{
-    self, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
+    self, HttpClientExt, LazyBody, MultipartForm, Request, Response,
     StreamingResponse,
 };
 use rig::wasm_compat::WasmCompatSend;
@@ -61,7 +61,7 @@ use super::RenderedRequestSource;
 /// Transport wrapper that persists the outbound completion body before it is
 /// sent. Install it as the innermost wrapper of every provider stack.
 #[derive(Clone, Debug, Default)]
-pub struct RenderedRequestCapturingHttpClient<H = ReqwestClient> {
+pub struct RenderedRequestCapturingHttpClient<H> {
     inner: H,
 }
 
@@ -299,7 +299,7 @@ where
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
         let protocol =
-            crate::llm::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
+            crate::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
         let decision = decide(
             parts.uri.path(),
             provider_endpoint_of(
@@ -311,7 +311,7 @@ where
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);
             let response = HttpClientExt::send_streaming(&inner, req).await?;
-            Ok(crate::llm::provider_stream::guard_response(
+            Ok(crate::provider_stream::guard_response(
                 response, protocol,
             ))
         }
@@ -326,25 +326,27 @@ where
 /// *above* the capture seam — ChatGPT Codex, xAI Grok — assemble their real
 /// stack over it in their own modules to prove the row describes the rewritten
 /// body rather than the one rig serialized.
-#[cfg(test)]
+// Not `#[cfg(test)]`: `gents`'s own native test code (chatgpt_codex,
+// xai_grok_oauth, oneshot) builds real provider transport stacks over this
+// double, and a cfg(test) item in this crate is invisible to a dependent
+// crate's own test build.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct CountingInner {
-    pub(crate) sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    pub(crate) bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+pub struct CountingInner {
+    pub sends: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    pub bodies: std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
 }
 
-#[cfg(test)]
 impl CountingInner {
-    pub(crate) fn send_count(&self) -> usize {
+    pub fn send_count(&self) -> usize {
         self.sends.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    pub(crate) fn bodies(&self) -> Vec<serde_json::Value> {
+    pub fn bodies(&self) -> Vec<serde_json::Value> {
         self.bodies.lock().expect("bodies").clone()
     }
 }
 
-#[cfg(test)]
+// Not `#[cfg(test)]`, for the same reason as `CountingInner` above.
 mod counting_inner_impl {
     use std::sync::atomic::Ordering;
     use std::sync::Arc;

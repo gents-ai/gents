@@ -3762,6 +3762,7 @@ dependencies = [
  "gents-callback-fixture-create-workspace",
  "gents-fs-runner",
  "gents-lean-contract",
+ "gents-loop",
  "gents-migration",
  "gents-protocol",
  "hmac",
@@ -4068,6 +4069,30 @@ version = "0.1.0"
 dependencies = [
  "lens_sdk",
  "serde_json",
+]
+
+[[package]]
+name = "gents-loop"
+version = "0.16.1"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures",
+ "gents-protocol",
+ "rand 0.9.2",
+ "rig-core",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.2",
+ "tracing",
 ]
 
 [[package]]

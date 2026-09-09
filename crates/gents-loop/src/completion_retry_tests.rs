@@ -419,7 +419,7 @@ fn internal_immediate_is_deadline_aware() {
 
 #[test]
 fn default_for_origin_maps_interactive_and_scheduled() {
-    use crate::lifecycle::ExecutionOrigin;
+    use crate::execution_origin::ExecutionOrigin;
 
     let interactive = CompletionRetryPolicy::default_for_origin(ExecutionOrigin::Interactive);
     assert_eq!(interactive.transport_backoff, vec![Duration::from_secs(2)]);

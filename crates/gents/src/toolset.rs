@@ -9,7 +9,6 @@ mod args;
 mod bash_tools;
 mod cli_tool;
 mod context_budget;
-mod denial;
 pub mod edit_match;
 mod file_tools;
 mod goal;
@@ -41,8 +40,8 @@ pub use context_budget::{
     build_context_budget_tool, load_context_budget_snapshot, ContextBudgetSnapshot,
     LastRequestContextSnapshot, CONTEXT_BUDGET_TOOL_NAME,
 };
-pub use denial::CommandPolicyDenial;
-pub(crate) use denial::DenialReason;
+pub use gents_loop::tool_policy::CommandPolicyDenial;
+pub(crate) use gents_loop::tool_policy::DenialReason;
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 pub use lsp::{
