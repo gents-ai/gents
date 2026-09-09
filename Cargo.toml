@@ -159,7 +159,18 @@ incremental = false
 # as `response.reasoning_text.delta`, which rig has no variant for (also a
 # `reasoning` vs `reasoning_content` mismatch on Chat Completions). Without the
 # fork our Responses-API reasoning capture is silently empty.
-rig-core = { git = "https://github.com/sourcenetwork/rig", rev = "1ebeeaee3b569bb6e242e000c11df1ed2c0cca90" }
+#
+# Pointed at the sibling checkout by path, not `git = ... rev = "1ebeeaee..."`,
+# because the checkout also carries the gents-cloud/optional-reqwest branch's
+# uncommitted work (reqwest as an optional dependency, so rig-core builds for
+# wasm32-wasip1 with default-features = false; gents-loop needs this). A
+# `[patch."https://github.com/sourcenetwork/rig"]` table layered on top of this
+# same entry was tried first and does not apply: Cargo patches are resolved
+# against the source a dependency's manifest names directly (crates-io here),
+# not against the source an earlier patch substituted, so a patch of a patch
+# is silently unused (verified in an isolated two-crate repro). Revert to the
+# git rev once this branch merges upstream and gents' pin moves past it.
+rig-core = { path = "../rig/rig/rig-core" }
 # noq 1.1.1 includes the stale-path and duplicate-Draining fixes, and
 # n0-computer/noq#723 has been closed. Keep the two endpoint Drop paths from
 # aborting the process when an earlier driver panic poisons their mutex.
