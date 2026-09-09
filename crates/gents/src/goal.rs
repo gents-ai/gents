@@ -1188,13 +1188,13 @@ pub enum GoalBackedRequestDisposition {
 pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
     request_id agent_did requester_did behavior_id session_id
     retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
-    content temperature top_p top_k seed max_tokens max_total_tokens metadata
+    content input
     execution_origin caused_by_trigger_id caused_by_trigger_doc_id
     caused_by_trigger_kind caused_by_correlation caused_by_trigger_context
     caused_by_source_doc_id retry_count max_retries valid_until subagent_depth
     caused_by_parent_request_id caused_by_parent_request_doc_id
     caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-    workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash
+    workspace_id workspace_authority workspace_seal_hash
     admission_kind admission_signer_did enrollment_request_id
     enrollment_request_digest enrollment_admin_did
     enrollment_authorization_sequence enrollment_authorization_expires_at
@@ -1213,20 +1213,18 @@ pub(crate) struct GoalBackedRequestFingerprint {
     request_id: String,
     agent_did: String,
     requester_did: String,
-    behavior_id: Option<String>,
+    behavior_id: String,
     session_id: String,
     retry_parent_request: Option<String>,
     retry_parent_request_doc_id: Option<String>,
     retry_root_request: Option<String>,
     retry_key: Option<String>,
     content: String,
-    temperature: Option<f64>,
-    top_p: Option<f64>,
-    top_k: Option<i64>,
-    seed: Option<i64>,
-    max_tokens: Option<i64>,
-    max_total_tokens: Option<i64>,
-    metadata: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null"
+    )]
+    input: gents_protocol::request_input::RequestInput,
     execution_origin: String,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_doc_id: Option<String>,
@@ -1244,7 +1242,6 @@ pub(crate) struct GoalBackedRequestFingerprint {
     caused_by_parent_tool_call_doc_id: Option<String>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_deployment_id: Option<String>,
     workspace_seal_hash: Option<String>,
     admission_kind: String,
     admission_signer_did: String,
@@ -1276,14 +1273,7 @@ impl GoalBackedRequestFingerprint {
             retry_root_request: _,
             retry_key: _,
             content: _,
-            temperature: _,
-            top_p: _,
-            top_k: _,
-            seed: _,
-            max_tokens: _,
-            max_total_tokens: _,
-            metadata: _,
-            backend_id: _,
+            input: _,
             execution_origin: _,
             caused_by_trigger_id: _,
             caused_by_trigger_doc_id: _,
@@ -1302,7 +1292,6 @@ impl GoalBackedRequestFingerprint {
             caused_by_parent_tool_call_doc_id: _,
             workspace_id: _,
             workspace_authority: _,
-            workspace_owner_deployment_id: _,
             workspace_seal_hash: _,
             initial_lifecycle_state: _,
             admission: _,
@@ -1318,13 +1307,7 @@ impl GoalBackedRequestFingerprint {
             retry_root_request: request.retry_root_request.clone(),
             retry_key: request.retry_key.clone(),
             content: request.content.clone(),
-            temperature: request.temperature,
-            top_p: request.top_p,
-            top_k: request.top_k,
-            seed: request.seed,
-            max_tokens: request.max_tokens,
-            max_total_tokens: request.max_total_tokens,
-            metadata: request.metadata.clone(),
+            input: request.input.clone(),
             execution_origin: request.execution_origin.clone(),
             caused_by_trigger_id: request.caused_by_trigger_id.clone(),
             caused_by_trigger_doc_id: request.caused_by_trigger_doc_id.clone(),
@@ -1342,7 +1325,6 @@ impl GoalBackedRequestFingerprint {
             caused_by_parent_tool_call_doc_id: request.caused_by_parent_tool_call_doc_id.clone(),
             workspace_id: request.workspace_id.clone(),
             workspace_authority: request.workspace_authority.clone(),
-            workspace_owner_deployment_id: request.workspace_owner_deployment_id.clone(),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
             admission_kind: request.admission.kind.as_str().to_string(),
             admission_signer_did: request.admission.signer_did.clone(),
@@ -2468,6 +2450,44 @@ fn optional_string_graphql_field(name: &str, value: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retry_fingerprint_compares_typed_input_but_not_regenerated_envelope() {
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+        let request = AgentRequestCreate::base(
+            "request",
+            "did:key:owner",
+            "did:key:owner",
+            "behavior",
+            "session",
+            "continue",
+            "interactive",
+            "2026-09-09T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self("did:key:owner"),
+        );
+        let expected = GoalBackedRequestFingerprint::from_create(&request).unwrap();
+        let mut regenerated = request.clone();
+        regenerated.created_at = "2026-09-09T00:01:00Z".into();
+        regenerated.admission.signature = vec![1, 2, 3];
+        assert_eq!(
+            expected,
+            GoalBackedRequestFingerprint::from_create(&regenerated).unwrap()
+        );
+        for input in [
+            serde_json::json!({"cwd":"/different"}),
+            serde_json::json!({"selected_skill_ids":["explicit-skill"]}),
+            serde_json::json!({"initial_title":{"text":"Task title","source":"task"}}),
+            serde_json::json!({"queue":{"source":"steering","policy":"append"}}),
+            serde_json::json!({"goal_continuation":{"sequence":1,"wrapup":false}}),
+        ] {
+            let mut changed = request.clone();
+            changed.input = serde_json::from_value(input).unwrap();
+            assert_ne!(
+                expected,
+                GoalBackedRequestFingerprint::from_create(&changed).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn goal_status_vocabulary_is_stable() {
