@@ -1,8 +1,8 @@
+use anyhow::Result;
 use gents_protocol::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
 };
-use anyhow::Result;
 use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -21,7 +21,9 @@ pub struct StreamProcessor<'a, H: SessionHook, W: StreamWriter, L: RequestLifecy
     persistence_hook: &'a H,
     stream_writer: &'a W,
     lifecycle: &'a mut L,
-    assistant_turn: AssistantTurnAccumulator,
+    // pub, not private: gents' own stream_processor tests drive the
+    // accumulator directly.
+    pub assistant_turn: AssistantTurnAccumulator,
     pub streamed_text: String,
     committed_text_len: usize,
     pub final_text: Option<String>,
@@ -218,7 +220,9 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
         }
     }
 
-    #[cfg(test)]
+    // Not `#[cfg(test)]`: gents' own stream_processor tests call this, and a
+    // cfg(test) item in this crate is invisible to a dependent crate's own
+    // test build.
     pub fn has_observable_activity(&self) -> bool {
         self.assistant_turn.has_content()
             || !self.streamed_text.trim().is_empty()
@@ -336,7 +340,8 @@ impl AssistantTurnAccumulator {
         (!content.is_empty()).then_some(CompletionMessage::Assistant { id: None, content })
     }
 
-    #[cfg(test)]
+    // Not `#[cfg(test)]`: `has_observable_activity` above calls this
+    // unconditionally now that it too is not test-only.
     fn has_content(&self) -> bool {
         !self.text.is_empty()
             || !self.reasoning.is_empty()

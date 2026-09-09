@@ -330,12 +330,13 @@ impl CompletionRetryState {
                 let resample_pacing =
                     resample_delay(&self.policy.transport_backoff, self.resample_used);
 
-                if is_fresh && !resample_budget_spent && resample_pacing.is_some() {
+                if let Some(base_delay) =
+                    resample_pacing.filter(|_| is_fresh && !resample_budget_spent)
+                {
                     // Fresh error with resample room. A deadline overshoot here
                     // fails immediately — it does NOT fall through to repair
                     // (mirrors Lean `parseExhaust`, whose guard is independent
                     // of `repair`'s deterministic-or-budget-spent condition).
-                    let base_delay = resample_pacing.expect("checked above");
                     let delay = jitter(base_delay, &mut rand::rng());
                     if exceeds_deadline(now, delay, deadline) {
                         return PreStreamDirective::Fail {

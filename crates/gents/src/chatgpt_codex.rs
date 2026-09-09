@@ -5,6 +5,9 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
 use defra_node::EmbeddedNode;
+use gents_loop::provider_patches::patch_instructions_body;
+#[cfg(test)]
+use gents_loop::provider_patches::CHATGPT_CODEX_UNSUPPORTED_PARAMS;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, HttpClientExt, LazyBody, Request, ReqwestClient, Response,
 };
@@ -12,7 +15,6 @@ use rig::http_client::{
 use rig::http_client::{MultipartForm, StreamingResponse};
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::{json, Value};
-use gents_loop::provider_patches::patch_instructions_body;
 
 #[cfg(test)]
 use crate::oauth_credential::{classify_chatgpt_auth_error, BearerSource, OAuthAuthProblem};
@@ -302,7 +304,9 @@ pub async fn build_responses_client(
     rig::providers::openai::Client<
         ChatGptCodexHttpClient<
             DbCredentialBearer,
-            crate::rendered_request::RenderedRequestCapturingHttpClient,
+            crate::rendered_request::RenderedRequestCapturingHttpClient<
+                rig::http_client::ReqwestClient,
+            >,
         >,
     >,
 > {
@@ -325,7 +329,9 @@ pub async fn build_responses_client(
     // request this backend never receives.
     let http = ChatGptCodexHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
+        crate::rendered_request::RenderedRequestCapturingHttpClient::<
+            rig::http_client::ReqwestClient,
+        >::default(),
     );
     crate::inference_http::build_openai_responses_client(
         "chatgpt-oauth-managed",

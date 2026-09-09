@@ -95,7 +95,10 @@ struct ScopeState {
     /// the transport never claims is silently replaced by the next one, so a
     /// test that only reads `pending` cannot see a loop that armed and then was
     /// superseded — which is exactly the shape the compaction fallback has.
-    #[cfg(test)]
+    /// Not `#[cfg(test)]`: gents' own capture-seam tests read this through
+    /// `armed_labels()` below, and a `cfg(test)` field in this crate does not
+    /// exist at all when this crate is built as a dependent crate's (non-test)
+    /// library, so the accessor must not be conditional either.
     armed_labels: Vec<String>,
 }
 
@@ -103,8 +106,7 @@ struct ScopeState {
 /// for the provenance record. Native (`gents::admission` reads a live
 /// task-local); the loop and tests default to `|_| None` since neither has
 /// an admission controller.
-pub type AdmissionJoinLookup =
-    Arc<dyn Fn(&str) -> Option<AdmissionJoin> + Send + Sync>;
+pub type AdmissionJoinLookup = Arc<dyn Fn(&str) -> Option<AdmissionJoin> + Send + Sync>;
 
 fn no_admission_join(_capture_scope: &str) -> Option<AdmissionJoin> {
     None
@@ -224,7 +226,6 @@ pub fn arm(
     };
     let replaced = {
         let mut state = scope.lock();
-        #[cfg(test)]
         state.armed_labels.push(capture_scope.clone());
         // A new arm ends the previous attempt's resend window: its stream has
         // drained (or its retry superseded it), so a body arriving now cannot
@@ -442,7 +443,11 @@ pub fn capture_failure_message(
 }
 
 /// Escape hatch used only by tests that need a scope without a daemon.
-#[cfg(test)]
+///
+/// Not `#[cfg(test)]`: gents' own capture-seam tests (chatgpt_codex,
+/// xai_grok_oauth, completion_factory, compaction) build real scopes with
+/// this, and a cfg(test) item in this crate is invisible to a dependent
+/// crate's own test build.
 pub fn test_scope(
     context: RenderedRequestContext,
     sink: RenderedRequestCaptureSink,
@@ -450,8 +455,8 @@ pub fn test_scope(
     Arc::new(RequestCaptureScope::new(context, sink))
 }
 
-/// Every scope label armed inside the current scope, in order.
-#[cfg(test)]
+/// Every scope label armed inside the current scope, in order. Not
+/// `#[cfg(test)]`, for the same reason as `test_scope` above.
 pub fn armed_labels() -> Vec<String> {
     current_scope()
         .map(|scope| scope.lock().armed_labels.clone())

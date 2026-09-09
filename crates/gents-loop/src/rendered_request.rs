@@ -168,9 +168,10 @@ pub struct RenderedCompletionRequest {
 /// Build the durable capture record from a captured body's components.
 ///
 /// `admission_join` is the admission-controller provenance stamp for this
-/// call, if any — computed by the caller (native code reads a live
+/// call, if any - computed by the caller (native code reads a live
 /// task-local; the loop and tests pass `None`) rather than looked up here, so
 /// this function stays free of the admission-controller dependency.
+#[allow(clippy::too_many_arguments)]
 pub fn build_rendered_completion_request(
     context: &RenderedRequestContext,
     capture_scope: &str,

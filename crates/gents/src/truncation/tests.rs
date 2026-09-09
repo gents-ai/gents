@@ -1,7 +1,6 @@
 use serde_json::json;
 
 use super::spill::extract_mutation_doc_id;
-use super::*;
 
 // The truncate/truncate_text tests moved to gents-loop with the pure logic
 // they exercise (crates/gents-loop/src/truncation.rs); only the DefraDB spill

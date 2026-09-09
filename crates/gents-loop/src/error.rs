@@ -161,27 +161,19 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     } else if provider_message_has_any_status(
                         provider_msg,
                         &[400, 401, 403, 404, 422],
-                    ) {
-                        InferenceError::PermanentFailure { reason }
-                    } else if provider_msg_lower.contains("invalid_api_key")
+                    ) || provider_msg_lower.contains("invalid_api_key")
                         || provider_msg_lower.contains("invalid api key")
                         || provider_msg_lower.contains("authentication")
                         || provider_msg_lower.contains("unauthorized")
-                    {
-                        InferenceError::PermanentFailure { reason }
-                    } else if provider_msg_lower.contains("invalid_request")
+                        || provider_msg_lower.contains("invalid_request")
                         || provider_msg_lower.contains("invalid request")
                     {
                         InferenceError::PermanentFailure { reason }
-                    } else if provider_message_has_any_status(
-                        provider_msg,
-                        &[408, 500, 502, 503, 504],
-                    ) || provider_message_is_transport_failure(&provider_msg_lower)
-                        || provider_msg_lower.contains("overloaded")
-                        || provider_msg_lower.contains("temporarily unavailable")
-                    {
-                        InferenceError::TransientFailure { reason }
                     } else {
+                        // Every other provider error (5xx, connection resets,
+                        // timeouts, "overloaded", "temporarily unavailable", or
+                        // anything unrecognized) is treated as transient: an
+                        // unknown failure is retried rather than given up on.
                         InferenceError::TransientFailure { reason }
                     }
                 }
@@ -226,25 +218,6 @@ pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) ->
         && message.contains(" line ")
         && message.contains(" column ")
         && message.contains("(char ")
-}
-
-fn provider_message_is_transport_failure(message_lower: &str) -> bool {
-    [
-        "error sending request",
-        "connection refused",
-        "connection reset",
-        "connection closed",
-        "connection aborted",
-        "operation timed out",
-        "request timed out",
-        "timed out",
-        "timeout",
-        "deadline has elapsed",
-        "temporary failure in name resolution",
-        "dns error",
-    ]
-    .iter()
-    .any(|needle| message_lower.contains(needle))
 }
 
 #[cfg(test)]

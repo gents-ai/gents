@@ -13,16 +13,18 @@ pub mod commits;
 pub mod sink;
 
 pub use gents_loop::rendered_request::{
+    build_rendered_completion_request, canonical_json, canonical_json_string, capture_key,
+    sha256_canonical_json,
+};
+pub use gents_loop::rendered_request::{
     scope, transport, AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId,
     CaptureOrderKey, CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting,
     ContextCompactionReason, ContextInputComponents, ParsedProvenance, ProvenanceManifest,
     ProvenanceStatus, RenderedCompletionRequest, RenderedRequestCaptureFactory,
     RenderedRequestCaptureSink, RenderedRequestCapturingHttpClient, RenderedRequestComponents,
-    RenderedRequestContext, RenderedRequestSource, ThreadedToolResult,
-    ASSEMBLY_TRACE_VERSION, CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION,
-    PROVENANCE_MANIFEST_VERSION,
+    RenderedRequestContext, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
+    CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
-pub use gents_loop::rendered_request::{build_rendered_completion_request, capture_key};
 pub(crate) use sink::defra_rendered_request_capture_factory;
 pub use sink::DefraRenderedRequestSink;
 

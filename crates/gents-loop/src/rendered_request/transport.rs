@@ -49,8 +49,7 @@ use std::future::Future;
 
 use bytes::Bytes;
 use rig::http_client::{
-    self, HttpClientExt, LazyBody, MultipartForm, Request, Response,
-    StreamingResponse,
+    self, HttpClientExt, LazyBody, MultipartForm, Request, Response, StreamingResponse,
 };
 use rig::wasm_compat::WasmCompatSend;
 use sha2::{Digest, Sha256};
@@ -79,7 +78,7 @@ enum CaptureDecision {
     /// Capture first; forward only on success.
     Capture {
         scope: std::sync::Arc<RequestCaptureScope>,
-        pending: PendingCapture,
+        pending: Box<PendingCapture>,
         source: RenderedRequestSource,
         durable_body_fingerprint: Option<[u8; 32]>,
         /// Scheme and authority of the URI this body was actually posted to,
@@ -123,7 +122,7 @@ fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
     match claim {
         CaptureClaim::Armed(pending) => CaptureDecision::Capture {
             scope,
-            pending,
+            pending: Box::new(pending),
             source,
             durable_body_fingerprint: None,
             provider_endpoint,
@@ -133,7 +132,7 @@ fn decide(path: &str, provider_endpoint: Option<String>) -> CaptureDecision {
             durable_body_fingerprint,
         } => CaptureDecision::Capture {
             scope,
-            pending,
+            pending: Box::new(pending),
             source,
             durable_body_fingerprint,
             provider_endpoint,
@@ -200,7 +199,7 @@ async fn capture_or_refuse(decision: CaptureDecision, body: &Bytes) -> http_clie
     let claimed = pending.clone();
     match scope::capture_body(
         scope.as_ref(),
-        pending,
+        *pending,
         source,
         provider_endpoint,
         body.as_ref(),
@@ -298,8 +297,7 @@ where
         let inner = self.inner.clone();
         let (parts, body) = req.into_parts();
         let body: Bytes = body.into();
-        let protocol =
-            crate::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
+        let protocol = crate::provider_stream::ProviderStreamProtocol::for_path(parts.uri.path());
         let decision = decide(
             parts.uri.path(),
             provider_endpoint_of(
@@ -311,9 +309,7 @@ where
             capture_or_refuse(decision, &body).await?;
             let req = Request::from_parts(parts, body);
             let response = HttpClientExt::send_streaming(&inner, req).await?;
-            Ok(crate::provider_stream::guard_response(
-                response, protocol,
-            ))
+            Ok(crate::provider_stream::guard_response(response, protocol))
         }
     }
 }

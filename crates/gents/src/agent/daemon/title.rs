@@ -149,7 +149,7 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
         match admission::scope_call(CallKind::OneOff, attempt, async move {
             tokio::time::timeout(
                 Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),
-                crate::agent::loop_stream::run_loop_to_text(
+                crate::agent::loop_stream::run_loop_to_text::<M, crate::hook::DefraSessionHook>(
                     model,
                     None,
                     crate::llm::message::Message::user(prompt),

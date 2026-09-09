@@ -128,7 +128,7 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         ]);
         let stream = run_loop_stream(
             model.clone(),
-            None,
+            None::<crate::hook::DefraSessionHook>,
             Message::user("hi"),
             Vec::new(),
             Arc::new(Vec::new()),
@@ -237,7 +237,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -367,7 +367,7 @@ async fn a_turn_after_a_repair_still_carries_the_effective_message_list() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -422,7 +422,7 @@ async fn capture_trace_retains_ephemeral_request_context() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model,
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -473,7 +473,7 @@ async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch()
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -538,7 +538,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
     let collected = scope_request(scope, async {
         let stream = run_loop_stream(
             model.clone(),
-            None,
+            None::<crate::hook::DefraSessionHook>,
             Message::user("hi"),
             Vec::new(),
             Arc::new(Vec::new()),
@@ -591,7 +591,7 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
     let collected = scope_request(scope, async {
         collect_scripted_stream(run_loop_stream(
             model,
-            None,
+            None::<crate::hook::DefraSessionHook>,
             Message::user("hi"),
             Vec::new(),
             Arc::new(Vec::new()),

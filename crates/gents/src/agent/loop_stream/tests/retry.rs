@@ -10,7 +10,7 @@ async fn pre_stream_transport_failure_retries_and_succeeds() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -49,7 +49,7 @@ async fn transport_ladder_exhaustion_fails_with_last_error() {
 
     let stream = run_loop_stream(
         model,
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -88,7 +88,7 @@ async fn three_minute_outage_recovers_within_ladder() {
 
     let stream = run_loop_stream(
         model,
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -131,7 +131,7 @@ async fn parse_400_resamples_once_then_repairs_on_identical_error() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -187,7 +187,7 @@ async fn first_stream_poll_parse_400_uses_pre_stream_retry_policy() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -221,7 +221,7 @@ async fn permanent_400_fails_immediately() {
 
     let stream = run_loop_stream(
         model,
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -256,7 +256,7 @@ async fn deadline_fail_fast_pre_sleep() {
 
     let stream = run_loop_stream(
         model,
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -311,7 +311,7 @@ async fn retry_reissues_same_request() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("use the tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -345,7 +345,7 @@ async fn mid_stream_decode_error_without_effects_retracts_and_resamples() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -387,7 +387,7 @@ async fn reasoning_only_completion_retracts_and_resamples() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("solve this"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -430,7 +430,7 @@ async fn mid_stream_failure_after_tool_ran_closes_turn_and_continues() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(tools),

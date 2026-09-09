@@ -107,9 +107,7 @@ pub fn to_rig_tool_call(call: &message::ToolCall) -> rig::completion::message::T
     }
 }
 
-pub fn to_rig_tool_result(
-    result: &message::ToolResult,
-) -> rig::completion::message::ToolResult {
+pub fn to_rig_tool_result(result: &message::ToolResult) -> rig::completion::message::ToolResult {
     rig::completion::message::ToolResult {
         id: result.id.clone(),
         call_id: result.call_id.clone(),
@@ -139,9 +137,7 @@ pub fn to_rig_tool_result_content(
     }
 }
 
-pub fn to_rig_reasoning(
-    reasoning: &message::Reasoning,
-) -> rig::completion::message::Reasoning {
+pub fn to_rig_reasoning(reasoning: &message::Reasoning) -> rig::completion::message::Reasoning {
     let mut rig_reasoning = rig::completion::message::Reasoning::new("");
     rig_reasoning.id = reasoning.id.clone();
     rig_reasoning.content = reasoning
@@ -285,9 +281,7 @@ pub fn from_rig_tool_call(call: &rig::completion::message::ToolCall) -> message:
     }
 }
 
-pub fn from_rig_reasoning(
-    reasoning: &rig::completion::message::Reasoning,
-) -> message::Reasoning {
+pub fn from_rig_reasoning(reasoning: &rig::completion::message::Reasoning) -> message::Reasoning {
     message::Reasoning {
         id: reasoning.id.clone(),
         content: reasoning
@@ -323,9 +317,7 @@ pub fn from_rig_reasoning(
     }
 }
 
-pub fn from_rig_tool_result(
-    result: &rig::completion::message::ToolResult,
-) -> message::ToolResult {
+pub fn from_rig_tool_result(result: &rig::completion::message::ToolResult) -> message::ToolResult {
     message::ToolResult {
         id: result.id.clone(),
         call_id: result.call_id.clone(),

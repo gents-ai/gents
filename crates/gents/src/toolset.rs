@@ -42,6 +42,12 @@ pub use context_budget::{
 };
 pub use gents_loop::tool_policy::CommandPolicyDenial;
 pub(crate) use gents_loop::tool_policy::DenialReason;
+/// `DenialReason` moved to `gents_loop::tool_policy` (G-1) flat, not nested
+/// under a `denial` module; this shim keeps the pre-move `toolset::denial::
+/// DenialReason` path this crate's call sites already use.
+pub(crate) mod denial {
+    pub(crate) use gents_loop::tool_policy::DenialReason;
+}
 pub(crate) use goal::build_goal_tools;
 pub(crate) use goal::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 pub use lsp::{

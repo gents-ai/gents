@@ -16,17 +16,17 @@ use crate::completion_retry::{
     CompletionRetryPolicy, CompletionRetryState, MidStreamDirective, PreStreamDirective,
 };
 use crate::error::InferenceError;
-use gents_protocol::message::{
-    AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
-};
-use crate::rig_compat;
-use crate::{HookAction, ToolCallHookAction};
 use crate::rendered_request::{
     AssemblyBuildPath, AssemblyTrace, ContextAccounting, ContextCompactionReason,
     CONTEXT_ACCOUNTING_VERSION,
 };
+use crate::rig_compat;
+use crate::{HookAction, ToolCallHookAction};
 use async_stream::try_stream;
 use futures::{Stream, StreamExt};
+use gents_protocol::message::{
+    AssistantContent, Message, ToolCall, ToolResult, ToolResultContent, UserContent,
+};
 use rig::agent::{MultiTurnStreamItem, StreamingError};
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, GetTokenUsage, PromptError, Usage,
@@ -36,9 +36,9 @@ use crate::tool::ToolDyn;
 use crate::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
-use crate::stream_processor::AssistantTurnAccumulator;
 use crate::output_obligation::OutputObligationCheck;
 use crate::session_hook::SessionHook;
+use crate::stream_processor::AssistantTurnAccumulator;
 use crate::tool_call_lifecycle::runtime::{
     current_tool_runtime_context, deadline_remaining, scope_request_tool_execution_with_session,
     ToolOutcome,
@@ -59,7 +59,11 @@ pub use contract::{
 };
 pub use one_shot::{run_loop_to_text, run_loop_to_typed};
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
-#[cfg(test)]
+// Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
+// agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
+// directly, and a cfg(test) item in this crate is invisible to a dependent
+// crate's own test build (same reasoning as `rendered_request::transport::
+// CountingInner`).
 pub use request_assembly::{
     clamp_request_output_budget, completion_request_input_components, ensure_context_can_dispatch,
     repair_provider_input,
@@ -70,14 +74,15 @@ use request_assembly::{
     build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
     repair_and_rebuild_request,
 };
-use tool_dispatch::value_to_json_string;
+pub use tool_dispatch::value_to_json_string;
 use turn_threading::{add_usage_saturating, close_streaming_turn};
 // The test suite stayed in gents (crates/gents/src/agent/loop_stream/tests/):
 // it builds real DefraSessionHook/EmbeddedNode fixtures for its end-to-end
 // cases and uses `include!` to share one big fixture module across files.
 
-use aggregate_budget::{
+pub use aggregate_budget::{
     aggregate_post_charge_action, AggregatePostChargeAction, AggregateTokenCharge,
+    AggregateTokenLedger,
 };
 pub use aggregate_budget::{
     aggregate_token_budget_exhaustion_message, AggregateTokenBudget,
@@ -728,11 +733,11 @@ where
                 ensure_rendered_request_was_captured(turn_index, attempt)?;
             }
 
-            if aggregate_token_budget.is_some() && !saw_final_usage_event {
-                let ledger = aggregate_token_budget
-                    .as_ref()
-                    .expect("configured aggregate token budget remains present")
-                    .snapshot()?;
+            if let Some(budget) = aggregate_token_budget
+                .as_ref()
+                .filter(|_| !saw_final_usage_event)
+            {
+                let ledger = budget.snapshot()?;
                 aggregate_usage_failure = Some(format!(
                     "aggregate_token_usage_missing: limit={}, used={}; \
                      provider stream ended without a final usage event",

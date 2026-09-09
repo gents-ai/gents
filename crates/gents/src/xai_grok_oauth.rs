@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use defra_node::EmbeddedNode;
 use futures::StreamExt as _;
+use gents_loop::provider_patches::patch_store_false;
 use rig::http_client::{
     self, HeaderMap, HeaderValue, Request, ReqwestClient, Response, StreamingResponse,
 };
@@ -14,7 +15,6 @@ use rig::http_client::{HttpClientExt, LazyBody, MultipartForm};
 #[cfg(test)]
 use rig::wasm_compat::WasmCompatSend;
 use serde_json::Value;
-use gents_loop::provider_patches::patch_store_false;
 
 #[cfg(test)]
 use crate::oauth_credential::BearerSource;
@@ -284,7 +284,6 @@ fn promote_xai_context_usage(value: &mut Value) -> bool {
     true
 }
 
-
 /// The authenticated Grok transport, with the rendered-request capture wrapper
 /// installed *below* it so the captured body already carries the `store:false`
 /// this client injects in `prepare`.
@@ -303,14 +302,16 @@ async fn build_authenticated_http(
     .await?;
     Ok(XaiGrokOAuthHttpClient::with_inner(
         bearer,
-        crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
+        crate::rendered_request::RenderedRequestCapturingHttpClient::<
+            rig::http_client::ReqwestClient,
+        >::default(),
     ))
 }
 
 /// Grok's OAuth transport wrapping the capture seam, which wraps reqwest.
 pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
     DbCredentialBearer,
-    crate::rendered_request::RenderedRequestCapturingHttpClient,
+    crate::rendered_request::RenderedRequestCapturingHttpClient<rig::http_client::ReqwestClient>,
 >;
 
 pub async fn build_responses_client(

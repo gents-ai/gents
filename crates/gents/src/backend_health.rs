@@ -19,11 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::backend_provider::BackendProviderOauthExt;
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
-use crate::backend_provider::BackendProviderOauthExt;
 
 use crate::backend_registry::{
     list_enabled_backends, set_backend_probe_status_with_last_probe, InferenceBackend,
@@ -962,8 +962,8 @@ mod tests {
 
     #[test]
     fn provider_kind_oauth_provider_names() {
-        use crate::backend_provider::BackendProviderOauthExt;
         use crate::backend_provider::BackendProviderKind as K;
+        use crate::backend_provider::BackendProviderOauthExt;
         assert_eq!(
             K::ClaudeCliSubscription.oauth_provider(),
             Some("claude-subscription")

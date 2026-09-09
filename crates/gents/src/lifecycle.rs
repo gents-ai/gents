@@ -12,12 +12,12 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
 mod execution_lease;
-pub(crate) use gents_loop::execution_policy;
 pub(crate) use execution_lease::{
     recover_execution_generation, revoke_execution_generation, ExecutionWriteFence,
     ExecutionWriteKind, RequestExecutionLease,
 };
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
+pub(crate) use gents_loop::execution_policy;
 mod lookup;
 pub mod manual;
 pub(crate) mod materialize;

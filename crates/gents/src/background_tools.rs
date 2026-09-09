@@ -30,10 +30,6 @@ use gents_protocol::row::AgentRequestRow;
 
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
 
-pub(crate) use gents_loop::live_output::{
-    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
-    STDERR_BOUNDARY,
-};
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
     ListStatusFilter, ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse,
@@ -42,6 +38,10 @@ use self::r4c_args::{
 };
 use self::transcript_render::{
     render_transcript, MessageKindView, MessageRoleView, MessageView, RenderOptions,
+};
+pub(crate) use gents_loop::live_output::{
+    LiveOutputStream, LiveToolOutputRegistry, LiveToolOutputSnapshot, LiveToolOutputWriter,
+    STDERR_BOUNDARY,
 };
 
 /// Immutable identity boundary used by `list_processes`, `read_process`,

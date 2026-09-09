@@ -26,5 +26,8 @@ pub trait StreamWriter: Send + Sync {
 
     /// Reset the live tail after a durable commit (a full turn, or a retract),
     /// so a resumed session's live view starts clean from the durable text.
-    fn reset_tail(&self, doc_id: &str) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+    fn reset_tail(
+        &self,
+        doc_id: &str,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
 }

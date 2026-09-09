@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use gents_protocol::message::Message;
 use anyhow::{Context, Result};
+use gents_protocol::message::Message;
 use rig::completion::CompletionModel;
 
 /// Output budget for the internal compaction summary completion — independent
@@ -12,10 +12,13 @@ pub const MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 100;
 pub const MAX_COMPACTION_SUMMARY_FILE_LIST_MAX: usize = 1_000;
 
+// pub, not private: gents' own compaction test suite reaches these through
+// `crate::compaction::{history, summary}` (a private submodule in this crate
+// is invisible to a dependent crate's own test build).
 #[path = "compaction_history.rs"]
-mod history;
+pub mod history;
 #[path = "compaction_summary.rs"]
-mod summary;
+pub mod summary;
 #[cfg(test)]
 mod tests {
     // Tests stay in gents (crates/gents/src/compaction/tests.rs), exercising
@@ -135,11 +138,7 @@ pub struct ReductionAdmission {
 }
 
 impl ReductionAdmission {
-    pub fn for_input(
-        input_tokens: usize,
-        context_window: usize,
-        threshold: f64,
-    ) -> Option<Self> {
+    pub fn for_input(input_tokens: usize, context_window: usize, threshold: f64) -> Option<Self> {
         let effective_input_budget =
             crate::provider_input::budget::effective_input_budget(context_window, threshold);
         matches!(
@@ -226,9 +225,10 @@ pub fn apply_reduction_decision<T, C>(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum CompactionStrategy {
     StripToolResults,
+    #[default]
     StripThenSummarize,
 }
 
@@ -238,12 +238,6 @@ pub enum CompactionStrategy {
 pub enum ReductionMode {
     StripOnly,
     Summarize,
-}
-
-impl Default for CompactionStrategy {
-    fn default() -> Self {
-        Self::StripThenSummarize
-    }
 }
 
 impl CompactionStrategy {
@@ -397,8 +391,7 @@ impl<M: CompletionModel> ProviderReductionEngine<M> {
         // block inline compaction for minutes) (#648). But it has no caller-level
         // retry either, so zero recovery made one empty provider turn abort the
         // whole user request: use the bounded immediate internal budget (#1016).
-        config.retry_policy =
-            crate::completion_retry::CompletionRetryPolicy::internal_immediate();
+        config.retry_policy = crate::completion_retry::CompletionRetryPolicy::internal_immediate();
         Self {
             model,
             config,
@@ -429,8 +422,10 @@ impl<M: CompletionModel> ProviderReductionEngine<M> {
         ))
     }
 
-    #[cfg(test)]
-    fn with_now(
+    // pub, not `#[cfg(test)]`: gents' own compaction test suite injects a
+    // fixed clock through this, and a cfg(test) item in this crate is
+    // invisible to a dependent crate's own test build.
+    pub fn with_now(
         mut self,
         now: Arc<dyn Fn() -> chrono::DateTime<chrono::Utc> + Send + Sync>,
     ) -> Self {
@@ -535,9 +530,10 @@ impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M
             (Some(from_options), Some(from_config)) => Some(from_options.min(from_config)),
             (from_options, from_config) => from_options.or(from_config),
         };
-        summary_config.structured_output = Some(
-            crate::loop_stream::StructuredOutputConfig::for_type::<ContinuationCheckpoint>(),
-        );
+        summary_config.structured_output =
+            Some(crate::loop_stream::StructuredOutputConfig::for_type::<
+                ContinuationCheckpoint,
+            >());
 
         // Roll the selected old prefix entirely in memory. Each successful step
         // feeds its checkpoint into the next bounded pair-safe chunk; the daemon
@@ -782,10 +778,10 @@ async fn summary_candidate_tokens<M: CompletionModel>(
     )
     .await
     .map_err(anyhow::Error::new)?;
-    Ok(summary_config
+    summary_config
         .provider_input_counter
         .estimate_request(&request)
-        .context("projecting rolling compaction summary request")?)
+        .context("projecting rolling compaction summary request")
 }
 
 async fn summarize_checkpoint<M: CompletionModel + 'static>(
@@ -841,10 +837,8 @@ async fn summarize_checkpoint<M: CompletionModel + 'static>(
             )
             .await
             .map_err(|fallback_error| {
-                if crate::loop_stream::aggregate_token_budget_exhaustion_message(
-                    &fallback_error,
-                )
-                .is_some()
+                if crate::loop_stream::aggregate_token_budget_exhaustion_message(&fallback_error)
+                    .is_some()
                 {
                     fallback_error.context(
                         "non-guided compaction fallback exhausted the request token budget",
@@ -868,9 +862,7 @@ async fn summarize_checkpoint<M: CompletionModel + 'static>(
             })
         }
         Err(error) => {
-            if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error)
-                .is_some()
-            {
+            if crate::loop_stream::aggregate_token_budget_exhaustion_message(&error).is_some() {
                 return Err(error.context("guided compaction exhausted the request token budget"));
             }
             let deadline_context = if deadline_elapsed(summary_config.deadline, now.as_ref()) {
@@ -985,11 +977,7 @@ pub fn compacted_through_sequence(
         .iter()
         .map(|item| &item.message)
         .collect::<Vec<_>>();
-    if prefix_view
-        .iter()
-        .chain(suffix_view.iter())
-        .eq(full_view.into_iter())
-    {
+    if prefix_view.iter().chain(suffix_view.iter()).eq(full_view) {
         Some(rows[split - 1].0)
     } else {
         None

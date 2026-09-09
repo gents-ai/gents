@@ -8,3 +8,12 @@
 mod tests;
 
 pub use gents_loop::compaction::*;
+
+// Glue for the test suite above, which reaches these bare through
+// `use super::*` the way it did before the move (gents-loop's own
+// `compaction` module imports them privately for its own use, so they do not
+// ride the glob re-export above).
+#[cfg(test)]
+use crate::provider_input::budget::{
+    rolling_summary_input_budget, summary_output_ceiling, threshold_decision, ThresholdDecision,
+};

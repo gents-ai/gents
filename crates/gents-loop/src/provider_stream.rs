@@ -47,10 +47,7 @@ pub fn guard_response(
                     Some((Ok(bytes), (body, events, false)))
                 }
                 Some(Err(error)) => Some((Err(error), (body, events, true))),
-                None if crate::execution_policy::provider_eof_is_failure(
-                    events.terminal,
-                ) =>
-                {
+                None if crate::execution_policy::provider_eof_is_failure(events.terminal) => {
                     let error = std::io::Error::new(
                         std::io::ErrorKind::UnexpectedEof,
                         "provider stream ended without an explicit protocol terminal event",
@@ -174,4 +171,3 @@ impl TerminalEvents {
         };
     }
 }
-

@@ -131,9 +131,17 @@ pub(crate) fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext
 }
 
 pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
-    call_tool_managed, deadline_remaining, scope_request_tool_execution_with_session,
-    scope_request_tool_execution_with_trigger_context, scope_tool_request_identity,
-    tool_execution_bounds, ToolExecutionBounds,
+    call_tool_managed, scope_request_tool_execution_with_trigger_context,
+    scope_tool_request_identity, tool_execution_bounds,
+};
+// Test-only: gents' own tool-execution tests exercise the loop's deadline
+// arithmetic directly, and `scope_request_tool_execution_with_workspace`
+// below (a test-only helper) still threads through the session scope; no
+// non-test call site in this crate needs either any more (the dispatch loop
+// that used to call them here moved to gents-loop).
+#[cfg(test)]
+pub(crate) use gents_loop::tool_call_lifecycle::runtime::{
+    deadline_remaining, scope_request_tool_execution_with_session,
 };
 
 #[cfg(test)]

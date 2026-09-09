@@ -226,12 +226,12 @@ pub mod subagent_request;
 pub(crate) mod subagent_workspace;
 mod transition;
 
+pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
     OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
     ToolCallRecoveryReport,
 };
-pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
 pub use subagent_request::{
     create_subagent_request, create_subagent_request_with_request_id,
     create_subagent_request_with_trusted_parent_request_id, MAX_SUBAGENT_DEPTH,

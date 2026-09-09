@@ -7,10 +7,7 @@ use super::*;
 /// `assembleWithContext_tail` theorem fixes the order as `... contextPreamble,
 /// prompt`. Fenced by `tests` (`assembles_context_immediately_before_prompt`);
 /// reordering here breaks that test and contradicts the proof.
-pub fn assemble_new_messages(
-    context_message: Option<Message>,
-    prompt: Message,
-) -> Vec<Message> {
+pub fn assemble_new_messages(context_message: Option<Message>, prompt: Message) -> Vec<Message> {
     let mut new_messages: Vec<Message> = Vec::with_capacity(2);
     if let Some(context_message) = context_message {
         new_messages.push(context_message);
@@ -300,6 +297,7 @@ pub fn ensure_context_can_dispatch(
     )))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
     history: &mut Vec<Message>,

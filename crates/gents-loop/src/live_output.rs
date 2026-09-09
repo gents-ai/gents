@@ -136,24 +136,6 @@ struct RingBuffer {
     total_bytes_seen: u64,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn writer_registration_is_visible_before_first_output_byte() {
-        let registry = LiveToolOutputRegistry::default();
-        let _writer = registry.writer_for("tool-1").await;
-
-        let snapshot = registry
-            .snapshot("tool-1")
-            .await
-            .expect("writer_for must eagerly register an empty live buffer");
-        assert_eq!(snapshot.combined.total_bytes_seen, 0);
-        assert!(snapshot.combined.bytes.is_empty());
-    }
-}
-
 impl RingBuffer {
     /// Append `bytes`, evicting from the *front* so the buffer always retains
     /// the most recent `LIVE_STREAM_CAPACITY_BYTES`.
@@ -196,5 +178,23 @@ impl RingBuffer {
                 .saturating_sub(self.bytes.len() as u64),
             total_bytes_seen: self.total_bytes_seen,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn writer_registration_is_visible_before_first_output_byte() {
+        let registry = LiveToolOutputRegistry::default();
+        let _writer = registry.writer_for("tool-1").await;
+
+        let snapshot = registry
+            .snapshot("tool-1")
+            .await
+            .expect("writer_for must eagerly register an empty live buffer");
+        assert_eq!(snapshot.combined.total_bytes_seen, 0);
+        assert!(snapshot.combined.bytes.is_empty());
     }
 }

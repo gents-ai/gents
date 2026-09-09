@@ -43,7 +43,6 @@ const CORE_ENV_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-
 /// Meet the baked command policy with the request's workspace authority.
 pub(crate) fn apply_workspace_authority(
     policy: &CommandExecutionPolicy,
@@ -78,7 +77,6 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
         None => policy.clone(),
     }
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandExecutionPolicy {

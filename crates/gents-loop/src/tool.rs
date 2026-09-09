@@ -3,9 +3,9 @@ use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
 
-use crate::tool_call_lifecycle::FailureClass;
 #[cfg(test)]
 use crate::test_support;
+use crate::tool_call_lifecycle::FailureClass;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -130,7 +130,10 @@ impl<T: Tool> ToolDyn for T {
 /// payload — we try a conservative repair and re-parse. If the repair still does
 /// not yield a value that deserializes into `Args`, we raise the typed,
 /// retryable [`ToolError::UnparseableArgs`] so the run re-attempts the inference.
-pub(crate) fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
+// pub, not pub(crate): gents' native tool call sites (eth, meta_tools) parse
+// their typed arguments through this, and a pub(crate) item in this crate is
+// invisible outside it.
+pub fn parse_tool_args<A>(args: &str) -> Result<A, ToolError>
 where
     A: for<'de> Deserialize<'de>,
 {

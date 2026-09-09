@@ -14,7 +14,6 @@ const DEFAULT_MAX_TOKENS: u64 = 4096;
 /// Lean: `ClaudeMap.identity`.
 pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
-
 /// Anthropic Messages JSON body from a rig `CompletionRequest`. The history
 /// crosses the converter seam once (`rig_compat::from_rig_message`) and the
 /// body is assembled over the native message family.

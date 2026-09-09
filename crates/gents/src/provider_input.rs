@@ -6,5 +6,16 @@
 //! (`chatgpt_codex`, `xai_grok_oauth`, `inference_http`) stay here, native.
 pub use gents_loop::provider_input::*;
 
+// Glue for the test suite below, which reaches these bare through
+// `use super::*` the way it did before the move (gents-loop's own
+// `provider_input` module imports them privately, so they do not ride the
+// glob re-export above).
+#[cfg(test)]
+use crate::backend_provider::BackendProviderKind;
+#[cfg(test)]
+use crate::openai_wire::OpenAiWireApi;
+#[cfg(test)]
+use serde_json::Value;
+
 #[cfg(test)]
 mod tests;

@@ -1,9 +1,11 @@
 use std::future::IntoFuture;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+use gents_loop::output_obligation::OutputObligationCheck;
 use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
@@ -235,7 +237,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     self.loop_tools.len(),
                 )?;
                 loop_config.deadline = request_deadline;
-                loop_config.output_obligation_gate = output_obligation_gate;
+                loop_config.output_obligation_gate = output_obligation_gate
+                    .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
                 let turn_context_window = self.behavior.context_window;
                 let turn_compaction_options = self.compaction_options_for_request(

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tracing::Instrument;
 
 // The enum itself (and its pure parse/as_str/is_agent_scoped_oauth/Display)
@@ -70,7 +70,6 @@ impl ModelDiscoveryHttpError {
         matches!(self.status, 401 | 403)
     }
 }
-
 
 fn provider_display_name(kind: BackendProviderKind) -> &'static str {
     match kind {

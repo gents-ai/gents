@@ -412,4 +412,3 @@ fn provenance_without_an_admission_scope_carries_no_join() {
         PROVENANCE_MANIFEST_VERSION
     );
 }
-

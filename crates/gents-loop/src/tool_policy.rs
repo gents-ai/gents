@@ -111,12 +111,12 @@ impl WorkspaceAuthority {
     }
 
     pub fn bindable_lifecycle_state(self, state: &str) -> bool {
-        match (self, normalize_workspace_lifecycle_state(state)) {
-            (Self::ReadWrite, Some("ready")) => true,
-            (Self::ReadOnly, Some("ready" | "sealed")) => true,
-            (Self::Integrate, Some("sealed")) => true,
-            _ => false,
-        }
+        matches!(
+            (self, normalize_workspace_lifecycle_state(state)),
+            (Self::ReadWrite, Some("ready"))
+                | (Self::ReadOnly, Some("ready" | "sealed"))
+                | (Self::Integrate, Some("sealed"))
+        )
     }
 }
 
@@ -423,7 +423,11 @@ pub struct CommandPolicyDenial {
 }
 
 impl CommandPolicyDenial {
-    pub fn new(reason: DenialReason, mode: CommandExecutionMode, network_mode: CommandNetworkMode) -> Self {
+    pub fn new(
+        reason: DenialReason,
+        mode: CommandExecutionMode,
+        network_mode: CommandNetworkMode,
+    ) -> Self {
         Self {
             reason,
             policy_mode: mode.as_str().to_string(),

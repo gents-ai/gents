@@ -357,4 +357,3 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
         "a second completion call must follow the tool result: {calls:?}"
     );
 }
-

@@ -87,15 +87,14 @@ impl ProviderInputCounter {
         }
     }
 
-    #[cfg(test)]
+    // Not `#[cfg(test)]`: gents' own provider_input tests read the resolved
+    // profile, and a cfg(test) item in this crate is invisible to a
+    // dependent crate's own test build.
     pub fn profile(&self) -> ProviderInputProfile {
         self.profile
     }
 
-    pub fn project_request(
-        &self,
-        request: &CompletionRequest,
-    ) -> Result<ProviderInputProjection> {
+    pub fn project_request(&self, request: &CompletionRequest) -> Result<ProviderInputProjection> {
         let body = self.project_body(request)?;
         let documentless_body = if request.documents.is_empty() {
             None
@@ -118,8 +117,10 @@ impl ProviderInputCounter {
         estimate_json(&body)
     }
 
+    // pub, not private: gents' own provider_input tests project a request
+    // body directly to assert its exact shape.
     #[cfg(feature = "native")]
-    fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
+    pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         let body = match self.profile {
             ProviderInputProfile::OpenAiChatCompletions => {
                 let dto = rig::providers::openai::completion::CompletionRequest::try_from((
@@ -163,13 +164,13 @@ impl ProviderInputCounter {
     /// Guest fallback (no `native` feature, so no `rig::providers::*` DTOs):
     /// serialize the core `CompletionRequest` directly. This undercounts
     /// relative to the wire-exact projection above (no provider-specific
-    /// framing overhead), so it is honest, not precise — the guest has no
+    /// framing overhead), so it is honest, not precise - the guest has no
     /// provider client to be byte-exact against in the first place.
     /// vertexia: ceiling is wire-exact accounting once rig's `providers`
     /// feature gate splits DTOs from the network client (upstream), or once
     /// the host-import transport (Phase 3b) supplies the wire body directly.
     #[cfg(not(feature = "native"))]
-    fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
+    pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
             return Ok(crate::claude_messages_body::build_messages_body(
                 &self.model,
@@ -313,7 +314,10 @@ impl ProviderInputCounter {
     }
 }
 
-fn set_streaming_fields(body: &mut Value, include_usage: bool) {
+// pub, not private: gents' own provider_input tests exercise this streaming
+// field patch directly, and a private item in this crate is invisible outside
+// it.
+pub fn set_streaming_fields(body: &mut Value, include_usage: bool) {
     let Some(object) = body.as_object_mut() else {
         return;
     };

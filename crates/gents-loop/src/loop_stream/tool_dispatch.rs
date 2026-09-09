@@ -1,6 +1,9 @@
 use super::*;
 
-pub(super) fn value_to_json_string(value: &serde_json::Value) -> String {
+// pub, not pub(super): gents' own tool-execution tests exercise this
+// formatting helper directly (a pub(super) item in this crate is invisible to
+// a dependent crate's own test build).
+pub fn value_to_json_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::String(string) => string.clone(),
         other => other.to_string(),

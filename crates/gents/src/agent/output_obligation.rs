@@ -241,37 +241,6 @@ fn expected_write_count(
     Ok(expected)
 }
 
-pub(crate) fn continuation_message(obligations: &[UnmetOutputObligation]) -> String {
-    let requirements = obligations
-        .iter()
-        .map(|obligation| {
-            if let Some(expected) = obligation.expected_writes {
-                format!(
-                    "`{}` exactly {expected} total time(s) ({} completed, {} remaining)",
-                    obligation.tool_name,
-                    obligation.completed_writes,
-                    expected.saturating_sub(obligation.completed_writes),
-                )
-            } else if let Some(field) = &obligation.expected_count_field {
-                format!(
-                    "`{}` at least once to declare the exact closed-set size in `{field}` ({} completed)",
-                    obligation.tool_name, obligation.completed_writes
-                )
-            } else {
-                format!(
-                    "`{}` at least {} total time(s) ({} completed)",
-                    obligation.tool_name, obligation.minimum_writes, obligation.completed_writes
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "The request cannot complete yet because its configured output obligation is unmet. \
-         Complete the required durable write before answering: {requirements}."
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -50,7 +50,9 @@ pub fn patch_instructions_body(body: &[u8]) -> Option<Bytes> {
     serde_json::to_vec(&value).ok().map(Bytes::from)
 }
 
-const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] = &["max_output_tokens", "temperature", "top_p"];
+// pub, not private: gents' own chatgpt_codex test pins this exact list.
+pub const CHATGPT_CODEX_UNSUPPORTED_PARAMS: &[&str] =
+    &["max_output_tokens", "temperature", "top_p"];
 
 fn first_system_text(input: &Value) -> Option<String> {
     match input {

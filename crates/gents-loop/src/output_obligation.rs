@@ -93,7 +93,9 @@ mod tests {
             UnmetOutputObligation::new("log_event", 2, 1, None, None),
         ];
         let message = continuation_message(&obligations);
-        assert!(message.contains("`write_result` exactly 3 total time(s) (0 completed, 3 remaining)"));
+        assert!(
+            message.contains("`write_result` exactly 3 total time(s) (0 completed, 3 remaining)")
+        );
         assert!(message.contains("`log_event` at least 2 total time(s) (1 completed)"));
     }
 }

@@ -64,8 +64,11 @@ pub trait SessionHook: Send + Sync {
     /// Fail-open/fail-closed policy over one persistence attempt's result:
     /// `Ok` on success, or the hook's configured decision on failure. Sync
     /// because the decision itself touches no I/O.
-    fn apply_persistence_policy(&self, result: anyhow::Result<()>, context: &str)
-        -> anyhow::Result<()>;
+    fn apply_persistence_policy(
+        &self,
+        result: anyhow::Result<()>,
+        context: &str,
+    ) -> anyhow::Result<()>;
 
     /// Persist one durable message, returning its assigned sequence.
     async fn persist_message(&self, message: &Message) -> anyhow::Result<u32>;

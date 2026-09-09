@@ -337,6 +337,7 @@ where
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn scope_request_tool_execution_with_trigger_context<F, T>(
     deadline_at: Option<DateTime<Utc>>,
     cancellation_token: CancellationToken,
@@ -415,8 +416,10 @@ where
 }
 
 pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
-    TOOL_RUNTIME_SCOPE.try_with(Clone::clone).ok().map(|scope| {
-        CurrentToolRuntimeContext {
+    TOOL_RUNTIME_SCOPE
+        .try_with(Clone::clone)
+        .ok()
+        .map(|scope| CurrentToolRuntimeContext {
             deadline_at: scope.deadline_at,
             cancellation_token: scope.cancellation_token,
             workspace_cwd: scope.workspace_cwd,
@@ -429,8 +432,7 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
             agent_did: scope.agent_did,
             behavior_id: scope.behavior_id,
             request_id: scope.request_id,
-        }
-    })
+        })
 }
 
 /// The deadline/cancellation/live-output triple every managed subprocess

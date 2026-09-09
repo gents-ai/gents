@@ -1147,8 +1147,15 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
         args: &str,
         outcome: &gents_loop::tool_call_lifecycle::ToolOutcome,
     ) -> HookAction {
-        DefraSessionHook::on_tool_result(self, tool_name, tool_call_id, internal_call_id, args, outcome)
-            .await
+        DefraSessionHook::on_tool_result(
+            self,
+            tool_name,
+            tool_call_id,
+            internal_call_id,
+            args,
+            outcome,
+        )
+        .await
     }
 
     async fn foreground_live_output_writer(

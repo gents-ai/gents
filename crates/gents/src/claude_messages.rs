@@ -17,18 +17,17 @@ use std::sync::{Mutex, OnceLock};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use rig::completion::{CompletionError, CompletionRequest, ToolDefinition};
+use rig::completion::{CompletionError, CompletionRequest};
 use rig::http_client::{
     self, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
     StreamingResponse,
 };
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall};
 use rig::wasm_compat::WasmCompatSend;
-use serde_json::{json, Value};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::claude_subscription::ClaudeStreamResponse;
-use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use crate::oauth_credential::BearerSource;
 use crate::rendered_request::RenderedRequestCapturingHttpClient;
 
@@ -42,7 +41,6 @@ pub(crate) const OAUTH_BETA: &str = "oauth-2025-04-20";
 pub use gents_loop::claude_messages_body::{
     build_messages_body, build_messages_body_native, CLAUDE_CODE_IDENTITY,
 };
-
 
 /// Fail-closed outcomes of the Messages tool-block parser. Display strings are
 /// matched by the conformance drivers; keep them stable.

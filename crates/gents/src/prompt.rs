@@ -21,7 +21,9 @@
 //! Behavior updates flow through `<system-reminder>` tags injected into
 //! conversation messages — never by mutating the preamble.
 
-use crate::llm::message::{Message, Text, UserContent};
+use crate::llm::message::Message;
+#[cfg(test)]
+use crate::llm::message::{Text, UserContent};
 use anyhow::Result;
 
 use crate::config::AgentBehavior;

@@ -49,10 +49,7 @@ pub enum ThresholdDecision {
 }
 
 /// The single equality-sensitive provider-input threshold decision.
-pub fn threshold_decision(
-    input_tokens: usize,
-    effective_input_budget: usize,
-) -> ThresholdDecision {
+pub fn threshold_decision(input_tokens: usize, effective_input_budget: usize) -> ThresholdDecision {
     if input_tokens <= effective_input_budget {
         ThresholdDecision::NotNeeded
     } else {
@@ -82,10 +79,7 @@ pub fn compaction_retention_target(
 
 /// Bound an internal summary's configured ceiling to one rounded-up quarter of
 /// its actual context window.
-pub fn summary_output_ceiling(
-    configured_max_output_tokens: usize,
-    context_window: usize,
-) -> usize {
+pub fn summary_output_ceiling(configured_max_output_tokens: usize, context_window: usize) -> usize {
     configured_max_output_tokens.min(context_window.div_ceil(4).max(1))
 }
 

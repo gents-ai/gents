@@ -1,3 +1,8 @@
+//! Pure message-history shaping for compaction. Every item here is `pub`
+//! (not `pub(super)`): gents' own compaction test suite reaches this module
+//! through `crate::compaction::history`, and a `pub(super)` item in this
+//! crate is invisible to a dependent crate's own test build.
+
 use std::collections::HashMap;
 
 use gents_protocol::message::{
@@ -8,9 +13,9 @@ use super::summary::dedupe_paths;
 use super::FileActivity;
 
 #[derive(Debug)]
-pub(super) struct SourcedMessage {
-    pub(super) source_index: usize,
-    pub(super) message: Message,
+pub struct SourcedMessage {
+    pub source_index: usize,
+    pub message: Message,
 }
 
 fn source_messages(messages: Vec<Message>) -> Vec<SourcedMessage> {
@@ -28,12 +33,12 @@ fn messages_only(messages: Vec<SourcedMessage>) -> Vec<Message> {
     messages.into_iter().map(|item| item.message).collect()
 }
 
-pub(super) fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
     let (messages, file_activity) = strip_tool_results_sourced(source_messages(messages));
     (messages_only(messages), file_activity)
 }
 
-pub(super) fn strip_tool_results_sourced(
+pub fn strip_tool_results_sourced(
     messages: Vec<SourcedMessage>,
 ) -> (Vec<SourcedMessage>, FileActivity) {
     let file_activity = extract_file_activity_iter(messages.iter().map(|item| &item.message));
@@ -137,13 +142,11 @@ fn resolved_keys_per_turn<'a>(
     per_turn
 }
 
-pub(super) fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
+pub fn drop_unpaired_tool_calls(messages: Vec<Message>) -> Vec<Message> {
     messages_only(drop_unpaired_tool_calls_sourced(source_messages(messages)))
 }
 
-pub(super) fn drop_unpaired_tool_calls_sourced(
-    messages: Vec<SourcedMessage>,
-) -> Vec<SourcedMessage> {
+pub fn drop_unpaired_tool_calls_sourced(messages: Vec<SourcedMessage>) -> Vec<SourcedMessage> {
     let resolved_per_turn =
         resolved_keys_per_turn(messages.len(), messages.iter().map(|item| &item.message));
 
@@ -189,15 +192,13 @@ pub(super) fn drop_unpaired_tool_calls_sourced(
     kept_messages
 }
 
-pub(super) fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
+pub fn drop_orphaned_tool_results(messages: Vec<Message>) -> Vec<Message> {
     messages_only(drop_orphaned_tool_results_sourced(source_messages(
         messages,
     )))
 }
 
-pub(super) fn drop_orphaned_tool_results_sourced(
-    messages: Vec<SourcedMessage>,
-) -> Vec<SourcedMessage> {
+pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<SourcedMessage> {
     let mut pending_calls: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut kept_messages = Vec::with_capacity(messages.len());
     for SourcedMessage {
@@ -264,13 +265,13 @@ pub(super) fn drop_orphaned_tool_results_sourced(
 /// provider format at the request-build boundary; the stored messages and the
 /// conformance-fenced reducers are untouched. Relative order within each
 /// category is preserved.
-pub(super) fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
+pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
     messages_only(normalize_assistant_content_order_sourced(source_messages(
         messages,
     )))
 }
 
-pub(super) fn normalize_assistant_content_order_sourced(
+pub fn normalize_assistant_content_order_sourced(
     messages: Vec<SourcedMessage>,
 ) -> Vec<SourcedMessage> {
     messages
@@ -309,7 +310,7 @@ pub(super) fn normalize_assistant_content_order_sourced(
         .collect()
 }
 
-pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
+pub fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| match message {
@@ -337,7 +338,7 @@ pub(super) fn pretruncate_tool_results(messages: Vec<Message>, max_chars: usize)
         .collect()
 }
 
-pub(super) fn split_messages_for_summary_with_counter(
+pub fn split_messages_for_summary_with_counter(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
     counter: &crate::provider_input::ProviderInputCounter,
@@ -419,8 +420,10 @@ pub(super) fn split_messages_for_summary_with_counter(
     Ok((old_messages, recent_messages))
 }
 
-#[cfg(test)]
-pub(super) fn split_messages_for_summary(
+// Not `#[cfg(test)]`: gents' own compaction test suite calls this test-only
+// convenience wrapper, and a cfg(test) item in this crate is invisible to a
+// dependent crate's own test build.
+pub fn split_messages_for_summary(
     messages: Vec<Message>,
     keep_recent_tokens: usize,
 ) -> (Vec<Message>, Vec<Message>) {
@@ -438,7 +441,7 @@ pub(super) fn split_messages_for_summary(
 /// Mirrors `Compaction.pairSafeBoundary` and the pending-set discipline in
 /// [`drop_orphaned_tool_results`]: an assistant message replaces the pending set
 /// with its own call ids, a tool result erases one, and anything else clears it.
-pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
+pub fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
     let limit = limit.min(messages.len());
     pair_safe_boundaries(&messages[..limit])
         .last()
@@ -450,7 +453,7 @@ pub(super) fn pair_safe_boundary(messages: &[Message], limit: usize) -> usize {
 ///
 /// This is the linear-time form used by rolling compaction. Calling
 /// `pair_safe_boundary` once per candidate makes a long prefix quadratic.
-pub(super) fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
+pub fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
     let mut pending: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut boundaries = Vec::new();
 
@@ -501,7 +504,7 @@ pub(super) fn pair_safe_boundaries(messages: &[Message]) -> Vec<usize> {
 /// results carry no error flag (`gents_protocol::message::ToolResult`), so
 /// there is nothing reliable to test. That is a known over-credit, narrower
 /// than the previous one.
-pub(super) fn extract_file_activity(messages: &[Message]) -> FileActivity {
+pub fn extract_file_activity(messages: &[Message]) -> FileActivity {
     extract_file_activity_iter(messages.iter())
 }
 
@@ -561,7 +564,7 @@ fn truncate_tool_result_content(content: ToolResultContent, max_chars: usize) ->
     }
 }
 
-pub(super) fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+pub fn floor_char_boundary(text: &str, mut index: usize) -> usize {
     if index >= text.len() {
         return text.len();
     }
@@ -721,7 +724,7 @@ struct ToolCallInfo {
 /// with the tool registry — `every_registered_file_tool_is_classified` fails if
 /// a file tool is added without a classification, which would silently empty the
 /// compaction summary's file lists.
-pub(super) fn is_read_tool(name: &str) -> bool {
+pub fn is_read_tool(name: &str) -> bool {
     matches!(
         name,
         "read_file" | "list_files" | "glob" | "grep" | "read" | "cat" | "search" | "find" | "query"
@@ -729,7 +732,7 @@ pub(super) fn is_read_tool(name: &str) -> bool {
 }
 
 /// Tools whose calls mean "this path was modified".
-pub(super) fn is_write_tool(name: &str) -> bool {
+pub fn is_write_tool(name: &str) -> bool {
     matches!(
         name,
         "write_file" | "edit_file" | "write" | "edit" | "replace" | "apply_patch"

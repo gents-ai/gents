@@ -28,7 +28,9 @@ pub(crate) enum BackendClient {
     OpenAiChatCompletions(
         rig::providers::openai::CompletionsClient<
             crate::inference_http::SessionTaggingHttpClient<
-                crate::rendered_request::RenderedRequestCapturingHttpClient,
+                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                    rig::http_client::ReqwestClient,
+                >,
             >,
         >,
     ),
@@ -36,21 +38,27 @@ pub(crate) enum BackendClient {
         rig::providers::openai::Client<
             crate::inference_http::SessionTaggingHttpClient<
                 crate::inference_http::ResponsesNormalizingHttpClient<
-                    crate::rendered_request::RenderedRequestCapturingHttpClient,
+                    crate::rendered_request::RenderedRequestCapturingHttpClient<
+                        rig::http_client::ReqwestClient,
+                    >,
                 >,
             >,
         >,
     ),
     OpenRouter(
         rig::providers::openrouter::Client<
-            crate::rendered_request::RenderedRequestCapturingHttpClient,
+            crate::rendered_request::RenderedRequestCapturingHttpClient<
+                rig::http_client::ReqwestClient,
+            >,
         >,
     ),
     ChatGptCodex(
         rig::providers::openai::Client<
             crate::chatgpt_codex::ChatGptCodexHttpClient<
                 crate::oauth_credential::DbCredentialBearer,
-                crate::rendered_request::RenderedRequestCapturingHttpClient,
+                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                    rig::http_client::ReqwestClient,
+                >,
             >,
         >,
     ),
@@ -94,7 +102,9 @@ pub(crate) async fn build_backend_client(
                     api_key,
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
-                        crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
+                        crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                            rig::http_client::ReqwestClient,
+                        >::default(),
                     ),
                 )
                 .with_context(|| build_context.clone())?;
@@ -105,7 +115,9 @@ pub(crate) async fn build_backend_client(
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::inference_http::ResponsesNormalizingHttpClient::new(
-                            crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default(),
+                            crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                                rig::http_client::ReqwestClient,
+                            >::default(),
                         ),
                     ),
                     Default::default(),
@@ -120,11 +132,17 @@ pub(crate) async fn build_backend_client(
                 behavior.behavior_id, behavior.backend_endpoint
             );
             let client: rig::providers::openrouter::Client<
-                crate::rendered_request::RenderedRequestCapturingHttpClient,
+                crate::rendered_request::RenderedRequestCapturingHttpClient<
+                    rig::http_client::ReqwestClient,
+                >,
             > = rig::providers::openrouter::Client::builder()
                 .api_key(api_key)
                 .base_url(&behavior.backend_endpoint)
-                .http_client(crate::rendered_request::RenderedRequestCapturingHttpClient::<rig::http_client::ReqwestClient>::default())
+                .http_client(
+                    crate::rendered_request::RenderedRequestCapturingHttpClient::<
+                        rig::http_client::ReqwestClient,
+                    >::default(),
+                )
                 .build()
                 .with_context(|| build_context.clone())?;
             Ok(BackendClient::OpenRouter(client))

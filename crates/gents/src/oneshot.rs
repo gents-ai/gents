@@ -4,6 +4,7 @@ use crate::llm::message::Message;
 use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_loop::output_obligation::OutputObligationCheck;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
 
@@ -216,7 +217,7 @@ where
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
-    config.output_obligation_gate =
+    let output_obligation_gate =
         match crate::agent::output_obligation::OutputObligationGate::for_request(
             node.clone(),
             &request,
@@ -231,6 +232,9 @@ where
                 );
             }
         };
+    config.output_obligation_gate = output_obligation_gate
+        .clone()
+        .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
     let capture_scope = crate::rendered_request::scope_from_factory(
         crate::rendered_request::RenderedRequestContext {
             request_doc_id: request.doc_id.clone(),
@@ -262,7 +266,7 @@ where
     .await
     {
         Ok(hook) => hook
-            .with_output_obligation_gate(config.output_obligation_gate.clone())
+            .with_output_obligation_gate(output_obligation_gate.clone())
             .with_background_tool_registry(background_tool_registry)
             .with_goal_tool_authority(
                 behavior.tools.goal_tools_requested(),

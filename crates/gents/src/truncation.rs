@@ -11,7 +11,7 @@ mod tests;
 // no storage side effect, and this crate re-exports it so `crate::truncation`
 // keeps every symbol callers already use.
 pub use gents_loop::truncation::{
-    truncate, truncate_text, tool_result_truncation_mode, TextTruncation, TruncationLimits,
+    tool_result_truncation_mode, truncate, truncate_text, TextTruncation, TruncationLimits,
     TruncationMode, TruncationTrigger, LIVE_STREAM_CAPACITY_BYTES,
 };
 

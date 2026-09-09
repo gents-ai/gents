@@ -47,6 +47,8 @@ pub type TurnCompactor = Arc<
         + Sync,
 >;
 
+pub type StructuredOutputValidator = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 /// A typed-output contract carried through the owned completion loop.
 ///
 /// Rig owns the provider schema transport. Gents keeps ownership of the loop
@@ -56,7 +58,7 @@ pub type TurnCompactor = Arc<
 #[derive(Clone)]
 pub struct StructuredOutputConfig {
     pub(super) schema: schemars::Schema,
-    pub(super) validate: Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>,
+    pub(super) validate: StructuredOutputValidator,
 }
 
 impl StructuredOutputConfig {

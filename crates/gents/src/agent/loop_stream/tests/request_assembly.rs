@@ -28,7 +28,7 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
 
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         result,
         vec![call],
         Arc::new(Vec::new()),
@@ -59,7 +59,7 @@ async fn context_message_is_sent_before_prompt() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("actual prompt"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -585,7 +585,7 @@ async fn repair_sanitizes_poisoned_tool_args_in_loaded_history() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<crate::hook::DefraSessionHook>,
         Message::user("hi"),
         history,
         Arc::new(Vec::new()),

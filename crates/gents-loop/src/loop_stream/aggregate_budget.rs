@@ -3,8 +3,12 @@ use std::sync::{Arc, Mutex};
 use rig::agent::StreamingError;
 use rig::completion::{CompletionError, CompletionRequest, Usage};
 
+// pub, not pub(super): gents' own loop_stream test suite (crates/gents/src/
+// agent/loop_stream/tests/budgeting.rs) drives these directly, and a
+// pub(super) item in this crate is invisible to a dependent crate's own test
+// build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregateTokenCharge {
+pub enum AggregateTokenCharge {
     Missing,
     Within,
     Exhausted,
@@ -12,13 +16,13 @@ pub(super) enum AggregateTokenCharge {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum AggregatePostChargeAction {
+pub enum AggregatePostChargeAction {
     Continue,
     Succeed,
     Fail,
 }
 
-pub(super) fn aggregate_post_charge_action(
+pub fn aggregate_post_charge_action(
     charge: AggregateTokenCharge,
     terminal_valid: bool,
 ) -> AggregatePostChargeAction {
@@ -39,8 +43,7 @@ pub struct AggregateTokenLedger {
     pub used: u64,
 }
 
-pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str =
-    "aggregate_token_budget_exhausted: ";
+pub const AGGREGATE_TOKEN_BUDGET_EXHAUSTED_PREFIX: &str = "aggregate_token_budget_exhausted: ";
 
 /// Recover only the typed request-budget failure from an anyhow context
 /// chain. Matching the underlying `StreamingError` rather than arbitrary text
@@ -117,7 +120,9 @@ impl AggregateTokenLedger {
         self.effective_output_tokens(input_tokens, configured_max) > 0
     }
 
-    pub(super) fn charge_reported(&mut self, usage: Option<Usage>) -> AggregateTokenCharge {
+    // pub, not pub(super): gents' own budgeting tests exercise the ledger's
+    // charge arithmetic directly (same visibility reasoning as above).
+    pub fn charge_reported(&mut self, usage: Option<Usage>) -> AggregateTokenCharge {
         let Some(usage) = usage else {
             return AggregateTokenCharge::Missing;
         };

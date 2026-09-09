@@ -5,5 +5,13 @@
 //! one case drives a real `rig` OpenAI client over `inference_http`, native.
 pub use gents_loop::provider_stream::*;
 
+// Glue for the test suite below, which reaches `http_client` and
+// `StreamingResponse` bare through `use super::*` the way it did before the
+// move.
+#[cfg(test)]
+use futures::StreamExt;
+#[cfg(test)]
+use rig::http_client::{self, StreamingResponse};
+
 #[cfg(test)]
 mod tests;
