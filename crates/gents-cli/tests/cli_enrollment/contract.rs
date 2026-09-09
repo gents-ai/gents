@@ -468,7 +468,7 @@ async fn wait_for_replicated_reply(
 }
 
 async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
-    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentResponse { request_id status content } }";
+    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentRequest { _docID request_id agent_did requester_did lifecycle_state } AgentResponse { _docID request_id agent_did requester_did status content } }";
     let client = core.node().execute(query).await;
     let runtime = graphql_query(graphql, query).await;
     let sync = core.sync_state();
@@ -482,8 +482,17 @@ async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
         Ok(response) => response.json::<serde_json::Value>().await.ok(),
         Err(_) => None,
     };
+    let runtime_replicators = reqwest::Client::new()
+        .get(graphql.replace("/graphql", "/p2p/replicators"))
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await;
+    let runtime_replicators = match runtime_replicators {
+        Ok(response) => response.json::<serde_json::Value>().await.ok(),
+        Err(_) => None,
+    };
     format!(
-        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
+        "observer={:?}; database_now={database_now:?}; runtime_database={runtime_database:?}; runtime_replicators={runtime_replicators:?}; database={:?}; peers={:?}; client={client:?}; runtime={runtime:?}",
         core.observer_metrics().await, sync.database_sync, sync.peers
     )
 }
