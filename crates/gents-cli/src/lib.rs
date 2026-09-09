@@ -97,6 +97,7 @@ Examples:
   gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
   gents init --backend-preset openrouter --model-name MODEL
   gents init --backend-preset openai --model-name MODEL
+  gents init --backend-preset claude-cli-subscription   # then: gents claude-login
   gents init --write
   gents init --yolo
   gents init --inference-url $INFERENCE_ENDPOINT --model-name MODEL --write
