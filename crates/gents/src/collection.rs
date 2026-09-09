@@ -1,199 +1,182 @@
-//! Typed discriminator for the set of operator-controlled collections.
+//! Canonical operator-controlled document collections.
 //!
-//! Mirrors the Lean inductive `ApplyReconcile.Collection` in
-//! `crates/gents/proofs/Proofs/ApplyReconcile.lean`. Any change
-//! to the set of variants, their GraphQL names, or their apply-order
-//! ranks must be reflected in the Lean module.
+//! Names and owner-scoped logical keys follow `ConfigDocuments`, shared by Lean's
+//! apply and self-configuration models. Enumeration is deterministic, not a
+//! dependency ordering: references can form cycles. Atomic publication of a
+//! complete owner-closed manifest provides reference safety.
 
 use std::fmt;
 
-// PartialOrd/Ord derived for BTreeMap<DocRef, _> use in apply_model; ordering
-// is declaration order, NOT apply_order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Collection {
     AgentPrincipal,
     AgentBehavior,
+    AgentContext,
+    Compaction,
     Skill,
     DatastoreToolSurface,
     ChainKeyBinding,
     EthTool,
-    WorkspaceRoot,
-    ToolSelection,
+    Tools,
+    SubagentTarget,
     InferenceBackend,
     InferenceProfile,
+    InferenceSampling,
+    InferenceExecution,
+    InferenceRetryPolicy,
     ToolServiceRegistry,
     ProjectionAcpBinding,
     Task,
     Schedule,
-    EventTrigger,
+    EventSource,
+    Trigger,
+    Callback,
+    CallbackBinding,
+    CallbackModule,
+    RepositoryPlacement,
+    GraphDefinition,
 }
 
-/// Canonical dependency order for desired-state writes. Consumers may select
-/// a subset, but must preserve this order. Deletes intentionally have no
-/// equivalent runtime API: pruning is an operator CLI concern, never a package
-/// installation primitive.
-///
-/// This is a *linear refinement* of the Lean-proven rank,
-/// [`Collection::apply_order`] (`ApplyReconcile.Collection.applyOrder`):
-/// [`Collection::apply_order`] only orders collections whose ranks differ (a
-/// partial order — same-rank collections have no proven relative order), and
-/// this array totals that partial order into one concrete write sequence by
-/// picking one linear order among the choices the rank leaves open. Reordering
-/// entries *within* a rank is free; moving a collection across a rank
-/// boundary is not — see `linear_apply_order_refines_the_lean_rank` below.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 14] = [
-    Collection::InferenceBackend,
-    Collection::InferenceProfile,
-    Collection::ToolServiceRegistry,
-    Collection::DatastoreToolSurface,
-    Collection::ChainKeyBinding,
-    Collection::EthTool,
-    Collection::ToolSelection,
-    Collection::Skill,
-    Collection::AgentBehavior,
-    Collection::ProjectionAcpBinding,
-    Collection::Task,
-    Collection::Schedule,
-    Collection::EventTrigger,
-    Collection::AgentPrincipal,
-];
+/// Deterministic document traversal for desired-state writes. This enumeration
+/// provides no reference-safety guarantee; publication must validate the complete
+/// manifest and atomically commit it, including legal reference cycles.
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
 
 impl Collection {
-    // NOTE: `WorkspaceRoot` is intentionally NOT a member of `ALL`. `ALL`
-    // drives the full desired-state config CRUD surface (CONFIG_APPLY_ORDER,
-    // DesiredStateManifest diff/load/write) — WorkspaceRoot's schema lands in
-    // this task, but that CLI surface is built in a follow-up task. The
-    // variant still exists on the enum (with real graphql_type/unique_field/
-    // apply_order/dir_name) so exhaustive matches over `Collection` account
-    // for it; it's just excluded from the CRUD-driving `ALL` set for now.
-    pub const ALL: [Collection; 14] = [
-        Collection::AgentPrincipal,
-        Collection::AgentBehavior,
-        Collection::Skill,
-        Collection::DatastoreToolSurface,
-        Collection::ChainKeyBinding,
-        Collection::EthTool,
-        Collection::ToolSelection,
-        Collection::InferenceBackend,
-        Collection::InferenceProfile,
-        Collection::ToolServiceRegistry,
-        Collection::ProjectionAcpBinding,
-        Collection::Task,
-        Collection::Schedule,
-        Collection::EventTrigger,
+    pub const ALL: [Collection; 26] = [
+        Self::AgentPrincipal,
+        Self::AgentBehavior,
+        Self::AgentContext,
+        Self::Compaction,
+        Self::Skill,
+        Self::DatastoreToolSurface,
+        Self::ChainKeyBinding,
+        Self::EthTool,
+        Self::Tools,
+        Self::SubagentTarget,
+        Self::InferenceBackend,
+        Self::InferenceProfile,
+        Self::InferenceSampling,
+        Self::InferenceExecution,
+        Self::InferenceRetryPolicy,
+        Self::ToolServiceRegistry,
+        Self::ProjectionAcpBinding,
+        Self::Task,
+        Self::Schedule,
+        Self::EventSource,
+        Self::Trigger,
+        Self::Callback,
+        Self::CallbackBinding,
+        Self::CallbackModule,
+        Self::RepositoryPlacement,
+        Self::GraphDefinition,
     ];
 
     pub fn file_name(self) -> Option<&'static str> {
         match self {
-            Collection::AgentPrincipal => Some("agent_principal.json"),
+            Self::AgentPrincipal => Some("agent_principal.json"),
             _ => None,
         }
     }
 
     pub fn dir_name(self) -> Option<&'static str> {
         match self {
-            Collection::AgentPrincipal => None,
-            Collection::AgentBehavior => Some("agent_behaviors"),
-            Collection::Skill => Some("skills"),
-            Collection::DatastoreToolSurface => Some("datastore_tool_surfaces"),
-            Collection::ChainKeyBinding => Some("chain_key_bindings"),
-            Collection::EthTool => Some("eth_tools"),
-            Collection::WorkspaceRoot => Some("workspace_roots"),
-            Collection::ToolSelection => Some("tool_selections"),
-            Collection::InferenceBackend => Some("inference_backends"),
-            Collection::InferenceProfile => Some("inference_profiles"),
-            Collection::ToolServiceRegistry => Some("tool_services"),
-            Collection::ProjectionAcpBinding => Some("projection_acp_bindings"),
-            Collection::Task => Some("tasks"),
-            Collection::Schedule => Some("schedules"),
-            Collection::EventTrigger => Some("event_triggers"),
+            Self::AgentPrincipal => None,
+            Self::AgentBehavior => Some("agent_behaviors"),
+            Self::AgentContext => Some("contexts"),
+            Self::Compaction => Some("compactions"),
+            Self::Skill => Some("skills"),
+            Self::DatastoreToolSurface => Some("datastore_tool_surfaces"),
+            Self::ChainKeyBinding => Some("chain_key_bindings"),
+            Self::EthTool => Some("eth_tools"),
+            Self::Tools => Some("tools"),
+            Self::SubagentTarget => Some("subagent_targets"),
+            Self::InferenceBackend => Some("inference_backends"),
+            Self::InferenceProfile => Some("inference_profiles"),
+            Self::InferenceSampling => Some("inference_sampling"),
+            Self::InferenceExecution => Some("inference_execution"),
+            Self::InferenceRetryPolicy => Some("inference_retry_policies"),
+            Self::ToolServiceRegistry => Some("tool_service_registries"),
+            Self::ProjectionAcpBinding => Some("projection_acp_bindings"),
+            Self::Task => Some("tasks"),
+            Self::Schedule => Some("schedules"),
+            Self::EventSource => Some("event_sources"),
+            Self::Trigger => Some("triggers"),
+            Self::Callback => Some("callbacks"),
+            Self::CallbackBinding => Some("callback_bindings"),
+            Self::CallbackModule => Some("callback_modules"),
+            Self::RepositoryPlacement => Some("repository_placements"),
+            Self::GraphDefinition => Some("graphs"),
         }
     }
 
     pub fn graphql_type(self) -> &'static str {
         match self {
-            Collection::AgentPrincipal => "AgentPrincipal",
-            Collection::AgentBehavior => "AgentBehavior",
-            Collection::Skill => "Skill",
-            Collection::DatastoreToolSurface => "DatastoreToolSurface",
-            Collection::ChainKeyBinding => "ChainKeyBinding",
-            Collection::EthTool => "EthTool",
-            Collection::WorkspaceRoot => "WorkspaceRoot",
-            Collection::ToolSelection => "ToolSelection",
-            Collection::InferenceBackend => "InferenceBackend",
-            Collection::InferenceProfile => "InferenceProfile",
-            Collection::ToolServiceRegistry => "ToolServiceRegistry",
-            Collection::ProjectionAcpBinding => "ProjectionAcpBinding",
-            Collection::Task => "Task",
-            Collection::Schedule => "Schedule",
-            Collection::EventTrigger => "EventTrigger",
+            Self::AgentPrincipal => "AgentPrincipal",
+            Self::AgentBehavior => "AgentBehavior",
+            Self::AgentContext => "AgentContext",
+            Self::Compaction => "CompactionConfig",
+            Self::Skill => "Skill",
+            Self::DatastoreToolSurface => "DatastoreToolSurface",
+            Self::ChainKeyBinding => "ChainKeyBinding",
+            Self::EthTool => "EthTool",
+            Self::Tools => "Tools",
+            Self::SubagentTarget => "SubagentTarget",
+            Self::InferenceBackend => "InferenceBackend",
+            Self::InferenceProfile => "InferenceProfile",
+            Self::InferenceSampling => "InferenceSampling",
+            Self::InferenceExecution => "InferenceExecution",
+            Self::InferenceRetryPolicy => "InferenceRetryPolicy",
+            Self::ToolServiceRegistry => "ToolServiceRegistry",
+            Self::ProjectionAcpBinding => "ProjectionAcpBinding",
+            Self::Task => "Task",
+            Self::Schedule => "Schedule",
+            Self::EventSource => "EventSource",
+            Self::Trigger => "Trigger",
+            Self::Callback => "Callback",
+            Self::CallbackBinding => "CallbackBinding",
+            Self::CallbackModule => "CallbackModule",
+            Self::RepositoryPlacement => "RepositoryPlacement",
+            Self::GraphDefinition => "GraphDefinition",
         }
     }
 
+    /// Logical document key within agent_did, never global uniqueness.
     pub fn unique_field(self) -> &'static str {
         match self {
-            Collection::AgentPrincipal => "agent_did",
-            Collection::AgentBehavior => "behavior_id",
-            Collection::Skill => "skill_id",
-            Collection::DatastoreToolSurface => "surface_id",
-            Collection::ChainKeyBinding => "binding_id",
-            Collection::EthTool => "tool_id",
-            Collection::WorkspaceRoot => "root_path",
-            Collection::ToolSelection => "selection_id",
-            Collection::InferenceBackend => "backend_id",
-            Collection::InferenceProfile => "profile_id",
-            Collection::ToolServiceRegistry => "service_id",
-            Collection::ProjectionAcpBinding => "binding_id",
-            Collection::Task => "task_id",
-            Collection::Schedule => "schedule_id",
-            Collection::EventTrigger => "trigger_id",
-        }
-    }
-
-    /// Apply ordering rank: lower ranks are written first so referenced
-    /// documents exist before referrers. Mirrors
-    /// `ApplyReconcile.Collection.applyOrder` in Lean.
-    pub fn apply_order(self) -> u8 {
-        match self {
-            Collection::InferenceBackend
-            | Collection::ToolSelection
-            | Collection::InferenceProfile
-            | Collection::ToolServiceRegistry
-            | Collection::Skill
-            | Collection::DatastoreToolSurface
-            | Collection::ChainKeyBinding
-            | Collection::EthTool
-            | Collection::WorkspaceRoot => 0,
-            Collection::AgentBehavior => 1,
-            Collection::ProjectionAcpBinding => 2,
-            Collection::Task => 2,
-            Collection::Schedule => 2,
-            Collection::AgentPrincipal => 3,
-            Collection::EventTrigger => 3,
+            Self::AgentPrincipal => "agent_did",
+            Self::AgentBehavior => "behavior_id",
+            Self::AgentContext => "context_id",
+            Self::Compaction => "compaction_id",
+            Self::Skill => "skill_id",
+            Self::DatastoreToolSurface => "surface_id",
+            Self::ChainKeyBinding => "binding_id",
+            Self::EthTool => "tool_id",
+            Self::Tools => "tools_id",
+            Self::SubagentTarget => "target_id",
+            Self::InferenceBackend => "backend_id",
+            Self::InferenceProfile => "profile_id",
+            Self::InferenceSampling => "sampling_id",
+            Self::InferenceExecution => "execution_id",
+            Self::InferenceRetryPolicy => "retry_policy_id",
+            Self::ToolServiceRegistry => "service_id",
+            Self::ProjectionAcpBinding => "binding_id",
+            Self::Task => "task_id",
+            Self::Schedule => "schedule_id",
+            Self::EventSource => "event_source_id",
+            Self::Trigger => "trigger_id",
+            Self::Callback => "callback_id",
+            Self::CallbackBinding => "binding_id",
+            Self::CallbackModule => "module_id",
+            Self::RepositoryPlacement => "repository_id",
+            Self::GraphDefinition => "graph_id",
         }
     }
 }
 
 impl fmt::Display for Collection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Collection::AgentPrincipal => "agent_principal",
-            Collection::AgentBehavior => "agent_behaviors",
-            Collection::Skill => "skills",
-            Collection::DatastoreToolSurface => "datastore_tool_surfaces",
-            Collection::ChainKeyBinding => "chain_key_bindings",
-            Collection::EthTool => "eth_tools",
-            Collection::WorkspaceRoot => "workspace_roots",
-            Collection::ToolSelection => "tool_selections",
-            Collection::InferenceBackend => "inference_backends",
-            Collection::InferenceProfile => "inference_profiles",
-            Collection::ToolServiceRegistry => "tool_service_registries",
-            Collection::ProjectionAcpBinding => "projection_acp_bindings",
-            Collection::Task => "tasks",
-            Collection::Schedule => "schedules",
-            Collection::EventTrigger => "event_triggers",
-        };
-        f.write_str(name)
+        f.write_str(self.dir_name().unwrap_or("agent_principal"))
     }
 }
 
@@ -203,161 +186,57 @@ mod tests {
     use std::collections::BTreeSet;
 
     #[test]
-    fn all_collections_have_distinct_file_or_dir_names() {
-        let names: BTreeSet<&str> = Collection::ALL
-            .iter()
-            .map(|c| {
-                c.file_name()
-                    .or(c.dir_name())
-                    .expect("every variant has one")
+    fn vocabulary_matches_canonical_lean_document_catalog() {
+        // Read the authoritative formal vocabulary, rather than maintaining
+        // another hand-written enum/rank fixture in this test.
+        let lean = include_str!("../proofs/Proofs/ConfigDocuments.lean");
+        let expected: Vec<_> = lean
+            .lines()
+            .filter_map(|line| {
+                let (_, row) = line.split_once("=> ⟨")?;
+                let fields: Vec<_> = row.split('"').collect();
+                Some((fields[1], fields[3]))
             })
             .collect();
-        assert_eq!(names.len(), Collection::ALL.len());
-    }
-
-    #[test]
-    fn all_collections_have_distinct_graphql_types() {
-        let names: BTreeSet<&str> = Collection::ALL.iter().map(|c| c.graphql_type()).collect();
-        assert_eq!(names.len(), Collection::ALL.len());
-    }
-
-    #[test]
-    fn all_collections_have_distinct_display_strings() {
-        let names: BTreeSet<String> = Collection::ALL.iter().map(|c| c.to_string()).collect();
-        assert_eq!(names.len(), Collection::ALL.len());
-    }
-
-    #[test]
-    fn linear_apply_order_refines_the_lean_rank() {
-        // DESIRED_STATE_APPLY_ORDER is a linear refinement of the Lean-proven
-        // partial order (Collection::apply_order): consecutive entries must
-        // never step DOWN in rank. Stepping up (including staying flat, for
-        // same-rank neighbors) is exactly what "refinement" allows.
-        let ranks: Vec<u8> = DESIRED_STATE_APPLY_ORDER
+        let actual: Vec<_> = Collection::ALL
             .iter()
-            .map(|c| c.apply_order())
+            .map(|collection| (collection.graphql_type(), collection.unique_field()))
             .collect();
-        for window in ranks.windows(2) {
-            let (previous, next) = (window[0], window[1]);
-            assert!(
-                previous <= next,
-                "DESIRED_STATE_APPLY_ORDER places a higher-rank collection \
-                 before a lower-rank one: rank {previous} is immediately \
-                 followed by rank {next} in {DESIRED_STATE_APPLY_ORDER:?}"
-            );
-        }
+        assert!(!expected.is_empty(), "formal document catalog not found");
+        assert_eq!(actual, expected);
+    }
 
-        // Every canonical variant appears in the array exactly once — the
-        // refinement is total, not a subset.
-        assert_eq!(DESIRED_STATE_APPLY_ORDER.len(), Collection::ALL.len());
-        for variant in Collection::ALL {
-            assert_eq!(
-                DESIRED_STATE_APPLY_ORDER
-                    .iter()
-                    .filter(|c| **c == variant)
-                    .count(),
-                1,
-                "DESIRED_STATE_APPLY_ORDER must list {variant:?} exactly once"
-            );
+    #[test]
+    fn authored_names_match_pack_config_document_roots() {
+        let pack = include_str!("document_config/pack_config.rs");
+        let roots: BTreeSet<_> = pack
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim().strip_prefix("pub ")?;
+                let (name, _) = line.split_once(':')?;
+                Some(name)
+            })
+            .filter(|name| !matches!(*name, "graph_intents" | "graph_capabilities"))
+            .collect();
+        // Graph intents and capabilities are composition inputs, not document
+        // collections; every other canonical pack root must be represented.
+        let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.to_string()).collect();
+        assert_eq!(names.len(), Collection::ALL.len());
+        assert_eq!(
+            names.iter().map(String::as_str).collect::<BTreeSet<_>>(),
+            roots
+        );
+        for c in Collection::ALL {
+            assert!(c.file_name().is_some() ^ c.dir_name().is_some());
         }
     }
 
     #[test]
-    fn canonical_variants_and_ranks() {
-        // This list is the Rust side of the parity contract. The Lean
-        // inductive `ApplyReconcile.Collection` and the
-        // `ApplyReconcile.Collection.applyOrder` function in
-        // crates/gents/proofs/Proofs/ApplyReconcile.lean must
-        // match this sequence exactly. When you add a variant here, you
-        // MUST also:
-        //
-        // 1. Add the variant to the Lean inductive.
-        // 2. Add the variant's rank to Collection.applyOrder in Lean.
-        // 3. Update the exhaustive pattern-match example at the bottom
-        //    of ApplyReconcile.lean (added in Task A4 alongside this test).
-        //
-        // Both the Lean build and this test must stay green.
-        let canonical: &[(Collection, u8, &str)] = &[
-            (Collection::AgentPrincipal, 3, "AgentPrincipal"),
-            (Collection::AgentBehavior, 1, "AgentBehavior"),
-            (Collection::Skill, 0, "Skill"),
-            (Collection::DatastoreToolSurface, 0, "DatastoreToolSurface"),
-            (Collection::ChainKeyBinding, 0, "ChainKeyBinding"),
-            (Collection::EthTool, 0, "EthTool"),
-            (Collection::ToolSelection, 0, "ToolSelection"),
-            (Collection::InferenceBackend, 0, "InferenceBackend"),
-            (Collection::InferenceProfile, 0, "InferenceProfile"),
-            (Collection::ToolServiceRegistry, 0, "ToolServiceRegistry"),
-            (Collection::ProjectionAcpBinding, 2, "ProjectionAcpBinding"),
-            (Collection::Task, 2, "Task"),
-            (Collection::Schedule, 2, "Schedule"),
-            (Collection::EventTrigger, 3, "EventTrigger"),
-        ];
-
-        // ALL must list every canonical variant exactly once.
-        assert_eq!(Collection::ALL.len(), canonical.len());
-        for (variant, _, _) in canonical.iter() {
-            assert!(
-                Collection::ALL.contains(variant),
-                "Collection::ALL missing variant {variant:?}; \
-                 see ApplyReconcile.lean parity contract"
-            );
-        }
-
-        // apply_order and graphql_type must match the canonical values.
-        for (variant, expected_rank, expected_type) in canonical.iter() {
-            assert_eq!(
-                variant.apply_order(),
-                *expected_rank,
-                "Collection::{variant:?}.apply_order() drifted from Lean parity contract"
-            );
-            assert_eq!(
-                variant.graphql_type(),
-                *expected_type,
-                "Collection::{variant:?}.graphql_type() drifted from Lean parity contract"
-            );
-        }
-    }
-
-    #[test]
-    fn exactly_one_of_file_or_dir_name() {
-        for variant in Collection::ALL {
-            let has_file = variant.file_name().is_some();
-            let has_dir = variant.dir_name().is_some();
-            assert!(
-                has_file ^ has_dir,
-                "Collection::{variant:?} must return Some from exactly one of file_name()/dir_name()"
-            );
-        }
-    }
-
-    #[test]
-    fn apply_order_puts_referees_before_referrers() {
-        assert!(
-            Collection::InferenceBackend.apply_order() < Collection::AgentBehavior.apply_order()
-        );
-        assert!(Collection::ToolSelection.apply_order() < Collection::AgentBehavior.apply_order());
-        assert!(
-            Collection::InferenceProfile.apply_order() < Collection::AgentBehavior.apply_order()
-        );
-        assert!(Collection::AgentBehavior.apply_order() < Collection::Task.apply_order());
-        assert!(Collection::AgentBehavior.apply_order() < Collection::Schedule.apply_order());
-        assert!(
-            Collection::AgentBehavior.apply_order()
-                < Collection::ProjectionAcpBinding.apply_order()
-        );
-        // Rank-0 members must all agree on rank 0.
-        assert_eq!(
-            Collection::InferenceBackend.apply_order(),
-            Collection::ToolSelection.apply_order(),
-        );
-        assert_eq!(
-            Collection::InferenceBackend.apply_order(),
-            Collection::InferenceProfile.apply_order(),
-        );
-        assert_eq!(
-            Collection::InferenceBackend.apply_order(),
-            Collection::ToolServiceRegistry.apply_order(),
-        );
+    fn traversal_covers_each_document_collection_once() {
+        let visited: BTreeSet<_> = DESIRED_STATE_APPLY_ORDER.into_iter().collect();
+        assert_eq!(visited.len(), DESIRED_STATE_APPLY_ORDER.len());
+        assert_eq!(visited, Collection::ALL.into_iter().collect());
+        let names: BTreeSet<_> = Collection::ALL.iter().map(|c| c.graphql_type()).collect();
+        assert_eq!(names.len(), Collection::ALL.len());
     }
 }
