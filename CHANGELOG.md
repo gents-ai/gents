@@ -6,6 +6,35 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+## 0.16.4 - 2026-09-09
+
+### Fixed
+
+- Deliver local chat commits through DefraDB's native replication path without
+  a redundant application gossip rebroadcast.
+- Flush streaming responses on a 100 ms deadline, persist the first update
+  immediately, and keep retry wakeups out of document-change metrics.
+- Drive observer refreshes from database changes and project the foreground
+  session directly, avoiding periodic full-session polling and reloads.
+- Track the live selected session across route changes and remove redundant
+  startup schema, migration, and subscription work.
+- Use the merged DefraDB and Regolith releases that provide native catch-up,
+  backpressure, and current Iroh transport behavior.
+- Route discovered-model catalog updates through the canonical committed-write
+  owner instead of the read-only GraphQL helper.
+
+### Validation
+
+- Cover clean and aged pairing, foreground delivery, offline recovery,
+  transcript convergence, and local pagination in the canonical enrollment
+  integration suite, including hard local latency budgets.
+
+### Upgrade
+
+- Upgrade phone/desktop clients and runtimes together while preserving stores,
+  identities, and enrollment state. Mixed historical wire protocols remain
+  unsupported.
+
 ## 0.16.2 - 2026-09-08
 
 ### Fixed
