@@ -54,6 +54,15 @@ impl<'a> StreamProcessor<'a> {
         self.lifecycle.validate_owned_execution().await
     }
 
+    pub(crate) async fn next_flush_deadline(&self) -> Option<tokio::time::Instant> {
+        self.stream_writer.next_flush_deadline(self.doc_id).await
+    }
+
+    pub(crate) async fn flush_pending(&self) -> Result<()> {
+        self.stream_writer.flush_pending(self.doc_id).await?;
+        Ok(())
+    }
+
     pub(crate) async fn process_item<R>(
         &mut self,
         item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,

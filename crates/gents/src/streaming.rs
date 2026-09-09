@@ -66,10 +66,7 @@ pub struct DefraStreamWriter {
 }
 
 struct StreamBuffer {
-    content: String,
-    reasoning: String,
-    token_count: usize,
-    reasoning_progress_seq: usize,
+    current: StreamBufferSnapshot,
     last_flush_at: Instant,
     persisted: StreamBufferSnapshot,
     lease: ExecutionWriteFence,
@@ -84,6 +81,18 @@ struct StreamBufferSnapshot {
 }
 
 impl DefraStreamWriter {
+    pub(crate) async fn next_flush_deadline(&self, doc_id: &str) -> Option<tokio::time::Instant> {
+        let buffers = self.buffers.lock().await;
+        let buffer = buffers.get(doc_id)?;
+        if buffer.current == buffer.persisted {
+            return None;
+        }
+        buffer
+            .last_flush_at
+            .checked_add(self.batch_interval)
+            .map(tokio::time::Instant::from_std)
+    }
+
     pub fn new(node: Arc<EmbeddedNode>, agent_did: &str, batch_interval: Duration) -> Self {
         let response_write_gate = response_write_gate(&node);
         Self {
@@ -204,15 +213,13 @@ impl DefraStreamWriter {
         let buf = buffers
             .get_mut(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-        if !force && buf.last_flush_at.elapsed() < self.batch_interval {
+        let first_visible_content = (buf.persisted.content.is_empty()
+            && !buf.current.content.is_empty())
+            || (buf.persisted.reasoning.is_empty() && !buf.current.reasoning.is_empty());
+        if !force && !first_visible_content && buf.last_flush_at.elapsed() < self.batch_interval {
             return Ok(None);
         }
-        let snapshot = StreamBufferSnapshot {
-            content: buf.content.clone(),
-            reasoning: buf.reasoning.clone(),
-            token_count: buf.token_count,
-            reasoning_progress_seq: buf.reasoning_progress_seq,
-        };
+        let snapshot = buf.current.clone();
         Ok((snapshot != buf.persisted).then_some(snapshot))
     }
 
@@ -226,8 +233,8 @@ impl DefraStreamWriter {
         let buf = buffers
             .get_mut(doc_id)
             .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-        if buf.content.is_empty()
-            && buf.reasoning.is_empty()
+        if buf.current.content.is_empty()
+            && buf.current.reasoning.is_empty()
             && buf.persisted.content.is_empty()
             && buf.persisted.reasoning.is_empty()
         {
@@ -251,8 +258,8 @@ impl DefraStreamWriter {
                     }}
                 ) {{ _docID }}
             }}"#,
-            token_count = buf.token_count,
-            reasoning_progress_seq = buf.reasoning_progress_seq,
+            token_count = buf.current.token_count,
+            reasoning_progress_seq = buf.current.reasoning_progress_seq,
         );
 
         let resp = lease
@@ -276,14 +283,9 @@ impl DefraStreamWriter {
             );
         }
 
-        buf.content.clear();
-        buf.reasoning.clear();
-        buf.persisted = StreamBufferSnapshot {
-            content: String::new(),
-            reasoning: String::new(),
-            token_count: buf.token_count,
-            reasoning_progress_seq: buf.reasoning_progress_seq,
-        };
+        buf.current.content.clear();
+        buf.current.reasoning.clear();
+        buf.persisted = buf.current.clone();
         buf.last_flush_at = Instant::now();
         Ok(())
     }
@@ -448,10 +450,7 @@ impl DefraStreamWriter {
         self.buffers.lock().await.insert(
             doc_id.clone(),
             StreamBuffer {
-                content: String::new(),
-                reasoning: String::new(),
-                token_count: 0,
-                reasoning_progress_seq: 0,
+                current: StreamBufferSnapshot::default(),
                 last_flush_at: Instant::now(),
                 persisted: StreamBufferSnapshot::default(),
                 lease,
@@ -478,8 +477,8 @@ impl DefraStreamWriter {
             let buf = buffers
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-            buf.content.push_str(tokens);
-            buf.token_count += tokens.split_whitespace().count();
+            buf.current.content.push_str(tokens);
+            buf.current.token_count += tokens.split_whitespace().count();
         }
 
         let snapshot = self.pending_snapshot(doc_id, false).await?;
@@ -500,8 +499,9 @@ impl DefraStreamWriter {
             let buf = buffers
                 .get_mut(doc_id)
                 .ok_or_else(|| anyhow::anyhow!("no buffer for doc_id={}", doc_id))?;
-            append_live_reasoning_preview(&mut buf.reasoning, reasoning);
-            buf.reasoning_progress_seq = buf.reasoning_progress_seq.saturating_add(1);
+            append_live_reasoning_preview(&mut buf.current.reasoning, reasoning);
+            buf.current.reasoning_progress_seq =
+                buf.current.reasoning_progress_seq.saturating_add(1);
         }
 
         let snapshot = self.pending_snapshot(doc_id, false).await?;

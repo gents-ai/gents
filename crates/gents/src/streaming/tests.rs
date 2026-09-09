@@ -79,6 +79,52 @@ async fn response_stores_exact_request_document_edge() {
     let _ = fs::remove_dir_all(&data_path);
 }
 
+#[tokio::test]
+async fn first_visible_content_does_not_wait_for_the_batch_interval() {
+    let (node, data_path) = build_test_node("first-visible").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    let mut lifecycle =
+        create_claimed_request(&node, "first-visible-request", "first-visible-session").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+
+    assert!(writer.write_reasoning(&doc_id, "Thinking").await.unwrap());
+    assert!(writer.write_tokens(&doc_id, "Hello").await.unwrap());
+    assert_eq!(load_response(&node, &doc_id).await["content"], "Hello");
+    assert!(!writer.write_tokens(&doc_id, " again").await.unwrap());
+    assert_eq!(load_response(&node, &doc_id).await["content"], "Hello");
+    writer.flush_pending(&doc_id).await.unwrap();
+    assert_eq!(
+        load_response(&node, &doc_id).await["content"],
+        "Hello again"
+    );
+
+    node.shutdown().await;
+    fs::remove_dir_all(data_path).unwrap();
+}
+
+#[tokio::test]
+async fn pending_stream_deadline_is_fixed_until_flush_and_idle_has_no_timer() {
+    let (node, data_path) = build_test_node("flush-deadline").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    let mut lifecycle =
+        create_claimed_request(&node, "flush-deadline-request", "flush-deadline-session").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+    assert!(writer.next_flush_deadline(&doc_id).await.is_none());
+    assert!(writer.write_tokens(&doc_id, "Hello").await.unwrap());
+    assert!(writer.next_flush_deadline(&doc_id).await.is_none());
+    assert!(!writer.write_tokens(&doc_id, " again").await.unwrap());
+    let deadline = writer
+        .next_flush_deadline(&doc_id)
+        .await
+        .expect("buffered content deadline");
+    assert!(!writer.write_tokens(&doc_id, " text").await.unwrap());
+    assert_eq!(writer.next_flush_deadline(&doc_id).await, Some(deadline));
+    writer.flush_pending(&doc_id).await.unwrap();
+    assert!(writer.next_flush_deadline(&doc_id).await.is_none());
+    node.shutdown().await;
+    fs::remove_dir_all(data_path).unwrap();
+}
+
 async fn create_claimed_request(
     node: &Arc<EmbeddedNode>,
     request_id: &str,

@@ -13,7 +13,7 @@ use crate::tool_surface::BehaviorToolConfig;
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 250;
-pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
+pub const DEFAULT_STREAM_BATCH_MS: u64 = 100;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 /// Output budget for the internal compaction summary completion — independent
 /// of the user turn's `max_output_tokens` (#1017).

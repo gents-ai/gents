@@ -8,8 +8,8 @@
 //! Behavior is supplied per construction via a chat `Responder` closure, so the
 //! thin `MockChatEndpoint` / `MockModelEndpoint` / `MockOpenAIEndpoint` /
 //! spawn-mock wrappers keep their exact public APIs while sharing this one
-//! robust server. SSE bodies are written whole (matching the previous mocks),
-//! so no incremental streaming is needed.
+//! robust server. Whole-response and gated incremental SSE variants let tests
+//! distinguish visible streaming from delivery that waits for completion.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,6 +28,7 @@ pub enum ChatAction {
     Sse(String),
     DelayThenSse(Duration, String),
     WaitThenSse(Arc<tokio::sync::Semaphore>, String),
+    GatedSse(Vec<(Duration, String)>, Arc<tokio::sync::Semaphore>, String),
     Hang,
 }
 
@@ -207,6 +208,42 @@ async fn handle_chat(
 
     match (state.responder)(&request_json) {
         ChatAction::Sse(body) => sse_response(body),
+        ChatAction::GatedSse(first, gate, rest) => {
+            let stopped = state.stopped.clone();
+            let chunks = futures_util::stream::unfold(
+                (first.into_iter(), Some(rest), gate, stopped),
+                |(mut first, mut rest, gate, stopped)| async move {
+                    let chunk = if let Some((delay, first)) = first.next() {
+                        tokio::time::sleep(delay).await;
+                        first
+                    } else {
+                        let rest = rest.take()?;
+                        loop {
+                            if stopped.load(Ordering::Relaxed) {
+                                return None;
+                            }
+                            if let Ok(permit) =
+                                tokio::time::timeout(Duration::from_millis(50), gate.acquire())
+                                    .await
+                            {
+                                drop(permit.ok()?);
+                                break;
+                            }
+                        }
+                        rest
+                    };
+                    Some((
+                        Ok::<_, std::convert::Infallible>(chunk),
+                        (first, rest, gate, stopped),
+                    ))
+                },
+            );
+            (
+                [(header::CONTENT_TYPE, "text/event-stream")],
+                axum::body::Body::from_stream(chunks),
+            )
+                .into_response()
+        }
         ChatAction::DelayThenSse(delay, body) => {
             let _ = tokio::time::timeout(delay, state.stop.notified()).await;
             sse_response(body)
@@ -222,7 +259,9 @@ async fn handle_chat(
                 tokio::time::timeout(Duration::from_millis(50), gate.acquire()).await
             {
                 if let Ok(permit) = permit {
-                    permit.forget();
+                    // This is a barrier (for example, the app has closed), not
+                    // a quota. Retries after it opens must not block again.
+                    drop(permit);
                     return sse_response(body);
                 }
                 return json_response(

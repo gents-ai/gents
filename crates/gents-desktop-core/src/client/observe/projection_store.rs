@@ -8,6 +8,8 @@ use crate::client::store::{ClientStore, SharedClientStore};
 #[derive(Debug, Default)]
 pub struct ObserverMetrics {
     pub events_received: AtomicU64,
+    pub document_change_batches: AtomicU64,
+    pub coalesced_updates: AtomicU64,
     pub docs_fetched: AtomicU64,
     pub debounce_flushes: AtomicU64,
     pub scope_reloads: AtomicU64,
@@ -22,6 +24,8 @@ pub struct ObserverMetrics {
 #[derive(Debug, Clone)]
 pub struct ObserverMetricsSnapshot {
     pub events_received: u64,
+    pub document_change_batches: u64,
+    pub coalesced_updates: u64,
     pub docs_fetched: u64,
     pub debounce_flushes: u64,
     pub scope_reloads: u64,
@@ -37,6 +41,8 @@ impl ObserverMetrics {
     pub fn snapshot(&self) -> ObserverMetricsSnapshot {
         ObserverMetricsSnapshot {
             events_received: self.events_received.load(Ordering::Relaxed),
+            document_change_batches: self.document_change_batches.load(Ordering::Relaxed),
+            coalesced_updates: self.coalesced_updates.load(Ordering::Relaxed),
             docs_fetched: self.docs_fetched.load(Ordering::Relaxed),
             debounce_flushes: self.debounce_flushes.load(Ordering::Relaxed),
             scope_reloads: self.scope_reloads.load(Ordering::Relaxed),

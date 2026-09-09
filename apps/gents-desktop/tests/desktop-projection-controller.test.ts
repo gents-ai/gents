@@ -66,7 +66,23 @@ describe("createDesktopProjectionController", () => {
     const full = projection.request("full");
     await Promise.all([delta, full]);
 
-    expect(calls).toEqual(["snapshot", "session"]);
+    expect(calls).toEqual(["session", "snapshot"]);
+  });
+
+  it("projects the selected chat before a slow fleet refresh on foreground", async () => {
+    const fleet = deferred();
+    const refreshSession = vi.fn(async () => null);
+    const refreshSnapshot = vi.fn(async () => fleet.promise);
+    const projection = controller({ refreshSession, refreshSnapshot });
+
+    const refresh = projection.request("full");
+    try {
+      await vi.waitFor(() => expect(refreshSnapshot).toHaveBeenCalledTimes(1));
+      expect(refreshSession).toHaveBeenCalledExactlyOnceWith("session-1");
+    } finally {
+      fleet.resolve();
+      await refresh;
+    }
   });
 
   it("still refreshes the bounded session when the fleet snapshot fails", async () => {

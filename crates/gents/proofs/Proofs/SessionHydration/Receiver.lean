@@ -67,6 +67,19 @@ def progressFor (prev : ClientProgress) (session agent : String) : ClientProgres
 def beginRequest (session agent : String) : ClientProgress :=
   { session, agent, phase := .requested }
 
+/-- An owned session header permits hydration during a live turn. Without that
+header, a pending local request alone does not prove the session exists. -/
+def canStartInitial (ownedSession hasDocuments nonterminalRequest : Bool) : Bool :=
+  ownedSession || (hasDocuments && !nonterminalRequest)
+
+theorem owned_session_can_start_during_turn (hasDocuments nonterminalRequest : Bool) :
+    canStartInitial true hasDocuments nonterminalRequest = true := by
+  simp [canStartInitial]
+
+theorem pending_request_without_session_waits (hasDocuments : Bool) :
+    canStartInitial false hasDocuments true = false := by
+  simp [canStartInitial]
+
 /-- An explicit retry is legal only for the same failed target. -/
 def canRetry (prev : ClientProgress) (session agent : String) : Bool :=
   decide (prev.session = session ∧ prev.agent = agent ∧ prev.phase = .failed)

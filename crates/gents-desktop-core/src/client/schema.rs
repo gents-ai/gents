@@ -17,20 +17,21 @@ pub async fn ensure_schemas(node: &EmbeddedNode) -> Result<()> {
 
 pub async fn subscribe_all_collections(node: &EmbeddedNode) -> Result<()> {
     let p2p = node.p2p().context("desktop node missing P2P support")?;
+    subscribe_runtime_collections(p2p).await
+}
 
-    for name in subscribed_collection_names() {
-        match p2p.add_collections(vec![name.to_owned()]).await {
-            Ok(()) => {}
-            Err(error) => {
-                if error.to_string().contains("already") {
-                    tracing::debug!(collection = name, "collection already subscribed");
-                } else {
-                    return Err(error.into());
-                }
-            }
-        }
-    }
-
+pub(crate) async fn subscribe_runtime_collections(
+    p2p: &dyn defra_p2p_adapter::P2POperations,
+) -> Result<()> {
+    // The DB handles existing subscriptions idempotently and persists the
+    // resulting list once per API call.
+    p2p.add_collections(
+        subscribed_collection_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+    )
+    .await?;
     Ok(())
 }
 
