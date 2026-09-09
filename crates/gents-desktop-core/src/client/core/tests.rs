@@ -18,6 +18,8 @@ use crate::client::{PeerDirectory, PeerRecord};
 
 #[derive(Default)]
 struct RecordingP2P {
+    collection_batches: StdRwLock<Vec<Vec<String>>>,
+    collection_error: StdRwLock<Option<String>>,
     notify_calls: AtomicUsize,
     local_peer_id_error: StdRwLock<Option<String>>,
     listen_addresses: StdRwLock<Vec<String>>,
@@ -33,6 +35,31 @@ struct RecordingP2P {
     replicators_error: StdRwLock<Option<String>>,
     sync_status: StdRwLock<serde_json::Value>,
     sync_status_error: StdRwLock<Option<String>>,
+}
+
+#[tokio::test]
+async fn startup_subscriptions_use_one_batch_with_the_exact_allowed_scope() {
+    let p2p = RecordingP2P::default();
+    crate::client::schema::subscribe_runtime_collections(&p2p)
+        .await
+        .unwrap();
+    let batches = p2p.collection_batches.read().unwrap();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(
+        batches[0],
+        crate::client::schema::subscribed_collection_names()
+    );
+}
+
+#[tokio::test]
+async fn startup_subscription_failure_is_not_swallowed() {
+    let p2p = RecordingP2P::default();
+    *p2p.collection_error.write().unwrap() = Some("subscription denied".to_string());
+    let error = crate::client::schema::subscribe_runtime_collections(&p2p)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("subscription denied"));
+    assert_eq!(p2p.collection_batches.read().unwrap().len(), 1);
 }
 
 #[allow(dead_code)]
@@ -297,7 +324,11 @@ impl P2POps for RecordingP2P {
         Ok(Vec::new())
     }
 
-    async fn add_collections(&self, _collections: Vec<String>) -> P2PResult<()> {
+    async fn add_collections(&self, collections: Vec<String>) -> P2PResult<()> {
+        self.collection_batches.write().unwrap().push(collections);
+        if let Some(error) = self.collection_error.read().unwrap().as_ref() {
+            return Err(defra_p2p_adapter::P2PError::Transport(error.clone()));
+        }
         Ok(())
     }
 
