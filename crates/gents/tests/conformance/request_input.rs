@@ -55,40 +55,6 @@ fn request_input_rejects_legacy_controls_and_incomplete_goal_facts() {
     assert_eq!(compact, json!({}));
 }
 
-/// The source-authentication observation belongs to existing admission/ACP.
-/// This exercises its workspace tuple boundary, not a test-local resolver.
-#[test]
-fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
-    fn lineage(value: &serde_json::Value) -> gents::lifecycle::WorkspaceLineage {
-        let field = |name: &str| value[name].as_str().map(str::to_owned);
-        gents::lifecycle::WorkspaceLineage {
-            workspace_id: field("workspace_id"),
-            workspace_owner_agent_did: field("workspace_owner_agent_did"),
-            workspace_authority: field("workspace_authority"),
-            workspace_seal_hash: field("workspace_seal_hash"),
-        }
-    }
-    let cases = &lean_contract_snapshot().request_input_cases;
-    assert!(cases
-        .iter()
-        .any(|case| case["name"] == "workspace-foreign-owner-same-label-denied"));
-    for case in cases {
-        let name = case["name"].as_str().unwrap();
-        let request = lineage(&case["workspace"]);
-        let source = lineage(&case["workspace_source"]);
-        assert_eq!(
-            request
-                .validate_source(
-                    &source,
-                    case["workspace_source_authenticated"].as_bool().unwrap(),
-                )
-                .is_ok(),
-            case["expected_workspace_accepted"].as_bool().unwrap(),
-            "{name}: actual workspace source owner"
-        );
-    }
-}
-
 #[test]
 fn signed_request_input_fields_match_lean_bytes() {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};

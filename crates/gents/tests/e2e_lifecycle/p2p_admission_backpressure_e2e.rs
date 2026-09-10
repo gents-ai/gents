@@ -114,35 +114,6 @@ async fn create_request(
     );
 }
 
-async fn terminalize_request(
-    node: &EmbeddedNode,
-    request_id: &str,
-    agent_did: &str,
-    lifecycle_state: &str,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let agent_did = escape_graphql_string(agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{
-                    request_id: {{ _eq: "{request_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }}
-                }},
-                input: {{
-                    lifecycle_state: "{lifecycle_state}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "terminalize AgentRequest failed: {:?}",
-        resp.errors
-    );
-}
-
 async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> Option<AgentRequestRow> {
     let request_id = escape_graphql_string(request_id);
     let query = format!(

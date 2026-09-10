@@ -3,7 +3,6 @@ use gents::watcher::{AgentRequest, DefraWatcher};
 use gents::RequestLifecycle;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use serde::Deserialize;
 
 use crate::support::{
     create_request, create_request_with_valid_until, first_row, set_interrupt_requested_at,
@@ -11,11 +10,6 @@ use crate::support::{
 };
 
 type StatusRow = AgentRequestRow;
-
-#[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
-    behavior_id: String,
-}
 
 type DeadlineRow = AgentRequestRow;
 
