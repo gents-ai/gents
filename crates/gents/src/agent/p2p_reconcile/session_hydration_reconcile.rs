@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use gents_protocol::session_hydration::{
     canonical_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
     SESSION_HYDRATION_RECEIPT_VERSION,
@@ -232,6 +232,10 @@ pub async fn run_session_hydration_reconciler(
     identity: Arc<dyn AgentIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let hydration_collection_id = node
+        .get_collection("SessionHydrationRequest")?
+        .context("SessionHydrationRequest schema is not installed")?
+        .collection_id;
     let store = GraphqlHydrationStore {
         node: node.clone(),
         enrollment,
@@ -239,9 +243,12 @@ pub async fn run_session_hydration_reconciler(
     };
     let delivery: Arc<dyn HydrationDelivery> =
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
-    let mut subscription = node.subscribe(&[EventName::Update]);
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut subscription = node.subscribe_document_changes();
+    let sweep_interval = super::intervals::sweep_interval();
+    let mut interval =
+        tokio::time::interval_at(tokio::time::Instant::now() + sweep_interval, sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut subscription_open = true;
 
     if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
         return Ok(());
@@ -254,14 +261,23 @@ pub async fn run_session_hydration_reconciler(
                     return Ok(());
                 }
             },
-            message = subscription.recv() => {
-                if message.is_none() {
+            batch = subscription.recv(), if subscription_open => {
+                let Some(batch) = batch else {
                     tracing::warn!("session-hydration reconciler update subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "session-hydration reconciler update subscription dropped messages");
+                };
+                if batch.resync_required {
+                    tracing::warn!(
+                        updates = batch.updates,
+                        "session-hydration document-change capacity exceeded; performing authoritative sweep"
+                    );
+                } else if !batch
+                    .changes
+                    .iter()
+                    .any(|change| change.collection_id == hydration_collection_id)
+                {
+                    continue;
                 }
                 if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
                     return Ok(());

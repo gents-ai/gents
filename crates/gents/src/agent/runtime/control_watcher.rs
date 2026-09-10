@@ -16,25 +16,67 @@ pub(super) const CONTROL_RECONCILE_SETTLE_RETRY: Duration = Duration::from_secs(
 const CONTROL_RECONCILE_SETTLE_WINDOW: Duration = Duration::from_secs(60);
 const CONTROL_WATCHER_IDLE_SLEEP: Duration = Duration::from_secs(60 * 60 * 24 * 365);
 
+#[derive(Clone, Copy)]
+pub(super) struct ControlWatcherTiming {
+    pub(super) debounce: Duration,
+    pub(super) settle_retry: Duration,
+    pub(super) settle_window: Duration,
+    pub(super) idle_sleep: Duration,
+}
+
+const CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
+    debounce: CONTROL_RECONCILE_DEBOUNCE,
+    settle_retry: CONTROL_RECONCILE_SETTLE_RETRY,
+    settle_window: CONTROL_RECONCILE_SETTLE_WINDOW,
+    idle_sleep: CONTROL_WATCHER_IDLE_SLEEP,
+};
+
 pub(super) async fn run_control_watcher(
     node: Arc<defra_node::EmbeddedNode>,
-    mut subscription: events::Subscription,
+    subscription: events::DocumentChangeSubscription,
+    agent_did: String,
+    resolve_context: DocumentResolveContext,
+    proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
+    runtime_status: RuntimeStatusHandle,
+    health_events_rx: mpsc::Receiver<()>,
+    shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    run_control_watcher_with_timing(
+        node,
+        subscription,
+        agent_did,
+        resolve_context,
+        proposals_tx,
+        runtime_status,
+        health_events_rx,
+        shutdown,
+        CONTROL_WATCHER_TIMING,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run_control_watcher_with_timing(
+    node: Arc<defra_node::EmbeddedNode>,
+    mut subscription: events::DocumentChangeSubscription,
     agent_did: String,
     resolve_context: DocumentResolveContext,
     proposals_tx: mpsc::Sender<ResolvedRuntimeSnapshot>,
     runtime_status: RuntimeStatusHandle,
     mut health_events_rx: mpsc::Receiver<()>,
     mut shutdown: watch::Receiver<bool>,
+    timing: ControlWatcherTiming,
 ) -> Result<()> {
     let mut document_view =
         document_view::load_document_runtime_view(node.as_ref(), &agent_did).await?;
-    let sleep = tokio::time::sleep(CONTROL_WATCHER_IDLE_SLEEP);
+    let sleep = tokio::time::sleep(timing.idle_sleep);
     tokio::pin!(sleep);
     let mut dirty = false;
     let mut pending_visibility = false;
     let mut settle_deadline = None;
     let mut last_proposed_fingerprint = None::<String>;
     let mut phase_transition_pending = false;
+    let mut resync_required = false;
     let mut collection_id_to_name = HashMap::<String, String>::new();
     let mut measured_mcp_availability =
         crate::tool_surface::measured_available_mcp_service_ids(node.as_ref(), &agent_did)
@@ -46,11 +88,12 @@ pub(super) async fn run_control_watcher(
         tokio::select! {
             _ = shutdown.changed() => return Ok(()),
             _ = &mut sleep, if dirty => {
-                if pending_visibility || settle_deadline.is_some() {
+                if resync_required || pending_visibility || settle_deadline.is_some() {
                     match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
                         Ok(reloaded) => {
                             document_view = reloaded;
                             pending_visibility = document_view.has_unresolved_behavior_references();
+                            resync_required = false;
                         }
                         Err(error) => {
                             tracing::error!(
@@ -59,13 +102,15 @@ pub(super) async fn run_control_watcher(
                                 "runtime control watcher failed to refresh document view during settle window"
                             );
                             runtime_status.publish_error(&format!("{error:#}")).await;
-                            if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
+                            if resync_required
+                                || settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline)
+                            {
                                 dirty = true;
-                                sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
+                                sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
                             } else {
                                 dirty = false;
                                 settle_deadline = None;
-                                sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_WATCHER_IDLE_SLEEP);
+                                sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
                             }
                             continue;
                         }
@@ -88,7 +133,7 @@ pub(super) async fn run_control_watcher(
                 if pending_visibility
                 {
                     dirty = true;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
                     continue;
                 }
                 let phase_announced = phase_transition_pending;
@@ -137,11 +182,11 @@ pub(super) async fn run_control_watcher(
                 }
                 if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
                     dirty = true;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_RETRY);
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
                 } else {
                     dirty = false;
                     settle_deadline = None;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_WATCHER_IDLE_SLEEP);
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
                 }
             }
             Some(()) = health_events_rx.recv() => {
@@ -154,146 +199,140 @@ pub(super) async fn run_control_watcher(
                 runtime_status
                     .set_reconcile_phase(ReconcilePhase::Debouncing)
                     .await;
-                sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE);
+                sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
             }
-            message = subscription.recv() => {
-                let Some(message) = message else {
+            batch = subscription.recv() => {
+                let Some(batch) = batch else {
                     return Ok(());
                 };
 
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
+                if batch.resync_required {
                     tracing::warn!(
                         agent_did = %agent_did,
-                        dropped = dropped,
-                        "runtime control watcher dropped events, forcing full reconcile"
+                        updates = batch.updates,
+                        "runtime control watcher document-change capacity exceeded; scheduling full reconcile"
                     );
-                    match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
-                        Ok(reloaded) => {
-                            document_view = reloaded;
-                            pending_visibility = document_view.has_unresolved_behavior_references();
+                    resync_required = true;
+                    dirty = true;
+                    phase_transition_pending = true;
+                    settle_deadline =
+                        Some(tokio::time::Instant::now() + timing.settle_window);
+                    runtime_status
+                        .set_reconcile_phase(ReconcilePhase::Debouncing)
+                        .await;
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
+                    continue;
+                }
+
+                for update in batch.changes {
+                    let collection_name = resolve_collection_name(
+                        node.as_ref(),
+                        &mut collection_id_to_name,
+                        update.collection_id.as_str(),
+                    );
+                    if collection_name.as_deref() == Some("ToolServiceHealthState") {
+                        let current = match crate::tool_surface::measured_available_mcp_service_ids(
+                            node.as_ref(),
+                            &agent_did,
+                        )
+                        .await
+                        {
+                            Ok(service_ids) => service_ids.into_iter().collect::<BTreeSet<_>>(),
+                            Err(error) => {
+                                tracing::warn!(
+                                    agent_did,
+                                    %error,
+                                    "could not measure MCP availability after health-state update"
+                                );
+                                continue;
+                            }
+                        };
+                        if current == measured_mcp_availability {
+                            continue;
+                        }
+                        measured_mcp_availability = current;
+                    }
+                    match document_view::apply_control_update(
+                        node.as_ref(),
+                        &agent_did,
+                        collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
+                        &update.doc_id,
+                        &mut document_view,
+                    )
+                    .await
+                    {
+                        Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
+                        Ok(document_view::ControlUpdateOutcome::FullReload) => {
+                            match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                                Ok(reloaded) => {
+                                    document_view = reloaded;
+                                    pending_visibility = document_view.has_unresolved_behavior_references();
+                                }
+                                Err(error) => {
+                                    tracing::error!(
+                                        agent_did = %agent_did,
+                                        error = %error,
+                                        "runtime control watcher failed to reload document view; keeping previous active generation"
+                                    );
+                                    runtime_status.publish_error(&format!("{error:#}")).await;
+                                    resync_required = true;
+                                    dirty = true;
+                                    sleep.as_mut().reset(
+                                        tokio::time::Instant::now() + timing.settle_retry,
+                                    );
+                                    break;
+                                }
+                            }
                         }
                         Err(error) => {
                             tracing::error!(
                                 agent_did = %agent_did,
+                                collection_id = %update.collection_id,
+                                doc_id = %update.doc_id,
                                 error = %error,
-                                "runtime control watcher failed to resync document view after dropped events"
+                                "runtime control update apply failed; forcing full resync"
                             );
-                            runtime_status.publish_error(&format!("{error:#}")).await;
-                            continue;
+                            match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
+                                Ok(reloaded) => {
+                                    document_view = reloaded;
+                                    pending_visibility = document_view.has_unresolved_behavior_references();
+                                }
+                                Err(resync_error) => {
+                                    tracing::error!(
+                                        agent_did = %agent_did,
+                                        error = %resync_error,
+                                        "runtime control watcher failed to resync document view after update error"
+                                    );
+                                    runtime_status
+                                        .publish_error(&format!("{resync_error:#}"))
+                                        .await;
+                                    resync_required = true;
+                                    dirty = true;
+                                    sleep.as_mut().reset(
+                                        tokio::time::Instant::now() + timing.settle_retry,
+                                    );
+                                    break;
+                                }
+                            }
                         }
                     }
+
+                    tracing::info!(
+                        agent_did = %agent_did,
+                        doc_id = %update.doc_id,
+                        collection_id = %update.collection_id,
+                        has_local_write = update.has_local_write,
+                        "runtime control update detected"
+                    );
                     dirty = true;
                     phase_transition_pending = true;
                     settle_deadline =
-                        Some(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_WINDOW);
+                        Some(tokio::time::Instant::now() + timing.settle_window);
                     runtime_status
                         .set_reconcile_phase(ReconcilePhase::Debouncing)
                         .await;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE);
-                    continue;
+                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.debounce);
                 }
-
-                let Some(update) = message.as_update() else {
-                    continue;
-                };
-                let collection_name = resolve_collection_name(
-                    node.as_ref(),
-                    &mut collection_id_to_name,
-                    update.collection_id.as_str(),
-                );
-                if collection_name.as_deref() == Some("ToolServiceHealthState") {
-                    let current = match crate::tool_surface::measured_available_mcp_service_ids(
-                        node.as_ref(),
-                        &agent_did,
-                    )
-                    .await
-                    {
-                        Ok(service_ids) => service_ids.into_iter().collect::<BTreeSet<_>>(),
-                        Err(error) => {
-                            tracing::warn!(
-                                agent_did,
-                                %error,
-                                "could not measure MCP availability after health-state update"
-                            );
-                            continue;
-                        }
-                    };
-                    if current == measured_mcp_availability {
-                        continue;
-                    }
-                    measured_mcp_availability = current;
-                }
-                match document_view::apply_control_update(
-                    node.as_ref(),
-                    &agent_did,
-                    collection_name.as_deref().unwrap_or(update.collection_id.as_str()),
-                    &update.doc_id,
-                    &mut document_view,
-                )
-                .await
-                {
-                    Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
-                    Ok(document_view::ControlUpdateOutcome::FullReload) => {
-                        match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
-                            Ok(reloaded) => {
-                                document_view = reloaded;
-                                pending_visibility = document_view.has_unresolved_behavior_references();
-                            }
-                            Err(error) => {
-                                tracing::error!(
-                                    agent_did = %agent_did,
-                                    error = %error,
-                                    "runtime control watcher failed to reload document view; keeping previous active generation"
-                                );
-                                runtime_status.publish_error(&format!("{error:#}")).await;
-                                continue;
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            agent_did = %agent_did,
-                            collection_id = %update.collection_id,
-                            doc_id = %update.doc_id,
-                            error = %error,
-                            "runtime control update apply failed; forcing full resync"
-                        );
-                        match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
-                            Ok(reloaded) => {
-                                document_view = reloaded;
-                                pending_visibility = document_view.has_unresolved_behavior_references();
-                            }
-                            Err(resync_error) => {
-                                tracing::error!(
-                                    agent_did = %agent_did,
-                                    error = %resync_error,
-                                    "runtime control watcher failed to resync document view after update error"
-                                );
-                                runtime_status
-                                    .publish_error(&format!("{resync_error:#}"))
-                                    .await;
-                                continue;
-                            }
-                        }
-                    }
-                }
-
-                tracing::info!(
-                    agent_did = %agent_did,
-                    doc_id = %update.doc_id,
-                    collection_id = %update.collection_id,
-                    is_relay = update.is_relay,
-                    "runtime control update detected"
-                );
-                dirty = true;
-                phase_transition_pending = true;
-                settle_deadline =
-                    Some(tokio::time::Instant::now() + CONTROL_RECONCILE_SETTLE_WINDOW);
-                runtime_status
-                    .set_reconcile_phase(ReconcilePhase::Debouncing)
-                    .await;
-                sleep.as_mut().reset(tokio::time::Instant::now() + CONTROL_RECONCILE_DEBOUNCE);
             }
         }
     }
