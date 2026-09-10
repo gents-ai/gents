@@ -14,6 +14,83 @@ gents pack prune mailbox
 gents pack run pipeline --http-port 19191 --keep-home
 ```
 
+## What a pack is made of
+
+A pack directory holds `manifest.json` and the assets that manifest declares.
+Nothing that is not declared travels, so the manifest is the whole description
+of the pack, and the pack's digest is computed over exactly what it declares.
+
+```json
+{
+  "manifest_version": 1,
+  "name": "shipping_tools",
+  "version": "0.1.0",
+  "description": "What this pack is for",
+  "authors": ["you"],
+  "tags": ["tools"],
+  "kind": "tools",
+  "assets": ["README.md", "tools/format_check.wasm"],
+  "tools": [
+    {
+      "name": "format_check",
+      "description": "What the model is told this does",
+      "module": "tools/format_check.wasm",
+      "source": "tools/format_check",
+      "input_schema": { "type": "object", "properties": {} },
+      "manifold": { "fs": { "ReadOnly": ["/workspace"] }, "net": "None" }
+    }
+  ]
+}
+```
+
+`kind` is `documents`, `graph`, `assets`, or `tools`. A `tools` pack installs
+no documents of its own: it exists to ship capabilities, and its tools are
+callable from any pack in the same home, so one pack can build on another's
+capabilities instead of vendoring a copy.
+
+## Tools
+
+A tool is compiled WASM that runs sandboxed on Afterburner. The same admitted
+tool is callable two ways, from one definition: as a deterministic stage in a
+graph, and as an ordinary tool a model can pick. A tool declares:
+
+- `module`, the compiled artifact inside the pack. It must also appear in
+  `assets`, so the pack's own digest covers it and nothing can be swapped
+  underneath the name it was admitted under.
+- `source`, optionally, where the module is built from. `gents pack build`
+  compiles it.
+- `input_schema`, which is what a model is shown.
+- `manifold`, what the tool asks the sandbox to allow. Absent means it asks
+  for nothing, which is right for a pure transform. An operator's ceiling
+  narrows this at admission and can never widen it. A tool may not listen on
+  a port: a pack's tools are called, never served.
+
+The call ABI is deliberately narrow: canonical JSON arguments arrive on
+standard input, one JSON value is written to standard output, and standard
+error is diagnostics.
+
+## Building and publishing
+
+```sh
+gents pack build packs/shipping_tools        # compile the tools, write one .afb
+gents pack publish shipping_tools-0.1.0.afb  # push it to the registry
+gents pack install shipping_tools            # from the registry, anywhere
+```
+
+A built pack is a single `.afb`: the same artifact every Afterburner tool is
+already published and served as. That is deliberate. It means a registry needs
+no second format to carry packs, and a pack that ships compiled tools is one
+artifact rather than an archive plus a pile of modules.
+
+The default registry is `https://packs.gents.xyz`, overridable per command and
+by `GENTS_REGISTRY`.
+
+A pack installed from a registry is the same pack as the one compiled into a
+binary: the digest is over the declared contents, never over the container, so
+neither the route a pack took nor the compression it arrived under changes
+what it is. A download is checked against the digest the registry advertised
+before it is opened.
+
 ## Installation and execution
 
 `pack install` resolves bundled assets by name, without a source checkout.
