@@ -12,8 +12,8 @@ use crate::config_client::{
 };
 use crate::graph_pipeline::{
     bind_package_plan, compile_graph, BundledProvenance, CompilerPolicy, GraphPlan,
-    PackageArtifactKind, PackagePlan, PackageRoleBinding, PlannedPackageArtifact,
-    RequiredSchemaDigest, StageCapability,
+    PackageArtifactKind, PackagePlan, PlannedPackageArtifact, RequiredSchemaDigest,
+    StageCapability,
 };
 use crate::{Collection, ToolSelectionDocument};
 
@@ -24,12 +24,8 @@ use super::{load_bundled_graph_package, BundledGraphPackage};
 // GraphRevision records retain the real installation/materialization time.
 const PACKAGE_DOCUMENT_TIMESTAMP: &str = "1970-01-01T00:00:00Z";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphPackageInstallBindings {
-    pub owner_did: String,
-    pub roles: BTreeMap<String, PackageRoleBinding>,
-}
+/// Common pack installation scope. No graph-specific inference/role overrides.
+pub type GraphPackageInstallBindings = crate::pack::PackInstallOptions;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GraphPackageInstallReceipt {

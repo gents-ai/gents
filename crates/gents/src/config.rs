@@ -68,7 +68,8 @@ pub struct AgentBehavior {
     pub skills: Vec<crate::skills::Skill>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ReasoningEffort {
     None,
     Minimal,

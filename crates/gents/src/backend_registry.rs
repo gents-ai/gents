@@ -28,21 +28,7 @@ pub struct BackendFields {
     pub backend_api_key_env_var: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct InferenceBackend {
-    pub backend_id: String,
-    pub name: String,
-    pub provider_kind: BackendProviderKind,
-    pub openai_wire_api: Option<OpenAiWireApi>,
-    pub endpoint: String,
-    pub api_key: Option<String>,
-    pub api_key_env_var: Option<String>,
-    pub max_concurrent: i64,
-    pub max_queue_depth: i64,
-    pub enabled: bool,
-    pub models: Vec<String>,
-    pub probe_status: String,
-}
+pub use crate::document_config::InferenceBackend;
 
 impl InferenceBackend {
     pub fn from_value(v: &serde_json::Value) -> Result<Self> {

@@ -9,23 +9,41 @@ use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 /// Document-layer view of a `Skill` row (decision D1). Mirrors
 /// `crates/gents-protocol/schemas/agent/skill.graphql`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct SkillDocument {
     pub skill_id: String,
     pub agent_did: String,
-    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(
         default,
-        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
     )]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tool_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub interface_json: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 const SKILL_FIELDS: &str = r#"

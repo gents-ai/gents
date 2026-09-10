@@ -21,9 +21,18 @@ pub enum PackKind {
 pub struct PackMetadata {
     pub kind: PackKind,
     pub authors: Vec<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub tags: Vec<String>,
     pub assets: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub dependencies: Vec<String>,
 }
 
@@ -35,9 +44,46 @@ pub struct PackManifest {
     pub description: String,
     #[serde(flatten)]
     pub metadata: PackMetadata,
-    // Graph-specific fields are validated by the existing graph loader.
-    #[serde(flatten)]
-    pub graph: BTreeMap<String, serde_json::Value>,
+    /// Declared asset decoded as PackConfig by the common loader. Required for
+    /// document/graph packs; absent for asset-only packs. Sidecars are relative
+    /// to this config asset. Graph topology/capabilities live in this same bundle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub schemas: Vec<String>,
+    /// Required for graph compilation; absent for packs without graph topology.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compiler_version: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub external_dependencies: Vec<PackageExternalDependency>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageExternalDependency {
+    pub service_id: String,
+    pub description: String,
+    pub repository_url: String,
+    pub install_command: String,
+}
+
+/// Installation scope shared by document and graph packs. Logical references
+/// resolve through the same canonical configuration loader. Graph installation
+/// adds topology/revision validation, not behavior/model selection overrides.
+/// Before strict decoding, fill omitted root owners from this explicit scope;
+/// reject mismatched explicit owners. Never rewrite target/caller/signer DIDs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackInstallOptions {
+    pub agent_did: String,
 }
 
 pub struct ResolvedPack {

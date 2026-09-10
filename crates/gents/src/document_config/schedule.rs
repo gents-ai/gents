@@ -191,32 +191,50 @@ pub(crate) async fn update_schedule_runtime_fields(
     Ok(())
 }
 
-/// Description of a scheduled trigger for a task.
-///
-/// Mirrors the `Schedule` GraphQL schema in
-/// `crates/gents-schemas/schemas/agent/schedule.graphql`. Includes both
-/// apply-owned fields (`schedule_id`, `task_id`, `interval_secs`, `cron`,
-/// `timezone`, `missed_run_policy`, `enabled`, `concurrency`, `created_at`,
-/// `updated_at`) and runtime-owned fields
-/// (`next_run_at`, `last_attempt_at`, `last_status`, `last_error`,
-/// `fire_count`) because `DocumentRuntimeView` is a DB-read view.
+/// Reusable schedule configuration. Task selection and concurrency live on
+/// Trigger; each referencing trigger has its own scheduling cursor.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Schedule {
+    pub agent_did: String,
     pub schedule_id: String,
-    pub task_id: Option<String>,
-    pub interval_secs: Option<i64>,
-    pub cron: Option<String>,
-    pub timezone: Option<String>,
-    pub missed_run_policy: Option<String>,
-    pub enabled: bool,
-    pub concurrency: Option<String>,
-    pub next_run_at: Option<String>,
-    pub last_attempt_at: Option<String>,
-    pub last_status: Option<String>,
-    pub last_error: Option<String>,
-    pub fire_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub cadence: ScheduleCadence,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
+}
+
+/// An interval or a timezone-qualified cron expression, never both.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScheduleCadence {
+    Interval {
+        /// Must be positive. Existing interval catch-up behavior is preserved.
+        interval_secs: i64,
+    },
+    Cron {
+        expression: String,
+        timezone: String,
+        /// Omitted means latest_only, as in the existing cron implementation.
+        missed_run_policy: Option<crate::schedule_cron::CronMissedRunPolicy>,
+    },
+}
+
+/// Runtime scheduling cursor, keyed by trigger rather than reusable schedule.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ScheduleObservation {
+    pub trigger_id: String,
+    pub next_run_at: Option<String>,
 }
 
 /// List every `Schedule` document in the node, returning `(doc_id, schedule)`

@@ -12,14 +12,26 @@ use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 
 /// Document-layer view of a `ChainKeyBinding` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct ChainKeyBindingDocument {
     pub binding_id: String,
-    pub principal_did: String,
+    pub agent_did: String,
     pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub attestation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 const BINDING_FIELDS: &str = r#"

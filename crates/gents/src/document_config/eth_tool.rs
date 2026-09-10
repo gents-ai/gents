@@ -11,21 +11,44 @@ use super::serde_helpers::{
 
 /// Document-layer view of an `EthTool` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EthToolDocument {
     pub tool_id: String,
     pub agent_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chain_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub rpc_url: Option<String>,
+    /// Per-RPC HTTP timeout; unset retains the current 30s default.
+    /// The enclosing tool-call deadline can shorten it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rpc_timeout_secs: Option<i64>,
     #[serde(default, deserialize_with = "deserialize_optional_string_vec")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub query_methods: Option<Vec<String>>,
     #[serde(default, deserialize_with = "deserialize_optional_string_vec")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub calls: Option<Vec<String>>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub key_binding_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 const TOOL_FIELDS: &str = r#"

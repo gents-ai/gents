@@ -6,17 +6,36 @@ use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use crate::graphql::escape_graphql_string;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct GraphDefinition {
-    pub(crate) graph_id: String,
-    pub(crate) owner_did: String,
-    #[serde(default)]
-    pub(crate) enabled: bool,
-    #[serde(default)]
-    pub(crate) active_revision_digest: Option<String>,
-    #[serde(default)]
-    pub(crate) generation: Option<i64>,
-    pub(crate) created_at: Option<String>,
-    pub(crate) updated_at: Option<String>,
+#[serde(deny_unknown_fields)]
+pub struct GraphDefinition {
+    pub graph_id: String,
+    pub agent_did: String,
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
+    pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
+}
+
+/// Runtime-owned graph publication state, not part of authored pack configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GraphDefinitionObservation {
+    pub graph_id: String,
+    pub agent_did: String,
+    pub active_revision_digest: Option<String>,
+    pub generation: Option<i64>,
 }
 
 pub(crate) async fn list_graph_definition_records(

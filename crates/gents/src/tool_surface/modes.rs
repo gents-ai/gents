@@ -6,7 +6,7 @@ use crate::toolset::CliToolConfig;
 
 use super::policy::{EndpointScope, ToolPolicySurface};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum FileToolMode {
     #[default]
     Off,
@@ -41,7 +41,7 @@ impl FileToolMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BashMode {
     #[default]
     Off,

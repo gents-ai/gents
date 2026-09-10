@@ -148,60 +148,71 @@ pub(crate) async fn update_event_trigger_runtime_fields(
     Ok(())
 }
 
-/// Description of an event-driven trigger for a task.
-///
-/// Mirrors the `EventTrigger` GraphQL schema in
-/// `crates/gents-schemas/schemas/agent/event_trigger.graphql`. Includes
-/// both apply-owned fields (`trigger_id`, `task_id`, `source_collection`,
-/// `event_kind`, `filter`, `enabled`, `concurrency`, `created_at`,
-/// `updated_at`) and runtime-owned fields (`last_attempt_at`,
-/// `last_fired_source_doc_id`, `last_status`, `last_error`, `fire_count`)
-/// because `DocumentRuntimeView` is a DB-read view.
-#[allow(dead_code)]
+/// Reusable event-source configuration. Trigger owns task selection, enabled
+/// state, concurrency, and delivery observations. The existing event engine owns
+/// group state independently for each typed trigger/callback consumer.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) struct EventTrigger {
-    pub(crate) trigger_id: String,
-    #[serde(default)]
-    pub(crate) task_id: Option<String>,
-    #[serde(default)]
-    pub(crate) source_collection: Option<String>,
-    #[serde(default)]
-    pub(crate) event_kind: Option<String>,
-    #[serde(default)]
-    pub(crate) filter: Option<String>,
-    #[serde(default)]
-    pub(crate) enabled: Option<bool>,
-    #[serde(default)]
-    pub(crate) concurrency: Option<String>,
-    #[serde(default)]
-    pub(crate) correlation_field: Option<String>,
-    #[serde(default)]
-    pub(crate) fire_mode: Option<String>,
-    #[serde(default)]
-    pub(crate) expected_count: Option<i64>,
-    #[serde(default)]
-    pub(crate) expected_count_field: Option<String>,
-    #[serde(default)]
-    pub(crate) group_timeout_secs: Option<i64>,
-    #[serde(default)]
-    pub(crate) group_min_count: Option<i64>,
-    #[serde(default)]
-    pub(crate) workspace_authority: Option<String>,
-    #[serde(default)]
-    pub(crate) created_at: Option<String>,
-    #[serde(default)]
-    pub(crate) updated_at: Option<String>,
-    // runtime-owned:
-    #[serde(default)]
-    pub(crate) last_attempt_at: Option<String>,
-    #[serde(default)]
-    pub(crate) last_fired_source_doc_id: Option<String>,
-    #[serde(default)]
-    pub(crate) last_status: Option<String>,
-    #[serde(default)]
-    pub(crate) last_error: Option<String>,
-    #[serde(default)]
-    pub(crate) fire_count: Option<i64>,
+#[serde(deny_unknown_fields)]
+pub struct EventSource {
+    pub agent_did: String,
+    pub event_source_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub source_collection: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absent/null means created, never all events. Explicit values use the
+    /// existing event engine vocabulary and are validated before installation.
+    pub event_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_field: Option<String>,
+    /// Absent processes each document independently. A group requires a
+    /// correlation_field; that same correlation remains available to templates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<EventGroup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace_authority: Option<crate::toolset::WorkspaceAuthority>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
+}
+
+/// Completion conditions for documents sharing an event correlation.
+/// Existing group deduplication, bounds, and durable ownership remain authoritative.
+/// Shared validation requires correlation and expected_count or timeout_secs.
+/// Counts/timeouts must be positive; min_count defaults to 1 and cannot exceed
+/// a known expected count. Source-field counts are validated on delivery too.
+/// Graph compilation additionally requires expected_count >= 2 and rejects
+/// latest_only concurrency; shared types do not widen existing graph semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EventGroup {
+    /// Fixed count or count supplied by each source document, never both.
+    /// Absence retains existing timeout-driven grouping, subject to validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_count: Option<EventGroupCount>,
+    /// Time to wait for the group, not the task execution deadline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+    /// Minimum group size accepted on timeout; unset uses the existing default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_count: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum EventGroupCount {
+    Fixed(i64),
+    SourceField { source_field: String },
 }
 
 /// List every `EventTrigger` document in the node, returning

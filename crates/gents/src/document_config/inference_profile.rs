@@ -11,32 +11,44 @@ use crate::config::{
 use crate::config_client::mint_recreate_identity_timestamp;
 use crate::graphql::escape_graphql_string;
 
+/// Complete selectable inference preset. Multiple profiles may select different
+/// models or efforts through the same backend without duplicating credentials.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct InferenceProfile {
+    pub agent_did: String,
     pub profile_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Shared connectivity, authentication, discovery, and admission capacity.
+    pub backend_id: String,
+    /// Explicit selection from the backend's advertised options, not a model
+    /// definition. Discovery refreshes must never rewrite this choice.
+    pub model_name: String,
+    /// Unset uses the provider default; an explicit unsupported effort is an error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<crate::config::ReasoningEffort>,
+    /// Model-specific context budget override. Resolution must use the selected
+    /// model's capabilities, never another model's limits from the same backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub context_window: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<i64>,
-    pub max_turns: Option<i64>,
-    pub temperature: Option<f64>,
-    /// Sampling knobs beyond temperature (#649). `None` inherits the served
-    /// model's `generation_config.json`; `Some` pins the value explicitly.
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub min_p: Option<f64>,
-    pub frequency_penalty: Option<f64>,
-    pub presence_penalty: Option<f64>,
-    pub repetition_penalty: Option<f64>,
-    pub reasoning_effort: Option<String>,
-    pub stream_batch_ms: Option<i64>,
-    pub stream_liveness_timeout_secs: Option<i64>,
-    pub deadline_duration_secs: Option<i64>,
-    pub retry_max_transport: Option<i64>,
-    pub retry_backoff_ms: Option<Vec<i64>>,
-    pub retry_max_resample: Option<i64>,
-    pub retry_allow_repair: Option<bool>,
-    pub retry_interactive_max: Option<i64>,
+    /// Unset leaves optional sampling parameters to the provider defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sampling_id: Option<String>,
+    /// Unset uses the existing owned-loop execution defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 impl InferenceProfile {

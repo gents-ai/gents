@@ -5,26 +5,92 @@ use serde::{Deserialize, Serialize};
 use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use crate::graphql::escape_graphql_string;
 
-/// Apply-owned description of a task.
+/// Reusable task definition; firing a trigger does not create a Task document.
 ///
-/// Mirrors the `Task` GraphQL schema in
-/// `crates/gents-schemas/schemas/agent/task.graphql`. All fields are
-/// apply-owned: the runtime does not mutate any `Task` document field at
-/// runtime. Optional fields use `Option<...>` and `DateTime` fields are carried
-/// as RFC3339 `String`s to match the rest of `document_config`.
+/// The trigger engine renders these templates into an AgentRequest before the
+/// owned request loop executes it. Manual invocation uses the same definition.
+/// All fields are desired configuration; execution state belongs to requests.
+/// This structural draft is not yet reflected in GraphQL or runtime readers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Task {
+    pub agent_did: String,
     pub task_id: String,
-    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub behavior_id: Option<String>,
-    pub prompt_template: Option<String>,
+    pub behavior_id: String,
+    pub prompt_template: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub goal_objective_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub goal_token_budget: Option<i64>,
+    /// Explicit host commands, in list order within each phase.
+    /// No hooks means ordinary agent execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub hooks: Vec<TaskHook>,
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub output_schema_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
+}
+
+/// A task-owned host command, using the behavior's HostTools.root (runtime cwd
+/// when absent) and inherited host environment. No input projection, prompt
+/// interpolation, callback reference, or workspace-specific argument schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TaskHook {
+    /// Unique within this task; identifies execution/recovery of this occurrence.
+    pub hook_id: String,
+    pub phase: TaskHookPhase,
+    /// Executable followed by literal arguments. Must be nonempty. PATH lookup
+    /// and relative paths use ordinary host process semantics. For shell syntax,
+    /// explicitly invoke a shell, e.g. ["sh", "-c", "./prepare.sh && ./verify.sh"].
+    pub command: Vec<String>,
+    /// Per-command timeout in seconds. Absent/null uses 120; explicit values
+    /// must be positive. Launch failure, timeout, and nonzero exit are hook errors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskHookPhase {
+    /// Before provider execution, after durable request creation.
+    /// Failure prevents the agent from starting and enters failure/cleanup phases.
+    Before,
+    /// After successful agent execution. Failure prevents successful completion.
+    AfterSuccess,
+    /// After failed agent execution or a failed before-hook; not cancellation.
+    AfterFailure,
+    /// Cleanup on success, failure, or cancellation once any before-hook or agent
+    /// step starts, including a failing first before-hook. Every finally hook is
+    /// attempted in order even if an earlier cleanup hook fails.
+    /// Other hook failures must not suppress cleanup. Cleanup failures are recorded
+    /// without erasing the primary failure/cancellation. Interrupted commands surface
+    /// through existing request recovery; arbitrary host effects are not replayed.
+    Finally,
 }
 
 /// List every `Task` document in the node, returning `(doc_id, task)` pairs.

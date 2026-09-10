@@ -31,7 +31,7 @@ pub struct IsolatedWorkspaceDoc {
     pub branch: String,
     pub creation_policy: String,
     pub adapter: String,
-    pub owner_deployment_id: String,
+    pub owner_agent_did: String,
     pub writer_principal: String,
     pub integrator_principal: String,
     #[serde(default, deserialize_with = "deserialize_null_string")]
@@ -59,7 +59,7 @@ impl IsolatedWorkspaceDoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspacePlacementDoc {
     pub workspace_id: String,
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub host_path: String,
     pub repository_placement_id: String,
     pub adapter: String,
@@ -91,7 +91,7 @@ pub struct WorkspaceBindingDoc {
     pub request_id: String,
     pub request_doc_id: String,
     pub authority: String,
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub seal_hash: Option<String>,
     pub lifecycle_state: String,
 }

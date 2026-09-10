@@ -39,13 +39,13 @@ pub struct LogicalWorkspaceIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryPlacementRef {
     pub repository_id: String,
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub host_path: PathBuf,
     pub enabled: bool,
 }
 
 pub struct HostExecutorContext<'a> {
-    pub deployment_id: String,
+    pub owner_agent_did: String,
     pub repository: RepositoryPlacementRef,
     pub ceiling: Option<&'a Path>,
     pub capabilities: BTreeSet<String>,

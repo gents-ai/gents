@@ -46,7 +46,7 @@ impl TryFrom<&str> for AgentRequestAdmissionKind {
 #[serde(rename_all = "kebab-case")]
 pub enum RuntimeInternalSourceKind {
     LocalChild,
-    CrossDeploymentChild,
+    CrossPrincipalChild,
     LocalControl,
     AutomatedTrigger,
 }
@@ -55,7 +55,7 @@ impl RuntimeInternalSourceKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::LocalChild => "local-child",
-            Self::CrossDeploymentChild => "cross-deployment-child",
+            Self::CrossPrincipalChild => "cross-principal-child",
             Self::LocalControl => "local-control",
             Self::AutomatedTrigger => "automated-trigger",
         }
@@ -68,7 +68,7 @@ impl TryFrom<&str> for RuntimeInternalSourceKind {
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             "local-child" => Ok(Self::LocalChild),
-            "cross-deployment-child" => Ok(Self::CrossDeploymentChild),
+            "cross-principal-child" => Ok(Self::CrossPrincipalChild),
             "local-control" => Ok(Self::LocalControl),
             "automated-trigger" => Ok(Self::AutomatedTrigger),
             _ => Err("unknown runtime-internal source kind"),
@@ -101,7 +101,7 @@ pub struct AgentRequestAdmissionObservation {
     pub target_policy_allows: bool,
     pub bridge_author_binding_current: bool,
     pub bridge_author_authorization_fresh: bool,
-    pub target_cross_deployment_policy_allows: bool,
+    pub target_cross_principal_policy_allows: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,11 +155,11 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
                             && observation.source_tool_call_binding_current
                             && observation.target_policy_allows
                     }
-                    RuntimeInternalSourceKind::CrossDeploymentChild => {
+                    RuntimeInternalSourceKind::CrossPrincipalChild => {
                         observation.source_tool_call_binding_current
                             && observation.bridge_author_binding_current
                             && observation.bridge_author_authorization_fresh
-                            && observation.target_cross_deployment_policy_allows
+                            && observation.target_cross_principal_policy_allows
                     }
                     RuntimeInternalSourceKind::LocalControl => {
                         observation.source_document_binding_current
@@ -193,20 +193,14 @@ pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
     pub agent_did: &'a str,
     pub requester_did: Option<&'a str>,
-    pub behavior_id: Option<&'a str>,
+    pub behavior_id: &'a str,
     pub session_id: &'a str,
     pub retry_parent_request: Option<&'a str>,
     pub retry_parent_request_doc_id: Option<&'a str>,
     pub retry_root_request: Option<&'a str>,
     pub retry_key: Option<&'a str>,
     pub content: &'a str,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub metadata: Option<&'a str>,
+    pub input: &'a crate::request_input::RequestInput,
     pub execution_origin: Option<&'a str>,
     pub caused_by_trigger_id: Option<&'a str>,
     pub caused_by_trigger_doc_id: Option<&'a str>,
@@ -224,8 +218,9 @@ pub struct AgentRequestSigningFields<'a> {
     pub caused_by_parent_tool_call_id: Option<&'a str>,
     pub caused_by_parent_tool_call_doc_id: Option<&'a str>,
     pub workspace_id: Option<&'a str>,
+    /// Principal scope copied from the verified workspace/source, not a host identity.
+    pub workspace_owner_agent_did: Option<&'a str>,
     pub workspace_authority: Option<&'a str>,
-    pub workspace_owner_deployment_id: Option<&'a str>,
     pub workspace_seal_hash: Option<&'a str>,
 }
 
@@ -368,7 +363,7 @@ impl AgentRequestAdmissionRecord {
         )
     }
 
-    pub fn runtime_cross_deployment_child(
+    pub fn runtime_cross_principal_child(
         target_did: impl Into<String>,
         source_request_id: impl Into<String>,
         bridge_author_did: impl Into<String>,
@@ -376,7 +371,7 @@ impl AgentRequestAdmissionRecord {
         Self::runtime_internal(
             target_did,
             source_request_id,
-            RuntimeInternalSourceKind::CrossDeploymentChild,
+            RuntimeInternalSourceKind::CrossPrincipalChild,
             Some(bridge_author_did.into()),
         )
     }
@@ -529,7 +524,7 @@ impl AgentRequestAdmissionRecord {
                             self.runtime_bridge_author_did.as_deref()
                         ),
                         (
-                            Some(RuntimeInternalSourceKind::CrossDeploymentChild),
+                            Some(RuntimeInternalSourceKind::CrossPrincipalChild),
                             Some(_)
                         ) | (Some(RuntimeInternalSourceKind::LocalChild), None)
                             | (Some(RuntimeInternalSourceKind::LocalControl), None)
@@ -707,21 +702,14 @@ pub struct AgentRequestCreate {
     pub request_id: String,
     pub agent_did: String,
     pub requester_did: String,
-    pub behavior_id: Option<String>,
+    pub behavior_id: String,
     pub session_id: String,
     pub retry_parent_request: Option<String>,
     pub retry_parent_request_doc_id: Option<String>,
     pub retry_root_request: Option<String>,
     pub retry_key: Option<String>,
     pub content: String,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub metadata: Option<String>,
-    pub backend_id: Option<String>,
+    pub input: crate::request_input::RequestInput,
     pub execution_origin: String,
     pub caused_by_trigger_id: Option<String>,
     pub caused_by_trigger_doc_id: Option<String>,
@@ -739,8 +727,10 @@ pub struct AgentRequestCreate {
     pub caused_by_parent_tool_call_id: Option<String>,
     pub caused_by_parent_tool_call_doc_id: Option<String>,
     pub workspace_id: Option<String>,
+    /// Signed principal scope; present exactly when workspace_id is present.
+    /// Issuance validates this against the existing workspace or authenticated source.
+    pub workspace_owner_agent_did: Option<String>,
     pub workspace_authority: Option<String>,
-    pub workspace_owner_deployment_id: Option<String>,
     pub workspace_seal_hash: Option<String>,
     pub initial_lifecycle_state: RequestLifecycleState,
     pub admission: AgentRequestAdmissionRecord,
@@ -1319,7 +1309,7 @@ mod tests {
         internal.runtime_source_request_id = None;
         assert!(internal.validate_branch_fields().is_err());
 
-        let mut cross = AgentRequestAdmissionRecord::runtime_cross_deployment_child(
+        let mut cross = AgentRequestAdmissionRecord::runtime_cross_principal_child(
             "did:key:agent",
             "source",
             "did:key:bridge",
@@ -1334,10 +1324,10 @@ mod tests {
 
         let mut local = AgentRequestAdmissionRecord::runtime_local_child("did:key:agent", "source");
         local.signature = vec![1; 64];
-        local.runtime_source_kind = Some(RuntimeInternalSourceKind::CrossDeploymentChild);
+        local.runtime_source_kind = Some(RuntimeInternalSourceKind::CrossPrincipalChild);
         assert!(
             local.validate_branch_fields().is_err(),
-            "local evidence cannot switch to cross-deployment without a bridge author"
+            "local evidence cannot switch to cross-principal without a bridge author"
         );
     }
 

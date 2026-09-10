@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, first_row, rows};
@@ -118,54 +118,10 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct CallbackBindingDoc {
-    pub binding_id: String,
-    pub source_collection: String,
-    pub event_kind: String,
-    #[serde(default)]
-    pub filter: Option<String>,
-    #[serde(default)]
-    pub source_fields: Option<String>,
-    #[serde(default)]
-    pub module_id: Option<String>,
-    #[serde(default)]
-    pub builtin_emitter: Option<String>,
-    pub principal_did: String,
-    #[serde(default)]
-    pub capability_set: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub retry_policy: Option<String>,
-    pub owner_deployment_id: String,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CallbackModuleDoc {
-    pub module_id: String,
-    #[serde(default)]
-    pub abi_version: Option<i64>,
-    #[serde(default)]
-    pub wasm_bytes: Option<String>,
-    #[serde(default)]
-    pub canonical_args: Option<String>,
-    #[serde(default)]
-    pub signer_did: Option<String>,
-    #[serde(default)]
-    pub provenance: Option<String>,
-    #[serde(default)]
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub fuel_limit: Option<i64>,
-    #[serde(default)]
-    pub memory_pages: Option<i64>,
-    #[serde(default)]
-    pub max_input_bytes: Option<i64>,
-    #[serde(default)]
-    pub max_output_bytes: Option<i64>,
-}
+// Canonical desired configuration is shared with packs and task hooks.
+pub use crate::document_config::{
+    CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
+};
 
 impl CallbackBindingDoc {
     #[allow(dead_code)]
@@ -186,13 +142,16 @@ impl CallbackBindingDoc {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct CallbackInvocationDoc {
+    /// Immutable projected planner input captured before dispatch. Events use an
+    /// object and groups an ordered array of projected objects.
+    /// Reuse the existing planner input and action journal; retries never reread
+    /// changed source rows or recompute a persisted action plan.
+    pub input: serde_json::Value,
     pub invocation_id: String,
-    pub owner_deployment_id: String,
-    pub binding_id: String,
-    pub source_collection: String,
-    pub source_doc_id: String,
-    #[serde(default)]
-    pub source_version: Option<String>,
+    /// Principal whose runtime owns execution and recovery.
+    pub owner_agent_did: String,
+    pub callback_id: String,
+    pub origin: crate::document_config::CallbackInvocationOrigin,
     pub idempotency_key: String,
     pub lifecycle_state: String,
     #[serde(default)]
@@ -213,8 +172,8 @@ pub struct CallbackInvocationDoc {
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
-    pub binding_id: String,
-    pub owner_deployment_id: String,
+    /// Principal whose runtime owns execution and recovery.
+    pub owner_agent_did: String,
     #[serde(default)]
     pub workspace_id: Option<String>,
     #[serde(default)]

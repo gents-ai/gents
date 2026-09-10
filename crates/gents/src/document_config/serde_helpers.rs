@@ -1,8 +1,20 @@
 use std::fmt;
 
 use serde::de::{DeserializeOwned, SeqAccess, Visitor};
-use serde::Deserializer;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
+
+/// Treat a missing (with `serde(default)`) or null field as its canonical default.
+/// Wrong non-null types remain errors; required identities/auth must not use this.
+pub(crate) fn deserialize_default_on_null<'de, D, T>(
+    deserializer: D,
+) -> std::result::Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 pub(super) fn default_display_name_for_did(agent_did: &str) -> String {
     agent_did
@@ -147,7 +159,10 @@ where
             rows.iter()
                 .filter_map(|row| {
                     let doc_id = row.get("_docID")?.as_str()?.to_string();
-                    let parsed = match serde_json::from_value(row.clone()) {
+                    // Storage identity is envelope metadata, not authored config.
+                    let mut payload = row.clone();
+                    payload.as_object_mut()?.remove("_docID");
+                    let parsed = match serde_json::from_value(payload) {
                         Ok(parsed) => parsed,
                         Err(error) => {
                             tracing::warn!(
@@ -164,4 +179,22 @@ where
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Installed configuration is enabled unless explicitly disabled. Missing and
+/// null agree; false remains an explicit override. Tool grants default separately.
+pub(super) fn default_enabled() -> bool {
+    true
+}
+pub(super) fn is_enabled(value: &bool) -> bool {
+    *value
+}
+pub(super) fn deserialize_enabled<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<bool, D::Error> {
+    Ok(Option::<bool>::deserialize(deserializer)?.unwrap_or(true))
+}
+
+pub(super) fn is_disabled(value: &bool) -> bool {
+    !*value
 }

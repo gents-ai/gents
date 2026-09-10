@@ -211,7 +211,7 @@ pub(crate) fn apply_reduction_decision<T, C>(
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CompactionStrategy {
     StripToolResults,
     StripThenSummarize,

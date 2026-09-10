@@ -141,7 +141,6 @@ pub struct PersonaRequestDoc {
     pub op: Option<PersonaOp>,
     pub behavior_id: Option<String>,
     pub persona_name: Option<String>,
-    pub backend_model: Option<String>,
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,

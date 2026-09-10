@@ -33,16 +33,42 @@ pub struct PortSpec {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StageCapability {
+    /// Owner of this capability and its referenced task; explicit foreign use
+    /// requires existing caller admission and ACP, never owner rewriting.
+    pub agent_did: String,
     pub capability_id: String,
     pub revision: String,
     pub task_id: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub input_ports: Vec<PortSpec>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub output_ports: Vec<PortSpec>,
     /// Empty means nobody, not everybody.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub allowed_callers: Vec<String>,
+    /// Optional graph execution ceiling; does not select a different behavior
+    /// or inference profile from the referenced task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_authority: Option<WorkspaceAuthority>,
+    /// UI/discovery metadata; explicit task/capability references define topology.
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 #[derive(
@@ -54,42 +80,12 @@ pub struct PortRef {
     pub port: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
-pub enum GroupCount {
-    Static { count: u32 },
-    SourceField { field: String },
-}
-
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryConcurrency {
-    #[default]
-    Parallel,
-    Serial,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
-pub enum DeliveryMode {
-    PerDocument,
-    PerGroup {
-        expected: GroupCount,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        timeout_secs: Option<u64>,
-    },
-}
+// Graph edges compile into the same event-group configuration used by ordinary
+// triggers. No graph-only count or delivery-policy model. Compilation enforces
+// graph cardinality/count bounds and rejects LatestOnly; it does not widen semantics.
+pub type GroupCount = crate::document_config::EventGroupCount;
+pub type DeliveryMode = Option<crate::document_config::EventGroup>;
+pub type DeliveryConcurrency = crate::document_config::ConcurrencyMode;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -104,6 +100,7 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub from: PortRef,
     pub to: PortRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: DeliveryMode,
     #[serde(default)]
     pub concurrency: DeliveryConcurrency,
@@ -155,14 +152,30 @@ pub struct GraphLimits {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GraphIntent {
+    pub agent_did: String,
     pub graph_id: String,
     pub nodes: Vec<GraphNode>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub edges: Vec<GraphEdge>,
     pub entries: Vec<EntryBinding>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub results: Vec<ResultContract>,
     pub limits: GraphLimits,
+    /// UI/discovery metadata; explicit task/capability references define topology.
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -262,31 +275,12 @@ pub struct PlannedResult {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PackageRoleBinding {
-    pub principal_did: String,
-    pub deployment_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub backend_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub profile_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model_name: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct BundledProvenance {
     pub binary_version: String,
     pub build_commit: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceAuthorityCeiling {
-    None,
-    ReadOnly,
-    ReadWrite,
-}
+pub use crate::toolset::WorkspaceAuthority;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -331,9 +325,7 @@ pub struct PackagePlan {
     pub package_digest: String,
     pub bundled_provenance: BundledProvenance,
     #[serde(default)]
-    pub roles: BTreeMap<String, PackageRoleBinding>,
-    #[serde(default)]
-    pub workspace_authority: BTreeMap<String, WorkspaceAuthorityCeiling>,
+    pub workspace_authority: BTreeMap<String, WorkspaceAuthority>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub predecessor_revision_digest: Option<String>,
     #[serde(default)]

@@ -25,7 +25,6 @@ pub struct LocalPersonaRequestRecord {
     pub behavior_id: Option<String>,
     pub clone_from: Option<String>,
     pub persona_name: Option<String>,
-    pub backend_model: Option<String>,
     pub root: Option<String>,
     pub preset: Option<String>,
     pub profile_id: Option<String>,

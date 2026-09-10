@@ -1,12 +1,20 @@
 mod behavior;
+mod callback;
 mod chain_key_binding;
+mod compaction;
+mod context;
 mod datastore_tool_surface;
 mod eth_tool;
 mod event_trigger;
 mod graph_definition;
 mod graph_run;
 mod graphql_fields;
+mod inference_backend;
+mod inference_execution;
 mod inference_profile;
+mod inference_sampling;
+mod installation;
+mod pack_config;
 mod principal;
 mod references;
 mod schedule;
@@ -16,11 +24,24 @@ mod subagent_target;
 mod surface_tool;
 mod task;
 mod tool_selection;
+mod tools;
+mod trigger;
 
 pub(crate) use chain_key_binding::load_chain_key_binding;
 pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
 pub(crate) use principal::{load_agent_principal_by_doc_id, load_agent_principal_record};
 
+pub use callback::{
+    BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
+    CallbackModule,
+};
+pub use compaction::CompactionConfig;
+pub use context::AgentContext;
+pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
+pub use installation::{
+    ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
+};
+pub use pack_config::PackConfig;
 pub use references::ConfigReferences;
 
 use behavior::create_default_behavior;
@@ -32,6 +53,13 @@ pub use behavior::{
     list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
 };
 
+pub use inference_backend::{
+    AdvertisedModel, BackendAuth, BackendModelCatalog, InferenceBackend,
+    InferenceBackendObservation,
+};
+pub use inference_execution::{InferenceExecution, InferenceRetryPolicy};
+pub use inference_sampling::InferenceSampling;
+
 pub use inference_profile::{
     default_inference_profile_id_for_behavior, list_inference_profile_records,
     load_inference_profile, upsert_inference_profile, InferenceProfile,
@@ -42,6 +70,7 @@ pub(crate) use inference_profile::{
     upsert_inference_profile_mutation,
 };
 
+pub(crate) use serde_helpers::deserialize_default_on_null;
 pub use serde_helpers::deserialize_dual_shape;
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
@@ -55,16 +84,21 @@ pub use tool_selection::default_tool_selection_id_for_behavior;
 pub use tool_selection::{
     is_reserved_builtin_tool_name, load_tool_selection, upsert_tool_selection,
     wide_open_tool_selection_document, wide_open_tool_selection_id_for_agent,
-    OutputObligationDecision, ToolSelectionDocument, WriteToolDecl, WriteToolField,
-    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    OutputObligationDecision, WriteToolDecl, WriteToolField, WriteToolFieldFill,
+    WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 #[allow(unused_imports)]
 pub(crate) use tool_selection::{
     list_all_tool_selection_records, list_tool_selection_records, load_tool_selection_by_doc_id,
     load_tool_selection_record, validate_write_tool_declarations,
 };
+pub use tools::{
+    BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools, IntegrationTools,
+    LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
+    Tools,
+};
 
-pub use subagent_target::{subagent_target_entry, SubagentTarget};
+pub use subagent_target::{subagent_target_entry, SubagentTarget, SubagentTargetDocument};
 
 pub use chain_key_binding::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
@@ -78,25 +112,28 @@ pub(crate) use datastore_tool_surface::{
 pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
 pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
 pub(crate) use eth_tool::{list_eth_tool_records, load_eth_tool, load_eth_tool_by_doc_id};
+pub use skill::SkillDocument;
 #[allow(unused_imports)]
-pub(crate) use skill::{list_skill_records, load_skill_by_doc_id, SkillDocument};
+pub(crate) use skill::{list_skill_records, load_skill_by_doc_id};
 
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
     list_event_trigger_records, load_event_trigger_by_doc_id, update_event_trigger_runtime_fields,
-    EventTrigger, EventTriggerRuntimeUpdate,
+    EventTriggerRuntimeUpdate,
 };
-pub(crate) use graph_definition::{
-    list_graph_definition_records, load_graph_definition_by_doc_id, GraphDefinition,
-};
+pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
+pub(crate) use graph_definition::{list_graph_definition_records, load_graph_definition_by_doc_id};
 pub(crate) use graph_run::{list_graph_run_pin_records, load_graph_run_pin_by_doc_id, GraphRunPin};
 #[allow(unused_imports)]
 pub(crate) use schedule::{
     list_schedule_records, load_schedule_by_doc_id, load_schedule_next_run_at,
-    update_schedule_runtime_fields, Schedule, ScheduleRuntimeUpdate,
+    update_schedule_runtime_fields, ScheduleRuntimeUpdate,
 };
+pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 #[allow(unused_imports)]
-pub(crate) use task::{list_task_records, load_task_by_doc_id, Task};
+pub(crate) use task::{list_task_records, load_task_by_doc_id};
+pub use task::{Task, TaskHook, TaskHookPhase};
+pub use trigger::{ConcurrencyMode, Trigger, TriggerObservation, TriggerSource};
 
 use anyhow::{anyhow, Result};
 use defra_node::EmbeddedNode;
@@ -211,3 +248,6 @@ pub async fn ensure_agent_principal(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod config_model_tests;

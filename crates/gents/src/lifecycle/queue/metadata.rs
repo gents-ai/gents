@@ -1,38 +1,9 @@
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct RequestQueueMetadata {
-    pub queue: QueueHints,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background_completion_wake_version: Option<u32>,
-}
+// Canonical input types replace the old JSON metadata wrapper.
+// Queue parser/writers migrate after Lean and conformance.
+pub use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestQueue};
 
 const BACKGROUND_COMPLETION_WAKE_VERSION: u32 = 1;
 const STEERING_INPUT_MESSAGE_PREFIX: &str = "steering-input:";
-
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub(crate) struct QueueHints {
-    pub source: QueueSource,
-    pub policy: QueuePolicy,
-    pub key: Option<String>,
-    pub queued_after_request_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interrupted_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum QueueSource {
-    User,
-    BackgroundCompletion,
-    Steering,
-    Goal,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum QueuePolicy {
-    Append,
-    Coalesce,
-}
 
 pub(crate) fn parse_queue_hints(metadata: Option<&str>) -> Option<QueueHints> {
     parse_queue_metadata(metadata).map(|metadata| metadata.queue)

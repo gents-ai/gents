@@ -8,14 +8,33 @@ use super::serde_helpers::{
     default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
 };
 
+/// DefraDB DID identity for the runtime principal. One active instance is an
+/// operating convention; runtime enforcement is deferred to #1435. No host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentPrincipal {
     pub agent_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub default_behavior_id: Option<String>,
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_by: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 pub async fn load_agent_principal(

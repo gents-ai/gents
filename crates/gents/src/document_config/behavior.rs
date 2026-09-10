@@ -11,31 +11,34 @@ use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 const DEFAULT_BEHAVIOR_LABEL: &str = "Default";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct AgentBehavior {
+    /// Logical configuration key used by manifests and callers across installs.
+    /// The storage document's `_docID` is loaded separately.
     pub behavior_id: String,
     pub agent_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    pub summary: Option<String>,
-    pub system_prompt: Option<String>,
-    pub request_context_template: Option<String>,
-    pub backend_id: Option<String>,
-    pub model_name: Option<String>,
-    pub tool_selection_id: Option<String>,
-    pub inference_profile_id: Option<String>,
-    pub compaction_strategy: Option<String>,
-    pub compaction_threshold: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Absent means no system prompt, skills, or tools, with default compaction.
+    pub context_id: Option<String>,
+    /// Selects the backend, model, and inference parameters as one unit.
+    pub inference_profile_id: String,
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
     #[serde(
         default,
-        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
     )]
-    pub skill_refs: Vec<String>,
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_string_vec_or_null"
-    )]
-    pub skill_excludes: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
 

@@ -158,16 +158,12 @@ impl ScheduleCadence {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConcurrencyMode {
-    Parallel,
-    Serial,
-    LatestOnly,
-}
+pub use crate::document_config::ConcurrencyMode;
 
 pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EventTriggerFireMode {
     PerDocument,
     PerGroup,

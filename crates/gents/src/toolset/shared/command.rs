@@ -35,7 +35,7 @@ const CORE_ENV_VARS: &[&str] = &[
     "DEVELOPER_DIR",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandExecutionMode {
     ReadOnly,
@@ -80,7 +80,8 @@ impl CommandExecutionMode {
 
 /// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
 /// never Unrestricted. Integrate is inspect-only (no bash writes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum WorkspaceAuthority {
     ReadOnly,
     ReadWrite,
@@ -190,7 +191,7 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandNetworkMode {
     Inherit,

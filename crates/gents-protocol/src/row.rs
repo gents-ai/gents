@@ -25,7 +25,7 @@ pub use crate::behavior_readiness::{
     ProjectedBehaviorReadinessSummary, BEHAVIOR_READINESS_FORMAT_VERSION,
 };
 
-fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+pub(crate) fn deserialize_null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de> + Default,
@@ -173,33 +173,6 @@ pub struct AgentMemoryRow {
     pub updated_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentConversationRow {
-    pub session_id: String,
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub title_source: Option<String>,
-    #[serde(default)]
-    pub preview_text: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub updated_at: Option<String>,
-    #[serde(default)]
-    pub latest_request_id: Option<String>,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentRequestRow {
     #[serde(default, rename = "_docID", skip_serializing)]
@@ -251,20 +224,11 @@ pub struct AgentRequestRow {
     pub superseded_by_request_doc_id: Option<String>,
     #[serde(default)]
     pub content: Option<String>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub top_p: Option<f64>,
-    #[serde(default)]
-    pub top_k: Option<i64>,
-    #[serde(default)]
-    pub seed: Option<i64>,
-    #[serde(default)]
-    pub max_tokens: Option<i64>,
+    /// Execution-owner budget resolved from InferenceExecution, not a caller override.
     #[serde(default)]
     pub max_total_tokens: Option<i64>,
     #[serde(default)]
-    pub metadata: Option<String>,
+    pub input: Option<crate::request_input::RequestInput>,
     #[serde(default)]
     pub lifecycle_state: Option<RequestLifecycleState>,
     #[serde(default)]
@@ -325,10 +289,11 @@ pub struct AgentRequestRow {
     pub subagent_depth: Option<i64>,
     #[serde(default)]
     pub workspace_id: Option<String>,
+    /// Signed workspace reference scope, independent of the executing principal.
+    #[serde(default)]
+    pub workspace_owner_agent_did: Option<String>,
     #[serde(default)]
     pub workspace_authority: Option<String>,
-    #[serde(default)]
-    pub workspace_owner_deployment_id: Option<String>,
     #[serde(default)]
     pub workspace_seal_hash: Option<String>,
 }
@@ -453,25 +418,15 @@ pub struct AgentMessageRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentSessionRow {
-    pub session_id: String,
-    #[serde(default)]
-    pub agent_name: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub started: Option<String>,
-    #[serde(default)]
-    pub ended: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
     pub goal_id: String,
+    /// User-managed labels; do not affect goal continuation or token accounting.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
     pub session_id: String,
     pub agent_did: String,
     #[serde(default)]
@@ -596,6 +551,9 @@ pub struct AgentToolCallRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolResultRow {
+    /// Exact spill document identity for observation/merge; not a content heuristic.
+    #[serde(default, rename = "_docID", skip_serializing)]
+    pub doc_id: Option<String>,
     #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
@@ -613,7 +571,7 @@ pub struct AgentToolResultRow {
     #[serde(default)]
     pub truncation_metadata: Option<String>,
     #[serde(default)]
-    pub conversation_doc_id: Option<String>,
+    pub tool_call_doc_id: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
     #[serde(default)]
@@ -645,96 +603,6 @@ pub struct CompactionEntryRow {
     pub compacted_tokens: Option<i64>,
     #[serde(default)]
     pub created_at: Option<String>,
-}
-
-/// One durable rendered-request fact (#840/#1059): the exact provider request
-/// body persisted before it was sent, keyed uniquely by `capture_key`.
-///
-/// Wire-shape mirror like every row here — only the identity key is required.
-/// `request_json` is the captured provider body; consumers that only need
-/// metadata should not select it (and the run timeline never does).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RenderedRequestRow {
-    pub capture_key: String,
-    #[serde(default)]
-    pub request_doc_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub capture_scope: Option<String>,
-    #[serde(default)]
-    pub turn_index: Option<i64>,
-    #[serde(default)]
-    pub attempt: Option<i64>,
-    #[serde(default)]
-    pub capture_version: Option<i64>,
-    #[serde(default)]
-    pub model_name: Option<String>,
-    #[serde(default)]
-    pub source: Option<String>,
-    #[serde(default)]
-    pub request_json: Option<String>,
-    #[serde(default)]
-    pub prompt_hash: Option<String>,
-    #[serde(default)]
-    pub tools_hash: Option<String>,
-    #[serde(default)]
-    pub provenance_json: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-}
-
-impl RenderedRequestRow {
-    /// The row's stable identity ordering. Errors when `capture_scope`,
-    /// `turn_index`, or `attempt` is missing or malformed: those are core
-    /// facts, and defaulting them to zero would silently collide the row with
-    /// a real first-turn capture.
-    pub fn order_key(
-        &self,
-    ) -> Result<
-        crate::rendered_request::CaptureOrderKey,
-        crate::rendered_request::CaptureOrderKeyError,
-    > {
-        use crate::rendered_request::{CaptureOrderKey, CaptureOrderKeyError, CaptureScope};
-
-        let scope: CaptureScope = self
-            .capture_scope
-            .as_deref()
-            .ok_or(CaptureOrderKeyError::MissingScope)?
-            .parse()
-            .map_err(CaptureOrderKeyError::Scope)?;
-        let turn_index = self
-            .turn_index
-            .ok_or(CaptureOrderKeyError::MissingTurnIndex)?;
-        let attempt = self.attempt.ok_or(CaptureOrderKeyError::MissingAttempt)?;
-        Ok(CaptureOrderKey {
-            scope,
-            turn_index,
-            attempt,
-        })
-    }
-
-    /// Read the row's provenance manifest through the versioned reader.
-    pub fn provenance(
-        &self,
-    ) -> Result<
-        crate::rendered_request::ParsedProvenance,
-        crate::rendered_request::ProvenanceParseError,
-    > {
-        crate::rendered_request::ProvenanceManifest::parse(
-            self.provenance_json
-                .as_deref()
-                .ok_or(crate::rendered_request::ProvenanceParseError::Empty)?,
-        )
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1134,71 +1002,6 @@ pub struct ToolServiceHealthStateRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn rendered_request_row_parses_a_graphql_response_row() {
-        let json = r#"{
-            "capture_key": "rendered:v1:abc",
-            "request_doc_id": "bae-doc-1",
-            "request_id": "req-1",
-            "session_id": "s-1",
-            "agent_did": "did:test:amy",
-            "requester_did": "",
-            "behavior_id": "amy-code",
-            "capture_scope": "compaction.2",
-            "turn_index": 1,
-            "attempt": 0,
-            "capture_version": 1,
-            "model_name": "test-model",
-            "source": "openai_chat_completions",
-            "request_json": "{\"model\":\"test-model\"}",
-            "prompt_hash": "aa",
-            "tools_hash": "bb",
-            "provenance_json": "{\"manifest_version\":99}",
-            "created_at": "2026-08-07T12:00:00Z"
-        }"#;
-        let row: RenderedRequestRow = serde_json::from_str(json).expect("parse");
-        assert_eq!(row.capture_key, "rendered:v1:abc");
-
-        let key = row.order_key().expect("order key");
-        assert_eq!(key.scope.kind.as_str(), "compaction");
-        assert_eq!(key.scope.seq, 2);
-        assert_eq!((key.turn_index, key.attempt), (1, 0));
-
-        // Unknown manifest versions are reported, not guessed at.
-        assert_eq!(
-            row.provenance().expect("well-formed provenance"),
-            crate::rendered_request::ParsedProvenance::Unsupported {
-                manifest_version: 99
-            }
-        );
-    }
-
-    /// A DefraDB response may omit unpopulated columns entirely; the row still
-    /// deserializes, but it cannot be ordered — and must say so rather than
-    /// defaulting into a first-turn collision.
-    #[test]
-    fn rendered_request_row_without_order_facts_deserializes_but_will_not_order() {
-        let row: RenderedRequestRow =
-            serde_json::from_str(r#"{ "capture_key": "rendered:v1:abc" }"#).expect("parse");
-        assert_eq!(
-            row.order_key(),
-            Err(crate::rendered_request::CaptureOrderKeyError::MissingScope)
-        );
-
-        let row: RenderedRequestRow = serde_json::from_str(
-            r#"{ "capture_key": "rendered:v1:abc", "capture_scope": "inference.1", "attempt": 0 }"#,
-        )
-        .expect("parse");
-        assert_eq!(
-            row.order_key(),
-            Err(crate::rendered_request::CaptureOrderKeyError::MissingTurnIndex)
-        );
-        assert!(matches!(
-            row.provenance(),
-            Err(crate::rendered_request::ProvenanceParseError::Empty)
-        ));
-    }
 
     #[test]
     fn agent_request_row_roundtrips() {

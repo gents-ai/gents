@@ -8,7 +8,8 @@ pub const DEFAULT_CRON_MISSED_RUN_POLICY: &str = "latest_only";
 
 const MAX_CRON_LOOKAHEAD_MINUTES: i64 = 366 * 24 * 60 * 5;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CronMissedRunPolicy {
     LatestOnly,
 }

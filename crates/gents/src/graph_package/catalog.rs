@@ -17,55 +17,13 @@ struct BundledToolSurface {
     entries: Vec<SurfaceToolDecl>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageRoleDeclaration {
-    pub name: String,
-    pub description: String,
-}
+pub use crate::pack::PackageExternalDependency;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageExternalDependency {
-    pub service_id: String,
-    pub description: String,
-    pub repository_url: String,
-    pub install_command: String,
-}
+/// Graph packages use the common manifest and its PackConfig asset.
+pub type GraphPackageManifest = crate::pack::PackManifest;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct GraphPackageManifest {
-    pub manifest_version: u32,
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub compiler_version: String,
-    #[serde(default)]
-    pub external_dependencies: Vec<PackageExternalDependency>,
-    pub roles: Vec<PackageRoleDeclaration>,
-    pub schemas: Vec<String>,
-    pub intent: String,
-    pub capabilities: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PackageCapabilityTemplate {
-    pub capability_id: String,
-    pub revision: String,
-    pub role: String,
-    pub behavior_asset: String,
-    pub system_prompt_asset: String,
-    pub task_asset: String,
-    pub task_prompt_asset: String,
-    pub tool_selection_asset: String,
-    #[serde(default)]
-    pub tool_surface_assets: Vec<String>,
-    pub input_ports: Vec<PortSpec>,
-    pub output_ports: Vec<PortSpec>,
-    pub workspace_authority: WorkspaceAuthorityCeiling,
-}
+/// Packs and graph compilation use the same capability/task reference type.
+pub type PackageCapabilityTemplate = crate::graph_pipeline::StageCapability;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct GraphPackageCatalogEntry {
@@ -75,7 +33,6 @@ pub struct GraphPackageCatalogEntry {
     pub package_digest: String,
     pub compiler_version: String,
     pub external_dependencies: Vec<PackageExternalDependency>,
-    pub roles: Vec<PackageRoleDeclaration>,
     pub entries: Vec<EntryBinding>,
     pub results: Vec<ResultContract>,
     pub capabilities: Vec<PackageCapabilityTemplate>,
@@ -84,8 +41,7 @@ pub struct GraphPackageCatalogEntry {
 #[derive(Clone, Debug)]
 pub struct BundledGraphPackage {
     pub manifest: GraphPackageManifest,
-    pub intent: GraphIntent,
-    pub capabilities: Vec<PackageCapabilityTemplate>,
+    pub config: crate::document_config::PackConfig,
     pub package_digest: String,
     asset_paths: Vec<String>,
 }

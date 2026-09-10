@@ -11,16 +11,31 @@ use super::surface_tool::{deserialize_optional_surface_tools, SurfaceToolDecl};
 
 /// Document-layer view of a `DatastoreToolSurface` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct DatastoreToolSurfaceDocument {
     pub surface_id: String,
     pub agent_did: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default = "super::serde_helpers::default_enabled",
+        deserialize_with = "super::serde_helpers::deserialize_enabled",
+        skip_serializing_if = "super::serde_helpers::is_enabled"
+    )]
     pub enabled: bool,
-    /// Create or query tool declarations (same dual-shape as `ToolSelection.write_tools`).
+    /// Canonical create/query tool declarations selected through Tools.datastore.
     #[serde(default, deserialize_with = "deserialize_optional_surface_tools")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub entries: Option<Vec<SurfaceToolDecl>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Optional UI/discovery labels. References, never tags, determine execution.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub tags: Vec<String>,
 }
 
 const SURFACE_FIELDS: &str = r#"
