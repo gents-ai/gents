@@ -1,3 +1,15 @@
+//! JSON-view codec between the Lean `ToolPolicy.ContractCases.SurfaceView`
+//! rows and the production `ToolPolicySurface`. This module performs **no
+//! permission decisions**: the effective surface is computed by the production
+//! owner `ToolPolicySurface::effective`; everything here only decodes emitted
+//! views into production types and re-encodes the result for comparison.
+//!
+//! The rank mappings are wire-discriminator codecs matching Lean
+//! `FileCap.rank` / `executionModeContractCode` / `networkRank`; numeric
+//! values are never an authority ordering. The view encodes only the bash
+//! execution mode: the legacy bash-tool selector is outside this projection.
+//! The emitted view comparison covers the represented permission dimensions.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use gents::tool_surface::ToolPolicySurface;
@@ -179,7 +191,8 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             ),
             deny_git_metadata_writes: false,
         },
-        meta: view.meta,
+        // Presentation is absent from the target permission contract.
+        meta: false,
         goal_tools: view.goal_tools,
         goal_create: view.goal_create,
         defra_query: view.defra_query,
@@ -190,7 +203,7 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
         spawn: view.spawn,
         steering: view.steering,
         background: view.background,
-        cross_deployment: view.cross_deployment,
+        cross_deployment: view.cross_principal,
         skills: view.skills,
         lsp: view.lsp,
         cli_tools: cli_scope_from_keys(&view.cli_scope_kind, &view.cli_keys),
@@ -212,28 +225,13 @@ fn surface_from_view(view: &View) -> ToolPolicySurface {
             &view.background_tools_keys,
         ),
         write_tools: write_scope_from_grants(&view.write_scope_kind, &view.write_grants),
-        query_tools: write_scope_from_grants(
-            if view.query_scope_kind.is_empty() {
-                "none"
-            } else {
-                &view.query_scope_kind
-            },
-            &view.query_grants,
-        ),
+        query_tools: write_scope_from_grants(&view.query_scope_kind, &view.query_grants),
         eth_query_methods: unit_scope_from_strings(
-            if view.eth_query_methods_kind.is_empty() {
-                "none"
-            } else {
-                &view.eth_query_methods_kind
-            },
+            &view.eth_query_methods_kind,
             &view.eth_query_methods_keys,
         ),
         eth_call_tools: unit_scope_from_strings(
-            if view.eth_call_tools_kind.is_empty() {
-                "none"
-            } else {
-                &view.eth_call_tools_kind
-            },
+            &view.eth_call_tools_kind,
             &view.eth_call_tools_keys,
         ),
     }
@@ -255,7 +253,6 @@ fn view_from_surface(
 
     View {
         file_rank: file_rank(surface.file),
-        meta: surface.meta,
         goal_tools: surface.goal_tools,
         goal_create: surface.goal_create,
         defra_query: surface.defra_query,
@@ -266,7 +263,9 @@ fn view_from_surface(
         spawn: surface.spawn,
         steering: surface.steering,
         background: surface.background,
-        cross_deployment: surface.cross_deployment,
+        // Production still names the field `cross_deployment`; the emitted
+        // contract (and canonical `SubagentTools`) call it `cross_principal`.
+        cross_principal: surface.cross_deployment,
         skills: surface.skills,
         lsp: surface.lsp,
         bash_mode: exec_rank(surface.bash.execution_mode),
@@ -317,7 +316,7 @@ fn view_from_surface(
     }
 }
 
-pub(super) fn rederive(behavior: &View, ceiling: &View, runtime: &View) -> View {
+pub(super) fn compose(behavior: &View, ceiling: &View, runtime: &View) -> View {
     let behavior_policy = surface_from_view(behavior);
     let ceiling_policy = surface_from_view(ceiling);
     let runtime_policy = surface_from_view(runtime);

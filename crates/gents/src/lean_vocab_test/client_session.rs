@@ -22,7 +22,6 @@ pub(crate) struct LeanClientShellCase {
     pub(crate) frontend_expected_send_status: String,
     pub(crate) frontend_expected_send_blocked_reason: Option<String>,
     pub(crate) frontend_expected_active_request_id: Option<usize>,
-    pub(crate) frontend_conversation_present: bool,
     pub(crate) desktop_selected_session_id: Option<usize>,
     pub(crate) desktop_snapshot_present: bool,
     pub(crate) desktop_preferred_request_id: Option<usize>,
@@ -50,8 +49,6 @@ pub(crate) struct LeanSessionRecoveryCase {
     pub(crate) post_new_admission: String,
     pub(crate) pre_origin: String,
     pub(crate) post_new_origin: String,
-    pub(crate) pre_backend: String,
-    pub(crate) post_new_backend: String,
     pub(crate) failed_id: usize,
     pub(crate) new_id: usize,
     pub(crate) pre_latest_id: usize,
@@ -77,5 +74,4 @@ pub(crate) struct LeanSessionRecoveryCase {
     pub(crate) old_request_retained: bool,
     pub(crate) new_request_inserted: bool,
     pub(crate) origin_preserved: bool,
-    pub(crate) backend_preserved: bool,
 }

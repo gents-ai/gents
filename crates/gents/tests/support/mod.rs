@@ -131,162 +131,6 @@ pub async fn test_db(name: &str) -> TestDb {
     }
 }
 
-/// `AgentConversation` as it exists on stores that predate the unique
-/// `session_id` index — the shape that produced #693 in the field.
-///
-/// The shipped schema declares `session_id: String @index(unique: true)`, and
-/// DefraDB enforces it on create: a duplicate cannot be minted on a fresh
-/// store. But DefraDB also cannot add an index to an *existing* collection
-/// (`add_schema` short-circuits), so a store whose `AgentConversation` was
-/// first registered without the unique index keeps duplicates forever. This SDL
-/// reproduces that store. Identical to the shipped schema except the index on
-/// `session_id` is not unique.
-pub const AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID: &str = r#"
-type AgentConversation @branchable {
-    session_id: String @index
-    agent_name: String @index
-    agent_did: String @index @immutable
-    behavior_id: String @index
-    title: String
-    title_source: String
-    preview_text: String
-    status: String @index
-    created_at: DateTime @index(direction: DESC)
-    updated_at: DateTime @index(direction: DESC)
-    latest_request_id: String @index
-    forked_from_session_id: String @index
-    fork_at_user_turn: Int
-    forked_at: DateTime
-}
-"#;
-
-pub async fn test_db_with_duplicate_tolerant_conversations(name: &str) -> TestDb {
-    let tempdir = tempfile::Builder::new()
-        .prefix(&format!("gents-{name}-"))
-        .tempdir()
-        .expect("tempdir");
-    let node_identity: Arc<dyn AgentIdentity> = Arc::new(
-        KeyIdentity::load_or_create(tempdir.path().join("node.key"), None).expect("node identity"),
-    );
-    let node_identity_did = node_identity.did().to_string();
-    let node = Arc::new(
-        EmbeddedNode::builder()
-            .data_path(tempdir.path())
-            .with_node_identity_did(&node_identity_did)
-            .build()
-            .await
-            .expect("embedded node"),
-    );
-    for schema in gents_protocol::schemas::RUNTIME_ALL
-        .iter()
-        .chain(gents_protocol::schemas::ALL.iter())
-    {
-        let fixture_schema = if *schema == gents_protocol::schemas::AGENT_CONVERSATION {
-            AGENT_CONVERSATION_NON_UNIQUE_SESSION_ID
-        } else {
-            *schema
-        };
-        node.add_schema(fixture_schema)
-            .await
-            .expect("duplicate-tolerant fixture schema");
-    }
-    TestDb {
-        node,
-        node_identity,
-        process_generation: 0,
-        node_identity_did,
-        tempdir,
-    }
-}
-
-/// Raw `create_AgentConversation`, bypassing the upsert paths that would
-/// collapse duplicates. Returns the new `_docID`.
-///
-/// Two rows sharing a `session_id` must differ in at least one other field:
-/// DefraDB derives the docID from the content, so identical rows would collapse
-/// into one document rather than duplicate.
-#[allow(clippy::too_many_arguments)]
-pub async fn create_conversation_row(
-    node: &EmbeddedNode,
-    session_id: &str,
-    title: &str,
-    preview_text: &str,
-    status: &str,
-    created_at: &str,
-    updated_at: &str,
-    latest_request_id: &str,
-) -> String {
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentConversation(input: {{
-                session_id: "{session_id}",
-                agent_name: "{agent_name}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                title: "{title}",
-                title_source: "placeholder",
-                preview_text: "{preview_text}",
-                status: "{status}",
-                created_at: "{created_at}",
-                updated_at: "{updated_at}",
-                latest_request_id: "{latest_request_id}"
-            }}) {{ _docID }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-        agent_name = escape_graphql_string(AGENT_NAME),
-        agent_did = escape_graphql_string(AGENT_DID),
-        behavior_id = escape_graphql_string(AGENT_NAME),
-        title = escape_graphql_string(title),
-        preview_text = escape_graphql_string(preview_text),
-        status = escape_graphql_string(status),
-        created_at = escape_graphql_string(created_at),
-        updated_at = escape_graphql_string(updated_at),
-        latest_request_id = escape_graphql_string(latest_request_id),
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentConversation failed: {:?}",
-        resp.errors
-    );
-    let payload = resp
-        .data
-        .as_ref()
-        .and_then(|data| {
-            data.get("create_AgentConversation")
-                .or_else(|| data.get("add_AgentConversation"))
-        })
-        .unwrap_or_else(|| panic!("create_AgentConversation payload missing: {:?}", resp.data));
-    let row = match payload {
-        serde_json::Value::Array(rows) => rows.first().cloned().unwrap_or_default(),
-        other => other.clone(),
-    };
-    row.get("_docID")
-        .and_then(|value| value.as_str())
-        .unwrap_or_else(|| panic!("created conversation _docID missing in {row:?}"))
-        .to_string()
-}
-
-pub async fn conversation_status_by_doc_id(node: &EmbeddedNode, doc_id: &str) -> String {
-    let query = format!(
-        r#"{{
-            AgentConversation(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}) {{ status }}
-        }}"#,
-        doc_id = escape_graphql_string(doc_id),
-    );
-    let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "status query failed: {:?}", resp.errors);
-    resp.data
-        .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("status"))
-        .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
 #[derive(Debug, Clone)]
 pub struct TestP2pAdmission {
     pub max_concurrent_push_tasks: usize,
@@ -671,68 +515,6 @@ pub async fn create_response(node: &EmbeddedNode, response_key: &str) -> String 
     create_response_with_status(node, response_key, "req-1", "session-1", "streaming").await
 }
 
-pub async fn upsert_conversation(
-    node: &EmbeddedNode,
-    session_id: &str,
-    request_id: &str,
-    content: &str,
-    status: &str,
-) {
-    upsert_conversation_for_agent(node, AGENT_DID, session_id, request_id, content, status).await;
-}
-
-pub async fn upsert_conversation_for_agent(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    session_id: &str,
-    request_id: &str,
-    content: &str,
-    status: &str,
-) {
-    let agent_did = escape_graphql_string(agent_did);
-    let session_id = escape_graphql_string(session_id);
-    let request_id = escape_graphql_string(request_id);
-    let content = escape_graphql_string(content);
-    let status = escape_graphql_string(status);
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                add: {{
-                    session_id: "{session_id}",
-                    agent_name: "{AGENT_NAME}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{AGENT_NAME}",
-                    title: "Test Conversation",
-                    preview_text: "{content}",
-                    status: "{status}",
-                    created_at: "{now}",
-                    updated_at: "{now}",
-                    latest_request_id: "{request_id}"
-                }},
-                update: {{
-                    agent_name: "{AGENT_NAME}",
-                    agent_did: "{agent_did}",
-                    behavior_id: "{AGENT_NAME}",
-                    title: "Test Conversation",
-                    preview_text: "{content}",
-                    status: "{status}",
-                    created_at: "{now}",
-                    updated_at: "{now}",
-                    latest_request_id: "{request_id}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "upsert conversation failed: {:?}",
-        resp.errors
-    );
-}
-
 pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {
     let doc_id = escape_graphql_string(doc_id);
     let at = escape_graphql_string(at);
@@ -829,65 +611,114 @@ pub fn build_request(
     }
 }
 
-pub async fn create_agent_session(
+/// Canonical target SDL fixture. This specifies the nested schema needed by the
+/// runtime layer; it does not implement or claim to test a storage conversion.
+pub async fn create_session_document(
     node: &EmbeddedNode,
-    session_id: &str,
-    behavior_id: &str,
-    started: &str,
+    session: &gents_protocol::session::AgentSession,
 ) {
-    let session_id = escape_graphql_string(session_id);
-    let behavior_id = escape_graphql_string(behavior_id);
-    let started = escape_graphql_string(started);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentSession(input: {{
-                session_id: "{session_id}",
-                agent_name: "{AGENT_NAME}",
-                behavior_id: "{behavior_id}",
-                started: "{started}",
-                status: "active"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
+    let input = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(session).expect("serialize canonical AgentSession"),
+    )
+    .expect("render session fixture");
+    let response = node
+        .execute(&format!(
+            "mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"
+        ))
+        .await;
     assert!(
-        !resp.has_errors(),
-        "create_AgentSession failed: {:?}",
-        resp.errors
+        !response.has_errors(),
+        "create canonical session: {:?}",
+        response.errors
     );
 }
 
-pub async fn create_agent_conversation(
+/// Seed an observation from a real authoritative request row; this does not run
+/// a transition or stand in for the runtime observation owner.
+pub async fn seed_session_observation_from_request(
+    node: &EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    preview: &str,
+) {
+    let session = escape_graphql_string(session_id);
+    let request = escape_graphql_string(request_id);
+    let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session}" }}, request_id: {{ _eq: "{request}" }} }}, limit: 2) {{ _docID request_id lifecycle_state created_at }} }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|v| v.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("request rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "fixture needs an unambiguous physical request"
+    );
+    let row = &rows[0];
+    let observation = gents_protocol::session::SessionObservation {
+        last_activity_at: row["created_at"]
+            .as_str()
+            .expect("creation time")
+            .to_owned(),
+        preview: Some(preview.to_owned()),
+        latest_request: Some(gents_protocol::session::SessionRequestObservation {
+            request_doc_id: row["_docID"].as_str().expect("physical request").to_owned(),
+            request_id: request_id.to_owned(),
+            lifecycle_state: serde_json::from_value(row["lifecycle_state"].clone())
+                .expect("canonical lifecycle"),
+        }),
+    };
+    seed_session_observation(node, session_id, &observation).await;
+}
+
+pub async fn seed_session_observation(
+    node: &EmbeddedNode,
+    session_id: &str,
+    observation: &gents_protocol::session::SessionObservation,
+) {
+    let input = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::json!({"observation": observation}),
+    )
+    .expect("render session observation fixture");
+    let session_id = escape_graphql_string(session_id);
+    let response = node.execute(&format!(
+        "mutation {{ update_AgentSession(filter: {{session_id: {{_eq: \"{session_id}\"}}}}, input: {input}) {{_docID}} }}"
+    )).await;
+    assert!(
+        !response.has_errors(),
+        "seed session observation: {:?}",
+        response.errors
+    );
+}
+
+pub fn session_document(
+    session_id: &str,
+    behavior_id: &str,
+    created_at: &str,
+) -> gents_protocol::session::AgentSession {
+    gents_protocol::session::AgentSession {
+        session_id: session_id.into(),
+        agent_did: AGENT_DID.into(),
+        requester_did: None,
+        behavior_id: behavior_id.into(),
+        created_at: created_at.into(),
+        closed_at: None,
+        title: None,
+        tags: vec![],
+        provenance: None,
+        observation: None,
+    }
+}
+
+pub async fn create_agent_session(
     node: &EmbeddedNode,
     session_id: &str,
     behavior_id: &str,
     created_at: &str,
 ) {
-    let session_id_escaped = escape_graphql_string(session_id);
-    let behavior_id_escaped = escape_graphql_string(behavior_id);
-    let created_at_escaped = escape_graphql_string(created_at);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentConversation(input: {{
-                session_id: "{session_id_escaped}",
-                agent_name: "{AGENT_NAME}",
-                agent_did: "{AGENT_DID}",
-                behavior_id: "{behavior_id_escaped}",
-                title: "test conversation",
-                preview_text: "",
-                status: "active",
-                created_at: "{created_at_escaped}",
-                updated_at: "{created_at_escaped}",
-                latest_request_id: ""
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentConversation failed: {:?}",
-        resp.errors
-    );
+    create_session_document(node, &session_document(session_id, behavior_id, created_at)).await;
 }
 
 pub async fn create_agent_message(
@@ -908,6 +739,8 @@ pub async fn create_agent_message(
             create_AgentMessage(input: {{
                 message_key: "{message_key}",
                 session_id: "{session_id_escaped}",
+                agent_did: "{AGENT_DID}",
+                requester_did: null,
                 sequence: {sequence},
                 role: "{role_escaped}",
                 content: "{content_escaped}",
@@ -935,7 +768,7 @@ pub async fn create_agent_tool_call(
     status: &str,
     started_at: &str,
     completed_at: &str,
-) {
+) -> String {
     let session_id_escaped = escape_graphql_string(session_id);
     let tool_call_id_escaped = escape_graphql_string(tool_call_id);
     let tool_name_escaped = escape_graphql_string(tool_name);
@@ -950,6 +783,8 @@ pub async fn create_agent_tool_call(
             create_AgentToolCall(input: {{
                 tool_call_key: "{tool_call_key}",
                 session_id: "{session_id_escaped}",
+                agent_did: "{AGENT_DID}",
+                requester_did: null,
                 message_sequence: {message_sequence},
                 tool_name: "{tool_name_escaped}",
                 tool_call_id: "{tool_call_id_escaped}",
@@ -967,17 +802,25 @@ pub async fn create_agent_tool_call(
         "create_AgentToolCall failed: {:?}",
         resp.errors
     );
+    gents::graphql::single_mutation_document(&resp, "create_AgentToolCall")
+        .expect("mutation envelope")
+        .expect("created call")["_docID"]
+        .as_str()
+        .expect("physical call ID")
+        .to_owned()
 }
 
 pub async fn create_agent_tool_result(
     node: &EmbeddedNode,
     session_id: &str,
+    tool_call_doc_id: &str,
     tool_name: &str,
     tool_input: &str,
     output_text: &str,
     created_at: &str,
 ) {
     let session_id_escaped = escape_graphql_string(session_id);
+    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let tool_name_escaped = escape_graphql_string(tool_name);
     let tool_input_escaped = escape_graphql_string(tool_input);
     let output_text_escaped = escape_graphql_string(output_text);
@@ -992,7 +835,7 @@ pub async fn create_agent_tool_result(
                 output_text: "{output_text_escaped}",
                 truncated: false,
                 truncation_metadata: "",
-                conversation_doc_id: "",
+                tool_call_doc_id: "{tool_call_doc_id}",
                 created_at: "{created_at_escaped}"
             }}) {{ _docID }}
         }}"#
@@ -1011,10 +854,9 @@ pub async fn create_compaction_entry(
     sequence: u32,
     summary: &str,
     messages_compacted: u32,
+    compacted_through_sequence: u32,
     created_at: &str,
 ) {
-    let request_id = escape_graphql_string(&format!("{session_id}:request:{sequence}"));
-    let request_doc_id = escape_graphql_string(&format!("request-doc:{session_id}:{sequence}"));
     let session_id_escaped = escape_graphql_string(session_id);
     let summary_escaped = escape_graphql_string(summary);
     let created_at_escaped = escape_graphql_string(created_at);
@@ -1024,13 +866,14 @@ pub async fn create_compaction_entry(
             create_CompactionEntry(input: {{
                 compaction_key: "{compaction_key}",
                 session_id: "{session_id_escaped}",
-                request_id: "{request_id}",
-                request_doc_id: "{request_doc_id}",
+                agent_did: "{AGENT_DID}",
+                requester_did: null,
                 sequence: {sequence},
                 summary: "{summary_escaped}",
                 files_read: "[]",
                 files_modified: "[]",
                 messages_compacted: {messages_compacted},
+                compacted_through_sequence: {compacted_through_sequence},
                 original_tokens: 100,
                 compacted_tokens: 50,
                 created_at: "{created_at_escaped}"
@@ -1046,32 +889,34 @@ pub async fn create_compaction_entry(
 }
 
 pub async fn create_agent_behavior(node: &EmbeddedNode, behavior_id: &str, agent_did: &str) {
-    let behavior_id_escaped = escape_graphql_string(behavior_id);
-    let agent_did_escaped = escape_graphql_string(agent_did);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentBehavior(input: {{
-                behavior_id: "{behavior_id_escaped}",
-                agent_did: "{agent_did_escaped}",
-                display_name: "test behavior",
-                system_prompt: "",
-                backend_id: "{BACKEND_ID}",
-                model_name: "test-model",
-                tool_selection_id: "",
-                inference_profile_id: "",
-                compaction_strategy: "StripThenSummarize",
-                compaction_threshold: 0.75,
-                enabled: true,
-                created_at: "2026-04-21T00:00:00Z"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentBehavior failed: {:?}",
-        resp.errors
-    );
+    // No context means literal-empty instructions/tools and default compaction.
+    // Provider/model selection has one owner: the referenced inference profile.
+    let profile_id = format!("{behavior_id}-inference");
+    let profile: gents::document_config::InferenceProfile = serde_json::from_value(
+        serde_json::json!({"agent_did": agent_did, "profile_id": profile_id,
+            "backend_id": BACKEND_ID, "model_name": "test-model"}),
+    )
+    .expect("canonical inference fixture");
+    let behavior: gents::document_config::AgentBehavior = serde_json::from_value(
+        serde_json::json!({"agent_did": agent_did, "behavior_id": behavior_id,
+            "display_name": "test behavior", "inference_profile_id": profile_id,
+            "created_at": "2026-04-21T00:00:00Z"}),
+    )
+    .expect("canonical behavior fixture");
+    for (collection, document) in [
+        ("InferenceProfile", serde_json::to_value(profile).unwrap()),
+        ("AgentBehavior", serde_json::to_value(behavior).unwrap()),
+    ] {
+        let input = gents_protocol::graphql::graphql_input_literal(&document)
+            .expect("render canonical config fixture");
+        let mutation = format!("mutation {{ create_{collection}(input: {input}) {{ _docID }} }}");
+        let response = node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "create_{collection}: {:?}",
+            response.errors
+        );
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

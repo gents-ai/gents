@@ -6,7 +6,6 @@ import { fileURLToPath } from "node:url";
 
 import type {
   BehaviorReadinessDecision,
-  ConversationSummary,
   DeploymentView,
   DesktopSessionSnapshot,
 } from "@source-inc/gents-desktop-client";
@@ -97,10 +96,6 @@ type LeanClientShellCase = {
   frontend_session_latest_request_id: number | null;
   frontend_session_turn_state: TurnState | null;
   frontend_session_pending_request_id: number | null;
-  frontend_conversation_present: boolean;
-  frontend_conversation_session_id: number | null;
-  frontend_conversation_latest_request_id: number | null;
-  frontend_conversation_turn_state: TurnState | null;
   frontend_local_workflow_kind: string;
   frontend_local_workflow_session: number | null;
   frontend_local_workflow_request: number | null;
@@ -128,25 +123,6 @@ type LeanContractSnapshot = {
 };
 
 let leanContractSnapshot: LeanContractSnapshot | null = null;
-
-function conversation(
-  overrides: Partial<ConversationSummary> = {},
-): ConversationSummary {
-  return {
-    sessionId: "session-1",
-    title: "conversation",
-    previewText: "preview",
-    status: "active",
-    behaviorId: "default",
-    latestRequestId: "req-1",
-    createdAt: "2026-04-21T00:00:00Z",
-    updatedAt: "2026-04-21T00:00:00Z",
-    turnState: "completed",
-    messageCount: 1,
-    toolCallCount: 0,
-    ...overrides,
-  };
-}
 
 function session(
   overrides: Partial<DesktopSessionSnapshot> = {},
@@ -307,21 +283,6 @@ function sessionFromContract(contractCase: LeanClientShellCase) {
   });
 }
 
-function conversationFromContract(contractCase: LeanClientShellCase) {
-  if (!contractCase.frontend_conversation_present) {
-    return null;
-  }
-  return conversation({
-    sessionId:
-      sessionId(contractCase.frontend_conversation_session_id) ??
-      "session-missing",
-    latestRequestId: requestId(
-      contractCase.frontend_conversation_latest_request_id,
-    ),
-    turnState: contractCase.frontend_conversation_turn_state,
-  });
-}
-
 function localWorkflowFromContract(
   contractCase: LeanClientShellCase,
 ): ChatWorkflowState {
@@ -350,11 +311,11 @@ function localWorkflowFromContract(
           "req-missing",
       };
     case "blocked":
-      return {
-        kind: "blocked",
-        reason:
-          contractCase.frontend_expected_workflow_reason ?? "clientOffline",
-      };
+      // The contract has no blocked-workflow input reason; expected output
+      // cannot supply it. Reject unsupported cases instead of seeding answers.
+      throw new Error(
+        `Lean case ${contractCase.name} needs a blocked-workflow input reason`,
+      );
     default:
       throw new Error(
         `unsupported Lean frontend workflow ${contractCase.frontend_local_workflow_kind}`,
@@ -433,6 +394,7 @@ describe("projectChatShell", () => {
   });
 
   it("keeps route admission separate from runtime readiness", () => {
+    const operationalState = operationalStateFor(readyBehaviorReadiness, false);
     const projection = projectChatShellWithReadiness({
       clientAvailable: true,
       selectedAgentDid: "did:key:agent",
@@ -442,7 +404,7 @@ describe("projectChatShell", () => {
       session: null,
       selectedConversation: null,
       localWorkflow: { kind: "ready" },
-      operationalState: operationalStateFor(readyBehaviorReadiness, false),
+      operationalState,
     });
 
     expect(projection.sendStatus).toEqual({
@@ -456,7 +418,7 @@ describe("projectChatShell", () => {
     "matches generated Lean ClientShell projection contracts",
     async () => {
       const contractCases = await loadLeanClientShellCases();
-      expect(contractCases).toHaveLength(17);
+      expect(contractCases).toHaveLength(16);
 
       for (const contractCase of contractCases) {
         const projection = projectChatShell({
@@ -467,14 +429,20 @@ describe("projectChatShell", () => {
           ),
           draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
           sending: contractCase.frontend_sending,
-          selectedConversation: conversationFromContract(contractCase),
+          selectedConversation: null,
           session: sessionFromContract(contractCase),
           localWorkflow: localWorkflowFromContract(contractCase),
         });
 
-        expect(compactWorkflow(projection.workflow)).toEqual(
+        expect(compactWorkflow(projection.workflow), contractCase.name).toEqual(
           expectedWorkflowFromContract(contractCase),
         );
+        // The compacted shape omits the principal stamped by the projection.
+        if (projection.workflow.kind === "turnInProgress") {
+          expect(projection.workflow.agentDid).toBe(
+            agentDid(contractCase.frontend_selected_agent_did),
+          );
+        }
         expect(projection.activeRequestId).toBe(
           requestId(contractCase.frontend_expected_active_request_id),
         );
@@ -504,7 +472,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ turnState: "streaming" }),
+      selectedConversation: null,
       session: session({ turnState: "streaming", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -530,7 +498,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: conversation({ turnState: "waitingForClaim" }),
+      selectedConversation: null,
       session: session({
         turnState: "waitingForClaim",
         latestRequestId: "req-1",
@@ -563,10 +531,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({
-        latestRequestId: "req-old",
-        turnState: "completed",
-      }),
+      selectedConversation: null,
       session: session({
         latestRequestId: "req-new",
         turnState: "streaming",
@@ -604,10 +569,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: conversation({
-        latestRequestId: "req-wake",
-        turnState: "streaming",
-      }),
+      selectedConversation: null,
       session: session({
         latestRequestId: "req-user",
         turnState: "completed",
@@ -628,10 +590,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: conversation({
-        latestRequestId: "req-wake",
-        turnState: "streaming",
-      }),
+      selectedConversation: null,
       session: session({
         latestRequestId: "req-wake",
         turnState: "streaming",
@@ -656,10 +615,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({
-        latestRequestId: "req-old",
-        turnState: "completed",
-      }),
+      selectedConversation: null,
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
       localWorkflow: {
         kind: "awaitingObservation",
@@ -696,11 +652,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-2",
       draft: "new session follow up",
       sending: false,
-      selectedConversation: conversation({
-        sessionId: "session-2",
-        latestRequestId: "req-2",
-        turnState: "completed",
-      }),
+      selectedConversation: null,
       session: session({
         sessionId: "session-2",
         latestRequestId: "req-2",
@@ -727,11 +679,8 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({
-        latestRequestId: "req-missing",
-        turnState: undefined,
-      }),
-      session: session({ latestRequestId: undefined, turnState: undefined }),
+      selectedConversation: null,
+      session: session({ latestRequestId: "req-missing", turnState: undefined }),
       localWorkflow: { kind: "ready" },
     });
 
@@ -754,7 +703,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ turnState: "completed" }),
+      selectedConversation: null,
       session: session({ turnState: "completed", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -770,7 +719,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: conversation({ turnState: "interrupted" }),
+      selectedConversation: null,
       session: session({ turnState: "interrupted", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -779,7 +728,7 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({ kind: "ready" });
   });
 
-  test("allows follow up when conversation summary is missing but session snapshot is terminal", () => {
+  test("allows follow up with an untitled terminal session", () => {
     const projection = projectChatShell({
       clientAvailable: true,
       selectedAgentDid: "did:test:amy",

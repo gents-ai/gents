@@ -4076,6 +4076,7 @@ name = "gents-lean-contract"
 version = "0.16.4"
 dependencies = [
  "anyhow",
+ "gents-protocol",
  "serde",
  "serde_json",
 ]

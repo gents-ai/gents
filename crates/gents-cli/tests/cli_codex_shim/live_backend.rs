@@ -295,18 +295,11 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
                     session_id
                     agent_did
                     behavior_id
-                    status
-                    started
-                }}
-                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
-                    session_id
-                    agent_did
-                    behavior_id
+                    closed_at
+                    created_at
                     title
-                    title_source
                 }}
             }}"#,
-            escape_graphql_string(&thread_id),
             escape_graphql_string(&thread_id),
         ),
     )
@@ -325,36 +318,20 @@ async fn codex_shim_live_thread_projection_survives_real_backend_turn() -> Resul
         session.get("behavior_id").and_then(Value::as_str),
         Some(expected_behavior_id.as_str())
     );
-    assert_eq!(
-        session.get("status").and_then(Value::as_str),
-        Some("active")
-    );
+    assert!(session.get("closed_at").is_none_or(Value::is_null));
     assert!(
         session
-            .get("started")
+            .get("created_at")
             .and_then(Value::as_str)
             .is_some_and(|value| !value.trim().is_empty()),
-        "AgentSession.started should be populated: {session}"
-    );
-    let conversation = first_graphql_row(&durable_response, "AgentConversation")?;
-    assert_eq!(
-        conversation.get("session_id").and_then(Value::as_str),
-        Some(thread_id.as_str())
+        "AgentSession.created_at should be populated: {session}"
     );
     assert_eq!(
-        conversation.get("agent_did").and_then(Value::as_str),
-        Some(smoke.agent_did.as_str())
-    );
-    assert_eq!(
-        conversation.get("behavior_id").and_then(Value::as_str),
-        Some(expected_behavior_id.as_str())
-    );
-    assert_eq!(
-        conversation.get("title").and_then(Value::as_str),
+        session.pointer("/title/text").and_then(Value::as_str),
         Some(thread_name.as_str())
     );
     assert_eq!(
-        conversation.get("title_source").and_then(Value::as_str),
+        session.pointer("/title/source").and_then(Value::as_str),
         Some("user")
     );
 

@@ -1,5 +1,11 @@
+//! Deserialization types for the Lean tool-policy contract rows
+//! (`Proofs/ToolPolicy.ContractCases`). Field names and types mirror the
+//! emitted JSON exactly and decode strictly: contract drift must fail loudly
+//! here instead of being masked by serde defaults.
+
 use serde::Deserialize;
 
+/// One `(tool, collection) → fields` write/query grant in the emitted view.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicyWriteGrant {
     pub(crate) tool: String,
@@ -7,10 +13,17 @@ pub(crate) struct LeanToolPolicyWriteGrant {
     pub(crate) fields: Vec<String>,
 }
 
+/// Lean `ToolPolicy.ContractCases.SurfaceView`: the JSON projection of one
+/// resolved surface under fixed probes and known key universes.
+///
+/// `cross_principal` is the Lean and canonical-config name
+/// (`SubagentTools.allow_cross_principal`). Production `ToolPolicySurface`
+/// still carries the field as `cross_deployment` until the runtime rename
+/// lands, so the conformance codec maps between the two names explicitly
+/// instead of hiding the difference behind a serde alias.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) file_rank: u8,
-    pub(crate) meta: bool,
     pub(crate) goal_tools: bool,
     pub(crate) goal_create: bool,
     pub(crate) defra_query: bool,
@@ -21,9 +34,8 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) spawn: bool,
     pub(crate) steering: bool,
     pub(crate) background: bool,
-    pub(crate) cross_deployment: bool,
+    pub(crate) cross_principal: bool,
     pub(crate) skills: bool,
-    #[serde(default)]
     pub(crate) lsp: bool,
     pub(crate) bash_mode: u8,
     pub(crate) bash_net: u8,
@@ -52,23 +64,14 @@ pub(crate) struct LeanToolPolicySurfaceView {
     pub(crate) write_scope_kind: String,
     pub(crate) write_grants: Vec<LeanToolPolicyWriteGrant>,
     pub(crate) write_fields: Vec<String>,
-    #[serde(default)]
     pub(crate) query_probe_tool: String,
-    #[serde(default)]
     pub(crate) query_probe_collection: String,
-    #[serde(default)]
     pub(crate) query_scope_kind: String,
-    #[serde(default)]
     pub(crate) query_grants: Vec<LeanToolPolicyWriteGrant>,
-    #[serde(default)]
     pub(crate) query_fields: Vec<String>,
-    #[serde(default)]
     pub(crate) eth_query_methods_kind: String,
-    #[serde(default)]
     pub(crate) eth_query_methods_keys: Vec<String>,
-    #[serde(default)]
     pub(crate) eth_call_tools_kind: String,
-    #[serde(default)]
     pub(crate) eth_call_tools_keys: Vec<String>,
 }
 
@@ -84,7 +87,6 @@ pub(crate) struct LeanToolPolicyCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanGoalCapabilityResolutionCase {
     pub(crate) name: String,
-    pub(crate) meta: bool,
     pub(crate) explicit_goal_tools: Option<bool>,
     pub(crate) explicit_goal_create: Option<bool>,
     pub(crate) expected_goal_tools: bool,

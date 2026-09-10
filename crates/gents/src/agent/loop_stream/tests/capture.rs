@@ -46,72 +46,25 @@ async fn rendered_request_sink_runs_before_provider_stream() {
     );
 }
 
-/// The durable `RenderedRequest` table, as `Proofs.RenderedCapture` models it:
-/// a partial map from the five-component capture key to the opaque canonical
-/// request stored under it.
-type CaptureKey = (u64, u64, u64, usize, u32);
-
-/// Mirror the capture contract: write a missing key, accept an identical
-/// binding, and reject a conflicting canonical request.
-fn mirror_capture(
-    store: &mut std::collections::HashMap<CaptureKey, u64>,
-    key: CaptureKey,
-    request: u64,
-) -> &'static str {
-    match store.get(&key).copied() {
-        None => {
-            store.insert(key, request);
-            "fresh"
-        }
-        Some(stored) if stored == request => "idempotent",
-        Some(_) => "rejected",
-    }
-}
-
-/// Persist-before-send, driven end to end through the real owned loop.
-///
-/// The Lean model (`Proofs/RenderedCapture.lean`) proves that `sent` is
-/// unreachable from `assembled` without an intervening successful capture of
-/// the same `(key, canonical request)`, and that a rejected capture makes
-/// `sent` unreachable permanently. This test is the fence that keeps
-/// `run_loop_stream` honest about it: for every generated row, a sink that
-/// answers exactly as `RenderedCapture.capture` does must let the provider
-/// observe exactly `provider_requests_observed` requests — one when the fact is
-/// durable, zero when it is not.
-///
-/// `on_rendered_request` must complete immediately before `model.stream`;
-/// capture rejection therefore permits no provider request.
+/// The loop must honor a scripted capture outcome before sending to the provider.
+/// Durable capture semantics are exercised separately against DefraRenderedRequestSink.
 #[tokio::test(start_paused = true)]
 async fn generated_rendered_capture_cases_fence_persist_before_send() {
     let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
     assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
 
     for case in cases {
-        let key: CaptureKey = (
-            case.agent_did,
-            case.session_id,
-            case.request_id,
-            case.turn_index,
-            case.attempt,
-        );
-        let mut seeded = std::collections::HashMap::new();
-        if let Some(prior) = case.prior_binding {
-            seeded.insert(key, prior);
-        }
-        let store = Arc::new(Mutex::new(seeded));
-        let outcomes = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+        let outcomes = Arc::new(Mutex::new(Vec::<String>::new()));
 
-        let store_for_sink = store.clone();
         let outcomes_for_sink = outcomes.clone();
-        let request_value = case.request;
+        let expected_outcome = case.capture_outcome.clone();
         let mut loop_config = config(0);
         loop_config.on_rendered_request =
             Some(Arc::new(move |_turn_index, _attempt, _request, _trace| {
-                let store = store_for_sink.clone();
+                let outcome = expected_outcome.clone();
                 let outcomes = outcomes_for_sink.clone();
                 Box::pin(async move {
-                    let outcome = mirror_capture(&mut *store.lock().await, key, request_value);
-                    outcomes.lock().await.push(outcome);
+                    outcomes.lock().await.push(outcome.clone());
                     if outcome == "rejected" {
                         Err(anyhow::anyhow!(
                             "capture key already names a different canonical request"
@@ -139,13 +92,7 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         assert_eq!(
             outcomes.lock().await.as_slice(),
             &[case.capture_outcome.as_str()],
-            "{}: the sink decision drifted from RenderedCapture.capture",
-            case.name
-        );
-        assert_eq!(
-            store.lock().await.get(&key).copied(),
-            case.durable_after,
-            "{}: the durable binding drifted from the Lean model",
+            "{}: the loop must invoke the configured capture sink",
             case.name
         );
         assert_eq!(
@@ -158,7 +105,6 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
         );
 
         if case.send_permitted {
-            assert_eq!(case.final_stage, "sent");
             assert!(
                 collected.error.is_none(),
                 "{}: a durable capture must not fail the turn: {:?}",
@@ -166,12 +112,6 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
                 collected.error
             );
         } else {
-            assert_eq!(case.final_stage, "assembled");
-            assert!(
-                !case.capture_durable,
-                "{}: a row may not refuse the send while claiming durability",
-                case.name
-            );
             let error = collected
                 .error
                 .as_deref()
@@ -221,19 +161,18 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let captured_requests: Arc<Mutex<Vec<CompletionRequest>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_requests_for_sink = captured_requests.clone();
     let mut loop_config = config(4);
-    loop_config.on_rendered_request =
-        Some(Arc::new(move |turn_index, attempt, request, trace| {
-            let captures = captures_for_sink.clone();
-            let captured_requests = captured_requests_for_sink.clone();
-            Box::pin(async move {
-                captured_requests.lock().await.push(request);
-                captures
-                    .lock()
-                    .await
-                    .push((turn_index, attempt, trace.build_path, trace));
-                Ok(())
-            })
-        }));
+    loop_config.on_rendered_request = Some(Arc::new(move |turn_index, attempt, request, trace| {
+        let captures = captures_for_sink.clone();
+        let captured_requests = captured_requests_for_sink.clone();
+        Box::pin(async move {
+            captured_requests.lock().await.push(request);
+            captures
+                .lock()
+                .await
+                .push((turn_index, attempt, trace.build_path, trace));
+            Ok(())
+        })
+    }));
 
     let stream = run_loop_stream(
         model.clone(),
@@ -608,3 +547,138 @@ async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() 
     assert!(error.contains("missing its capturing transport"), "{error}");
     assert_eq!(collected.final_text, None);
 }
+
+// Exercise fresh, idempotent, and conflicting captures at the durable sink.
+#[tokio::test]
+async fn generated_rendered_capture_cases_hold_against_the_real_defra_sink() {
+    use crate::graphql::escape_graphql_string;
+    use crate::rendered_request::capture_key as derive_capture_key;
+    use crate::rendered_request::{
+        DefraRenderedRequestSink, ProvenanceManifest, RenderedRequestSource, CAPTURE_VERSION,
+    };
+
+    let cases = crate::lean_vocab_test::lean_rendered_capture_cases();
+    assert!(!cases.is_empty(), "Lean emitted no rendered-capture cases");
+
+    async fn rendered_rows(
+        node: &Arc<defra_node::EmbeddedNode>,
+        capture_key: &str,
+    ) -> Vec<serde_json::Value> {
+        let query = format!(
+            r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}) {{ capture_key request_json }} }}"#,
+            escape_graphql_string(capture_key),
+        );
+        let response = node.execute(&query).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response.data.unwrap()["RenderedRequest"]
+            .as_array()
+            .cloned()
+            .expect("RenderedRequest row array")
+    }
+
+    for case in cases {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let sink = DefraRenderedRequestSink::new(node.clone());
+
+        // The model's canonical request is opaque; equal values mean equal
+        // canonical JSON. One witness value per modeled request keeps that
+        // equality exact, including the case where a delivery must NOT be
+        // idempotent (witness 100 vs 101 in the generated rows).
+        let rendered_for_witness =
+            |witness: u64| -> crate::rendered_request::RenderedCompletionRequest {
+                let agent_did = format!("did:key:z6Mk-sink-{}", case.agent_did);
+                let session_id = format!("session-{}", case.session_id);
+                let request_doc_id = format!("bae-request-doc-{}", case.request_id);
+                let assembly_trace =
+                    crate::rendered_request::AssemblyTrace::from_effective_messages(
+                        crate::rendered_request::AssemblyBuildPath::Budgeted,
+                        Vec::new(),
+                    );
+                crate::rendered_request::RenderedCompletionRequest {
+                    capture_key: derive_capture_key(
+                        &agent_did,
+                        &session_id,
+                        &request_doc_id,
+                        CAPTURE_SCOPE_SINK,
+                        case.turn_index,
+                        case.attempt,
+                    )
+                    .expect("capture key"),
+                    capture_version: CAPTURE_VERSION,
+                    request_doc_id: request_doc_id.clone(),
+                    request_commit_cid: format!("bafy-commit-{}", case.request_id),
+                    request_id: format!("req-sink-{}", case.request_id),
+                    capture_scope: CAPTURE_SCOPE_SINK.to_string(),
+                    turn_index: case.turn_index,
+                    attempt: case.attempt,
+                    agent_did,
+                    requester_did: "did:key:z6Mk-requester".to_string(),
+                    behavior_id: "behavior-sink".to_string(),
+                    session_id,
+                    model_name: "sink-model".to_string(),
+                    source: RenderedRequestSource::OpenAiChatCompletions,
+                    request_json: serde_json::json!({"witness": witness}),
+                    messages_json: serde_json::json!([]),
+                    tools_json: serde_json::json!([]),
+                    tool_choice_json: serde_json::Value::Null,
+                    sampling_json: serde_json::Value::Null,
+                    provenance_json: serde_json::to_value(ProvenanceManifest::captured_only(
+                        CAPTURE_SCOPE_SINK.to_string(),
+                        None,
+                        None,
+                        assembly_trace.clone(),
+                    ))
+                    .expect("provenance manifest"),
+                    assembly_trace,
+                }
+            };
+
+        // Seed the prior binding through the same sink: the model's store is
+        // built by captures, never by fixture writes.
+        if let Some(prior) = case.prior_binding {
+            sink.capture(rendered_for_witness(prior))
+                .await
+                .expect("seeding the prior binding must be a fresh capture");
+        }
+
+        let delivery = rendered_for_witness(case.request);
+        let delivery_key = delivery.capture_key.clone();
+        let captured = sink.capture(delivery).await;
+        match case.capture_outcome.as_str() {
+            "fresh" | "idempotent" => captured.expect("capture must succeed"),
+            "rejected" => {
+                let error = captured.expect_err("a rebound key must be rejected");
+                assert!(
+                    error.to_string().contains("integrity violation"),
+                    "{}: unexpected error {error:#}",
+                    case.name
+                );
+            }
+            other => panic!("{}: unknown capture outcome {other}", case.name),
+        }
+        let rows = rendered_rows(&node, &delivery_key).await;
+        assert_eq!(
+            rows.len(),
+            usize::from(case.durable_after.is_some()),
+            "{}",
+            case.name
+        );
+        let stored = rows.first().map(|row| {
+            serde_json::from_str::<serde_json::Value>(
+                row["request_json"].as_str().expect("request_json string"),
+            )
+            .expect("stored request_json decodes")
+        });
+        assert_eq!(
+            stored,
+            case.durable_after
+                .map(|witness| serde_json::json!({"witness": witness})),
+            "{}: the durable binding must match the capture contract",
+            case.name
+        );
+        node.shutdown().await;
+    }
+}
+
+const CAPTURE_SCOPE_SINK: &str = "inference.1";

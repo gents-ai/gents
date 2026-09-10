@@ -17,10 +17,6 @@ use crate::desired_state::DesiredApplyBundle;
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
 use crate::{extract_mutation_doc_id, graphql_input_literal, graphql_string_list_literal};
 
-#[cfg(test)]
-#[path = "../../gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
-
 const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
 
 const CONFIG_APPLY_ORDER: [Collection; 14] = gents::DESIRED_STATE_APPLY_ORDER;
@@ -777,4 +773,4 @@ fn select_apply_docs_for_collection(
 mod tests;
 
 #[cfg(test)]
-mod lean_apply_write_boundary_tests;
+mod transaction_tests;

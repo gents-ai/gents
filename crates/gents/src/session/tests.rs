@@ -471,7 +471,7 @@ async fn compaction_entry_stores_exact_request_document_edge() {
 }
 
 #[tokio::test]
-async fn close_session_preserves_started_datetime() {
+async fn close_session_preserves_creation_time() {
     let data_path = std::env::temp_dir().join(format!("gents-session-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
         .data_path(&data_path)
@@ -483,6 +483,12 @@ async fn close_session_preserves_started_datetime() {
     create_session_with_id(&node, "session-1", "deploy-test", "did:test:test")
         .await
         .unwrap();
+    let before = node
+        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) {created_at} }"#)
+        .await;
+    assert!(!before.has_errors(), "{:?}", before.errors);
+    let original_created_at =
+        before.data.as_ref().unwrap()["AgentSession"][0]["created_at"].clone();
     close_session(&node, "session-1").await.unwrap();
 
     let resp = node
@@ -492,10 +498,9 @@ async fn close_session_preserves_started_datetime() {
                     filter: { session_id: { _eq: "session-1" } },
                     limit: 1
                 ) {
-                    status
                     behavior_id
-                    started
-                    ended
+                    created_at
+                    closed_at
                 }
             }"#,
         )
@@ -516,22 +521,19 @@ async fn close_session_preserves_started_datetime() {
         .expect("session row");
 
     assert_eq!(
-        row.get("status").and_then(|value| value.as_str()),
-        Some("completed")
-    );
-    assert_eq!(
         row.get("behavior_id").and_then(|value| value.as_str()),
         Some("deploy-test")
     );
     assert!(row
-        .get("started")
+        .get("created_at")
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
     assert!(row
-        .get("ended")
+        .get("closed_at")
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.is_empty()));
 
+    assert_eq!(row["created_at"], original_created_at);
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -549,6 +551,11 @@ async fn create_session_with_id_is_idempotent() {
     create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
+    let patched = node.execute(r#"mutation { update_AgentSession(filter: {session_id: {_eq: "session-1"}}, input: {
+        created_at: "2020-01-01T00:00:00Z", tags: ["keep-on-resume"], title: {text: "User title", source: "user"}
+    }) {_docID} }"#).await;
+    assert!(!patched.has_errors(), "{:?}", patched.errors);
+
     create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
@@ -560,7 +567,10 @@ async fn create_session_with_id_is_idempotent() {
                     filter: { session_id: { _eq: "session-1" } }
                 ) {
                     session_id
-                    agent_name
+                    created_at
+                    tags
+                    title
+                    agent_did
                     behavior_id
                 }
             }"#,
@@ -581,9 +591,15 @@ async fn create_session_with_id_is_idempotent() {
         .expect("session rows");
 
     assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["created_at"], "2020-01-01T00:00:00Z");
+    assert_eq!(rows[0]["tags"], serde_json::json!(["keep-on-resume"]));
     assert_eq!(
-        rows[0].get("agent_name").and_then(|value| value.as_str()),
-        Some("general")
+        rows[0]["title"],
+        serde_json::json!({"text": "User title", "source": "user"})
+    );
+    assert_eq!(
+        rows[0].get("agent_did").and_then(|value| value.as_str()),
+        Some("did:test:test")
     );
     assert_eq!(
         rows[0].get("behavior_id").and_then(|value| value.as_str()),
@@ -594,7 +610,7 @@ async fn create_session_with_id_is_idempotent() {
 }
 
 #[tokio::test]
-async fn update_conversation_title_with_source_persists_generated_title() {
+async fn title_owner_persists_nested_generated_session_title() {
     let data_path =
         std::env::temp_dir().join(format!("gents-conversation-title-{}", uuid::Uuid::new_v4()));
     let node = defra_node::EmbeddedNode::builder()
@@ -607,18 +623,17 @@ async fn update_conversation_title_with_source_persists_generated_title() {
     let create = node
         .execute(
             r#"mutation {
-                create_AgentConversation(input: {
+                create_AgentSession(input: {
                     session_id: "session-1",
-                    agent_name: "general",
                     agent_did: "did:key:zTestGeneral",
                     behavior_id: "general",
-                    title: "",
-                    title_source: "placeholder",
-                    preview_text: "Draft a weekly fleet report",
-                    status: "processing",
+                    title: {text: "New session", source: "placeholder"},
                     created_at: "2026-05-01T00:00:00Z",
-                    updated_at: "2026-05-01T00:00:00Z",
-                    latest_request_id: "request-1"
+                    tags: ["title-test"],
+                    closed_at: "2026-05-02T00:00:00Z",
+                    observation: {last_activity_at: "2026-05-01T12:00:00Z", preview: "Keep this preview", latest_request: {
+                        request_doc_id: "physical-request", request_id: "logical-request", lifecycle_state: "completed"
+                    }}
                 }) { _docID }
             }"#,
         )
@@ -632,12 +647,15 @@ async fn update_conversation_title_with_source_persists_generated_title() {
     let resp = node
         .execute(
             r#"{
-                AgentConversation(
+                AgentSession(
                     filter: { session_id: { _eq: "session-1" } },
                     limit: 1
                 ) {
                     title
-                    title_source
+                    tags
+                    closed_at
+                    observation
+                    created_at
                 }
             }"#,
         )
@@ -651,21 +669,40 @@ async fn update_conversation_title_with_source_persists_generated_title() {
     let row = resp
         .data
         .as_ref()
-        .and_then(|data| data.get("AgentConversation"))
+        .and_then(|data| data.get("AgentSession"))
         .and_then(|value| value.as_array())
         .and_then(|rows| rows.first())
         .cloned()
         .expect("conversation row");
 
     assert_eq!(
-        row.get("title").and_then(|value| value.as_str()),
+        row["title"].get("text").and_then(|value| value.as_str()),
         Some("fleet-report-draft")
     );
     assert_eq!(
-        row.get("title_source").and_then(|value| value.as_str()),
+        row["title"].get("source").and_then(|value| value.as_str()),
         Some("generated")
     );
 
+    assert_eq!(row["closed_at"], "2026-05-02T00:00:00Z");
+    assert_eq!(row["observation"]["preview"], "Keep this preview");
+    assert_eq!(
+        row["observation"]["latest_request"],
+        serde_json::json!({"request_doc_id": "physical-request", "request_id": "logical-request", "lifecycle_state": "completed"})
+    );
+    let previous_activity = chrono::DateTime::parse_from_rfc3339("2026-05-01T12:00:00Z").unwrap();
+    let activity = chrono::DateTime::parse_from_rfc3339(
+        row["observation"]["last_activity_at"]
+            .as_str()
+            .expect("observed activity timestamp"),
+    )
+    .expect("valid observed activity timestamp");
+    assert!(
+        activity >= previous_activity,
+        "title update must not regress activity"
+    );
+    assert_eq!(row["tags"], serde_json::json!(["title-test"]));
+    assert_eq!(row["created_at"], "2026-05-01T00:00:00Z");
     let _ = std::fs::remove_dir_all(&data_path);
 }
 

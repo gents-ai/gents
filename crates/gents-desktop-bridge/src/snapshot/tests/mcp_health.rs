@@ -6,25 +6,13 @@ use lean_vocab_test::lean_mcp_health_cases;
 
 use crate::commands::mcp_health::view_from_row;
 
-/// Translate an internal Lean `HealthState` name to the DefraDB-persisted
-/// string vocabulary used by `gents_protocol::tool_service_health::ToolServiceHealthState::as_str`.
-/// Identity for every internal state — the persisted vocabulary mirrors
-/// `Proofs/MCPHealth/State.lean :: HealthState.toDefraDB` exactly. The
-/// public `HealthStatus` collapse (degraded → stale, evicted+reconnecting
-/// → unreachable) is a separate projection applied in
-/// `lean_state_to_health_status_projection` below.
-fn lean_state_to_defradb_status(state: &str) -> &'static str {
-    match state {
-        "healthy" => "healthy",
-        "degraded" => "degraded",
-        "evicted" => "evicted",
-        "reconnecting" => "reconnecting",
-        other => panic!("Lean MCP health case produced unknown state {other:?}"),
-    }
-}
-
-fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealthStateRow {
-    let status = lean_state_to_defradb_status(state);
+fn row_from_lean(
+    case_name: &str,
+    state: &str,
+    count: usize,
+    threshold_k: usize,
+) -> ToolServiceHealthStateRow {
+    let status = state;
     ToolServiceHealthStateRow {
         service_id: format!("contract-{}", case_name),
         agent_did: Some("did:test:contract-agent".to_string()),
@@ -32,7 +20,7 @@ fn row_from_lean(case_name: &str, state: &str, count: usize) -> ToolServiceHealt
         status: Some(status.to_string()),
         tool_count: Some(7),
         failure_count: Some(count as i64),
-        k_max: Some(3),
+        k_max: Some(threshold_k as i64),
         backoff_until: if status == "evicted" {
             Some("2026-04-21T12:00:30Z".to_string())
         } else {
@@ -71,7 +59,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
             continue;
         };
 
-        let row = row_from_lean(&case.name, next_state, next_count);
+        let row = row_from_lean(&case.name, next_state, next_count, case.threshold_k);
         let view = view_from_row(row).unwrap_or_else(|error| {
             panic!(
                 "Lean MCP health case {} row must project to a view: {error}",
@@ -79,7 +67,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
             )
         });
 
-        let expected_persisted_status = lean_state_to_defradb_status(next_state);
+        let expected_persisted_status = next_state;
         assert_eq!(
             view.status.as_deref(),
             Some(expected_persisted_status),
@@ -94,7 +82,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
         );
         assert_eq!(
             view.k_max,
-            Some(3),
+            Some(case.threshold_k as i64),
             "view k_max should mirror the row's k_max",
         );
 
@@ -106,13 +94,7 @@ fn mcp_health_view_preserves_every_generated_lean_mcp_health_case_transition() {
             );
         }
 
-        covered_states.insert(match next_state {
-            "healthy" => "healthy",
-            "degraded" => "degraded",
-            "evicted" => "evicted",
-            "reconnecting" => "reconnecting",
-            _ => unreachable!(),
-        });
+        covered_states.insert(next_state);
         covered_thresholds.insert(case.threshold_k);
     }
 

@@ -6,22 +6,12 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 #[tokio::test]
 async fn fork_does_not_transition_parent_lifecycle_state() {
     use gents::session::{fork, ForkParams};
-    use support::{
-        create_agent_behavior, create_agent_conversation, create_agent_message,
-        create_agent_session,
-    };
+    use support::{create_agent_behavior, create_agent_message, create_agent_session};
 
     let db = test_db("fork-no-lifecycle-transition").await;
 
     let parent_session = uuid::Uuid::new_v4().to_string();
     create_agent_session(
-        &db.node,
-        &parent_session,
-        AGENT_NAME,
-        "2026-04-21T10:00:00Z",
-    )
-    .await;
-    create_agent_conversation(
         &db.node,
         &parent_session,
         AGENT_NAME,
@@ -70,7 +60,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 
     let before_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
     let before_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
-    let before_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
     let before_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     let _ = fork(
@@ -87,7 +76,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
 
     let after_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
     let after_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
-    let after_conversation = fetch_conversation_snapshot(&db.node, &parent_session).await;
     let after_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     assert_eq!(
@@ -97,10 +85,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     assert_eq!(
         before_response, after_response,
         "parent AgentResponse unchanged"
-    );
-    assert_eq!(
-        before_conversation, after_conversation,
-        "parent AgentConversation unchanged"
     );
     assert_eq!(
         before_session, after_session,
@@ -1137,4 +1121,188 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
         post_claim_lineage, pre_claim_lineage,
         "lineage must be byte-identical before and after claim"
     );
+}
+
+/// The interrupt owner's observable action is more than the latch: after
+/// stamping (or finding) `interrupt_requested_at`, `interrupt_request` drains
+/// the session's queued automated wake-ups through `drain_automated_wakeups`,
+/// whose query is scoped to the interrupted row's own `agent_did` (#664) and
+/// whose row predicate selects only scheduled coalesced background-completion
+/// wake-ups. A latched timestamp alone never exercises that action, so this
+/// test drives the real owner and observes which queued rows it actually
+/// terminalized — including the foreign-principal replica that must survive.
+#[tokio::test]
+async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
+    let db = test_db("interrupt-drain-wakeups").await;
+    let session_id = "interrupt-drain-session";
+    let foreign_did = "did:test:foreign-drain";
+    let wakeup_metadata = format!(
+        r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
+    );
+    let non_wakeup_metadata = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
+
+    create_request(
+        &db.node,
+        "drain-parent",
+        session_id,
+        "processing",
+        "2026-03-23T00:00:00Z",
+    )
+    .await;
+
+    // Owner-scope scheduled automated wake-up: the drain owner must
+    // terminalize exactly this row.
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-owner",
+        session_id,
+        AGENT_DID,
+        "scheduled",
+        &wakeup_metadata,
+    )
+    .await;
+    // Same session, same row shape, foreign principal: the drain's
+    // agent_did-scoped query must never surface it (#664).
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-foreign",
+        session_id,
+        foreign_did,
+        "scheduled",
+        &wakeup_metadata,
+    )
+    .await;
+    // Owner principal but interactive origin: a user-turn queue row is not an
+    // automated wake-up and must survive its session's interrupt.
+    create_pending_queue_row(
+        &db.node,
+        "drain-wakeup-interactive",
+        session_id,
+        AGENT_DID,
+        "interactive",
+        &wakeup_metadata,
+    )
+    .await;
+    // Scheduled origin but user/append queue metadata: the wakeup predicate
+    // (background_completion + coalesce + non-empty key) must reject it.
+    create_pending_queue_row(
+        &db.node,
+        "drain-scheduled-user",
+        session_id,
+        AGENT_DID,
+        "scheduled",
+        non_wakeup_metadata,
+    )
+    .await;
+
+    gents::interrupt_request(&db.node, "drain-parent")
+        .await
+        .expect("interrupt_request should latch and drain");
+
+    let latched = gents::fetch_interrupt_requested_at(&db.node, "drain-parent")
+        .await
+        .expect("fetch latched interrupt");
+    assert!(
+        latched.is_some(),
+        "interrupt_request must latch interrupt_requested_at before draining"
+    );
+
+    let drained = fetch_drain_row(&db.node, "drain-wakeup-owner").await;
+    assert_eq!(
+        drained.lifecycle_state,
+        RequestLifecycleState::Interrupted,
+        "the owner's own scheduled wake-up must be drained by the interrupt owner"
+    );
+    assert_eq!(
+        drained.failure_reason.as_deref(),
+        Some("automated wake-up drained because active request was interrupted"),
+        "the drain owner must record its own reason, got {:?}",
+        drained.failure_reason
+    );
+
+    let foreign = fetch_drain_row(&db.node, "drain-wakeup-foreign").await;
+    assert_eq!(foreign.agent_did, foreign_did);
+    assert_eq!(
+        foreign.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "a foreign-principal replica sharing the session must never be drained by this owner"
+    );
+
+    let interactive = fetch_drain_row(&db.node, "drain-wakeup-interactive").await;
+    assert_eq!(
+        interactive.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "interactive-origin rows are user turns, not automated wake-ups"
+    );
+
+    let scheduled_user = fetch_drain_row(&db.node, "drain-scheduled-user").await;
+    assert_eq!(
+        scheduled_user.lifecycle_state,
+        RequestLifecycleState::Pending,
+        "scheduled rows without background-completion wake metadata must survive the drain"
+    );
+}
+
+async fn create_pending_queue_row(
+    node: &EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    execution_origin: &str,
+    metadata: &str,
+) {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_session_id = escape_graphql_string(session_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_origin = escape_graphql_string(execution_origin);
+    let escaped_metadata = escape_graphql_string(metadata);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_session_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "queued wake-up",
+                metadata: "{escaped_metadata}",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "{escaped_origin}",
+                created_at: "2026-03-23T00:00:00Z",
+                retry_count: 0,
+                max_retries: 3
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create pending queue row failed: {:?}",
+        resp.errors
+    );
+}
+
+#[derive(Debug, Deserialize)]
+struct DrainRow {
+    lifecycle_state: RequestLifecycleState,
+    #[serde(default)]
+    failure_reason: Option<String>,
+    agent_did: String,
+}
+
+async fn fetch_drain_row(node: &EmbeddedNode, request_id: &str) -> DrainRow {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                lifecycle_state
+                failure_reason
+                agent_did
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentRequest")
 }

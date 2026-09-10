@@ -197,9 +197,9 @@ async fn real_glm_daemon_compiler_uses_sealed_artifact_authority() {
     wait_for_runtime_ready(&db.node, &did).await;
     let did_q = escape_graphql_string(&did);
     let behavior_q = escape_graphql_string(&behavior_id);
-    execute(&db.node, &format!(r#"mutation {{ create_AgentConversation(input: {{ session_id: "artifact-live-session",
-        agent_did: "{did_q}", agent_name: "{behavior_q}", behavior_id: "{behavior_q}", title: "Artifact live QA", title_source: "generated",
-        status: "active", created_at: "{now}", updated_at: "{now}" }}) {{ _docID }} }}"#)).await;
+    execute(&db.node, &format!(r#"mutation {{ create_AgentSession(input: {{ session_id: "artifact-live-session",
+        agent_did: "{did_q}", behavior_id: "{behavior_q}", title: {{ text: "Artifact live QA", source: "generated" }},
+        created_at: "{now}" }}) {{ _docID }} }}"#)).await;
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
         "artifact-live-request", &did, &did, &behavior_id, "artifact-live-session",
         "Inspect Cargo.toml and src/lib.rs, then call bash exactly once with command cargo, args [\"test\",\"--locked\",\"--offline\"], raw_json true. This is a sealed read-only source with runtime-managed compiler artifacts. Do not edit source or set output directories. You must execute the test, not merely suggest it. After observing its actual result, report the test count and answer value. If the compiler fails, report the exact failure without claiming success.",

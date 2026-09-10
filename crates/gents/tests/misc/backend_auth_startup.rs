@@ -126,7 +126,7 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
                 AgentRequest { lifecycle_state }
                 AgentResponse { status content }
                 AgentMessage(order: { sequence: ASC }) { role content }
-                AgentConversation { status }
+                AgentSession { observation }
             }"#,
         )
         .await;
@@ -153,7 +153,8 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
         .as_str()
         .is_some_and(|content| content.contains("mock response")));
     assert_eq!(
-        projection.data.as_ref().unwrap()["AgentConversation"][0]["status"],
+        projection.data.as_ref().unwrap()["AgentSession"][0]["observation"]["latest_request"]
+            ["lifecycle_state"],
         "completed"
     );
 

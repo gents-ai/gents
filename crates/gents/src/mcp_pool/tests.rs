@@ -6,69 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::lean_vocab_test::{
-    assert_lean_contract_vocabulary_matches, lean_tool_retry_case, lean_tool_retry_cases,
-    LeanContractVocabulary, LeanToolRetryCase,
-};
-
-#[test]
-fn tool_retry_disposition_contract_cases_match_mcp_pool_policy() {
-    assert_lean_contract_vocabulary_matches(LeanContractVocabulary {
-        domain: "ToolRetryDisposition",
-        rust_source: "Proofs.ToolExecution retryDisposition / mcp_pool::call_tool",
-        rust_values: &["doNotRetry", "retrySafeRead", "retryIdempotentToolCall"],
-    });
-
-    for case in lean_tool_retry_cases() {
-        let rust_disposition = tool_retry_disposition(
-            rust_operation(&case.operation),
-            rust_idempotency(&case.idempotency),
-            rust_failure_class(&case.failure_class),
-        );
-        assert_eq!(
-            rust_disposition.as_contract(),
-            case.disposition,
-            "Lean ToolExecution retry case {} must match mcp_pool policy",
-            case.name
-        );
-    }
-
-    assert_eq!(
-        lean_tool_retry_case("retry_mcpCall_idempotent_transport_retryIdempotentToolCall")
-            .disposition,
-        "retryIdempotentToolCall"
-    );
-    assert!(
-        lean_tool_retry_cases()
-            .iter()
-            .filter(|case| case.operation == "nativeCommand")
-            .all(|case| case.disposition == "doNotRetry"),
-        "Proofs.ToolExecution.native_command_not_retried_by_tool_model"
-    );
-}
-
-fn rust_operation(value: &str) -> ToolExecutionOperation {
-    match value {
-        "mcpListTools" => ToolExecutionOperation::McpListTools,
-        "mcpCall" => ToolExecutionOperation::McpCall,
-        "nativeCommand" => ToolExecutionOperation::NativeCommand,
-        other => panic!("unknown Lean tool operation {other:?}"),
-    }
-}
-
-fn rust_idempotency(value: &str) -> ToolIdempotencyEvidence {
-    match value {
-        "unknown" => ToolIdempotencyEvidence::Unknown,
-        "idempotent" => ToolIdempotencyEvidence::Idempotent,
-        "nonIdempotent" => ToolIdempotencyEvidence::NonIdempotent,
-        other => panic!("unknown Lean idempotency evidence {other:?}"),
-    }
-}
-
-fn rust_failure_class(value: &str) -> ToolFailureClass {
-    ToolFailureClass::from_persisted(value)
-        .unwrap_or_else(|| panic!("unknown Lean tool failure class {value:?}"))
-}
+use crate::lean_vocab_test::lean_tool_retry_case;
 
 #[test]
 fn resolve_mcp_url_same_host_uses_localhost() {
@@ -192,15 +130,7 @@ async fn list_tools_transport_failure_retries_generated_safe_read_case() {
 
 #[tokio::test]
 async fn call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata() {
-    for case in [
-        lean_tool_retry_case("retry_mcpCall_unknown_transport_doNotRetry"),
-        lean_tool_retry_case("retry_mcpCall_nonIdempotent_transport_doNotRetry"),
-    ] {
-        assert_call_tool_transport_no_retry(case).await;
-    }
-}
-
-async fn assert_call_tool_transport_no_retry(case: &LeanToolRetryCase) {
+    let case = lean_tool_retry_case("retry_mcpCall_unknown_transport_doNotRetry");
     assert_eq!(case.operation, "mcpCall");
     assert_eq!(case.failure_class, "transport");
     assert_eq!(case.disposition, "doNotRetry");

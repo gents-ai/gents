@@ -4,15 +4,7 @@ use gents::watcher::AgentRequest;
 use gents::RequestLifecycle;
 use serde::Deserialize;
 
-use crate::support::{
-    build_request, create_request, first_row, test_db, upsert_conversation, AGENT_DID, AGENT_NAME,
-};
-
-#[derive(Debug, Clone, Deserialize)]
-struct ConversationRow {
-    status: String,
-    latest_request_id: Option<String>,
-}
+use crate::support::{build_request, create_request, first_row, test_db, AGENT_DID, AGENT_NAME};
 
 #[derive(Debug, Clone, Deserialize)]
 struct ProgressRow {
@@ -20,7 +12,7 @@ struct ProgressRow {
 }
 
 #[tokio::test]
-async fn missing_conversation_projection_does_not_block_terminal_request() {
+async fn missing_session_observation_does_not_block_terminal_request() {
     let db = test_db("lifecycle-missing-terminal-projection").await;
     let session_id = "session-missing-terminal-projection";
     let request_id = "req-missing-terminal-projection";
@@ -45,7 +37,7 @@ async fn missing_conversation_projection_does_not_block_terminal_request() {
         .node
         .execute(
             r#"mutation {
-                delete_AgentConversation(
+                delete_AgentSession(
                     filter: { session_id: { _eq: "session-missing-terminal-projection" } }
                 ) { _docID }
             }"#,
@@ -132,7 +124,21 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
 
-    upsert_conversation(&db.node, session_id, "req-second", "second", "processing").await;
+    create_request(
+        &db.node,
+        "req-second",
+        session_id,
+        "processing",
+        "2026-03-23T00:00:01Z",
+    )
+    .await;
+    crate::support::seed_session_observation_from_request(
+        &db.node,
+        session_id,
+        "req-second",
+        "second",
+    )
+    .await;
 
     crate::support::begin_owned_execution(&mut lifecycle, &db.node)
         .await
@@ -142,23 +148,19 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         .await
         .unwrap();
 
-    let conversation_resp = db
-        .node
-        .execute(
-            r#"{
-                AgentConversation(
-                    filter: { session_id: { _eq: "session-stale" } },
-                    limit: 1
-                ) { status latest_request_id }
-            }"#,
-        )
-        .await;
-    let conversation = first_row::<ConversationRow>(&conversation_resp, "AgentConversation");
+    let session = crate::support::snapshots::fetch_session_snapshot(&db.node, session_id)
+        .await
+        .expect("session");
+    let latest = session
+        .observation
+        .expect("observation")
+        .latest_request
+        .expect("latest request");
+    assert_eq!(latest.request_id, "req-second");
     assert_eq!(
-        conversation.latest_request_id.as_deref(),
-        Some("req-second")
+        latest.lifecycle_state,
+        gents_protocol::request_lifecycle::RequestLifecycleState::Processing
     );
-    assert_eq!(conversation.status, "processing");
 }
 
 #[tokio::test]

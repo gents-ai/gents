@@ -1015,12 +1015,13 @@ mod tests {
             "retry_root_request": "req-1",
             "superseded_by_request": "",
             "content": "hello",
-            "temperature": 0.0,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_tokens": 512,
             "max_total_tokens": 4096,
-            "metadata": "{\"run_id\":\"run-1\"}",
+            "input": {
+                "selected_skill_ids": ["review"],
+                "cwd": "/workspace",
+                "initial_title": {"text": "Review", "source": "task"},
+                "goal_continuation": {"sequence": 1, "wrapup": false}
+            },
             "lifecycle_state": "pending",
             "backend_id": "",
             "execution_origin": "interactive",
@@ -1033,12 +1034,16 @@ mod tests {
         assert_eq!(row.doc_id.as_deref(), Some("doc-1"));
         assert_eq!(row.request_id, "req-1");
         assert_eq!(row.retry_count, Some(0));
-        assert_eq!(row.temperature, Some(0.0));
-        assert_eq!(row.top_p, Some(0.95));
-        assert_eq!(row.top_k, Some(40));
-        assert_eq!(row.max_tokens, Some(512));
         assert_eq!(row.max_total_tokens, Some(4096));
-        assert_eq!(row.metadata.as_deref(), Some(r#"{"run_id":"run-1"}"#));
+        let input = row.input.as_ref().expect("typed input");
+        assert_eq!(input.selected_skill_ids, ["review"]);
+        assert_eq!(input.cwd.as_deref(), Some("/workspace"));
+        assert_eq!(
+            input.initial_title.as_ref().unwrap().source,
+            crate::session::SessionTitleSource::Task
+        );
+        assert_eq!(input.goal_continuation.as_ref().unwrap().sequence, 1);
+        assert!(!input.goal_continuation.as_ref().unwrap().wrapup);
         assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Pending));
         assert!(row.is_claimable());
         assert!(!row.is_terminal());
@@ -1053,6 +1058,36 @@ mod tests {
             },
             round
         );
+    }
+
+    #[test]
+    fn request_row_nullable_input_and_claim_observations_are_independent() {
+        for input in [
+            serde_json::Value::Null,
+            serde_json::json!({"selected_skill_ids": null}),
+        ] {
+            let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+                "request_id": "request-1", "input": input,
+                "backend_id": "resolved-at-claim", "max_total_tokens": 0
+            }))
+            .expect("nullable row decoder");
+            assert_eq!(row.backend_id.as_deref(), Some("resolved-at-claim"));
+            assert_eq!(
+                row.max_total_tokens,
+                Some(0),
+                "pinned exhausted budget is not absent"
+            );
+            if let Some(input) = row.input {
+                assert!(input.selected_skill_ids.is_empty());
+            }
+        }
+        let row: AgentRequestRow = serde_json::from_value(serde_json::json!({
+            "request_id": "request-1", "input": null, "backend_id": null, "max_total_tokens": null
+        }))
+        .unwrap();
+        assert!(row.input.is_none());
+        assert!(row.backend_id.is_none());
+        assert!(row.max_total_tokens.is_none());
     }
 
     #[test]

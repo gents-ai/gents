@@ -70,7 +70,7 @@ def followUpCoverage
   , acceptedFollowUp := acceptedFollowUp
   }
 
-def consumerWithFollowUpCoverage
+def consumerWithFollowUp
     (category domain consumer acceptedFollowUp : String) : CoverageEntry :=
   { category := category
   , domain := domain
@@ -238,8 +238,11 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , deferred := []
     }
   , { feature := "durable-goals"
-    , required := allSurfaces
-    , deferred := []
+    , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorCli]
+    , deferred :=
+        [ (Surface.operatorUi, "Bind goal projection to emitted cases; current card tests check rendering, not the continuation decision.")
+        , (Surface.api, "Bind goal protocol operations to emitted decisions; current shim round-trip tests check persistence only.")
+        ]
     }
   , { feature := "command-policy"
     , required := [Surface.agentFacing, Surface.operatorUi]
@@ -345,10 +348,10 @@ def vocabularyCoverage : List CoverageEntry :=
       "CompletionRetryFailureClass"
       "conformance::completion_retry_lean_witness_cases_hold")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "vocabulary"
       "ToolRetryDisposition"
-      "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy")
+      "No production disposition enum exists; the deleted test-only mirror was not runtime vocabulary coverage. Retry behavior is observed through MCP operations below.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
@@ -373,17 +376,17 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "AwaitMode"
-      "conformance::lean_emits_await_mode_vocabulary")
+      "conformance::tool_call::lean_emits_await_mode_and_cancel_policy_vocabularies")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "CancelPolicy"
-      "conformance::lean_emits_cancel_policy_vocabulary")
+      "conformance::tool_call::lean_emits_await_mode_and_cancel_policy_vocabularies")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
       "ChildTerminal"
-      "conformance::lean_emits_child_terminal_vocabulary_and_projections")
+      "conformance::tool_call::lean_emits_child_terminal_vocabulary")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
@@ -490,15 +493,16 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (followUpCoverage
+  [ tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
       "PairingReconcileCases"
-      "Conformance layer: replace the retired phase-table consumer with actual multi-resource reconciliation samples.")
+      "conformance::pairing_reconcile::generated_pairing_reconcile_cases_drive_production_projector"
+      "The consumer exercises the production resource diff over emitted multi-resource snapshots. Connected flags are observations; actual transport dial/failure and applying operations to reach the post-state still require the transport reconciliation owner.")
       "pairing-reconcile" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "child_failure_projections"
       "ChildFailureProjections"
-      "Conformance layer: consume bridge-derived child/tool projections; AwaitMode and CancelPolicy remain vocabularies, not machines.")
+      "background_tools::tests::generated_child_failure_projections_match_bridge_owner")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "lifecycle_transition_cases"
@@ -510,10 +514,11 @@ def caseCoverage : List CoverageEntry :=
       "ProviderEofCases"
       "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"
-      "Production begin/progress/finalize/revocation guards consume the applicable generated cases in lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy. Abstract claim freshness and recovery effects still require generated database consumer coverage.")
+      "lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy"
+      "Covers production begin/progress/finalize/revocation guards. Abstract claim freshness and recovery effects still require generated database consumer coverage.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_trace_cases"
@@ -525,10 +530,11 @@ def caseCoverage : List CoverageEntry :=
       "ProcessTransitions"
       "runtime_status::tests::generated_process_transition_cases_match_runtime_status_policy")
       "process-lifecycle" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "trigger_cases"
       "TriggerDispatch"
-      "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases")
+      "trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases"
+      "Dispatch decisions exercise the production engine. Existing materializer tests cover correlation scope, retry exclusion and live-execution supersession. Cross-principal isolation and expired-claim deadline/grace cases still need direct materializer observations. A booted schedule-kind error-writeback observation is also outstanding.")
       "triggers" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "trigger_cases"
@@ -560,10 +566,11 @@ def caseCoverage : List CoverageEntry :=
       "GoalCapabilityResolutionCases"
       "conformance::generated_goal_capability_resolution_matches_rust_decoder")
       "durable-goals" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "task_goal_publication_cases"
       "TaskGoalPublicationCases"
-      "conformance::goals::generated_task_goal_publication_cases_fence_atomic_selection")
+      "conformance::goals::generated_task_goal_cases_fence_declaration_and_identity"
+      "The consumer checks the production declaration validator and fire identity. Atomic task/goal/request publication needs the shared publication owner; fixture-only booleans are not an implementation check.")
       "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "task_goal_recovery_cases"
@@ -574,7 +581,7 @@ def caseCoverage : List CoverageEntry :=
       "goal_submission_cases"
       "GoalSubmissionCases"
       "conformance::goals::generated_goal_submission_cases_fence_atomic_visibility")
-      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
+      "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_continuation_materialization_cases"
       "GoalContinuationMaterializationCases"
@@ -610,6 +617,33 @@ def caseCoverage : List CoverageEntry :=
       "EnrollmentDigestCases"
       "conformance::enrollment::generated_enrollment_digest_vectors_match_wire_codec")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "event_group_cases"
+      "EventGroupCases"
+      "trigger_engine::tests::event_group_eligibility_matches_lean_generated_contract_cases"
+      "Exercises the production count/timeout eligibility owner for trigger and callback cases. Typed consumer/config/owner identity, durable marker suppression and atomic materialization require the migrated event-group owner; the old trigger-only spy cannot establish these guarantees.")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "enrollment_durable_projection_cases"
+      "EnrollmentDurableProjectionCases"
+      "conformance::enrollment::generated_enrollment_durable_cases_drive_current_projection")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "pending_user_turn_cases"
+      "PendingUserTurnCases"
+      "conformance::live_overlay::pending_user_turn_cases_match_lean_table")
+      "client-shell" [Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "aggregate_token_budget_cases"
+      "AggregateTokenBudgetCases"
+      "agent::loop_stream::tests::generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger"
+      "Exercises charged-usage summation and the owned loop budget ledger. Database selection of restart rows and missing-usage rejection still need completion-owner observations.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "request_progress_cases"
+      "RequestProgressCases"
+      "packages/gents-desktop-chat/src/chat-shell.test.ts::requestProgressPresentation matches every generated Lean request lifecycle projection")
+      "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "agent_request_admission_cases"
       "AgentRequestAdmissionCases"
@@ -620,25 +654,11 @@ def caseCoverage : List CoverageEntry :=
       "GoalDecisionCases"
       "goal_continuation_live::durable_goal_continues_with_real_inference_until_model_completes")
       "durable-goals" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases"
-      "cli_goal::goal_configuration_rejects_implicit_resume_and_clear_is_durable")
-      "durable-goals" [Surface.operatorCli]
-  , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases"
-      "apps/gents-desktop/tests/durable-goal-card.test.tsx::durable goal transcript card renders persisted goal status, objective, token usage, and active time")
-      "durable-goals" [Surface.operatorUi]
-  , tagged (consumerCoverage
-      "goal_decision_cases"
-      "GoalDecisionCases"
-      "cli_codex_shim::thread_goal_round_trip_survives_shim_restart")
-      "durable-goals" [Surface.api]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "runtime_cases"
       "RuntimeReconcileCases"
-      "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases")
+      "runtime_status::tests::runtime_status_generation_updates_match_lean_runtime_reconcile_cases"
+      "The status consumer observes publication/router-generation writeback. Generated request acceptance, lifetime tracking and generation retirement need router/reconciler owner consumers; fixture-only arithmetic is not implementation coverage.")
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "startup_readiness_cases"
@@ -665,15 +685,17 @@ def caseCoverage : List CoverageEntry :=
       "SelfConfigFieldTables"
       "conformance::self_config_field_tables_match_lean_contract")
       "self-config" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "self_config_cases"
       "SelfConfigCases"
-      "conformance::generated_self_config_cases_fence_patch_merge")
+      "conformance::generated_self_config_cases_fence_patch_merge"
+      "Covers production patch admissibility and accepted merges. Nested Tools no-lockout, reference validation and unchanged stored state after rejection require the shared configuration transaction owner.")
       "self-config" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "session_recovery_cases"
       "SessionRecoveryCases"
-      "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request")
+      "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request"
+      "Exercises desktop retry eligibility and successor lineage. Admission lease release remains an owner refinement: terminal-failed is the current adapter assumption, and emitted admission witnesses are not independently observed. Exact-row retryFromRows cases require the migrated query/transaction owner.")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "slot_cases"
@@ -685,16 +707,22 @@ def caseCoverage : List CoverageEntry :=
       "LogicalOutputObligationCases"
       "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "completion_retry_cases"
       "completionRetry"
-      "conformance::completion_retry_lean_witness_cases_hold")
+      "conformance::completion_retry_lean_witness_cases_hold"
+      "Retry/failure/output-obligation cases drive production decisions. reissue_with_open_effects_illegal and rendered_never_two require owned-loop effect-closure and rendered-response traces, not assertions on expected fixture fields.")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "fleet_cases"
       "FleetSlotAccounting"
       boundaryFleetSlotAccountingDerivedViewId
       "admission::tests::generated_slot_accounting_fleet_cases_match_admission_runtime_boundary")
+      "fleet-slot-accounting" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "fleet_cases"
+      "FleetSlotAccounting"
+      "conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts")
       "fleet-slot-accounting" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "fleet_cases"
@@ -739,20 +767,20 @@ def caseCoverage : List CoverageEntry :=
       "BackendHealthTransitionCases"
       "http::prometheus::tests::backend_probe_status_metric_reflects_measured_health")
       "backend-health" [Surface.operatorCli]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "native_filesystem_boundary_cases"
       "NativeFilesystemBoundaryCases"
-      "toolset::tests::generated_native_filesystem_boundary_cases_match_preemptible_boundary_contract")
+      "Replay generated glob/grep/list_files cases through the existing managed filesystem boundary. toolset::tests::native_filesystem_deadline_preempts_single_poll_blocker_and_advances_queue preserves real GlobTool preemption/queue observations; grep/list_files routing is not established by the removed fixture-only test.")
       "tool-call" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "managed_exec_cases"
       "ManagedExecLivenessCases"
-      "conformance::managed_exec_liveness_cases_pin_native_process_boundary")
+      "Drive generated exit/deadline/cancel cases through existing managed_exec process tests. Fixture kill flags do not observe OS termination.")
       "managed-exec" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "managed_exec_cases"
       "ManagedExecToolBoundaryCases"
-      "conformance::managed_exec_tool_boundary_cases_cover_every_native_subprocess_tool")
+      "Drive each generated native-tool route through its actual managed process boundary. Names and processTree flags are not evidence of runtime routing.")
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "pairing_reconcile_cases"
@@ -780,24 +808,37 @@ def caseCoverage : List CoverageEntry :=
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_projection_consumes_generated_client_shell_contract_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
+      "client_behavior_readiness_cases"
+      "ClientBehaviorReadinessCases"
+      "conformance::client_runtime::generated_behavior_readiness_cases_drive_the_production_projector")
+      "runtime-reconcile" [Surface.operatorUi]
+  , tagged (consumerCoverage
       "live_overlay_cases"
       "LiveOverlayCases"
-      "live_overlay::live_overlay_cases_match_lean_table")
+      "gents_desktop_bridge::snapshot::tests::session_timeline::session_snapshot_consumes_generated_live_overlay_cases")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerCoverage
       "request_lifecycle_operator_ui_cases"
       "RequestLifecycleOperatorUiCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_binds_request_lifecycle_operator_ui_cases")
       "request-lifecycle" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "tool_cases"
       "ToolExecutionPreflight"
-      "conformance::generated_tool_execution_cases_cover_preflight_and_retry_contracts")
+      "meta_tools::call::tests::generated_tool_preflight_cases_match_health_and_schema_gates"
+      "Generated inputs exercise the production health and schema gates. Full call_tool dispatch and typed health-denial propagation still need generated owner observations.")
       "tool-call" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "tool_cases"
       "ToolExecutionRetry"
-      "mcp_pool::tests::tool_retry_disposition_contract_cases_match_mcp_pool_policy")
+      "mcp_pool::tests::list_tools_transport_failure_retries_generated_safe_read_case"
+      "Drives the real safe-read retry after a transport failure. The remaining generated failure/idempotency matrix needs production owner consumers.")
+      "tool-call" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "tool_cases"
+      "ToolExecutionRetry"
+      "mcp_pool::tests::call_tool_transport_failure_obeys_generated_no_retry_cases_without_idempotency_metadata"
+      "Drives a real failed call without idempotency metadata and observes no retry or eviction. Explicit idempotency metadata and native-command cases are not exercised by this path.")
       "tool-call" [Surface.agentFacing]
   , tagged (consumerCoverage
       "command_policy_cases"
@@ -831,10 +872,11 @@ def caseCoverage : List CoverageEntry :=
       "RecoverySweepCases"
       "conformance::generated_recovery_sweep_cases_drive_startup_recovery_contract")
       "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "graph_failure_attribution_traces"
       "GraphFailureAttributionTraces"
-      "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions")
+      "graph_pipeline::run::attribution_contract_tests::generated_graph_failure_attribution_traces_drive_real_transactions"
+      "Covers durable CAS outcomes and emitted positive failure decisions through the real interrupt owner. Isolated no-failure/cancellation suppression remains unobserved; a false failure-interrupt decision does not forbid cancellation-driven interrupts.")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "graph_workspace_lineage_cases"
@@ -889,15 +931,17 @@ def caseCoverage : List CoverageEntry :=
       "WorkspacePathAliasCases"
       "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "graph_logical_invocation_cases"
       "GraphLogicalInvocationCases"
-      "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection")
+      "graph_pipeline::logical_invocation_contract_tests::generated_graph_logical_invocations_drive_persisted_run_projection"
+      "Fifteen representable cases replay through signed production owners. The defensive pinned-root-with-parent row is outside admission: root event/schedule authority excludes Goal/local-control parent authority, and ancestry excludes its entry. Reconcile that abstract input domain before claiming runtime projection coverage; do not broaden authority to manufacture the row.")
       "graph-pipeline" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "graph_invocation_publication_cases"
       "GraphInvocationPublicationCases"
-      "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions")
+      "graph_pipeline::run::publication_contract_tests::generated_graph_invocation_publication_traces_drive_real_transactions"
+      "Covers durable publication, failure/cancellation fences and child counts. Failure-driven interrupts still need observations through the graph execution owner; recomputing may_interrupt_for_failure from stored flags does not exercise that decision.")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_claimed_publication_cases"
@@ -908,7 +952,7 @@ def caseCoverage : List CoverageEntry :=
       "goal_request_head_cases"
       "GoalRequestHeadCases"
       "goal::request_head::tests::generated_goal_request_head_cases_drive_signed_row_selector")
-      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
+      "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_operator_resume_cases"
       "GoalOperatorResumeCases"
@@ -923,7 +967,7 @@ def caseCoverage : List CoverageEntry :=
       "goal_config_reactivation_cases"
       "GoalConfigReactivationCases"
       "goal::operator_resume::contract_tests::generated_goal_config_reactivation_cases_drive_transactional_setter")
-      "durable-goals" [Surface.operatorCli, Surface.runtimeInternal]
+      "durable-goals" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "graph_pipeline_validation_cases"
       "GraphPipelineValidationCases"
@@ -964,10 +1008,11 @@ def caseCoverage : List CoverageEntry :=
       "R5CrossPrincipalCases"
       "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases")
       "subagents-cross-principal" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
-      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance")
+      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance"
+      "Covers persisted tool recovery/cancellation outcomes for four representative deadline/interrupt inputs. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "cancel_propagation_cases"
@@ -984,20 +1029,22 @@ def caseCoverage : List CoverageEntry :=
       "CascadeCancelsChildTheoremWitness"
       "conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
       "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "subagent_delegation_graph_cases"
       "SubagentDelegationGraphCases"
-      "conformance::generated_subagent_delegation_graph_cases_pin_gap2_contract")
+      "conformance::delegation_depth_matches_runtime_limit"
+      "This consumer compares the runtime depth limit only. Generated path acyclicity, boundedness and cascade witnesses need actual delegation/control traces; asserting their expected flags is not implementation coverage.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"
       "DescendantGraphCases"
       "descendant_graph::tests::generated_descendant_graph_cases_fence_visibility_and_control")
       "descendant-graph" [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
-      "conformance::generated_r4c_background_work_cases_pin_observable_shapes")
+      "conformance::unmaterialized_child_status_matches_runtime_vocabulary"
+      "This consumer compares runtime status vocabulary only. Existing subagent e2e tests exercise visibility and steering; generated lineage rejection, cursor, append and interrupt observations need those owner consumers. Fixture-only assertions did not establish them.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "r4c_background_work_cases"
@@ -1019,75 +1066,78 @@ def caseCoverage : List CoverageEntry :=
       "BridgeStepCases"
       "conformance::generated_bridge_step_cases_drive_bridge_lifecycle")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "codex_shim_projection_cases"
       "CodexShimProjectionCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
+      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
+      "codex-shim" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
       "codex_shim_subagent_tool_cases"
       "CodexShimSubagentToolCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "codex_shim_subagent_status_cases"
       "CodexShimSubagentStatusCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
+      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
+      "codex-shim" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
       "codex_shim_subagent_visibility_cases"
       "CodexShimSubagentVisibilityCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_subagent_metadata_cases"
       "CodexShimSubagentMetadataCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_subagent_listing_cases"
       "CodexShimSubagentListingCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_subagent_thread_shape_cases"
       "CodexShimSubagentThreadShapeCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "codex_shim_reasoning_projection_cases"
       "CodexShimReasoningProjectionCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "commands::codex_shim::turn_projection::tests::generated_reasoning_projection_cases_drive_turn_projection_notifications")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "codex_shim_thread_status_cases"
       "CodexShimThreadStatusCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
-      "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping"
+      "Exercises the canonical persisted-attempt projector, followed by test-local phase/status mapping. Drive the gents-cli Codex shim mapping and local-interrupt override before claiming end-to-end shim projection coverage.")
+      "codex-shim" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
       "codex_shim_behavior_selection_cases"
       "CodexShimBehaviorSelectionCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_tool_metadata_cases"
       "CodexShimToolMetadataCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_context_usage_cases"
       "CodexShimContextUsageCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_compaction_projection_cases"
       "CodexShimCompactionProjectionCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "codex_shim_turn_lifecycle_cases"
       "CodexShimTurnLifecycleCases"
-      "conformance::generated_codex_shim_projection_cases_pin_adapter_mapping")
+      "The conformance suite's copied mappings and fixture-field assertions do not exercise the gents-cli Codex shim owner. Route these generated inputs through its production projection before claiming adapter coverage.")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "codex_shim_binding_cases"
@@ -1104,30 +1154,32 @@ def caseCoverage : List CoverageEntry :=
       "TranscriptConformanceCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_transcript_rendering_consumes_generated_transcript_cases")
       "transcript" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "identity_structural_cases"
       "IdentityStructuralCases"
-      "identity::identity_structural_cases_match_lean_verdicts")
+      "Exercise canonical owner-scoped registry validation; the deleted test-local well-formedness predicate was not implementation conformance.")
+      "identity-permission" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "identity_permission_cases"
+      "IdentityPermissionCases"
+      "conformance::identity::resolved_identity_permission_cases_drive_defra_acp"
+      "Checks native Defra ACP after explicit principal resolution. Unknown-owner and same-owner-collision selector rejection require the canonical registry owner; no test-local ID map remains.")
       "identity-permission" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "identity_permission_cases"
       "IdentityPermissionCases"
-      "identity::identity_permission_cases_pin_runtime_permission_contract_shape")
-      "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "identity_permission_cases"
-      "IdentityPermissionCases"
-      "http::identity_decide::tests::identity_decide_endpoint_matches_lean_permission_cases")
+      "http::identity_decide::tests::identity_decide_endpoint_matches_resolved_lean_permission_cases")
       "identity-permission" [Surface.api]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "identity_contracts"
       "IdentityContracts"
-      "identity::identity_respects_principal_contract_enforced_by_runtime_routing")
+      "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "streaming_response_cases"
       "ResponseTransitionCases"
-      "conformance::generated_streaming_response_cases_pin_lifecycle_contract")
+      "conformance::generated_streaming_response_cases_pin_lifecycle_contract"
+      "Observes response status, live tail, token count, materialization marker and request lifecycle. Full durable-reasoning transfer and atomic response/request commit require the completion/materialization owner; this adapter only marks an externally supplied materialization sequence.")
       "streaming-response" [Surface.agentFacing]
   , tagged (consumerCoverage
       "streaming_response_interrupt_flow_cases"
@@ -1139,10 +1191,11 @@ def caseCoverage : List CoverageEntry :=
       "ResponseTransitionCases"
       "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases")
       "streaming-response" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "compaction_reducer_cases"
       "CompactionReducerCases"
-      "conformance::generated_compaction_reducer_cases_pin_contract")
+      "conformance::generated_compaction_reducer_cases_pin_contract"
+      "Strip/provider-view cases exercise actual payload reduction and reapplication. Summarize cases exercise the production gate and splitter only; full checkpoint execution and same-operation idempotence need the compaction owner consumer.")
       "compaction" [Surface.agentFacing]
   , tagged (consumerCoverage
       "compaction_cursor_cases"
@@ -1194,15 +1247,22 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "rendered_capture_cases"
+      "RenderedCaptureCases"
+      "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send"
+      "Drives provider-send ordering with scripted sink outcomes. Durable fresh/idempotent/conflicting bindings are observed separately by the real sink consumer; no test-side store model remains.")
+      "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rendered_capture_cases"
       "RenderedCaptureCases"
-      "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send")
+      "agent::loop_stream::tests::generated_rendered_capture_cases_hold_against_the_real_defra_sink")
       "rendered-capture" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "durable_reduction_cases"
       "DurableReductionCases"
-      "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_identity_and_persist_before_send")
+      "provider_context_reduction::durable_reduction_conformance::generated_durable_reduction_cases_pin_storage_and_capture_citations"
+      "Checks durable create/load/conflict and capture citations. The exported send_permitted fence is not exercised: validate actual provider dispatch against durable reduction facts through the owned completion loop.")
       "compaction" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rolling_compaction_cases"
@@ -1214,6 +1274,12 @@ def caseCoverage : List CoverageEntry :=
       "ReductionEngineCases"
       "compaction::tests::generated_reduction_engine_cases_drive_shared_decision_outcome")
       "compaction" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "budget_rehydration_cases"
+      "BudgetRehydrationCases"
+      "completion_factory::tests::rehydrates_aggregate_budget_from_durable_inference_calls"
+      "Drives absent, zero and positive pinned limits with inference/compaction rows through the real physical-request query and ledger factory. Full process restart and InferenceCall write ownership remain separate boundaries.")
+      "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "rendered_capture_cases"
       "RenderedCaptureKeyCases"
@@ -1239,21 +1305,28 @@ def caseCoverage : List CoverageEntry :=
       "RenderedCaptureCases"
       "apps/gents-desktop/tests/request-trace.test.tsx::request trace panel renders the reconstructed event stream")
       "rendered-capture" [Surface.operatorUi]
-  , tagged (consumerWithFollowUpCoverage
+  , tagged (consumerWithFollowUp
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
       "conformance::event_delivery_transition_cases_match_contract"
-      "Conformance layer: replay handle_ready_trigger_preserves_pending_sibling through EventSource with two triggers on one source document. The existing consumer runs all transition rows through Watcher and therefore does not validate EventSource delivery-key construction or readiness isolation.")
+      "Observes five Watcher rescan/next-request cases, including real cooldown seeding. Eight substrate bookkeeping rows remain unobserved; subscription loss/delivery, queue multiset state, and empty-rescan silence need owner observations rather than a copied World.")
+      "event-delivery" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "event_delivery_cases"
+      "EventDeliveryTransitionCases"
+      "trigger_engine::tests::event_source::generated_sibling_delivery_case_preserves_pending_correlation"
+      "Observes the sibling trigger readiness/correlation case. Other transition rows use separate consumers or retain the explicit substrate follow-up.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
       "EventDeliverySourceInstances"
       "conformance::event_delivery_source_instances_match_runtime")
       "event-delivery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "event_delivery_cases"
       "EventDeliveryConvergenceTraces"
-      "conformance::event_delivery_convergence_traces_match_runtime_or_deviation")
+      "conformance::event_delivery_convergence_traces_match_runtime_or_deviation"
+      "Observes persisted documents recovered by real rescans and emitted request identities for all three sources. Does not assert full final World state, monotone-once silence on later rescans, or subscription delivery/multiset semantics.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "mcp_health_cases"
@@ -1285,21 +1358,53 @@ def caseCoverage : List CoverageEntry :=
       "Request"
       "gents_desktop_bridge::tests::operations_interrupt::interrupt_request_cascade_returns_accepted_when_signature_matches")
       "interrupt-and-cancel" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "workspace_cases"
       "WorkspaceCases"
-      "conformance::workspace_binding::generated_workspace_cases_match_lean_predicate")
+      "Replay these cases through the production Workspace lifecycle owner after its canonical principal fields migrate; the deleted test-local state table was not implementation coverage.")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "workspace_binding_cases"
       "WorkspaceBindingCases"
-      "conformance::workspace_binding::generated_workspace_binding_cases_match_lean_predicate")
+      "Replay these cases through the production Workspace binding admission owner after principal-field migration; do not restore the deleted test-local binding predicate.")
       "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "callback_cases"
       "CallbackCases"
-      "conformance::callback_lifecycle::generated_callback_cases_match_lean_predicate")
+      "conformance::callback_lifecycle::generated_callback_journals_match_runtime_owner"
+      "Generated journal-prefix observations exercise the actual journal owner. Invocation-state legality, denied execution and result-emission ordering need the callback executor consumer; the removed Rust predicate copy did not establish them.")
       "isolated-workspaces" [Surface.runtimeInternal]
+
+  , tagged (consumerWithFollowUp "runtime_cases" "RuntimeReconcileCases"
+      "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases"
+      "Exercises explicit request/session behavior binding. Readiness, atomic admission and generation lifetime remain router-owner obligations.")
+      "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp "request_input_cases" "RequestInputCases"
+      "conformance::request_input::lean_request_inputs_decode_without_losing_explicit_issuance_facts"
+      "Canonical input serde only. Signed canonical_input_fields/bytes, context whitelist, title materialization and verified goal receipt checks need the migrated admission/signing owners.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "session_document_cases" "SessionDocumentCases"
+      "Canonical session DB/lifecycle and fork tests specify target behavior; the generated interned-ID selection/projection/retry/fork rows still need real-owner adapters, including exact physical references and transactional freshness. No fixture-local state machine may substitute.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "background_wake_row_cases" "BackgroundWakeRowCases"
+      "Consume exact physical-parent and cross-requester authoritative rows through background publication after its owner migrates. Existing DB wake tests do not establish every generated row verdict.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "configuration_scope_cases" "ConfigurationScopeCases"
+      "Resolve same-label documents through the real owner-qualified context/inference registry; do not rebuild Lean lookup in tests.")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "discovery_scope_cases" "DiscoveryScopeCases"
+      "Exercise backend-owner and credential-scoped catalog selection in the production discovery owner, including shared/OAuth and foreign-owner rejection.")
+      "apply-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "event_group_clock_cases" "EventGroupClockCases"
+      "Drive the existing durable group clock owner after typed trigger/callback identity migration; preserve first-seen and quiescence across restart.")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "event_group_capture_cases" "EventGroupCaptureCases"
+      "Drive captured ordered input and typed origin through the callback capture owner; quiesced groups must reject capture.")
+      "triggers" [Surface.runtimeInternal]
+  , tagged (followUpCoverage "callback_transition_cases" "CallbackTransitionCases"
+      "Drive the callback executor's claim/run/succeed/fail/denial operations and observe exact input/origin/journal/emission; journal-prefix-only checks cannot establish lifecycle coverage.")
+      "triggers" [Surface.runtimeInternal]
+
   ]
 
 def followUpHookCoverage : List CoverageEntry :=
@@ -1332,7 +1437,7 @@ def followUpHookCoverage : List CoverageEntry :=
       "follow_up_hook"
       "PromptAssembly.providerInput.sanitizeLoadedHistory"
       boundaryPromptAssemblyProviderInputSanitizationId)
-      "compaction" [Surface.agentFacing]
+      "prompt-assembly" [Surface.agentFacing]
   , tagged (boundaryCoverage
       "follow_up_hook"
       "Compaction.safeToReduce.sessionScopeResolver"
@@ -1347,7 +1452,7 @@ def followUpHookCoverage : List CoverageEntry :=
       "follow_up_hook"
       "PromptAssembly.Template.assembled_preamble_literal"
       "The existing slot assembler preserves resolved context instructions literally; task_binding_preserves_context confines invocation substitutions to the task slot. Task render_determined proves dependency on declared task variables. The next layers must fence this model through the real provider-input serializer; slot content preservation alone is not a wire-format proof.")
-      "compaction" []
+      "prompt-assembly" []
   ]
 
 def followUpHookIds : List String :=
@@ -1378,13 +1483,13 @@ def rowCoverageStrength (entry : CoverageEntry) : String :=
   let hasConsumer := stringPresent entry.consumer
   let hasBoundary := stringPresent entry.acceptedBoundary
   let hasFollowUp := stringPresent entry.acceptedFollowUp
-  if hasConsumer && !hasFollowUp then
+  if hasBoundary then
+    "boundary"
+  else if hasConsumer && !hasFollowUp then
     "consumer"
   else if hasConsumer && hasFollowUp then
     "consumer_with_follow_up"
-  else if !hasConsumer && hasBoundary then
-    "boundary"
-  else if !hasConsumer && !hasBoundary && hasFollowUp then
+  else if hasFollowUp then
     "follow_up_only"
   else
     "missing"

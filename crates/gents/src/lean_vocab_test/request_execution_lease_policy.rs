@@ -6,19 +6,6 @@ use crate::lifecycle::execution_policy::{
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState as RequestState;
 
-fn request_state(phase: LeanRequestExecutionRequestPhase) -> RequestState {
-    match phase {
-        LeanRequestExecutionRequestPhase::Pending => RequestState::Pending,
-        LeanRequestExecutionRequestPhase::Claimed => RequestState::Claimed,
-        LeanRequestExecutionRequestPhase::Processing => RequestState::Processing,
-        LeanRequestExecutionRequestPhase::Completed => RequestState::Completed,
-        LeanRequestExecutionRequestPhase::Failed => RequestState::Failed,
-        LeanRequestExecutionRequestPhase::Interrupted => RequestState::Interrupted,
-        LeanRequestExecutionRequestPhase::Dead => RequestState::Dead,
-        LeanRequestExecutionRequestPhase::Superseded => RequestState::Superseded,
-    }
-}
-
 fn outcome_state(outcome: LeanRequestExecutionOutcome) -> RequestState {
     match outcome {
         LeanRequestExecutionOutcome::Completed => RequestState::Completed,
@@ -36,11 +23,25 @@ fn outcome_state(outcome: LeanRequestExecutionOutcome) -> RequestState {
 fn generated_request_execution_lease_cases_fence_production_policy() {
     let cases = lean_request_execution_lease_cases();
     assert_eq!(cases.len(), 34);
+    // Action kinds whose semantics (claim freshness, expiry/drop recovery
+    // bookkeeping, advance-time) have no production authorization owner yet;
+    // the Lean coverage ledger records them as follow-up coverage. Any other
+    // skipped kind would silently bypass this fence, so the set is pinned.
+    const ABSTRACT_KINDS: [&str; 7] = [
+        "claim",
+        "drop",
+        "expire",
+        "no_op",
+        "recover",
+        "recover_and_fail",
+        "socket_traffic",
+    ];
     let mut checked = 0;
+    let mut skipped_kinds = std::collections::BTreeSet::new();
     for case in cases {
         let owner = case.pre.lease.generation.unwrap_or_default().to_string();
         let observed = ExecutionObservation {
-            request: request_state(case.pre.request),
+            request: case.pre.request,
             response_streaming: match case.pre.response {
                 LeanRequestExecutionResponsePhase::Absent => None,
                 LeanRequestExecutionResponsePhase::Streaming => Some(true),
@@ -97,7 +98,10 @@ fn generated_request_execution_lease_cases_fence_production_policy() {
                 checked += 1;
                 continue;
             }
-            _ => continue,
+            ref other => {
+                skipped_kinds.insert(other.kind());
+                continue;
+            }
         };
         let authorized = authorize_live_execution(
             observed,
@@ -111,6 +115,12 @@ fn generated_request_execution_lease_cases_fence_production_policy() {
     assert_eq!(
         checked, 23,
         "all generated live-authorization and revocation cases must run"
+    );
+    let skipped: Vec<&str> = skipped_kinds.iter().copied().collect();
+    assert_eq!(
+        skipped, ABSTRACT_KINDS,
+        "an unmodelled action kind appeared in the generated lease contract; \
+         either fence it through the production seam or extend ABSTRACT_KINDS deliberately"
     );
 }
 

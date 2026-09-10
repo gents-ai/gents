@@ -15,7 +15,7 @@ fn request() -> AgentRequest {
         request_id: "request-123".to_string(),
         agent_did: String::new(),
         requester_did: None,
-        behavior_id: None,
+        behavior_id: Some("behavior-test".to_owned()),
         session_id: "session-456".to_string(),
         content: String::new(),
         temperature: None,
@@ -281,61 +281,6 @@ fn sampling_additional_params_omit_dedicated_completion_fields() {
 }
 
 #[test]
-fn request_sampling_overrides_behavior_defaults() {
-    let defaults = SamplingConfig {
-        temperature: Some(0.7),
-        top_p: Some(0.9),
-        top_k: Some(20),
-        max_tokens: Some(2048),
-        ..Default::default()
-    };
-    let request = AgentRequest {
-        doc_id: String::new(),
-        request_id: String::new(),
-        agent_did: String::new(),
-        requester_did: None,
-        behavior_id: None,
-        session_id: String::new(),
-        content: String::new(),
-        temperature: Some(0.0),
-        top_p: None,
-        top_k: Some(40),
-        seed: Some(1234),
-        max_tokens: Some(512),
-        max_total_tokens: Some(4096),
-        metadata: Some(r#"{"run_id":"foo"}"#.to_string()),
-        execution_origin: None,
-        created_at: String::new(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
-
-    let sampling = sampling_for_request(defaults, &request);
-
-    assert_eq!(sampling.temperature, Some(0.0));
-    assert_eq!(sampling.top_p, Some(0.9));
-    assert_eq!(sampling.top_k, Some(40));
-    assert_eq!(sampling.seed, Some(1234));
-    assert_eq!(sampling.max_tokens, Some(512));
-}
-
-#[test]
 fn effective_max_tokens_falls_back_to_behavior_budget() {
     assert_eq!(effective_max_tokens(4096, None), Some(4096));
 }
@@ -396,23 +341,6 @@ fn loop_config_for_request_rejects_unknown_retry_origin() {
         panic!("unknown execution origin must fail closed");
     };
     assert!(error.to_string().contains("unknown execution_origin"));
-}
-
-#[test]
-fn request_seed_rejects_provider_paths_without_seed_support() {
-    let mut behavior = behavior_with_retry(CompletionRetryProfileFields::default());
-    behavior.openai_wire_api = crate::OpenAiWireApi::Responses;
-    let mut request = request();
-    request.seed = Some(1234);
-
-    let Err(error) = loop_config_for_request(&behavior, "preamble".to_string(), &request, None, 0)
-    else {
-        panic!("Responses must reject a sampling seed");
-    };
-    assert_eq!(
-        error.to_string(),
-        "sampling seed is unsupported by provider OpenAiCompatible on the responses wire"
-    );
 }
 
 #[test]
@@ -500,16 +428,17 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
 }
 
 #[test]
-fn request_budget_construction_fails_closed_on_non_positive_values() {
+fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
     let behavior = behavior_with_retry(CompletionRetryProfileFields::default());
-    for invalid in [-1, 0] {
+    for invalid in [-1] {
         let error = parse_aggregate_token_limit(Some(invalid))
             .err()
-            .expect("non-positive aggregate budget must be rejected");
+            .expect("negative aggregate budget must be rejected");
         assert!(error.to_string().contains("must be a positive integer"));
     }
 
     assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);
+    assert_eq!(parse_aggregate_token_limit(Some(0)).unwrap(), Some(0));
     assert_eq!(
         parse_aggregate_token_limit(Some(4_096)).unwrap(),
         Some(4_096)
@@ -587,77 +516,76 @@ fn prior_usage_decode_rejects_partial_or_negative_components() {
 
 #[tokio::test]
 async fn rehydrates_aggregate_budget_from_durable_inference_calls() {
-    use crate::schema::ensure_runtime_schemas;
-    use defra_node::EmbeddedNode;
-
-    let node = EmbeddedNode::builder().build().await.unwrap();
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    let request_doc_id = "doc-budget-rehydrate";
-    let seed = r#"mutation {
-        create_InferenceCall(input: {
-            call_id: "call-1"
-            runtime_instance_id: "runtime-1"
-            request_id: "req-budget"
-            request_doc_id: "doc-budget-rehydrate"
-            call_seq: 1
-            backend_id: "backend-1"
-            behavior_id: "behavior-1"
-            agent_did: "did:test:agent"
-            call_kind: "inference"
-            attempt: 1
-            call_state: "completed"
-            prompt_tokens: 100
-            completion_tokens: 50
-            queue_depth_at_enqueue: 0
-            controller_generation: 1
-            backend_config_fingerprint: "fp"
-        }) { _docID }
-        create_InferenceCall(input: {
-            call_id: "call-2"
-            runtime_instance_id: "runtime-1"
-            request_id: "req-budget"
-            request_doc_id: "doc-budget-rehydrate"
-            call_seq: 2
-            backend_id: "backend-1"
-            behavior_id: "behavior-1"
-            agent_did: "did:test:agent"
-            call_kind: "compaction"
-            attempt: 1
-            call_state: "completed"
-            prompt_tokens: 200
-            completion_tokens: 10
-            queue_depth_at_enqueue: 0
-            controller_generation: 1
-            backend_config_fingerprint: "fp"
-        }) { _docID }
-    }"#;
-    let response = node.execute(seed).await;
-    assert!(
-        !response.has_errors(),
-        "seed InferenceCall rows: {:?}",
-        response.errors
+    let cases = crate::lean_vocab_test::lean_budget_rehydration_cases();
+    assert_eq!(
+        cases.len(),
+        5,
+        "all nullable restart witnesses must be exercised"
     );
-
-    let mut request = request();
-    request.doc_id = request_doc_id.to_string();
-    request.request_id = "req-budget".to_string();
-    request.max_total_tokens = Some(1_000);
-
-    let budget = aggregate_token_budget_for_request(&node, &request)
-        .await
-        .expect("rehydrate")
-        .expect("budget present");
-    let ledger = budget.snapshot().expect("ledger");
-    assert_eq!(ledger.used, 360, "100+50 + 200+10 charged totals");
-    assert_eq!(ledger.limit, 1_000);
-    assert!(
-        !ledger.can_dispatch(700, 100),
-        "remaining 640 cannot cover 700 input"
-    );
-    assert!(ledger.can_dispatch(100, 100));
-
-    node.shutdown().await;
+    for case in cases {
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        for (index, row) in case.rows.iter().enumerate() {
+            let doc_id = escape_graphql_string(&row.request_doc_id);
+            let call_id = escape_graphql_string(&format!("rehydrate-{index}"));
+            let call_kind = escape_graphql_string(&row.kind);
+            let prompt = row.prompt_tokens;
+            let completion = row.completion_tokens;
+            let seed = format!(
+                r#"mutation {{
+                create_InferenceCall(input: {{
+                    call_id: "{call_id}"
+                    runtime_instance_id: "runtime-rehydrate"
+                    request_id: "req-budget"
+                    request_doc_id: "{doc_id}"
+                    call_seq: {index}
+                    backend_id: "backend-rehydrate"
+                    behavior_id: "behavior-rehydrate"
+                    agent_did: "did:test:agent"
+                    call_kind: "{call_kind}"
+                    attempt: 1
+                    call_state: "completed"
+                    prompt_tokens: {prompt}
+                    completion_tokens: {completion}
+                    queue_depth_at_enqueue: 0
+                    controller_generation: 1
+                    backend_config_fingerprint: "fp"
+                }}) {{ _docID }}
+            }}"#
+            );
+            let response = node.execute(&seed).await;
+            assert!(
+                !response.has_errors(),
+                "{}: {:?}",
+                case.name,
+                response.errors
+            );
+        }
+        let mut request = request();
+        request.doc_id = case.request_doc_id.clone();
+        request.request_id = "req-budget".to_string();
+        // This is the already resolved, pinned execution observation. Authored
+        // profile limits are validated before this restart boundary.
+        request.max_total_tokens = case.pinned_limit.map(|limit| i64::try_from(limit).unwrap());
+        let budget = aggregate_token_budget_for_request(&node, &request)
+            .await
+            .unwrap_or_else(|error| panic!("{}: rehydrate: {error}", case.name));
+        match (&case.ledger, budget) {
+            (None, None) => {}
+            (Some(expected), Some(budget)) => {
+                let ledger = budget.snapshot().expect("ledger");
+                assert_eq!(ledger.used, expected.used, "{}", case.name);
+                assert_eq!(ledger.limit, expected.limit, "{}", case.name);
+            }
+            (expected, actual) => panic!(
+                "{}: ledger presence expected {}, got {}",
+                case.name,
+                expected.is_some(),
+                actual.is_some()
+            ),
+        }
+        node.shutdown().await;
+    }
 }
 
 /// #649: every sampling knob a profile can pin must reach the provider body.

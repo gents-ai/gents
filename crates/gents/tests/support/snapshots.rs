@@ -58,26 +58,6 @@ pub struct RequestLineageSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ConversationSnapshot {
-    pub latest_request_id: String,
-    pub behavior_id: String,
-    pub status: String,
-    #[serde(default)]
-    pub forked_from_session_id: Option<String>,
-    #[serde(default)]
-    pub fork_at_user_turn: Option<i64>,
-    #[serde(default)]
-    pub forked_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SessionSnapshot {
-    pub session_id: String,
-    pub behavior_id: String,
-    pub status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct ResponseSnapshotRow {
     status: String,
     behavior_id: String,
@@ -242,100 +222,45 @@ pub async fn fetch_request_snapshot_raw(node: &EmbeddedNode, doc_id: &str) -> Re
     first_row::<AgentRequestRow>(&resp, "AgentRequest").into()
 }
 
-pub async fn fetch_conversation_snapshot(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Option<ConversationSnapshot> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                limit: 1
-            ) {{
-                latest_request_id
-                behavior_id
-                status
-                forked_from_session_id
-                fork_at_user_turn
-                forked_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_optional_row::<ConversationSnapshot>(&resp, "AgentConversation")
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct FullConversationSnapshot {
-    pub session_id: String,
-    pub agent_name: String,
-    pub agent_did: String,
-    pub behavior_id: String,
-    pub title: String,
-    pub preview_text: String,
-    pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
-    pub latest_request_id: String,
-    #[serde(default)]
-    pub forked_from_session_id: Option<String>,
-    #[serde(default)]
-    pub fork_at_user_turn: Option<i64>,
-    #[serde(default)]
-    pub forked_at: Option<String>,
-}
-
-pub async fn fetch_full_conversation_snapshot(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Option<FullConversationSnapshot> {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentConversation(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                limit: 1
-            ) {{
-                session_id
-                agent_name
-                agent_did
-                behavior_id
-                title
-                preview_text
-                status
-                created_at
-                updated_at
-                latest_request_id
-                forked_from_session_id
-                fork_at_user_turn
-                forked_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_optional_row::<FullConversationSnapshot>(&resp, "AgentConversation")
-}
-
+/// Read the canonical target shape; schema/storage migration remains downstream.
+/// No second writable session representation or retired conversation fallback.
+/// Fixture-only lookup: callers seed unique session labels. This is not a
+/// runtime scope/authorization selector; ambiguity fails instead of choosing a row.
 pub async fn fetch_session_snapshot(
     node: &EmbeddedNode,
     session_id: &str,
-) -> Option<SessionSnapshot> {
+) -> Option<gents_protocol::session::AgentSession> {
     let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentSession(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                limit: 1
-            ) {{
-                session_id
-                behavior_id
-                status
-            }}
-        }}"#
+    let response = node
+        .execute(&format!(
+            r#"{{
+        AgentSession(filter: {{session_id: {{_eq: "{session_id}"}}}}, limit: 2) {{
+            session_id agent_did requester_did behavior_id created_at closed_at tags
+            title
+            provenance
+            observation
+        }}
+    }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "canonical session query: {:?}",
+        response.errors
     );
-    let resp = node.execute(&query).await;
-    first_optional_row::<SessionSnapshot>(&resp, "AgentSession")
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentSession"))
+        .and_then(|v| v.as_array())
+        .expect("session rows");
+    assert!(
+        rows.len() <= 1,
+        "fixture expected one session label, found {}",
+        rows.len()
+    );
+    rows.first()
+        .map(|row| serde_json::from_value(row.clone()).expect("canonical AgentSession"))
 }
 
 pub async fn fetch_response_interrupted_at(node: &EmbeddedNode, doc_id: &str) -> Option<String> {
@@ -604,7 +529,7 @@ pub struct ToolResultSnapshot {
     pub output_text: String,
     pub truncated: bool,
     pub truncation_metadata: String,
-    pub conversation_doc_id: String,
+    pub tool_call_doc_id: Option<String>,
     pub created_at: String,
 }
 
@@ -620,7 +545,7 @@ pub async fn fetch_tool_result_snapshots_for_session(
                 order: {{ created_at: ASC }}
             ) {{
                 agent_did session_id tool_name tool_input output_text
-                truncated truncation_metadata conversation_doc_id created_at
+                truncated truncation_metadata tool_call_doc_id created_at
             }}
         }}"#
     );
@@ -636,10 +561,11 @@ pub async fn fetch_tool_result_snapshots_for_session(
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct CompactionEntrySnapshot {
+    pub compacted_through_sequence: Option<u32>,
     pub compaction_key: String,
     pub session_id: String,
-    pub request_id: String,
-    pub request_doc_id: String,
+    pub request_id: Option<String>,
+    pub request_doc_id: Option<String>,
     pub sequence: u32,
     pub summary: String,
     pub messages_compacted: u32,
@@ -657,7 +583,7 @@ pub async fn fetch_compaction_entry_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
             ) {{
-                compaction_key session_id request_id request_doc_id sequence summary messages_compacted created_at
+                compaction_key session_id request_id request_doc_id sequence summary messages_compacted compacted_through_sequence created_at
             }}
         }}"#
     );

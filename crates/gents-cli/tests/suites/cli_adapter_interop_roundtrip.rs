@@ -10,8 +10,8 @@ use gents::{
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
     import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
     AdapterProjectionEnvelope, AdapterProjectionKind, ExternalAdapterCapture,
-    ProjectionRedactionMode, RunTimelineRows, TimelineConversationRow, TimelineMessageRow,
-    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    ProjectionRedactionMode, RunTimelineRows, TimelineMessageRow, TimelineRequestRow,
+    TimelineResponseRow, TimelineToolCallRow,
 };
 use serde_json::{json, Value};
 
@@ -426,7 +426,6 @@ fn langgraph_envelope_value() -> Value {
 async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
     for collection in [
         "AgentSession",
-        "AgentConversation",
         "AgentRequest",
         "AgentMessage",
         "AgentToolCall",
@@ -460,9 +459,6 @@ async fn persist_run_timeline_rows(node: &EmbeddedNode, rows: &RunTimelineRows) 
     if let Some(session) = rows.session.as_ref() {
         create_session(node, session).await?;
     }
-    if let Some(conversation) = rows.conversation.as_ref() {
-        create_conversation(node, conversation).await?;
-    }
 
     let mut seen_requests = BTreeSet::new();
     for request in &rows.requests {
@@ -486,60 +482,16 @@ async fn persist_run_timeline_rows(node: &EmbeddedNode, rows: &RunTimelineRows) 
     Ok(())
 }
 
-async fn create_session(node: &EmbeddedNode, row: &TimelineSessionRow) -> Result<()> {
+async fn create_session(node: &EmbeddedNode, row: &impl serde::Serialize) -> Result<()> {
+    // Import/export must carry the canonical session document, not a second
+    // projection which this fixture would have to reconstruct or merge.
+    let session: gents_protocol::session::AgentSession =
+        serde_json::from_value(serde_json::to_value(row)?)
+            .context("adapter importer must emit a canonical AgentSession")?;
+    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
     exec(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentSession(input: {{
-                    session_id: "{}",
-                    {}
-                    {}
-                    {}
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.session_id),
-            string_field("agent_name", row.agent_name.as_deref()),
-            string_field("behavior_id", row.behavior_id.as_deref()),
-            string_field("started", row.started.as_deref()),
-            string_field("status", row.status.as_deref()),
-        ),
-    )
-    .await
-}
-
-async fn create_conversation(node: &EmbeddedNode, row: &TimelineConversationRow) -> Result<()> {
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentConversation(input: {{
-                    session_id: "{}",
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.session_id),
-            string_field("agent_name", row.agent_name.as_deref()),
-            string_field("agent_did", row.agent_did.as_deref()),
-            string_field("behavior_id", row.behavior_id.as_deref()),
-            string_field("title", row.title.as_deref()),
-            string_field("title_source", row.title_source.as_deref()),
-            string_field("preview_text", row.preview_text.as_deref()),
-            string_field("status", row.status.as_deref()),
-            string_field("created_at", row.created_at.as_deref()),
-            string_field("updated_at", row.updated_at.as_deref()),
-            string_field("latest_request_id", row.latest_request_id.as_deref()),
-        ),
+        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
     )
     .await
 }
@@ -570,7 +522,16 @@ async fn create_request(node: &EmbeddedNode, row: &TimelineRequestRow) -> Result
             string_field("behavior_id", row.behavior_id.as_deref()),
             string_field("session_id", row.session_id.as_deref()),
             string_field("content", row.content.as_deref()),
-            string_field("metadata", row.metadata.as_deref()),
+            match serde_json::to_value(row)?
+                .get("input")
+                .filter(|value| !value.is_null())
+            {
+                Some(input) => format!(
+                    "input: {},",
+                    gents_protocol::graphql::graphql_input_literal(input)?
+                ),
+                None => String::new(),
+            },
             string_field(
                 "lifecycle_state",
                 row.lifecycle_state.map(|state| state.as_str()),

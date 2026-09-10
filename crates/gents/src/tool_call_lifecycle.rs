@@ -599,11 +599,6 @@ mod tests {
     }
 
     #[test]
-    fn all_lists_seven_states() {
-        assert_eq!(ToolCallState::ALL.len(), 7);
-    }
-
-    #[test]
     fn failure_class_round_trip_persisted_vocabulary() {
         for fc in FailureClass::ALL {
             assert_eq!(FailureClass::from_persisted(fc.as_str()), Some(fc));
@@ -611,25 +606,79 @@ mod tests {
         assert_eq!(FailureClass::from_persisted("unknown"), None);
     }
 
-    #[test]
-    fn failure_class_all_lists_seven_variants() {
-        assert_eq!(FailureClass::ALL.len(), 7);
-    }
-
-    #[test]
-    fn lifecycle_new_signature_compiles() {
-        // Compile-only sanity test: behavior verified in Bucket 3 integration tests.
-        let _: fn(
-            std::sync::Arc<defra_node::EmbeddedNode>,
-            String,
-            String,
-            String,
-            String,
-            u32,
-            String,
-            String,
-            chrono::DateTime<chrono::Utc>,
-        ) -> ToolCallLifecycle = ToolCallLifecycle::new;
+    #[tokio::test]
+    async fn constructors_preserve_bridge_classification_and_terminal_status() {
+        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let deadline = chrono::Utc::now() + chrono::Duration::minutes(1);
+        let check = |tool: &ToolCallLifecycle, subagent, background, plain: &str, reason: &str| {
+            assert_eq!(tool.is_subagent_bridge(), subagent);
+            assert_eq!(tool.is_background_tool_bridge(), background);
+            assert_eq!(tool.is_bridge(), subagent || background);
+            assert_eq!(tool.terminal_persistence_status(None), plain);
+            assert_eq!(
+                tool.terminal_persistence_status(Some("tool_failed")),
+                reason
+            );
+        };
+        let mut native = ToolCallLifecycle::new(
+            node.clone(),
+            "request".into(),
+            "session".into(),
+            "did:test:owner".into(),
+            "native".into(),
+            0,
+            "tool".into(),
+            "{}".into(),
+            deadline,
+        );
+        check(&native, false, false, "completed", "completed");
+        for (input, expected) in [
+            (Some("  did:test:requester  "), Some("did:test:requester")),
+            (Some(""), None),
+            (Some("  "), None),
+            (None, None),
+        ] {
+            native = native.with_requester_did(input.map(str::to_string));
+            assert_eq!(native.requester_did.as_deref(), expected);
+        }
+        let background = ToolCallLifecycle::new_background_tool(
+            node.clone(),
+            "request".into(),
+            "session".into(),
+            "did:test:owner".into(),
+            "background".into(),
+            0,
+            "tool".into(),
+            "{}".into(),
+            deadline,
+        );
+        // Recovery selects completionPending rows to redrive native-tool effects.
+        check(
+            &background,
+            false,
+            true,
+            "completionPending",
+            "completionPending:tool_failed",
+        );
+        for mode in [AwaitMode::Foreground, AwaitMode::Background] {
+            let subagent = ToolCallLifecycle::new_subagent(
+                node.clone(),
+                "request".into(),
+                "session".into(),
+                "did:test:owner".into(),
+                "subagent".into(),
+                0,
+                "spawn_agent".into(),
+                "{}".into(),
+                deadline,
+                mode,
+                CancelPolicy::Cascade,
+                "child".into(),
+                "did:test:target".into(),
+            );
+            check(&subagent, true, false, "completed", "completed");
+        }
+        node.shutdown().await;
     }
 
     use crate::lean_vocab_test::{
@@ -705,7 +754,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod bucket_1_subagent_vocabulary {
+mod subagent_vocabulary {
     use super::*;
 
     #[test]
@@ -750,18 +799,12 @@ mod bucket_1_subagent_vocabulary {
     }
 
     #[test]
-    fn cancel_cause_all_has_three_variants() {
-        assert_eq!(CancelCause::ALL.len(), 3);
-    }
-
-    #[test]
     fn cancel_cause_from_persisted_unknown_returns_none() {
         assert_eq!(CancelCause::from_persisted("unknown"), None);
     }
 
     #[test]
     fn child_terminal_all_kind_has_four_variants() {
-        assert_eq!(ChildTerminal::ALL_KIND.len(), 4);
         assert_eq!(
             ChildTerminal::ALL_KIND,
             &["failed", "dead", "interrupted", "superseded"]

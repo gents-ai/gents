@@ -1,33 +1,35 @@
 #[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
-use crate::types::{SubagentEdgeView, SubagentNodeView, SubagentTreeView};
-use lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeploymentCase};
+use crate::tauri_commands::operations::subagent_tree_view_from_gents;
+use crate::types::SubagentTreeView;
+use gents::subagent_tree::{SubagentTree, SubagentTreeEdge, SubagentTreeNode};
+use lean_vocab_test::{lean_r5_cross_principal_cases, LeanR5CrossPrincipalCase};
 
-fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> SubagentTreeView {
-    SubagentTreeView {
+fn subagent_tree_view_from_lean_case(case: &LeanR5CrossPrincipalCase) -> SubagentTreeView {
+    subagent_tree_view_from_gents(SubagentTree {
         partial_errors: Vec::new(),
         root_request_id: case.parent_request_id.clone(),
         nodes: vec![
-            SubagentNodeView {
+            SubagentTreeNode {
                 resolved_via: None,
                 request_id: case.parent_request_id.clone(),
                 session_id: None,
-                agent_did: Some(case.parent_deployment.clone()),
+                agent_did: Some(case.parent_principal.clone()),
                 behavior_id: None,
-                lifecycle_state: Some("Processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
                 subagent_depth: Some(0),
                 caused_by_parent_request_id: None,
                 caused_by_parent_tool_call_id: None,
                 backend_id: None,
             },
-            SubagentNodeView {
+            SubagentTreeNode {
                 resolved_via: None,
                 request_id: case.child_request_id.clone(),
                 session_id: None,
-                agent_did: Some(case.child_deployment.clone()),
+                agent_did: Some(case.child_principal.clone()),
                 behavior_id: Some(case.target_behavior_id.clone()),
-                lifecycle_state: Some("Processing".to_string()),
+                lifecycle_state: Some("processing".to_string()),
                 subagent_depth: Some(1),
                 caused_by_parent_request_id: case
                     .caused_by_parent_request_id_matches
@@ -38,7 +40,7 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
                 backend_id: None,
             },
         ],
-        edges: vec![SubagentEdgeView {
+        edges: vec![SubagentTreeEdge {
             parent_request_id: case.parent_request_id.clone(),
             child_request_id: case.child_request_id.clone(),
             parent_tool_call_id: Some(case.parent_tool_call_id.clone()),
@@ -48,15 +50,15 @@ fn subagent_tree_view_from_lean_case(case: &LeanR5CrossDeploymentCase) -> Subage
             lifecycle_state: Some("running".to_string()),
         }],
         truncated: false,
-    }
+    })
 }
 
 #[test]
-fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
-    let cases = lean_r5_cross_deployment_cases();
+fn subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases() {
+    let cases = lean_r5_cross_principal_cases();
     assert!(
         !cases.is_empty(),
-        "Lean R5 contract should emit cross-deployment cases"
+        "Lean R5 contract should emit cross-principal cases"
     );
 
     let mut cross_seen = false;
@@ -91,11 +93,11 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
 
         assert_eq!(
             parent.agent_did.as_deref(),
-            Some(case.parent_deployment.as_str())
+            Some(case.parent_principal.as_str())
         );
         assert_eq!(
             child.agent_did.as_deref(),
-            Some(case.child_deployment.as_str())
+            Some(case.child_principal.as_str())
         );
         assert_eq!(edge.tool_name.as_deref(), Some("spawn_subagent"));
         assert_eq!(edge.await_mode.as_deref(), Some("background"));
@@ -105,24 +107,24 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
             Some(case.parent_tool_call_id.as_str())
         );
 
-        if case.cross_deployment_routing_fired {
+        if case.cross_principal_routing_fired {
             cross_seen = true;
             assert_ne!(
                 parent.agent_did, child.agent_did,
-                "{}: cross_deployment_routing_fired requires parent.agentDid != child.agentDid",
+                "{}: cross_principal_routing_fired requires parent.agentDid != child.agentDid",
                 case.name
             );
             assert!(
-                case.child_owned_by_target_deployment,
-                "{}: cross-deployment routing implies child owned by target",
+                case.child_owned_by_target_principal,
+                "{}: cross-principal routing implies child owned by target",
                 case.name
             );
         }
-        if case.single_deployment_fallback {
+        if case.same_principal_fallback {
             local_seen = true;
             assert_eq!(
                 parent.agent_did, child.agent_did,
-                "{}: single_deployment_fallback requires parent and child on same deployment",
+                "{}: same_principal_fallback requires parent and child owned by the same principal",
                 case.name
             );
         }
@@ -161,10 +163,10 @@ fn subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases() {
 
     assert!(
         cross_seen,
-        "Lean R5 contract should include a cross-deployment case"
+        "Lean R5 contract should include a cross-principal case"
     );
     assert!(
         local_seen,
-        "Lean R5 contract should include a single-deployment fallback case"
+        "Lean R5 contract should include a same-principal fallback case"
     );
 }

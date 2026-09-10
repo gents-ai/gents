@@ -20,9 +20,9 @@ use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::{AgentPrincipal, KeyIdentity};
 use crate::lean_vocab_test::{
-    assert_lean_to_defradb_vocabulary_matches, lean_trigger_dispatch_case_count,
-    lean_trigger_dispatch_cases, lean_trigger_group_case_count, lean_trigger_group_cases,
-    LeanTriggerDispatchCase, LeanTriggerKeyContract, LeanVocabulary,
+    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
+    lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
+    LeanTriggerKeyContract, LeanVocabulary,
 };
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
@@ -745,6 +745,6 @@ async fn trigger_engine_dispatch_matches_lean_generated_contract_cases() {
 }
 
 #[tokio::test]
-async fn trigger_group_reconciliation_matches_lean_generated_contract_cases() {
-    dispatch_contract::trigger_group_reconciliation_matches_lean_generated_contract_cases().await;
+async fn event_group_eligibility_matches_lean_generated_contract_cases() {
+    dispatch_contract::event_group_eligibility_matches_lean_generated_contract_cases().await;
 }

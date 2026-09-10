@@ -882,6 +882,7 @@ async fn fetch_tool_call_row(
                     result
                     status
                     tool_failure_class
+                    denial_reason
                     selected_service_id
                     selected_tool_name
                     cancel_cause
@@ -3508,16 +3509,14 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
         Some("completed"),
         "forged sentinel output must not fabricate a failure: {row:?}"
     );
-    assert_eq!(
-        row.get("tool_failure_class").and_then(|v| v.as_str()),
-        None,
-        "no failure class may be fabricated"
-    );
-    assert_eq!(
-        row.get("denial_reason").and_then(|v| v.as_str()),
-        None,
-        "no command-policy denial may be fabricated"
-    );
+    for field in ["tool_failure_class", "denial_reason"] {
+        assert!(
+            row.get(field)
+                .expect("query must select failure fields")
+                .is_null(),
+            "forged output must not fabricate {field}: {row:?}"
+        );
+    }
     assert!(
         row.get("result")
             .and_then(|v| v.as_str())
@@ -3773,4 +3772,181 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     drop(persistence_hook);
     drop(hook);
     node.shutdown().await;
+}
+
+// Exercise the typed terminal result at the persistence hook.
+#[tokio::test]
+async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-cancelled-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "req-cancelled-outcome",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    assert!(matches!(
+        hook.on_tool_call("slow", None, "internal-cancelled", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    let action = hook
+        .on_tool_result(
+            "slow",
+            None,
+            "internal-cancelled",
+            "{}",
+            &crate::tool_call_lifecycle::ToolOutcome::Cancelled,
+        )
+        .await;
+    assert!(
+        matches!(&action, HookAction::Terminate { reason } if reason.contains("cancelled")),
+        "a cancelled outcome must terminate the turn, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-cancelled").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("cancelled"),
+        "cancelled outcome must terminalize cancelled, got row {row:?}"
+    );
+    assert_eq!(
+        row.get("cancel_cause").and_then(|value| value.as_str()),
+        Some("interrupted"),
+        "the dispatch-level interrupt cause must be recorded"
+    );
+    assert!(
+        row.get("tool_failure_class")
+            .expect("selected failure class")
+            .is_null(),
+        "a cancellation is not a failure: no failure class may be fabricated, got {:?}",
+        row.get("tool_failure_class")
+    );
+
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
+}
+
+// Dispatch a real denied command and preserve its class and diagnostic payload.
+#[tokio::test]
+async fn real_bash_policy_denial_persists_typed_class_and_payload() {
+    let data_path =
+        std::env::temp_dir().join(format!("agent-hook-real-denial-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("Run"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.expect("session id");
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "req-real-denial",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    assert!(matches!(
+        hook.on_tool_call("bash", None, "internal-real-denial", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+
+    // The real read-only bash tool denying `git commit` at its policy owner.
+    let dispatched = crate::agent::loop_stream::dispatch_tool(
+        &crate::toolset::ToolSet::builder()
+            .read_root(std::env::temp_dir())
+            .bash_read_only()
+            .build()
+            .build_native_tools()
+            .unwrap(),
+        "bash",
+        r#"{"command":"git","args":["commit"]}"#.to_string(),
+        None,
+        None,
+    )
+    .await;
+    let crate::tool_call_lifecycle::ToolOutcome::Failed { text, .. } = &dispatched else {
+        panic!("read-only bash must deny git commit as a structured policy denial: {dispatched:?}")
+    };
+    assert!(
+        text.contains("readOnlySubcommandNotAllowlisted"),
+        "the denial payload must ride the typed text channel: {text}"
+    );
+
+    let action = hook
+        .on_tool_result(
+            "bash",
+            None,
+            "internal-real-denial",
+            r#"{"command":"git","args":["commit"]}"#,
+            &dispatched,
+        )
+        .await;
+    assert!(
+        matches!(action, HookAction::Continue),
+        "a reported failure persists and continues the turn, got {action:?}"
+    );
+
+    let row = fetch_tool_call_row(&node, &session_id, "internal-real-denial").await;
+    assert_eq!(
+        row.get("lifecycle_state").and_then(|value| value.as_str()),
+        Some("failed"),
+        "a denied command must terminalize failed, got row {row:?}"
+    );
+    assert_eq!(
+        row.get("tool_failure_class")
+            .and_then(|value| value.as_str()),
+        Some("policyDenied"),
+        "typed classification must survive persistence"
+    );
+    assert!(
+        row.get("result")
+            .and_then(|value| value.as_str())
+            .is_some_and(|result| result.contains("readOnlySubcommandNotAllowlisted")),
+        "the denial payload must persist as the model-facing result"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(&data_path);
 }

@@ -520,4 +520,57 @@ mod tests {
         }
         assert_eq!(workspaces.len(), 1);
     }
+    #[test]
+    fn projection_behavior_id_uses_child_binding_or_root_fallback() {
+        let mut record = CodexThreadRecord {
+            session_id: "root-session".to_string(),
+            cwd: PathBuf::from("/workspace/root"),
+            archived: false,
+            loaded: true,
+            memory_mode: "disabled".to_string(),
+            name: String::new(),
+            settings_json: String::new(),
+            git_info: Some(json!({"sha": "abc", "branch": "main"})),
+            projection_started: None,
+            conversation: None,
+            subagent: None,
+        };
+        assert_eq!(
+            record.projection_behavior_id("root-behavior"),
+            "root-behavior"
+        );
+        let link = LinkedSubagentThread {
+            request_id: "request-0".to_string(),
+            latest_request_id: "request-0".to_string(),
+            latest_request_content: String::new(),
+            latest_request_created_at: None,
+            session_id: "child-0".to_string(),
+            parent_request_id: "parent-request".to_string(),
+            parent_tool_call_id: "spawn-0".to_string(),
+            parent_session_id: "root-session".to_string(),
+            root_session_id: "root-session".to_string(),
+            depth: 1,
+            agent_did: "did:test:child".to_string(),
+            behavior_id: " child-behavior ".to_string(),
+            model: None,
+            nickname: "child-0".to_string(),
+            client_projection: gents_protocol::client_protocol::project_persisted_attempt(
+                "processing",
+                false,
+                None,
+            ),
+            failure_reason: None,
+            created_at: None,
+        };
+        record.subagent = Some(link);
+        assert_eq!(
+            record.projection_behavior_id("root-behavior"),
+            "child-behavior"
+        );
+        record.subagent.as_mut().unwrap().behavior_id = "  ".to_string();
+        assert_eq!(
+            record.projection_behavior_id("root-behavior"),
+            "root-behavior"
+        );
+    }
 }

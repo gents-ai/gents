@@ -8,9 +8,9 @@ use gents::agent::p2p_reconcile::{
 };
 
 use crate::lean_vocab_test::{
-    lean_pairing_reconcile_shutdown_boundary_cases,
+    lean_pairing_reconcile_cases, lean_pairing_reconcile_shutdown_boundary_cases,
     lean_pairing_reconcile_sweep_retry_boundary_cases,
-    lean_pairing_reconcile_sweep_scheduling_cases,
+    lean_pairing_reconcile_sweep_scheduling_cases, LeanPairingReconcileSnapshot,
 };
 use crate::support::pairing_conformance::invariants::{
     check_liveness, check_safety, ObservedSnapshot,
@@ -308,6 +308,157 @@ fn app_collections_coexists_with_control_pairing() {
     );
     assert!(merged.template_ids.contains("explicit-control"));
     assert!(merged.template_ids.contains("app-collections"));
+}
+
+impl LeanPairingReconcileSnapshot {
+    fn desired(&self) -> PairingDesired {
+        PairingDesired {
+            collections: self.desired_collections.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    fn actual(&self) -> PairingActual {
+        PairingActual {
+            collections: self.actual_collections.iter().cloned().collect(),
+            ..Default::default()
+        }
+    }
+
+    /// Resource ops the production projector would run from this state. The
+    /// Fixtures export install-only resource observations; applied ownership
+    /// affects teardown and is outside this projection.
+    fn owned_ops(&self) -> Vec<DiffOp> {
+        compute_owned_pairing_diff(&self.desired(), &self.actual(), &PairingApplied::default())
+    }
+}
+
+#[test]
+fn generated_pairing_reconcile_cases_drive_production_projector() {
+    let cases = lean_pairing_reconcile_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean must emit pairing reconcile samples"
+    );
+
+    let mut names = BTreeSet::new();
+    for case in cases {
+        assert!(
+            names.insert(case.name.as_str()),
+            "duplicate generated pairing case {:?}",
+            case.name
+        );
+        assert!(
+            case.before.desired_collections.len() >= 2,
+            "{}: samples must be multi-resource, got {:?}",
+            case.name,
+            case.before.desired_collections
+        );
+        assert_eq!(
+            case.before.desired_collections, case.after.desired_collections,
+            "{}: sampled actions never rewrite desired state",
+            case.name
+        );
+        // These samples validate the real resource projector. The connected
+        // field is an observed transport input, not evidence that this test dialed.
+        for state in [&case.before, &case.after] {
+            if state.connected {
+                assert_eq!(
+                    state.owned_ops().is_empty(),
+                    state.converged,
+                    "{}: resource completion",
+                    case.name
+                );
+            }
+        }
+
+        let before_ops = case.before.owned_ops();
+        let after_ops = case.after.owned_ops();
+        match case.action.as_str() {
+            // Dialing only moves transport readiness: the projector's pending
+            // resource work is identical on both sides of the transition.
+            "dial" | "dialFailed" => {
+                assert!(
+                    !case.before.connected,
+                    "{}: dial premises require a disconnected transport",
+                    case.name
+                );
+                assert_eq!(
+                    case.before.actual_collections, case.after.actual_collections,
+                    "{}: dial must not change observed resources",
+                    case.name
+                );
+                assert_eq!(
+                    before_ops, after_ops,
+                    "{}: dial must not change pending owned ops",
+                    case.name
+                );
+                if case.action == "dial" {
+                    assert!(
+                        case.after.connected,
+                        "{}: dial must establish transport readiness",
+                        case.name
+                    );
+                } else {
+                    assert!(
+                        !case.after.connected,
+                        "{}: dialFailed must leave the transport disconnected",
+                        case.name
+                    );
+                }
+            }
+            "reconcileInstall" => {
+                let installed: Vec<String> = case
+                    .after
+                    .actual_collections
+                    .iter()
+                    .filter(|collection| !case.before.actual_collections.contains(*collection))
+                    .cloned()
+                    .collect();
+                assert_eq!(
+                    installed.len(),
+                    1,
+                    "{}: one install must add exactly one collection, got {installed:?}",
+                    case.name
+                );
+                let (first, rest) = before_ops.split_first().unwrap_or_else(|| {
+                    panic!(
+                        "{}: the projector must still have pending work before an install, got {before_ops:?}",
+                        case.name
+                    )
+                });
+                assert_eq!(
+                    first,
+                    &DiffOp::InstallCollection(installed[0].clone()),
+                    "{}: the projector's first op must be the modeled install; ops {before_ops:?}",
+                    case.name
+                );
+                assert_eq!(
+                    rest, after_ops,
+                    "{}: the remaining projector ops must survive the install; \
+                     before {before_ops:?} after {after_ops:?}",
+                    case.name
+                );
+            }
+            other => panic!("unmapped Lean pairing reconcile action {other}"),
+        }
+    }
+
+    // Readiness is not convergence: the samples must include a connected state
+    // with resources still missing, and convergence only on the state where
+    // every desired resource is installed.
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.after.connected && !case.after.converged),
+        "samples must include a connected-but-unconverged state (readiness != convergence)"
+    );
+    assert!(
+        cases
+            .iter()
+            .any(|case| case.after.converged && case.after.owned_ops().is_empty()),
+        "samples must include a state converged on every desired resource"
+    );
 }
 
 pub(super) fn pairing_reconcile_shutdown_boundary_preempts_in_flight_sweep() {

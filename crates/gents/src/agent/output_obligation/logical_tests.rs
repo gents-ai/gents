@@ -211,3 +211,69 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         node.shutdown().await;
     }
 }
+
+// Malformed durable counts must fail the actual output gate.
+#[tokio::test]
+async fn dynamic_count_failures_are_observed_not_defaulted() {
+    for (args, reason) in [
+        (
+            json!({"other_field": 1}).to_string(),
+            "the write is missing the expected_count_field",
+        ),
+        // `canonical_positive_count` rejects leading zeroes, zero, and values
+        // above the closed-set maximum: textual variants cannot smuggle a
+        // second representation of the same count past the consistency check.
+        (
+            json!({"expected_total": "03"}).to_string(),
+            "a leading-zero count is not canonical",
+        ),
+        (
+            json!({"expected_total": 0}).to_string(),
+            "zero is not a canonical positive count",
+        ),
+        (
+            json!({"expected_total": -2}).to_string(),
+            "a negative count is not a canonical positive integer",
+        ),
+    ] {
+        let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let gate = OutputObligationGate::new(
+            node.clone(),
+            "request-doc-count-fail-closed",
+            vec![ActiveOutputObligation {
+                tool_name: "write_result".to_string(),
+                contract: crate::document_config::WriteToolOutputObligation {
+                    scope: crate::document_config::WriteToolOutputObligationScope::Trigger,
+                    minimum_writes: 1,
+                    expected_count_field: Some("expected_total".to_string()),
+                },
+            }],
+        );
+
+        let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new(
+            node.clone(),
+            "request-count-fail-closed".to_string(),
+            "session-count-fail-closed".to_string(),
+            "did:test:count".to_string(),
+            "call-count-1".to_string(),
+            1,
+            "write_result".to_string(),
+            args,
+            chrono::Utc::now() + chrono::Duration::minutes(1),
+        )
+        .with_request_doc_id(Some("request-doc-count-fail-closed".to_string()));
+        lifecycle.start_running().await.unwrap();
+        lifecycle.complete("persisted output").await.unwrap();
+
+        let error = gate
+            .unmet()
+            .await
+            .expect_err("a malformed durable count must fail the gate closed");
+        assert!(
+            error.to_string().contains("expected_count_field"),
+            "{reason}: unexpected error {error:#}"
+        );
+        node.shutdown().await;
+    }
+}

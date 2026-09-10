@@ -2574,7 +2574,6 @@ fn data_plane_desired_machine_scopes_conversation_and_owned_directory() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
     ] {
         assert_eq!(
@@ -2621,7 +2620,6 @@ fn control_plane_desired_machine_scopes_conversation_and_owned_directory() {
         "AgentToolCall",
         "AgentToolResult",
         "AgentSession",
-        "AgentConversation",
         "CompactionEntry",
     ] {
         let pred = desired

@@ -1,3 +1,9 @@
+//! R5 cross-principal subagent delegation conformance.
+//!
+//! Routing is keyed on agent DID identity (AgentPrincipal), not deployment
+//! identity: the "cross" route spawns on a different principal's runtime and
+//! the "same-principal" route falls back locally.
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +19,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::lean_vocab_test::{lean_r5_cross_deployment_cases, LeanR5CrossDeploymentCase};
+use crate::lean_vocab_test::{lean_r5_cross_principal_cases, LeanR5CrossPrincipalCase};
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
@@ -40,9 +46,13 @@ struct ToolCallRow {
     unclaimed_deadline_at: Option<String>,
 }
 
-pub(super) async fn generated_r5_cross_deployment_cases_drive_production_dispatch() {
-    let cases = lean_r5_cross_deployment_cases();
-    assert_eq!(cases.len(), 2, "Lean should emit cross and local R5 rows");
+pub(super) async fn generated_r5_cross_principal_cases_drive_production_dispatch() {
+    let cases = lean_r5_cross_principal_cases();
+    assert_eq!(
+        cases.len(),
+        2,
+        "Lean should emit cross- and same-principal R5 rows"
+    );
 
     for case in cases {
         assert_eq!(case.action.as_str(), "spawn_subagent", "{}", case.name);
@@ -55,22 +65,22 @@ pub(super) async fn generated_r5_cross_deployment_cases_drive_production_dispatc
             case.name
         );
 
-        if case.cross_deployment_routing_fired {
-            drive_cross_deployment_case(case).await;
+        if case.cross_principal_routing_fired {
+            drive_cross_principal_case(case).await;
         } else {
-            drive_single_deployment_case(case).await;
+            drive_same_principal_case(case).await;
         }
     }
 }
 
-async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
-    assert_eq!(case.route.as_str(), "cross_deployment", "{}", case.name);
+async fn drive_cross_principal_case(case: &LeanR5CrossPrincipalCase) {
+    assert_eq!(case.route.as_str(), "cross_principal", "{}", case.name);
     assert_ne!(
-        case.parent_deployment, case.child_deployment,
-        "{} should cross deployments",
+        case.parent_principal, case.child_principal,
+        "{} should cross principals",
         case.name
     );
-    assert!(case.child_owned_by_target_deployment, "{}", case.name);
+    assert!(case.child_owned_by_target_principal, "{}", case.name);
 
     let child_agent = boot_child_agent(case).await;
     let parent_db = test_p2p_db(&format!("{}-parent", case.name)).await;
@@ -102,7 +112,9 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     )
     .await;
 
+    let spawn_before = chrono::Utc::now();
     let child_request_id = spawn_from_parent_hook(case, &hook).await;
+    let spawn_after = chrono::Utc::now();
     assert!(
         fetch_child_request_optional(parent_db.node.as_ref(), &child_request_id)
             .await
@@ -118,6 +130,21 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     )
     .await;
     assert_bridge_matches_case(case, &bridge, &child_request_id);
+    if let Some(value) = bridge.unclaimed_deadline_at.as_deref() {
+        let deadline = chrono::DateTime::parse_from_rfc3339(value)
+            .expect("persisted spawn deadline")
+            .with_timezone(&chrono::Utc);
+        // Bracket the owner call instead of assuming a maximum scheduler delay
+        // between deadline computation and start_running's timestamp.
+        let timeout = chrono::Duration::seconds(60); // Explicit fixture configuration below.
+        assert!(
+            (chrono::DateTime::from_timestamp(spawn_before.timestamp(), 0).unwrap() + timeout
+                ..=spawn_after + timeout)
+                .contains(&deadline),
+            "{}: unclaimed deadline must use the configured spawn timeout",
+            case.name,
+        );
+    }
 
     let replicated_bridge = wait_for_tool_call(
         child_agent.db.node.as_ref(),
@@ -137,10 +164,15 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     let child = wait_for_child_request(child_agent.db.node.as_ref(), &child_request_id).await;
     assert_child_matches_case(case, &child, &child_request_id);
     let child_agent_did = child_agent.booted.agent_did.clone();
+    assert_ne!(
+        parent_agent_did, child_agent_did,
+        "{}: cross-principal route must use distinct runtime DIDs",
+        case.name
+    );
     assert_eq!(
         child.agent_did.as_deref(),
         Some(child_agent_did.as_str()),
-        "{}: cross-deployment child must be locally owned by B",
+        "{}: cross-principal child must be locally owned by B",
         case.name
     );
     assert_eq!(
@@ -161,14 +193,14 @@ async fn drive_cross_deployment_case(case: &LeanR5CrossDeploymentCase) {
     child_db.node.shutdown().await;
 }
 
-async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
-    assert_eq!(case.route.as_str(), "single_deployment", "{}", case.name);
+async fn drive_same_principal_case(case: &LeanR5CrossPrincipalCase) {
+    assert_eq!(case.route.as_str(), "same_principal", "{}", case.name);
     assert_eq!(
-        case.parent_deployment, case.child_deployment,
-        "{} should stay on one deployment",
+        case.parent_principal, case.child_principal,
+        "{} should stay within one principal",
         case.name
     );
-    assert!(case.single_deployment_fallback, "{}", case.name);
+    assert!(case.same_principal_fallback, "{}", case.name);
 
     let (parent_db, hook, parent_session_id, parent_behavior_id) =
         setup_parent_hook(case, true).await;
@@ -193,12 +225,12 @@ async fn drive_single_deployment_case(case: &LeanR5CrossDeploymentCase) {
     assert_eq!(
         child.agent_did.as_deref(),
         Some(parent_db.node_identity.did()),
-        "{}: same-deployment fallback should keep child ownership local",
+        "{}: same-principal fallback should keep child ownership local",
         case.name
     );
 }
 
-async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent {
+async fn boot_child_agent(case: &LeanR5CrossPrincipalCase) -> RunningChildAgent {
     let db = test_p2p_db(&format!("{}-child", case.name)).await;
 
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity(&format!("{}-child", case.name)));
@@ -243,7 +275,7 @@ async fn boot_child_agent(case: &LeanR5CrossDeploymentCase) -> RunningChildAgent
 }
 
 async fn setup_parent_hook(
-    case: &LeanR5CrossDeploymentCase,
+    case: &LeanR5CrossPrincipalCase,
     target_is_local: bool,
 ) -> (TestDb, DefraSessionHook, String, String) {
     let db = test_db(&format!("{}-parent", case.name)).await;
@@ -252,7 +284,7 @@ async fn setup_parent_hook(
 }
 
 async fn setup_parent_hook_on_db(
-    case: &LeanR5CrossDeploymentCase,
+    case: &LeanR5CrossPrincipalCase,
     parent_agent_did: &str,
     target_is_local: bool,
     remote_target_owner_did: Option<&str>,
@@ -266,7 +298,7 @@ async fn setup_parent_hook_on_db(
         parent_agent_did.to_string()
     } else {
         remote_target_owner_did
-            .expect("cross-deployment case must pass the booted child agent DID")
+            .expect("cross-principal case must pass the booted child agent DID")
             .to_string()
     };
 
@@ -385,7 +417,7 @@ async fn setup_parent_hook_on_db(
 }
 
 async fn spawn_from_parent_hook(
-    case: &LeanR5CrossDeploymentCase,
+    case: &LeanR5CrossPrincipalCase,
     hook: &DefraSessionHook,
 ) -> String {
     let args = json!({
@@ -435,7 +467,7 @@ async fn upsert_active_child_behavior_from_default(
         .expect("load default child behavior")
         .expect("default child behavior");
     let child_agent_did = behavior.agent_did.clone();
-    let selection_id = format!("{target_behavior_id}-r5-cross-deployment-tools");
+    let selection_id = format!("{target_behavior_id}-r5-cross-principal-tools");
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
@@ -685,7 +717,7 @@ async fn agent_tool_call_diagnostic(node: &EmbeddedNode) -> String {
 }
 
 fn assert_bridge_matches_case(
-    case: &LeanR5CrossDeploymentCase,
+    case: &LeanR5CrossPrincipalCase,
     bridge: &ToolCallRow,
     child_request_id: &str,
 ) {
@@ -734,7 +766,7 @@ fn assert_bridge_matches_case(
 }
 
 fn assert_child_matches_case(
-    case: &LeanR5CrossDeploymentCase,
+    case: &LeanR5CrossPrincipalCase,
     child: &AgentRequestRow,
     child_request_id: &str,
 ) {

@@ -135,3 +135,56 @@ fn graph_delivery_uses_the_same_grouping_and_concurrency_types() {
     );
     assert_eq!(serde_json::to_value(concurrency).unwrap(), json!("serial"));
 }
+
+#[test]
+fn context_skill_selection_is_compact_and_system_instructions_stay_literal() {
+    let minimal = json!({"context_id":"coding", "agent_did":"did:key:test"});
+    for skill_ids in [Value::Null, json!([])] {
+        let mut authored = minimal.clone();
+        authored["skill_ids"] = skill_ids;
+        let context: AgentContext = serde_json::from_value(authored).unwrap();
+        assert!(context.skill_ids.is_empty());
+        assert_eq!(serde_json::to_value(context).unwrap(), minimal);
+    }
+
+    let context = round_trip::<AgentContext>(json!({
+        "context_id":"coding", "agent_did":"did:key:test",
+        "system_prompt":"Keep {{ args.target }} and {{ ctx.now }} literal.",
+        "skill_ids":["review", "investigate"], "tags":["coding"]
+    }));
+    assert_eq!(context.skill_ids, ["review", "investigate"]);
+    assert_eq!(
+        context.system_prompt.as_deref(),
+        Some("Keep {{ args.target }} and {{ ctx.now }} literal.")
+    );
+}
+
+#[test]
+fn execution_and_retry_keep_explicit_overrides_distinct_from_omission() {
+    let execution = round_trip::<InferenceExecution>(
+        json!({"execution_id":"coding", "agent_did":"did:key:test"}),
+    );
+    assert_eq!(execution.stream_batch_ms, None);
+    assert_eq!(execution.retry_policy_id, None);
+    let retry = round_trip::<InferenceRetryPolicy>(
+        json!({"retry_policy_id":"coding", "agent_did":"did:key:test"}),
+    );
+    assert_eq!(retry.max_transport_retries, None);
+    assert_eq!(retry.allow_repair, None);
+    assert_eq!(retry.backoff_ms, None);
+
+    let execution = round_trip::<InferenceExecution>(json!({
+        "execution_id":"coding", "agent_did":"did:key:test",
+        "stream_batch_ms":25, "stream_liveness_timeout_secs":90,
+        "retry_policy_id":"no-repair", "tags":["interactive"]
+    }));
+    assert_eq!(execution.stream_batch_ms, Some(25));
+    let retry = round_trip::<InferenceRetryPolicy>(json!({
+        "retry_policy_id":"no-repair", "agent_did":"did:key:test",
+        "max_transport_retries":0, "allow_repair":false,
+        "backoff_ms":[0, 100], "tags":["interactive"]
+    }));
+    assert_eq!(retry.max_transport_retries, Some(0));
+    assert_eq!(retry.allow_repair, Some(false));
+    assert_eq!(retry.backoff_ms.as_deref(), Some([0, 100].as_slice()));
+}

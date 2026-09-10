@@ -43,121 +43,6 @@ pub(super) async fn generated_recovery_sweep_cases_drive_startup_recovery_contra
     }
 }
 
-pub(super) fn generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract() {
-    let sweep_cases = lean_recovery_sweep_cases();
-    let equivalence_cases = lean_recovery_equivalence_cases();
-    assert_eq!(
-        equivalence_cases.len(),
-        sweep_cases.len(),
-        "Lean must emit one uninterrupted-equivalence witness per recovery sweep case"
-    );
-    assert_eq!(
-        equivalence_cases.len(),
-        34,
-        "Lean recovery equivalence witness count drifted"
-    );
-
-    let sweep_by_name = sweep_cases
-        .iter()
-        .map(|case| (case.name.as_str(), case))
-        .collect::<HashMap<_, _>>();
-    let mut seen_sources = BTreeSet::new();
-    for case in equivalence_cases {
-        let source = sweep_by_name
-            .get(case.source_sweep_case.as_str())
-            .unwrap_or_else(|| {
-                panic!(
-                    "recovery equivalence case {} references unknown sweep case {}",
-                    case.name, case.source_sweep_case
-                )
-            });
-        assert!(
-            seen_sources.insert(case.source_sweep_case.as_str()),
-            "duplicate recovery equivalence witness for {}",
-            case.source_sweep_case
-        );
-        assert_eq!(case.sweep_id, source.sweep_id, "sweep id drifted");
-        assert_eq!(case.collection, source.collection, "collection drifted");
-        assert_eq!(
-            case.rust_function, source.rust_function,
-            "Rust function drifted"
-        );
-        assert_eq!(
-            case.cadence, source.cadence,
-            "recovery equivalence cadence drifted from its source sweep case"
-        );
-        assert_eq!(case.pre_state, source.pre_state, "pre-state drifted");
-        assert_eq!(
-            case.recovered_state, source.terminal_state,
-            "recovery terminal state drifted"
-        );
-        assert_eq!(
-            case.uninterrupted_state, source.terminal_state,
-            "uninterrupted terminal state drifted"
-        );
-        assert!(
-            case.equivalent,
-            "recovery case {} must equal the uninterrupted terminalization path",
-            case.name
-        );
-        assert!(
-            !case.reexecutes,
-            "recovery case {} must not claim tool/request re-execution",
-            case.name
-        );
-        assert!(
-            !case.can_hang,
-            "recovery case {} must not permit hanging after startup recovery",
-            case.name
-        );
-        assert_eq!(
-            case.theorem.as_str(),
-            expected_recovery_equivalence_theorem(case.sweep_id.as_str()),
-            "wrong concrete Lean equivalence theorem for {}",
-            case.name
-        );
-        assert_eq!(
-            case.aggregate_theorem.as_str(),
-            "Recovery.RecoveryEquivalence.finite_stale_rows_converge_to_uninterrupted"
-        );
-    }
-    assert_eq!(seen_sources.len(), sweep_cases.len());
-}
-
-fn expected_recovery_equivalence_theorem(sweep_id: &str) -> &'static str {
-    match sweep_id {
-        "request_lifecycle_recover_all_requests" => "Recovery.requestRecover_matches_uninterrupted",
-        "request_lifecycle_recover_all_streaming_responses" => {
-            "Recovery.responseRecover_matches_uninterrupted"
-        }
-        "tool_call_lifecycle_recover_all_running_calls" => {
-            "Recovery.toolCallRecover_matches_uninterrupted"
-        }
-        "tool_call_lifecycle_reconcile_orphaned_background_tools" => {
-            "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
-        }
-        "tool_call_lifecycle_reconcile_background_completion_side_effects" => {
-            "Recovery.backgroundCompletionSideEffectRecover_matches_uninterrupted"
-        }
-        "tool_call_lifecycle_reconcile_terminal_parent_owned_tools" => {
-            "Recovery.terminalParentToolRecover_matches_uninterrupted"
-        }
-        "tool_call_lifecycle_recover_detached_bridge_rows" => {
-            "Recovery.detachedBridgeRecover_matches_uninterrupted"
-        }
-        "inference_call_recover_all_stale_calls" => {
-            "Recovery.inferenceCallRecover_matches_uninterrupted"
-        }
-        "subagent_liveness_terminalize_expired_children" => {
-            "Recovery.expiredChildRecover_matches_uninterrupted"
-        }
-        "subagent_liveness_interrupt_queued_descendants" => {
-            "Recovery.queuedDescendantRecover_matches_uninterrupted"
-        }
-        other => panic!("unhandled recovery equivalence sweep id {other}"),
-    }
-}
-
 fn assert_recovery_case_metadata(case: &lean_vocab_test::LeanRecoverySweepCase) {
     let expected_cadence = if rust_periodic_recovery_sweep_ids().contains(case.sweep_id.as_str()) {
         "periodic"
@@ -479,16 +364,25 @@ pub(super) async fn startup_recovery_order_terminalizes_crash_orphaned_calls() {
         RECOVERY_CREATED_AT,
     )
     .await;
-    create_agent_session(&db.node, session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
-    create_conversation_row(
+    support::create_session_document(
         &db.node,
-        session_id,
-        "startup recovery",
-        "startup recovery",
-        "processing",
-        RECOVERY_CREATED_AT,
-        RECOVERY_CREATED_AT,
-        request_id,
+        &gents_protocol::session::AgentSession {
+            title: Some(gents_protocol::session::SessionTitle {
+                text: "startup recovery".into(),
+                source: gents_protocol::session::SessionTitleSource::Placeholder,
+            }),
+            observation: Some(gents_protocol::session::SessionObservation {
+                last_activity_at: RECOVERY_CREATED_AT.into(),
+                preview: Some("startup recovery".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: request_doc_id.clone(),
+                    request_id: (request_id).to_string(),
+                    lifecycle_state:
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                }),
+            }),
+            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+        },
     )
     .await;
     let _owner = own_child_fixture(&db.node, &request_doc_id, request_id, session_id, true).await;
@@ -558,15 +452,19 @@ async fn live_startup_lease_expiry_converges_inference_rows_through_periodic_reg
         )
         .await;
         create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
-        create_conversation_row(
+        support::seed_session_observation(
             &db.node,
             &session_id,
-            "deferred recovery",
-            "deferred recovery",
-            "processing",
-            RECOVERY_CREATED_AT,
-            RECOVERY_CREATED_AT,
-            &request_id,
+            &gents_protocol::session::SessionObservation {
+                last_activity_at: RECOVERY_CREATED_AT.into(),
+                preview: Some("deferred recovery".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: doc_id.clone(),
+                    request_id: request_id.clone(),
+                    lifecycle_state:
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                }),
+            },
         )
         .await;
         // Retain the fixture owner: dropping it would relinquish the lease,
@@ -940,16 +838,25 @@ async fn drive_request_recovery_case(case: &lean_vocab_test::LeanRecoverySweepCa
     )
     .await;
     seed_expired_execution_tuple(&db.node, &doc_id).await;
-    create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
-    create_conversation_row(
+    support::create_session_document(
         &db.node,
-        &session_id,
-        "recovery request",
-        "recovery request",
-        "processing",
-        RECOVERY_CREATED_AT,
-        RECOVERY_CREATED_AT,
-        &request_id,
+        &gents_protocol::session::AgentSession {
+            title: Some(gents_protocol::session::SessionTitle {
+                text: "recovery request".into(),
+                source: gents_protocol::session::SessionTitleSource::Placeholder,
+            }),
+            observation: Some(gents_protocol::session::SessionObservation {
+                last_activity_at: RECOVERY_CREATED_AT.into(),
+                preview: Some("recovery request".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: doc_id.clone(),
+                    request_id: (&request_id).to_string(),
+                    lifecycle_state:
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                }),
+            }),
+            ..support::session_document(&session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+        },
     )
     .await;
     set_request_lifecycle_state(&db.node, &doc_id, case.pre_state.as_str()).await;
@@ -1023,12 +930,19 @@ async fn drive_response_recovery_case(case: &lean_vocab_test::LeanRecoverySweepC
     .await;
     seed_expired_execution_tuple(&db.node, &request_doc_id).await;
     create_agent_session(&db.node, &session_id, AGENT_NAME, RECOVERY_CREATED_AT).await;
-    upsert_conversation(
+    support::seed_session_observation(
         &db.node,
         &session_id,
-        &request_id,
-        "recovery response",
-        "processing",
+        &gents_protocol::session::SessionObservation {
+            last_activity_at: RECOVERY_CREATED_AT.into(),
+            preview: Some("recovery response".into()),
+            latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                request_doc_id: request_doc_id.clone(),
+                request_id: request_id.clone(),
+                lifecycle_state:
+                    gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+            }),
+        },
     )
     .await;
     create_response_with_status(
@@ -1202,7 +1116,7 @@ async fn drive_tool_call_recovery_case(case: &lean_vocab_test::LeanRecoverySweep
                 "{}: Lean-pinned recovery cause must preserve external failure classification",
                 case.name
             ),
-            Some("unclaimedCrossDeploymentSpawn") => assert_eq!(
+            Some("unclaimedCrossPrincipalSpawn") => assert_eq!(
                 row.tool_failure_class.as_deref(),
                 Some("serviceUnavailable"),
                 "{}: unclaimed recovery must preserve service-unavailable classification",
@@ -1482,7 +1396,7 @@ async fn seed_tool_parent_and_row(
                     "did:test:target".to_string(),
                 )
             }
-            "tool_running_unclaimed_cross_deployment_spawn_to_failed" => {
+            "tool_running_unclaimed_cross_principal_spawn_to_failed" => {
                 let child_request_id = format!("{tool_call_id}-remote-child");
                 ToolCallLifecycle::new_subagent(
                     node.clone(),
@@ -1505,7 +1419,7 @@ async fn seed_tool_parent_and_row(
     };
     lifecycle.start_running().await.unwrap();
 
-    if case.name == "tool_running_unclaimed_cross_deployment_spawn_to_failed"
+    if case.name == "tool_running_unclaimed_cross_principal_spawn_to_failed"
         || case.unclaimed_expired == Some(true)
     {
         set_tool_unclaimed_deadline(&node, tool_call_id, "2020-01-01T00:00:00Z").await;
@@ -2035,8 +1949,8 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
         assert_eq!(metadata["queue"]["key"], queue_key, "{}", case.name);
 
         // Idempotence: a second startup pass finds no running row, appends no
-        // duplicate notification, and enqueues no second wake.
-        let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        // duplicate notification, and enqueues no second wake for the same agent.
+        let second = ToolCallLifecycle::recover_all(&db.node, &agent_did)
             .await
             .unwrap();
         assert_eq!(second.tool_calls_recovered, 0, "{}", case.name);
@@ -2168,4 +2082,328 @@ async fn seed_expired_execution_tuple(node: &EmbeddedNode, request_doc_id: &str)
         "seed expired execution tuple: {:?}",
         response.errors
     );
+}
+
+/// Recovery-time cascade to a NON-LOCAL cascade child. The generated sweep
+/// witnesses only link locally-owned children (local `interrupt_request`
+/// latch, covered by the subagent-source suite) or expire the unclaimed
+/// deadline (which suppresses the cascade entirely), so the recovery owner's
+/// remote branch — durable `cancel_cascade_intent_at` +
+/// `cancel_pending_remote_ack` on the terminalizing bridge, and NO local
+/// latch of the foreign child — has no witness. A regression that latches the
+/// foreign child locally, or drops the remote intent, would either fork a
+/// foreign document (#664: a peer-authored delta forks the CRDT) or strand a
+/// running remote child whose host mirror
+/// (`cross_deployment_cancel_mirror`) keys on exactly those two fields.
+#[tokio::test]
+async fn recovery_cascade_writes_remote_intent_for_foreign_child() {
+    let db = test_db("recovery-cascade-remote-intent").await;
+    let foreign_did = "did:test:remote-host";
+    let parent_request_id = "recovery-cascade-remote-parent";
+    let parent_session_id = "recovery-cascade-remote-parent-session";
+    let tool_call_id = "recovery-cascade-remote-bridge";
+    let child_request_id = "recovery-cascade-remote-child";
+
+    let parent_doc_id = create_request(
+        &db.node,
+        parent_request_id,
+        parent_session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    // The child row EXISTS but is owned by the remote principal: the recovery
+    // owner must neither latch nor terminalize it.
+    let _foreign_child = crate::support::create_request_for_agent_with_signed_fields(
+        &db.node,
+        foreign_did,
+        child_request_id,
+        &format!("{child_request_id}-session"),
+        "processing",
+        RECOVERY_CREATED_AT,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await;
+
+    let mut bridge = ToolCallLifecycle::new_subagent(
+        db.node.clone(),
+        parent_request_id.to_string(),
+        parent_session_id.to_string(),
+        AGENT_DID.to_string(),
+        tool_call_id.to_string(),
+        1,
+        "spawn_subagent".to_string(),
+        "{}".to_string(),
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        AwaitMode::Foreground,
+        CancelPolicy::Cascade,
+        child_request_id.to_string(),
+        foreign_did.to_string(),
+    );
+    bridge.start_running().await.unwrap();
+    set_request_lifecycle_state(&db.node, &parent_doc_id, "interrupted").await;
+
+    let report = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.tool_calls_recovered, 1,
+        "the interrupted parent must terminalize its running cascade bridge"
+    );
+
+    let row = fetch_tool_recovery_row(&db.node, tool_call_id).await;
+    assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+    assert_eq!(
+        row.cancel_cause.as_deref(),
+        Some("interrupted"),
+        "parent-interrupted recovery must persist the interrupted cause"
+    );
+    assert_eq!(
+        row.tool_failure_class, None,
+        "cancellation recovery must not invent a failure class"
+    );
+
+    let intent_row = fetch_bridge_cancel_intent_row(&db.node, tool_call_id).await;
+    assert!(
+        intent_row
+            .cancel_cascade_intent_at
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        "recovery must write the durable remote cancel intent for the foreign child: {intent_row:?}"
+    );
+    assert_eq!(
+        intent_row.cancel_pending_remote_ack,
+        Some(true),
+        "the remote intent must stay pending until the host's ack observer clears it"
+    );
+
+    let child_interrupt = fetch_interrupt_requested_at(&db.node, child_request_id)
+        .await
+        .expect("fetch foreign child interrupt_requested_at");
+    assert!(
+        child_interrupt.is_none(),
+        "recovery must never latch interrupt_requested_at on a foreign-principal child"
+    );
+    let child = fetch_request_recovery_row(&db.node, child_request_id).await;
+    assert_eq!(
+        child.lifecycle_state.as_str(),
+        "processing",
+        "recovery must not terminalize a foreign-principal child row"
+    );
+
+    let second = ToolCallLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        second.tool_calls_recovered, 0,
+        "the remote-intent bridge is terminal; a second pass must not re-recover it"
+    );
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeCancelIntentRow {
+    cancel_cascade_intent_at: Option<String>,
+    cancel_pending_remote_ack: Option<bool>,
+}
+
+async fn fetch_bridge_cancel_intent_row(
+    node: &EmbeddedNode,
+    tool_call_id: &str,
+) -> BridgeCancelIntentRow {
+    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{escaped_tool_call_id}" }} }}, limit: 1) {{
+                cancel_cascade_intent_at
+                cancel_pending_remote_ack
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentToolCall")
+}
+
+/// Recovery with NO durable AgentResponse at all. Every generated
+/// request-recovery witness seeds a response row (`complete` or `error`), so
+/// the owner's response-absent branches have no consumer: the classifier's
+/// default arm (`_ if interrupt_was_requested => Interrupted`, else `Failed`)
+/// and `terminalize_execution`'s `create_AgentResponse` fallback that mints
+/// the synthetic error response with the owner's reason. A regression that
+/// dropped the fallback (recovery erroring instead of terminalizing a
+/// response-less request) or demoted the latched-interrupt arm (failing a
+/// request whose interrupt was already requested) would pass every generated
+/// case. Covers the crash shape "daemon restarted before the first token".
+#[tokio::test]
+async fn request_recovery_without_response_mints_synthetic_terminal() {
+    // Sub-case A: no response, no interrupt latch -> Failed with the
+    // "before response could be generated" reason.
+    let db = test_db("recovery-no-response-failed").await;
+    let request_id = "recovery-no-response-request";
+    let session_id = "recovery-no-response-session";
+    let doc_id = create_request(
+        &db.node,
+        request_id,
+        session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    seed_expired_execution_tuple(&db.node, &doc_id).await;
+    support::create_session_document(
+        &db.node,
+        &gents_protocol::session::AgentSession {
+            title: Some(gents_protocol::session::SessionTitle {
+                text: "recovery no response".into(),
+                source: gents_protocol::session::SessionTitleSource::Placeholder,
+            }),
+            observation: Some(gents_protocol::session::SessionObservation {
+                last_activity_at: RECOVERY_CREATED_AT.into(),
+                preview: Some("recovery no response".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: doc_id.clone(),
+                    request_id: (request_id).to_string(),
+                    lifecycle_state:
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                }),
+            }),
+            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+        },
+    )
+    .await;
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.requests_recovered, 1,
+        "a response-less expired request must still terminalize"
+    );
+    assert_eq!(
+        report.responses_recovered, 1,
+        "recovery must count the synthetic response it creates"
+    );
+
+    let row = fetch_request_recovery_row(&db.node, request_id).await;
+    assert_eq!(
+        row.lifecycle_state.as_str(),
+        "failed",
+        "absent response and no interrupt latch must default to failed"
+    );
+    let response = fetch_recovery_response_detail(&db.node, request_id).await;
+    assert_eq!(response.status, "error");
+    assert_eq!(
+        response.error_message.as_deref(),
+        Some("daemon restarted before response could be generated"),
+        "the synthetic response must carry the owner's reason, got {response:?}"
+    );
+    assert!(
+        response
+            .interrupted_at
+            .as_deref()
+            .is_none_or(|v| v.trim().is_empty()),
+        "a failed recovery must not stamp interrupted_at"
+    );
+
+    let second = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        second.requests_recovered, 0,
+        "a repaired terminal request must leave the active-recovery scope"
+    );
+
+    // Sub-case B: no response but a latched interrupt -> Interrupted wins
+    // over the Failed default, and the synthetic response is stamped with
+    // interrupted_at.
+    let db = test_db("recovery-no-response-interrupted").await;
+    let request_id = "recovery-no-response-interrupted-request";
+    let session_id = "recovery-no-response-interrupted-session";
+    let doc_id = create_request(
+        &db.node,
+        request_id,
+        session_id,
+        "processing",
+        RECOVERY_CREATED_AT,
+    )
+    .await;
+    seed_expired_execution_tuple(&db.node, &doc_id).await;
+    set_interrupt_requested_at(&db.node, &doc_id, "2026-03-23T00:00:30Z").await;
+    support::create_session_document(
+        &db.node,
+        &gents_protocol::session::AgentSession {
+            title: Some(gents_protocol::session::SessionTitle {
+                text: "recovery no response interrupted".into(),
+                source: gents_protocol::session::SessionTitleSource::Placeholder,
+            }),
+            observation: Some(gents_protocol::session::SessionObservation {
+                last_activity_at: RECOVERY_CREATED_AT.into(),
+                preview: Some("recovery no response interrupted".into()),
+                latest_request: Some(gents_protocol::session::SessionRequestObservation {
+                    request_doc_id: doc_id.clone(),
+                    request_id: (request_id).to_string(),
+                    lifecycle_state:
+                        gents_protocol::request_lifecycle::RequestLifecycleState::Processing,
+                }),
+            }),
+            ..support::session_document(session_id, AGENT_NAME, RECOVERY_CREATED_AT)
+        },
+    )
+    .await;
+
+    let report = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+        .await
+        .unwrap();
+    assert_eq!(
+        report.requests_recovered, 1,
+        "a latched response-less interrupt must terminalize as interrupted"
+    );
+
+    let row = fetch_request_recovery_row(&db.node, request_id).await;
+    assert_eq!(
+        row.lifecycle_state.as_str(),
+        "interrupted",
+        "a latched interrupt must outrank the absent-response Failed default"
+    );
+    let response = fetch_recovery_response_detail(&db.node, request_id).await;
+    assert_eq!(response.status, "error");
+    assert_eq!(
+        response.error_message.as_deref(),
+        Some("interrupted"),
+        "the interrupted synthetic response must carry the interrupt reason"
+    );
+    assert!(
+        response
+            .interrupted_at
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        "the interrupted synthetic response must carry a stamped interrupted_at"
+    );
+}
+
+#[derive(Debug, Deserialize)]
+struct RecoveryResponseDetail {
+    status: String,
+    #[serde(default)]
+    error_message: Option<String>,
+    #[serde(default)]
+    interrupted_at: Option<String>,
+}
+
+async fn fetch_recovery_response_detail(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> RecoveryResponseDetail {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let query = format!(
+        r#"{{
+            AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+                status
+                error_message
+                interrupted_at
+            }}
+        }}"#
+    );
+    first_row(&node.execute(&query).await, "AgentResponse")
 }

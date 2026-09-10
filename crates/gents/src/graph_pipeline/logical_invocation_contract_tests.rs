@@ -269,9 +269,19 @@ struct CaseRow {
 #[tokio::test]
 async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
     let snapshot: Contracts = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.graph_logical_invocation_cases.len(), 15);
+    assert_eq!(snapshot.graph_logical_invocation_cases.len(), 16);
+    let mut replayed = 0;
     for case in snapshot.graph_logical_invocation_cases {
         assert_eq!(case.root, 10, "{}", case.name);
+        if case.name == "pinned_root_has_authenticated_parent" {
+            // Abstract rejection outside the production admission domain:
+            // roots require event/schedule authority, whereas authenticated
+            // parent edges require Goal/local-control authority. The ancestry
+            // owner also excludes its entry from the parent map. This row does
+            // not yet have a faithful runtime projection (CoverageLedger).
+            continue;
+        }
+        replayed += 1;
         let (node, run, goal, identity, _temp) =
             signed_invocation_fixture(case.max_invocations).await;
         let mut request_ids =
@@ -445,6 +455,7 @@ async fn generated_graph_logical_invocations_drive_persisted_run_projection() {
         assert_eq!(terminal.status, status, "{}", case.name);
         node.shutdown().await;
     }
+    assert_eq!(replayed, 15, "all representable invocation cases must run");
 }
 
 async fn publication_state(node: &defra_node::EmbeddedNode) -> serde_json::Value {

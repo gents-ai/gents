@@ -120,10 +120,8 @@ fn generated_backend_health_admission_cases_match_registry_and_admission_policy(
 }
 
 /// Operator-UI projection of `(enabled, probe_status)`. Drives every Lean
-/// witness through `derive_display_state` and asserts:
-///   * the derivation is total (every witness maps to a known bucket);
-///   * the `available` bucket coincides exactly with the Lean
-///     `expected_available` verdict.
+/// witness through `derive_display_state` and compares availability with Lean.
+/// An explicit input table checks the display labels, including unknown status.
 ///
 /// This is the bridge-snapshot consumer test for the
 /// `backend-health.operatorUi` row of the feature matrix — registered in
@@ -137,36 +135,25 @@ fn display_state_matches_every_lean_backend_health_admission_case() {
         "Lean witness count drifted from operator UI expectations"
     );
 
+    for (enabled, status, expected) in [
+        (false, "healthy", "disabled"),
+        (true, "healthy", "available"),
+        (true, "unhealthy", "unhealthy"),
+        (true, "stale", "stale"),
+        (true, "rate_limited", "rate-limited"),
+        (true, "circuit_open", "circuit-open"),
+        (true, "unknown", "unknown"),
+        (true, "unrecognized", "unknown"),
+    ] {
+        assert_eq!(derive_display_state(enabled, status), expected);
+    }
     for case in cases {
-        let actual = derive_display_state(case.enabled, &case.probe_status);
-        let expected = expected_display_state(case.enabled, &case.probe_status);
         assert_eq!(
-            actual, expected,
-            "case {} mapped probe_status {} to {} but expected {}",
-            case.name, case.probe_status, actual, expected
-        );
-
-        let panel_says_available = actual == "available";
-        assert_eq!(
-            panel_says_available, case.expected_available,
-            "case {} drifted from Lean availability witness",
+            derive_display_state(case.enabled, &case.probe_status) == "available",
+            case.expected_available,
+            "{}",
             case.name
         );
-    }
-
-    fn expected_display_state(enabled: bool, probe_status: &str) -> &'static str {
-        if !enabled {
-            return "disabled";
-        }
-        match probe_status {
-            "healthy" => "available",
-            "unhealthy" => "unhealthy",
-            "stale" => "stale",
-            "rate_limited" => "rate-limited",
-            "circuit_open" => "circuit-open",
-            "unknown" => "unknown",
-            _ => "unknown",
-        }
     }
 }
 

@@ -127,7 +127,6 @@ mod tests {
             behavior_id: None,
             clone_from: None,
             persona_name: Some("Research".into()),
-            backend_model: Some("openai|gpt-5".into()),
             root: None,
             preset: Some("write".into()),
             profile_id: Some("profile-1".into()),

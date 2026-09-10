@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -329,6 +331,113 @@ fn windows_process_is_running(pid: u32) -> std::io::Result<bool> {
         WAIT_TIMEOUT => Ok(true),
         _ => Err(std::io::Error::last_os_error()),
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_delivers_stdin_and_closes_the_pipe() {
+    // `stdin` plumbing through the managed envelope: the writer task writes
+    // the payload and the child sees EOF after it, so a program that reads to
+    // completion observes exactly the supplied bytes.
+    let outcome = run_managed_exec(ManagedExecRequest {
+        argv: vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            // `wc -c` counts every byte it reads before EOF; if the pipe were
+            // left open (writer task never finishing / not closed), this
+            // would hang until the deadline instead of exiting.
+            "wc -c".to_string(),
+        ],
+        cwd: PathBuf::from("/"),
+        deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+        cancellation_token: CancellationToken::new(),
+        max_output_bytes: 1024,
+        stdin: b"hello managed stdin".to_vec(),
+        environment: None,
+        tool_name: Some("stdin-passthrough".to_string()),
+        live_output: None,
+    })
+    .await;
+
+    match outcome {
+        ManagedExecOutcome::Exited { code, stdout, .. } => {
+            assert_eq!(code, Some(0));
+            // `19` is the payload length; the count is whitespace-padded.
+            let text = String::from_utf8_lossy(&stdout);
+            assert_eq!(
+                text.trim().parse::<u64>().expect("byte count"),
+                19,
+                "the child must observe exactly the supplied stdin bytes: {text:?}"
+            );
+        }
+        other => panic!("expected exited outcome, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_environment_replaces_the_inherited_environment() {
+    // Invoke env directly so shell-created variables cannot mask inheritance.
+    let outcome = run_managed_exec(ManagedExecRequest {
+        argv: vec!["/usr/bin/env".to_string()],
+        cwd: PathBuf::from("/"),
+        deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+        cancellation_token: CancellationToken::new(),
+        max_output_bytes: 4096,
+        stdin: Vec::new(),
+        environment: Some(HashMap::from([(
+            "TEST_SCOPED_VAR".to_string(),
+            "scoped-only".to_string(),
+        )])),
+        tool_name: Some("env-scope".to_string()),
+        live_output: None,
+    })
+    .await;
+    match outcome {
+        ManagedExecOutcome::Exited { code, stdout, .. } => {
+            assert_eq!(code, Some(0));
+            // Do not include inherited environment values in failure output.
+            assert!(
+                stdout == b"TEST_SCOPED_VAR=scoped-only\n",
+                "child environment must exactly match the supplied map"
+            );
+        }
+        other => panic!("expected exited outcome, got {other:?}"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_reports_spawn_failure_as_a_typed_outcome() {
+    // A nonexistent program must surface as SpawnFailed with the OS error —
+    // never as a silent exit or a hang — and must not leave a registry entry.
+    let outcome = run_managed_exec(ManagedExecRequest {
+        argv: vec!["/nonexistent/gents-missing-binary".to_string()],
+        cwd: PathBuf::from("/"),
+        deadline_at: Some(Utc::now() + chrono::Duration::seconds(5)),
+        cancellation_token: CancellationToken::new(),
+        max_output_bytes: 1024,
+        stdin: Vec::new(),
+        environment: None,
+        tool_name: Some("spawn-failure".to_string()),
+        live_output: None,
+    })
+    .await;
+    match &outcome {
+        ManagedExecOutcome::SpawnFailed { error } => {
+            assert!(
+                error.contains("No such file") || error.contains("no such file"),
+                "spawn failure should carry the OS error: {error}"
+            );
+        }
+        other => panic!("expected spawn-failed outcome, got {other:?}"),
+    }
+    assert!(
+        crate::active_native_executors()
+            .iter()
+            .all(|snapshot| snapshot.tool_name.as_deref() != Some("spawn-failure")),
+        "a failed spawn must not register an active executor snapshot"
+    );
 }
 
 #[cfg(unix)]

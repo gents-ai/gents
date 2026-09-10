@@ -1,67 +1,12 @@
-//! Task 30 — conformance tests for the trigger engine + EventTrigger lifecycle.
-//!
-//! # Scope
-//!
-//! These tests lock down the **externally-observable** conformance contract
-//! between the trigger engine, the `EventSource`, the
-//! `ProductionMaterializer`, and DefraDB. Full engine-level e2e coverage for
-//! the event pipeline (source-doc create → materialized `AgentRequest` with
-//! lineage) is handled by `tests/event_trigger_e2e.rs` (PR 2 Task 24). The
-//! cases here pin the corresponding conformance surface:
-//!
-//! * `fires_on_matching_source_doc_create` — a filter-less EventTrigger
-//!   materializes an `AgentRequest` with `caused_by_trigger_kind = "event"`
-//!   and the rendered template in `content`.
-//! * `does_not_fire_when_source_doc_fails_filter` — an EventTrigger gated by a
-//!   `kind == "signup"` filter does NOT fire for `kind: "other"` source docs,
-//!   and the runtime bookkeeping on the trigger row stays null.
-//! * `enabled_false_does_not_fire` — `enabled: false` triggers never
-//!   materialize requests, even for matching source docs.
-//! * `backfill_is_forward_only` — pre-existing source docs are NEVER replayed
-//!   when a trigger becomes active; only NEW doc-create events fire.
-//! * `subscription_reconciles_on_generation_bump` — re-pointing a trigger from
-//!   collection A to collection B bumps `active_generation` and only B-side
-//!   writes fire afterwards.
-//! * `serial_skips_when_prior_active_runtime` — the engine's gating query sees an
-//!   active runtime `(trigger_id, "event")` tuple and the serial trigger skips.
-//! * `latest_only_supersedes_prior_fire` — the supersede mutation the engine
-//!   would run transitions the in-flight event-kind request to
-//!   `superseded`, and a new materialize lands with the same lineage.
-//! * `template_render_failure_records_error_status` — an event-kind render
-//!   failure writes `last_status = "error"` / `last_error = ...` on the
-//!   EventTrigger doc without materializing a request.
-//! * `two_triggers_same_source_collection_each_evaluate_filter_independently`
-//!   — two triggers on the same `source_collection` apply their own filters
-//!   independently; only the trigger whose filter matches fires.
-//!
-//! # Pragmatic split: engine semantics vs. persistence/operational surfaces
-//!
-//! The pure trigger-engine branch matrix is pinned in-crate by
-//! `trigger_engine::tests::trigger_engine_dispatch_matches_lean_generated_contract_cases`,
-//! which consumes finite cases emitted by
-//! `Proofs/Conformance/Triggers/Contracts.lean`. That Lean-generated contract
-//! covers manual dispatch, schedule/event reachability, tuple-sensitive serial
-//! gating, latest-only supersession, parallel bypass of in-flight gates, and
-//! lineage shape without depending on wall-clock debounce.
-//!
-//! Cases 6, 7, 8 remain asserted here at the persistence-layer contract (seed
-//! an in-flight `AgentRequest` with the right lineage tuple + simulate the
-//! exact mutation / writeback the production materializer/source produces).
-//! They are still valuable because they pin the DefraDB query/mutation shape
-//! the engine delegates to at runtime, but they are no longer the only
-//! correctness oracle for serial/latest-only trigger behavior.
-//!
-//! Cases 1, 2, 3, 4, 5, 9 boot a real `Gents` so the EventSource loop
-//! actually observes DefraDB events; these are the tests where the
-//! externally-observable behavior *only* exists if the live subscription +
-//! filter + materialize chain runs end to end.
+//! Live event-source delivery, filtering, writeback, and reconfiguration.
+//! Concurrency branches and persistence are covered through the existing
+//! trigger dispatch and ProductionMaterializer owners, without copied SQL here.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
-use gents::lifecycle::{ExecutionOrigin, RequestLifecycle, TriggerLineage};
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling};
 use serde_json::Value;
 
@@ -69,7 +14,7 @@ use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{wait_for_runtime_ready, TEST_RUNTIME_READY_TIMEOUT};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
-use crate::support::{test_db, AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS};
+use crate::support::{set_request_lifecycle_state, test_db, AGENT_NAME};
 
 async fn register_webhook_event_schema(node: &EmbeddedNode) {
     let sdl = r#"
@@ -380,112 +325,6 @@ async fn fetch_event_trigger_row(node: &EmbeddedNode, trigger_id: &str) -> Optio
     })
 }
 
-async fn has_active_runtime_request_for_trigger(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    trigger_id: &str,
-    trigger_kind: &str,
-) -> bool {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_trigger_kind = escape_graphql_string(trigger_kind);
-    let query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
-                    caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
-                }},
-                limit: 1
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "has_active_runtime_request_for_trigger failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| !rows.is_empty())
-        .unwrap_or(false)
-}
-
-async fn supersede_active_runtime_requests_for_trigger(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    trigger_id: &str,
-    trigger_kind: &str,
-) -> usize {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_trigger_kind = escape_graphql_string(trigger_kind);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
-                    caused_by_trigger_kind: {{ _eq: "{escaped_trigger_kind}" }},
-                    lifecycle_state: {{ _in: ["pending", "claimed", "processing"] }}
-                }},
-                input: {{
-                    lifecycle_state: "superseded"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "supersede_active_runtime_requests_for_trigger failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("update_AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|rows| rows.len())
-        .unwrap_or(0)
-}
-
-async fn fetch_request_state(node: &EmbeddedNode, request_id: &str) -> Option<String> {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{
-                lifecycle_state
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "fetch_request_state failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .map(|row| {
-            row.get("lifecycle_state")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_owned()
-        })
-}
-
 struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     handle: tokio::task::JoinHandle<anyhow::Result<()>>,
@@ -593,15 +432,6 @@ async fn wait_for_request_count(
     }
 }
 
-async fn assert_no_request_within(node: &EmbeddedNode, trigger_id: &str, settle: Duration) {
-    tokio::time::sleep(settle).await;
-    let count = count_agent_requests_for_trigger(node, trigger_id, "event").await;
-    assert_eq!(
-        count, 0,
-        "expected no AgentRequest for trigger_id={trigger_id} but got {count}"
-    );
-}
-
 async fn wait_for_last_status(
     node: &EmbeddedNode,
     trigger_id: &str,
@@ -626,7 +456,152 @@ async fn wait_for_last_status(
     }
 }
 
-#[path = "triggers_cases/concurrency_persistence.rs"]
-mod concurrency_persistence;
+/// Register a GroupMember source schema for live per-group delivery tests.
+/// `run_id` is indexed because `EventTrigger.correlation_field` resolves
+/// against it in the filter probe and recovery pages.
+async fn register_group_member_schema(node: &EmbeddedNode) {
+    let sdl = r#"
+        type GroupMember {
+            run_id: String @index
+            value: String
+        }
+    "#;
+    node.add_schema(sdl)
+        .await
+        .expect("add_schema for GroupMember");
+}
+
+async fn write_group_member(node: &EmbeddedNode, run_id: &str, value: &str) {
+    let escaped_run_id = escape_graphql_string(run_id);
+    let escaped_value = escape_graphql_string(value);
+    let mutation = format!(
+        r#"mutation {{
+            create_GroupMember(input: {{
+                run_id: "{escaped_run_id}",
+                value: "{escaped_value}"
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create_GroupMember failed: {:?}",
+        resp.errors
+    );
+}
+
+/// Create a `per_group` EventTrigger with a fixed expected cardinality and a
+/// 60s collection timeout. Both knobs are required by the runtime resolve-time
+/// quarantine (a per_group trigger needs correlation + expected count or
+/// timeout), so this fixture exercises the existing resolver. These legacy EventTrigger
+/// fields migrate to Trigger -> EventSource grouping; they are not pack authoring targets.
+async fn create_per_group_event_trigger(
+    node: &EmbeddedNode,
+    trigger_id: &str,
+    task_id: &str,
+    source_collection: &str,
+    expected_count: i64,
+) {
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let escaped_task_id = escape_graphql_string(task_id);
+    let escaped_source_collection = escape_graphql_string(source_collection);
+    let mutation = format!(
+        r#"mutation {{
+            create_EventTrigger(input: {{
+                trigger_id: "{escaped_trigger_id}",
+                task_id: "{escaped_task_id}",
+                source_collection: "{escaped_source_collection}",
+                event_kind: "created",
+                enabled: true,
+                concurrency: "serial",
+                fire_mode: "per_group",
+                correlation_field: "run_id",
+                expected_count: {expected_count},
+                group_timeout_secs: 60,
+                fire_count: 0
+            }}) {{ _docID }}
+        }}"#
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create per-group EventTrigger failed: {:?}",
+        resp.errors
+    );
+}
+
+/// Create an `AgentRequest` row carrying exact trigger lineage so tests can
+/// seed the durable input of `ProductionMaterializer::
+/// has_active_runtime_request_for_trigger` through the real store. The lineage
+/// tuple is `@immutable` in the schema, so it must be authored at create time;
+/// `lifecycle_state` is authored directly, matching what the runtime's
+/// completion/terminal owners persist.
+///
+async fn create_request_with_trigger_lineage(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+    lifecycle_state: &str,
+    trigger_id: &str,
+    trigger_kind: &str,
+) -> String {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let escaped_lifecycle_state = escape_graphql_string(lifecycle_state);
+    let escaped_trigger_id = escape_graphql_string(trigger_id);
+    let escaped_trigger_kind = escape_graphql_string(trigger_kind);
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{escaped_request_id}",
+                agent_did: "{escaped_agent_did}",
+                behavior_id: "{AGENT_NAME}",
+                session_id: "{escaped_request_id}",
+                retry_parent_request: "",
+                retry_root_request: "{escaped_request_id}",
+                superseded_by_request: "",
+                content: "serial gate seed",
+                lifecycle_state: "{escaped_lifecycle_state}",
+                caused_by_trigger_id: "{escaped_trigger_id}",
+                caused_by_trigger_kind: "{escaped_trigger_kind}",
+                backend_id: "",
+                execution_origin: "scheduled",
+                created_at: "2026-01-01T00:00:00Z",
+                retry_count: 0,
+                max_retries: {max_retries},
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let resp = node.execute(&mutation).await;
+    assert!(
+        !resp.has_errors(),
+        "create serial-gate seed request failed: {:?}",
+        resp.errors
+    );
+    let query = format!(
+        r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ _docID }}
+        }}"#
+    );
+    let lookup = node.execute(&query).await;
+    assert!(
+        !lookup.has_errors(),
+        "seed lookup failed: {:?}",
+        lookup.errors
+    );
+    lookup
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(|v| v.as_str())
+        .expect("seeded AgentRequest _docID")
+        .to_string()
+}
+
 #[path = "triggers_cases/event_source_cases.rs"]
 mod event_source_cases;

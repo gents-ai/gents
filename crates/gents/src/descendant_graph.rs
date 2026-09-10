@@ -1182,8 +1182,13 @@ mod tests {
         ] {
             assert!(lifecycle_is_terminal(value), "{value}");
         }
+        // Legacy bridge spellings kept for rows persisted by older writers.
+        assert!(lifecycle_is_terminal("complete"), "complete");
+        assert!(lifecycle_is_terminal("error"), "error");
         assert!(!lifecycle_is_terminal(AWAITING_CHILD_MATERIALIZATION));
         assert!(!lifecycle_is_terminal(PENDING_CHILD_AUTHORIZATION));
+        assert!(!lifecycle_is_terminal("running"));
+        assert!(!lifecycle_is_terminal("pending"));
     }
 
     #[test]

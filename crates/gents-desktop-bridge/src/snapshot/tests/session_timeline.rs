@@ -1,6 +1,64 @@
 use super::*;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
+#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
+mod lean_vocab_test;
+
+#[test]
+fn session_snapshot_consumes_generated_live_overlay_cases() {
+    let cases = lean_vocab_test::lean_live_overlay_cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        let content = if case.has_content { "live answer" } else { "" };
+        let mut rows = make_streaming_store_with_response_content(content).to_rows();
+        rows.requests[0].lifecycle_state = Some(match case.turn_label.as_str() {
+            "streaming" => RequestLifecycleState::Processing,
+            "interrupted" => RequestLifecycleState::Interrupted,
+            "completed" => RequestLifecycleState::Completed,
+            other => panic!("unrepresented live-overlay turn {other}"),
+        });
+        rows.responses[0].status = Some(case.response_status.clone());
+        rows.responses[0].reasoning = case.has_reasoning.then(|| "live reasoning".to_string());
+        rows.responses[0].materialized_message_sequence = case.materialized.then_some(2);
+        if case.has_durable_owner {
+            rows.messages.push(AgentMessageRow {
+                message_key: "durable-answer".to_string(),
+                session_id: Some("sess-1".to_string()),
+                request_id: Some("req-1".to_string()),
+                requester_did: None,
+                sequence: Some(2),
+                role: Some("assistant".to_string()),
+                content: Some(assistant_message_json(content)),
+                reasoning: rows.responses[0].reasoning.clone(),
+                timestamp: Some("2026-04-21T12:00:02Z".to_string()),
+            });
+        }
+        for index in 0..case.preceding_tool_calls {
+            rows.tool_calls.push(
+                serde_json::from_value(serde_json::json!({
+                    "tool_call_key": format!("tool-{index}"),
+                    "tool_call_id": format!("call-{index}"),
+                    "session_id": "sess-1",
+                    "request_id": "req-1",
+                    "message_sequence": index + 3,
+                    "tool_name": "read_file",
+                    "lifecycle_state": "completed",
+                    "result": "done"
+                }))
+                .expect("tool row"),
+            );
+        }
+        let store = ClientStore::from_rows(rows);
+        let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
+            .expect("session snapshot");
+        let visible = snapshot
+            .timeline_items
+            .iter()
+            .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
+        assert_eq!(visible, case.expect_overlay, "{}", case.name);
+    }
+}
+
 #[test]
 fn session_timeline_pages_are_bounded_and_cursor_stable() {
     let store = make_streaming_store_with_response_content("streaming");
@@ -277,6 +335,9 @@ fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() 
 
 #[test]
 fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
+    // Fixed FNV-1a checksum fixtures for the webview's acknowledged text.
+    const HELLO_HASH: &str = "4f9f2cab";
+    const EMPTY_HASH: &str = "811c9dc5";
     let store = make_streaming_store_with_response_content("hello world");
     let revision = gents_desktop_core::client::StoreProjectionRevision {
         store_version: 9,
@@ -290,9 +351,9 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "req-1",
         4,
         5,
-        &test_live_text_hash("hello"),
+        HELLO_HASH,
         0,
-        &test_live_text_hash(""),
+        EMPTY_HASH,
     );
     assert_eq!(delta.outcome, "delta");
     let content = delta.content.expect("content patch");
@@ -310,7 +371,7 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         5,
         "wrong-base",
         0,
-        &test_live_text_hash(""),
+        EMPTY_HASH,
     );
     assert_eq!(replaced.content.expect("replacement").mode, "replace");
 
@@ -323,9 +384,9 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "req-1",
         4,
         5,
-        &test_live_text_hash("hello"),
+        HELLO_HASH,
         0,
-        &test_live_text_hash(""),
+        EMPTY_HASH,
     );
     let cleared_content = cleared.content.expect("cleared content patch");
     assert_eq!(cleared_content.mode, "replace");
@@ -340,21 +401,12 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "req-1",
         3,
         5,
-        &test_live_text_hash("hello"),
+        HELLO_HASH,
         0,
-        &test_live_text_hash(""),
+        EMPTY_HASH,
     );
     assert_eq!(fenced.outcome, "snapshotRequired");
     assert!(fenced.content.is_none());
-}
-
-fn test_live_text_hash(value: &str) -> String {
-    let mut hash = 0x811c9dc5_u32;
-    for byte in value.as_bytes() {
-        hash ^= u32::from(*byte);
-        hash = hash.wrapping_mul(0x01000193);
-    }
-    format!("{hash:08x}")
 }
 
 fn assistant_message_json(text: &str) -> String {
@@ -363,61 +415,41 @@ fn assistant_message_json(text: &str) -> String {
 
 fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
     ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "sess-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("conversation".to_string()),
-            title_source: Some("generated".to_string()),
-            preview_text: Some("hello".to_string()),
-            status: Some("active".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            updated_at: Some("2026-04-21T12:01:00Z".to_string()),
-            latest_request_id: Some("req-1".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "conversation".to_string(),
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:01:00Z".to_string(),
+                preview: Some("hello".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".to_string()),
             request_id: "req-1".to_string(),
             agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("sess-1".to_string()),
-            retry_parent_request: None,
-            retry_root_request: None,
-            superseded_by_request: None,
             content: Some("hello".to_string()),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
             lifecycle_state: Some(RequestLifecycleState::Processing),
-            backend_id: None,
             execution_origin: Some("interactive".to_string()),
-            failure_reason: None,
-            terminalized_at: None,
-            terminal_redrive_attempts: None,
             created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            claimed_at: None,
-            deadline: None,
             retry_count: Some(0),
             max_retries: Some(3),
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            caused_by_trigger_doc_id: None,
-            caused_by_source_doc_id: None,
-            caused_by_parent_request_id: None,
-            interrupt_requested_at: None,
-            valid_until: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
             ..Default::default()
         }],
         messages: vec![AgentMessageRow {
@@ -671,105 +703,56 @@ fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
 #[test]
 fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("conversation".to_string()),
-            title_source: Some("generated".to_string()),
-            preview_text: Some("turn two".to_string()),
-            status: Some("active".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
-            latest_request_id: Some("req-2".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "conversation".to_string(),
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
+                preview: Some("turn two".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-2".to_string(),
+                    request_id: "req-2".to_string(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![
             AgentRequestRow {
+                doc_id: Some("req-1".to_string()),
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
                 content: Some("turn one".to_string()),
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
                 execution_origin: Some("interactive".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
                 retry_count: Some(0),
                 max_retries: Some(3),
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
             AgentRequestRow {
+                doc_id: Some("req-2".to_string()),
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
                 content: Some("turn two".to_string()),
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Processing),
-                backend_id: None,
                 execution_origin: Some("interactive".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
                 retry_count: Some(0),
                 max_retries: Some(3),
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
         ],
@@ -900,61 +883,44 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
 #[test]
 fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("conversation".to_string()),
-            title_source: Some("generated".to_string()),
-            preview_text: Some("turn one".to_string()),
-            status: Some("active".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            updated_at: Some("2026-04-21T12:15:00Z".to_string()),
-            latest_request_id: Some("req-1".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "conversation".to_string(),
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:15:00Z".to_string(),
+                preview: Some("turn one".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".to_string()),
             request_id: "req-1".to_string(),
             agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
-            retry_parent_request: None,
-            retry_root_request: None,
-            superseded_by_request: None,
             content: Some("turn one".to_string()),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
             lifecycle_state: Some(RequestLifecycleState::Failed),
-            backend_id: None,
             execution_origin: Some("interactive".to_string()),
             failure_reason: Some("request deadline exceeded".to_string()),
-            terminalized_at: None,
-            terminal_redrive_attempts: None,
             created_at: Some("2026-04-21T12:00:00Z".to_string()),
             claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
             deadline: Some("2026-04-21T12:15:00Z".to_string()),
             retry_count: Some(0),
             max_retries: Some(3),
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            caused_by_trigger_doc_id: None,
-            caused_by_source_doc_id: None,
-            caused_by_parent_request_id: None,
-            interrupt_requested_at: None,
-            valid_until: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
             ..Default::default()
         }],
         messages: vec![AgentMessageRow {
@@ -1019,105 +985,56 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
 #[test]
 fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("conversation".to_string()),
-            title_source: Some("generated".to_string()),
-            preview_text: Some("turn two".to_string()),
-            status: Some("active".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
-            latest_request_id: Some("req-2".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "conversation".to_string(),
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
+                preview: Some("turn two".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-2".to_string(),
+                    request_id: "req-2".to_string(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![
             AgentRequestRow {
+                doc_id: Some("req-1".to_string()),
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
                 content: Some("turn one".to_string()),
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
                 execution_origin: Some("interactive".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
                 retry_count: Some(0),
                 max_retries: Some(3),
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
             AgentRequestRow {
+                doc_id: Some("req-2".to_string()),
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
                 content: Some("turn two".to_string()),
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Processing),
-                backend_id: None,
                 execution_origin: Some("interactive".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
                 retry_count: Some(0),
                 max_retries: Some(3),
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
         ],
@@ -1194,61 +1111,41 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
 #[test]
 fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("conversation".to_string()),
-            title_source: Some("generated".to_string()),
-            preview_text: Some("turn one".to_string()),
-            status: Some("active".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            updated_at: Some("2026-04-21T12:02:00Z".to_string()),
-            latest_request_id: Some("req-1".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "conversation".to_string(),
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
+                preview: Some("turn one".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-1".to_string(),
+                    request_id: "req-1".to_string(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".to_string()),
             request_id: "req-1".to_string(),
             agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
-            retry_parent_request: None,
-            retry_root_request: None,
-            superseded_by_request: None,
             content: Some("turn one".to_string()),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
             lifecycle_state: Some(RequestLifecycleState::Processing),
-            backend_id: None,
             execution_origin: Some("interactive".to_string()),
-            failure_reason: None,
-            terminalized_at: None,
-            terminal_redrive_attempts: None,
             created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            claimed_at: None,
-            deadline: None,
             retry_count: Some(0),
             max_retries: Some(3),
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            caused_by_trigger_doc_id: None,
-            caused_by_source_doc_id: None,
-            caused_by_parent_request_id: None,
-            interrupt_requested_at: None,
-            valid_until: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
             ..Default::default()
         }],
         messages: vec![AgentMessageRow {
@@ -1328,14 +1225,17 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
 #[test]
 fn structured_command_policy_denial_projects_to_rendered_tool() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSessionRow {
+        sessions: vec![AgentSession {
             session_id: "session-denial".to_string(),
-            agent_name: Some("Amy".to_string()),
+            agent_did: "did:test:amy".into(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            started: None,
-            ended: None,
-            status: Some("active".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-21T12:00:00Z".into(),
+            closed_at: None,
+            title: None,
+            tags: Vec::new(),
+            provenance: None,
+            observation: None,
         }],
         tool_calls: vec![gents_protocol::row::AgentToolCallRow {
             partial_output_tail: None,

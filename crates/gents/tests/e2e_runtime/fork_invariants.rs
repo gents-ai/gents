@@ -13,14 +13,14 @@ use serde::Deserialize;
 use tokio::net::TcpListener;
 
 use crate::support::snapshots::fetch_compaction_entry_snapshots_for_session;
-use crate::support::snapshots::fetch_conversation_snapshot;
 use crate::support::snapshots::fetch_message_snapshots_for_session;
+use crate::support::snapshots::fetch_session_snapshot;
 use crate::support::snapshots::fetch_tool_call_snapshots_for_session;
 use crate::support::snapshots::fetch_tool_result_snapshots_for_session;
 use crate::support::{
-    create_agent_behavior, create_agent_conversation, create_agent_message, create_agent_session,
-    create_agent_tool_call, create_agent_tool_result, create_compaction_entry, create_request,
-    test_db, AGENT_DID, AGENT_NAME,
+    create_agent_behavior, create_agent_message, create_agent_session, create_agent_tool_call,
+    create_agent_tool_result, create_compaction_entry, create_request, test_db, AGENT_DID,
+    AGENT_NAME,
 };
 
 #[derive(Clone)]
@@ -112,7 +112,6 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
 
     let parent_session = "parent-session";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
@@ -213,7 +212,6 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
 
     let parent_session = "parent-http-session";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
@@ -267,15 +265,25 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     assert_eq!(child_messages[1].role, "assistant");
     assert_eq!(child_messages[1].content, "a1");
 
-    let child_conv = fetch_conversation_snapshot(&db.node, &outcome.session_id)
+    let child_session = fetch_session_snapshot(&db.node, &outcome.session_id)
         .await
-        .expect("child conversation exists");
+        .expect("child canonical session exists");
     assert_eq!(
-        child_conv.forked_from_session_id.as_deref(),
+        child_session.requester_did, None,
+        "absent requester scope is preserved exactly"
+    );
+    assert_eq!(
+        Some(fork_origin(&child_session).source_session_id.as_str()),
         Some(parent_session)
     );
-    assert_eq!(child_conv.fork_at_user_turn, Some(1));
-    assert!(child_conv.forked_at.is_some(), "forked_at must be set");
+    assert_eq!(
+        Some(i64::from(fork_origin(&child_session).at_user_turn)),
+        Some(1)
+    );
+    assert!(
+        !child_session.created_at.is_empty(),
+        "child creation time records fork time"
+    );
 
     assert_eq!(outcome.copied_messages, 2);
 }
@@ -286,7 +294,6 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
 
     let parent_session = "parent-tc";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
@@ -417,12 +424,11 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
 }
 
 #[tokio::test]
-async fn fork_copies_tool_results_strictly_before_cut_ts() {
+async fn fork_copies_spills_by_retained_call_not_creation_time() {
     let db = test_db("fork-copy-tool-results").await;
 
     let parent_session = "parent-tr";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
@@ -443,22 +449,50 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
         "2026-04-21T10:00:03Z",
     )
     .await;
-    create_agent_tool_result(
+    let retained_call = create_agent_tool_call(
         &db.node,
         parent_session,
+        1,
+        "retained",
         "read_file",
         "{}",
         "early",
-        "2026-04-21T10:00:02Z",
+        "completed",
+        "2026-04-21T10:00:01Z",
+        "2026-04-21T10:00:01Z",
+    )
+    .await;
+    let excluded_call = create_agent_tool_call(
+        &db.node,
+        parent_session,
+        2,
+        "excluded",
+        "read_file",
+        "{}",
+        "late",
+        "completed",
+        "2026-04-21T10:00:03Z",
+        "2026-04-21T10:00:03Z",
     )
     .await;
     create_agent_tool_result(
         &db.node,
         parent_session,
+        &retained_call,
+        "read_file",
+        "{}",
+        "early",
+        "2026-04-21T10:00:09Z",
+    )
+    .await;
+    create_agent_tool_result(
+        &db.node,
+        parent_session,
+        &excluded_call,
         "read_file",
         "{}",
         "late",
-        "2026-04-21T10:00:04Z",
+        "2026-04-21T10:00:00Z",
     )
     .await;
 
@@ -479,7 +513,7 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     assert_eq!(
         child_results.len(),
         1,
-        "only the early tool result should be copied"
+        "only the spill associated with the retained call should be copied"
     );
     assert_eq!(child_results[0].output_text, "early");
     assert_eq!(child_results[0].session_id, outcome.session_id);
@@ -488,18 +522,35 @@ async fn fork_copies_tool_results_strictly_before_cut_ts() {
     assert_eq!(child_results[0].tool_input, "{}");
     assert!(!child_results[0].truncated);
     assert_eq!(child_results[0].truncation_metadata, "");
-    assert_eq!(child_results[0].conversation_doc_id, "");
-    assert_eq!(child_results[0].created_at, "2026-04-21T10:00:02Z");
+    let child = escape_graphql_string(&outcome.session_id);
+    let calls = db.node.execute(&format!(r#"{{
+        AgentToolCall(filter: {{session_id: {{_eq: "{child}"}}}}) {{_docID tool_call_id request_id request_doc_id}}
+    }}"#)).await;
+    assert!(!calls.has_errors(), "{:?}", calls.errors);
+    let calls = calls.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["tool_call_id"], "retained");
+    assert_eq!(
+        child_results[0].tool_call_doc_id.as_deref(),
+        calls[0]["_docID"].as_str()
+    );
+    assert_ne!(
+        child_results[0].tool_call_doc_id.as_deref(),
+        Some(retained_call.as_str())
+    );
+    assert!(calls[0]["request_id"].is_null() && calls[0]["request_doc_id"].is_null());
+    assert_eq!(child_results[0].created_at, "2026-04-21T10:00:09Z");
     assert_eq!(outcome.copied_tool_results, 1);
 }
 
 #[tokio::test]
-async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
+async fn fork_copies_compaction_cursor_with_retained_prefix() {
     let db = test_db("fork-copy-compactions").await;
 
     let parent_session = "parent-ce";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
@@ -525,8 +576,9 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
         parent_session,
         1,
         "early summary",
-        2,
-        "2026-04-21T10:00:02Z",
+        1,
+        1,
+        "2026-04-21T10:00:09Z",
     )
     .await;
     create_compaction_entry(
@@ -534,8 +586,9 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
         parent_session,
         2,
         "late summary",
-        3,
-        "2026-04-21T10:00:04Z",
+        2,
+        2,
+        "2026-04-21T10:00:00Z",
     )
     .await;
 
@@ -556,8 +609,9 @@ async fn fork_copies_compaction_entries_strictly_before_cut_ts() {
     assert_eq!(child_compactions.len(), 1);
     assert_eq!(child_compactions[0].summary, "early summary");
     assert_eq!(child_compactions[0].sequence, 1);
-    assert_eq!(child_compactions[0].request_id, "");
-    assert_eq!(child_compactions[0].request_doc_id, "");
+    assert_eq!(child_compactions[0].request_id, None);
+    assert_eq!(child_compactions[0].compacted_through_sequence, Some(1));
+    assert_eq!(child_compactions[0].request_doc_id, None);
     assert_eq!(
         child_compactions[0].compaction_key,
         format!("{}:1", outcome.session_id)
@@ -571,7 +625,6 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
     let parent_session = "parent-physical-edges";
     let parent_request_id = "parent-physical-request";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     let parent_request_doc_id = create_request(
         &db.node,
@@ -637,6 +690,7 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
                 files_read: "[]",
                 files_modified: "[]",
                 messages_compacted: 1,
+                compacted_through_sequence: 1,
                 original_tokens: 10,
                 compacted_tokens: 5,
                 created_at: "2026-04-21T10:00:02Z"
@@ -701,7 +755,6 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
                 output_text: "spilled output",
                 truncated: false,
                 truncation_metadata: "",
-                conversation_doc_id: "",
                 created_at: "2026-04-21T10:00:03Z"
             }}) {{ _docID }}
         }}"#,
@@ -733,7 +786,7 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
                 request_id request_doc_id
             }}
             AgentToolCall(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
-                request_id request_doc_id
+                _docID request_id request_doc_id
             }}
             CompactionEntry(filter: {{ session_id: {{ _eq: "{child_session_escaped}" }} }}) {{
                 request_id request_doc_id
@@ -753,20 +806,54 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
         response.errors
     );
     let data = response.data.as_ref().expect("fork fact data");
+    // Assert cardinality before per-row predicates: dropping a whole copied
+    // collection must not satisfy detachment or spill-remapping vacuously.
+    for (collection, expected) in [
+        ("AgentMessage", 2),
+        ("AgentToolCall", 1),
+        ("CompactionEntry", 1),
+        ("AgentToolResult", 1),
+    ] {
+        assert_eq!(
+            data[collection]
+                .as_array()
+                .expect("copied collection")
+                .len(),
+            expected,
+            "{collection} retained rows"
+        );
+    }
     for collection in ["AgentMessage", "AgentToolCall", "CompactionEntry"] {
         for row in data[collection]
             .as_array()
             .expect("fork request-scoped rows")
         {
-            assert_eq!(row["request_id"].as_str(), Some(""));
-            assert_eq!(row["request_doc_id"].as_str(), Some(""));
+            assert!(
+                row["request_id"].is_null(),
+                "copied history has no live request label"
+            );
+            assert!(
+                row["request_doc_id"].is_null(),
+                "copied history has no live physical request"
+            );
         }
     }
     for row in data["AgentToolResult"]
         .as_array()
         .expect("fork tool-result rows")
     {
-        assert_eq!(row["tool_call_doc_id"].as_str(), Some(""));
+        let child_call = row["tool_call_doc_id"]
+            .as_str()
+            .expect("exact copied call link");
+        assert_ne!(child_call, parent_tool_call_doc_id);
+        assert!(
+            data["AgentToolCall"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|call| call["_docID"].as_str() == Some(child_call)),
+            "spill resolves to a copied child call, not source history"
+        );
     }
     assert!(data["ProviderContextReduction"]
         .as_array()
@@ -800,7 +887,6 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
 
     let parent_session = "parent-batch-copy";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     for (sequence, role, content, timestamp) in [
@@ -817,7 +903,7 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
         let args = format!(r#"{{"index":{i}}}"#);
         let result = format!("tool-call-result-{i}");
         let timestamp = format!("2026-04-21T10:00:0{i}Z");
-        create_agent_tool_call(
+        let call_doc_id = create_agent_tool_call(
             &db.node,
             parent_session,
             i,
@@ -836,6 +922,7 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
         create_agent_tool_result(
             &db.node,
             parent_session,
+            &call_doc_id,
             "read_file",
             &tool_input,
             &output_text,
@@ -849,11 +936,31 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
             i,
             &format!("summary-{i}"),
             i,
+            i,
             &timestamp,
         )
         .await;
     }
 
+    // A concrete requester scope survives on the canonical child and every copied row.
+    for collection in [
+        "AgentSession",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "CompactionEntry",
+    ] {
+        let source = escape_graphql_string(parent_session);
+        let mutation = format!(
+            r#"mutation {{ update_{collection}(filter: {{session_id: {{_eq: "{source}"}}}}, input: {{requester_did: "did:key:fork-requester"}}) {{_docID}} }}"#
+        );
+        let response = db.node.execute(&mutation).await;
+        assert!(
+            !response.has_errors(),
+            "seed exact requester scope: {:?}",
+            response.errors
+        );
+    }
     let outcome = fork(
         &db.node,
         ForkParams {
@@ -915,6 +1022,27 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
             format!("{}:{sequence}", outcome.session_id)
         );
     }
+    for collection in [
+        "AgentSession",
+        "AgentMessage",
+        "AgentToolCall",
+        "AgentToolResult",
+        "CompactionEntry",
+    ] {
+        let child = escape_graphql_string(&outcome.session_id);
+        let response = db.node.execute(&format!(r#"{{ {collection}(filter: {{session_id: {{_eq: "{child}"}}}}) {{requester_did}} }}"#)).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let rows = response.data.as_ref().unwrap()[collection]
+            .as_array()
+            .expect("child rows");
+        assert!(!rows.is_empty(), "{collection} was copied");
+        for row in rows {
+            assert_eq!(
+                row["requester_did"], "did:key:fork-requester",
+                "{collection} exact requester"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -923,7 +1051,6 @@ async fn fork_rejects_source_with_non_terminal_request() {
 
     let parent_session = "parent-busy";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -969,7 +1096,6 @@ async fn fork_rejects_mismatched_caller_principal() {
 
     let parent_session = "parent-wp";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1006,7 +1132,6 @@ async fn fork_accepts_behavior_swap_within_same_principal() {
 
     let parent_session = "parent-swap-ok";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_behavior(&db.node, "alt-behavior", AGENT_DID).await;
     create_agent_message(
@@ -1031,11 +1156,15 @@ async fn fork_accepts_behavior_swap_within_same_principal() {
     .await
     .expect("fork with matching-principal behavior succeeds");
 
-    let child_conv =
-        crate::support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+    let child_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, &outcome.session_id)
             .await
-            .expect("child conversation exists");
-    assert_eq!(child_conv.behavior_id, "alt-behavior");
+            .expect("child canonical session exists");
+    assert_eq!(
+        child_session.requester_did, None,
+        "absent requester scope is preserved exactly"
+    );
+    assert_eq!(child_session.behavior_id, "alt-behavior");
 }
 
 #[tokio::test]
@@ -1044,7 +1173,6 @@ async fn fork_rejects_behavior_owned_by_different_principal() {
 
     let parent_session = "parent-swap-bad";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_behavior(&db.node, "foreign-behavior", "did:test:someone-else").await;
     create_agent_message(
@@ -1082,7 +1210,6 @@ async fn fork_rejects_out_of_range_user_turn() {
 
     let parent_session = "parent-oor";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1124,7 +1251,6 @@ async fn fork_rejects_out_of_range_user_turn() {
     for collection in [
         "AgentMessage",
         "AgentSession",
-        "AgentConversation",
         "AgentToolCall",
         "AgentToolResult",
         "CompactionEntry",
@@ -1156,7 +1282,6 @@ async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
 
     let parent_session = "parent-zero";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1197,16 +1322,26 @@ async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
     let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert!(child_messages.is_empty());
 
-    let child_conv =
-        crate::support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+    let child_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, &outcome.session_id)
             .await
-            .expect("child conversation exists");
+            .expect("child canonical session exists");
     assert_eq!(
-        child_conv.forked_from_session_id.as_deref(),
+        child_session.requester_did, None,
+        "absent requester scope is preserved exactly"
+    );
+    assert_eq!(
+        Some(fork_origin(&child_session).source_session_id.as_str()),
         Some(parent_session)
     );
-    assert_eq!(child_conv.fork_at_user_turn, Some(0));
-    assert!(child_conv.forked_at.is_some(), "forked_at must be set");
+    assert_eq!(
+        Some(i64::from(fork_origin(&child_session).at_user_turn)),
+        Some(0)
+    );
+    assert!(
+        !child_session.created_at.is_empty(),
+        "child creation time records fork time"
+    );
 }
 
 #[tokio::test]
@@ -1215,7 +1350,6 @@ async fn fork_at_total_user_turns_copies_full_history() {
 
     let parent_session = "parent-end";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1274,24 +1408,42 @@ async fn fork_at_total_user_turns_copies_full_history() {
     assert_eq!(child_messages[2].content, "u2");
     assert_eq!(child_messages[3].content, "a2");
 
-    let child_conv =
-        crate::support::snapshots::fetch_conversation_snapshot(&db.node, &outcome.session_id)
+    let child_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, &outcome.session_id)
             .await
-            .expect("child conversation exists");
+            .expect("child canonical session exists");
     assert_eq!(
-        child_conv.forked_from_session_id.as_deref(),
+        child_session.requester_did, None,
+        "absent requester scope is preserved exactly"
+    );
+    assert_eq!(
+        Some(fork_origin(&child_session).source_session_id.as_str()),
         Some(parent_session)
     );
-    assert_eq!(child_conv.fork_at_user_turn, Some(2));
+    assert_eq!(
+        Some(i64::from(fork_origin(&child_session).at_user_turn)),
+        Some(2)
+    );
 }
 
 #[tokio::test]
-async fn fork_leaves_parent_byte_identical() {
+async fn fork_preserves_parent_session_and_message_fields() {
     let db = test_db("fork-parent-unchanged").await;
 
     let parent_session = "parent-unchanged";
-    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    let mut parent =
+        crate::support::session_document(parent_session, AGENT_NAME, "2026-04-21T10:00:00Z");
+    parent.title = Some(gents_protocol::session::SessionTitle {
+        text: "Keep my title".into(),
+        source: gents_protocol::session::SessionTitleSource::User,
+    });
+    parent.tags = vec!["audit".into(), "fork-parent".into()];
+    parent.provenance = Some(gents_protocol::session::SessionProvenance {
+        task_id: Some("task-source".into()),
+        graph_run_id: Some("graph-source".into()),
+        ..Default::default()
+    });
+    crate::support::create_session_document(&db.node, &parent).await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
 
     for (i, role) in [
@@ -1306,8 +1458,8 @@ async fn fork_leaves_parent_byte_identical() {
     }
 
     let before_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
-    let before_conv =
-        crate::support::snapshots::fetch_full_conversation_snapshot(&db.node, parent_session).await;
+    let before_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, parent_session).await;
 
     let _ = fork(
         &db.node,
@@ -1322,16 +1474,16 @@ async fn fork_leaves_parent_byte_identical() {
     .expect("fork succeeds");
 
     let after_messages = fetch_message_snapshots_for_session(&db.node, parent_session).await;
-    let after_conv =
-        crate::support::snapshots::fetch_full_conversation_snapshot(&db.node, parent_session).await;
+    let after_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, parent_session).await;
 
     assert_eq!(
         before_messages, after_messages,
         "parent AgentMessage rows unchanged"
     );
     assert_eq!(
-        before_conv, after_conv,
-        "parent AgentConversation unchanged"
+        before_session, after_session,
+        "parent canonical session unchanged"
     );
 }
 
@@ -1341,7 +1493,6 @@ async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
 
     let parent_session = "parent-concurrent";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1445,7 +1596,6 @@ async fn fork_rejects_unknown_target_behavior() {
 
     let parent_session = "parent-unknown-behavior";
     create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_conversation(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
     create_agent_message(
         &db.node,
@@ -1482,13 +1632,6 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
 
     let grandparent_session = "grandparent";
     create_agent_session(
-        &db.node,
-        grandparent_session,
-        AGENT_NAME,
-        "2026-04-21T10:00:00Z",
-    )
-    .await;
-    create_agent_conversation(
         &db.node,
         grandparent_session,
         AGENT_NAME,
@@ -1582,18 +1725,19 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
         "grandchild inherits child's prefix (which is grandparent's prefix)"
     );
 
-    let grandchild_conv = crate::support::snapshots::fetch_conversation_snapshot(
-        &db.node,
-        &grandchild_outcome.session_id,
-    )
-    .await
-    .expect("grandchild conversation exists");
+    let grandchild_session =
+        crate::support::snapshots::fetch_session_snapshot(&db.node, &grandchild_outcome.session_id)
+            .await
+            .expect("grandchild canonical session exists");
     assert_eq!(
-        grandchild_conv.forked_from_session_id.as_deref(),
+        Some(fork_origin(&grandchild_session).source_session_id.as_str()),
         Some(child_outcome.session_id.as_str()),
         "grandchild must record its immediate parent (child), not its grandparent"
     );
-    assert_eq!(grandchild_conv.fork_at_user_turn, Some(1));
+    assert_eq!(
+        Some(i64::from(fork_origin(&grandchild_session).at_user_turn)),
+        Some(1)
+    );
 
     let grandchild_messages =
         fetch_message_snapshots_for_session(&db.node, &grandchild_outcome.session_id).await;
@@ -1612,4 +1756,102 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     assert!(!grandchild_messages
         .iter()
         .any(|m| m.session_id == child_outcome.session_id));
+}
+
+fn fork_origin(
+    session: &gents_protocol::session::AgentSession,
+) -> &gents_protocol::session::SessionFork {
+    session
+        .provenance
+        .as_ref()
+        .and_then(|p| p.fork.as_ref())
+        .expect("canonical fork provenance")
+}
+
+#[tokio::test]
+async fn fork_rejects_nonexistent_call_associations_and_compaction_prefixes() {
+    for malformed in ["call", "cursor"] {
+        let db = test_db(&format!("fork-invalid-{malformed}")).await;
+        let parent = "source";
+        create_agent_session(&db.node, parent, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+        create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+        create_agent_message(&db.node, parent, 1, "user", "one", "2026-04-21T10:00:01Z").await;
+        if malformed == "call" {
+            create_agent_tool_call(
+                &db.node,
+                parent,
+                99,
+                "orphan",
+                "read_file",
+                "{}",
+                "done",
+                "completed",
+                "2026-04-21T10:00:01Z",
+                "2026-04-21T10:00:01Z",
+            )
+            .await;
+        } else {
+            create_compaction_entry(
+                &db.node,
+                parent,
+                1,
+                "invalid prefix",
+                1,
+                99,
+                "2026-04-21T10:00:01Z",
+            )
+            .await;
+        }
+        assert!(
+            fork(
+                &db.node,
+                ForkParams {
+                    source_session_id: parent,
+                    fork_at_user_turn: 1,
+                    caller_agent_did: AGENT_DID,
+                    target_behavior_id: None
+                }
+            )
+            .await
+            .is_err(),
+            "{malformed}: malformed source must fail before publishing a child"
+        );
+        let response = db.node.execute("{ AgentSession { session_id } }").await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|v| v.get("AgentSession"))
+            .and_then(serde_json::Value::as_array)
+            .expect("sessions");
+        assert_eq!(rows.len(), 1, "{malformed}: failed fork leaves no child");
+        assert_eq!(rows[0]["session_id"], parent);
+        // A copier can fail before creating the session yet leave orphan rows.
+        // Rejection must publish neither a child session nor child history.
+        for collection in [
+            "AgentMessage",
+            "AgentToolCall",
+            "AgentToolResult",
+            "CompactionEntry",
+        ] {
+            let response = db
+                .node
+                .execute(&format!("{{ {collection} {{ session_id }} }}"))
+                .await;
+            assert!(
+                !response.has_errors(),
+                "{collection}: {:?}",
+                response.errors
+            );
+            for row in response.data.as_ref().unwrap()[collection]
+                .as_array()
+                .unwrap()
+            {
+                assert_eq!(
+                    row["session_id"], parent,
+                    "{malformed}: orphan {collection} after failed fork"
+                );
+            }
+        }
+    }
 }

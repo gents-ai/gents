@@ -2332,17 +2332,6 @@ where
     Ok(parsed)
 }
 
-fn dedupe_non_empty(values: Vec<String>) -> Vec<String> {
-    let mut deduped = Vec::with_capacity(values.len());
-    for value in values {
-        let value = value.trim();
-        if !value.is_empty() && !deduped.iter().any(|existing| existing == value) {
-            deduped.push(value.to_string());
-        }
-    }
-    deduped
-}
-
 fn non_empty_string(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -2353,7 +2342,7 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::message::{AssistantContent, Text};
+    use crate::llm::message::{AssistantContent, Reasoning, Text, ToolCall, ToolFunction};
 
     #[test]
     fn process_control_requester_absence_is_exact_not_empty_string() {
@@ -2406,6 +2395,44 @@ mod tests {
             args(Some(999_999)).validated_wait_timeout(),
             std::time::Duration::from_secs(MAX_WAIT_PROCESS_TIMEOUT_SECS)
         );
+    }
+
+    // This is the observed projection boundary shared by live bridge failure
+    // and recovery. Durable writes/notifications have separate owner tests.
+    #[test]
+    fn generated_child_failure_projections_match_bridge_owner() {
+        let cases = crate::lean_vocab_test::lean_child_failure_projections();
+        let observed_kinds = cases
+            .iter()
+            .map(|case| case.child_state.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let runtime_kinds = ChildTerminal::ALL_KIND
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(observed_kinds, runtime_kinds);
+        assert_eq!(
+            cases.len(),
+            observed_kinds.len(),
+            "duplicate child projection"
+        );
+        for case in cases {
+            let row = AgentRequestRow {
+                request_id: "projection-child".to_string(),
+                lifecycle_state: Some(
+                    RequestLifecycleState::parse(&case.child_state)
+                        .expect("Lean child lifecycle vocabulary"),
+                ),
+                ..Default::default()
+            };
+            let terminal = project_child_terminal(&row).expect("child failure projection");
+            assert_eq!(
+                terminal.projected_state().as_str(),
+                case.tool_state,
+                "child {} bridge projection",
+                case.child_state
+            );
+        }
     }
 
     #[test]
@@ -2468,15 +2495,24 @@ mod tests {
     }
 
     #[test]
-    fn dedupe_non_empty_trims_and_preserves_order() {
+    fn render_assistant_message_text_prefers_text_over_reasoning_and_tools() {
+        let message = Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new("chain-of-thought trace")),
+                AssistantContent::ToolCall(ToolCall::new(
+                    "call-1".to_string(),
+                    ToolFunction::new("bash".to_string(), serde_json::json!({"command": "ls"})),
+                )),
+                AssistantContent::Text(Text {
+                    text: "final answer".to_string(),
+                }),
+            ],
+        };
+        let content = serde_json::to_string(&message).unwrap();
         assert_eq!(
-            dedupe_non_empty(vec![
-                " alpha ".to_string(),
-                "".to_string(),
-                "alpha".to_string(),
-                "beta".to_string(),
-            ]),
-            vec!["alpha".to_string(), "beta".to_string()]
+            render_assistant_message_text(&content).unwrap(),
+            "final answer"
         );
     }
 
@@ -2503,6 +2539,38 @@ mod tests {
         assert_eq!(slice.output, "tail");
         assert_eq!(slice.next_offset, 1000);
         assert_eq!(slice.total_bytes, 1000);
+        assert!(!slice.has_more);
+    }
+
+    #[test]
+    fn persisted_empty_stream_sentinel_decodes_to_empty_combined_output() {
+        let persisted = concat!(
+            "gents_exec: {\"ok\":true,\"status\":\"success\",",
+            "\"command\":\"true\",\"argv\":[\"true\"],",
+            "\"cwd\":\".\",\"exit_code\":0,\"timed_out\":false,\"duration_ms\":1,",
+            "\"timeout_ms\":10000,\"execution_mode\":\"read_only\",",
+            "\"network_mode\":\"inherit\",\"sandbox\":\"policy_read_only\",",
+            "\"stdout_truncation\":{\"returned_bytes\":0,\"total_bytes\":0,",
+            "\"max_bytes\":16000,\"truncated\":false},",
+            "\"stderr_truncation\":{\"returned_bytes\":0,\"total_bytes\":0,",
+            "\"max_bytes\":16000,\"truncated\":false}}\n",
+            "stdout:\n",
+            "(empty)\n",
+            "stderr:\n",
+            "(empty)"
+        );
+        let streams = persisted_tool_output_streams("bash", persisted);
+        assert_eq!(streams.stdout, "");
+        assert_eq!(streams.stderr, "");
+        assert_eq!(streams.exit_code, Some(0));
+
+        let combined = combine_output_streams(&streams.stdout, &streams.stderr);
+        assert_eq!(combined, "");
+        let slice = read_combined_output_slice(&combined, 0, 1024);
+        assert_eq!(slice.output, "");
+        assert_eq!(slice.first_available_offset, 0);
+        assert_eq!(slice.next_offset, 0);
+        assert_eq!(slice.total_bytes, 0);
         assert!(!slice.has_more);
     }
 

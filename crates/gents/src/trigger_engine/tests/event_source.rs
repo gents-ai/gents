@@ -176,12 +176,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     // The trigger_id is what the returned FireIntent should carry.
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-webhook", "WebhookEvent", task.clone());
     let snapshot =
@@ -301,13 +296,8 @@ async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_s
     }
 
     let task = ResolvedTask {
-        task_id: "group-task".into(),
-        name: None,
-        behavior_id: "general".into(),
-        prompt_template: "{{ group.correlation_value }} {{ group.count }}".into(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        task_id: "group-task".to_string(),
+        ..resolved_task("{{ group.correlation_value }} {{ group.count }}")
     };
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
@@ -487,7 +477,31 @@ async fn correlation_populated_after_create_remains_eligible_for_delivery() {
 }
 
 #[tokio::test]
-async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
+async fn generated_sibling_delivery_case_preserves_pending_correlation() {
+    use crate::lean_vocab_test::{lean_event_delivery_transition_cases, LeanEventDeliveryAction};
+
+    let cases = lean_event_delivery_transition_cases();
+    let case = cases
+        .iter()
+        .find(|case| case.name == "handle_ready_trigger_preserves_pending_sibling")
+        .expect("Lean sibling delivery case");
+    let LeanEventDeliveryAction::Handle { doc: ready_key } = &case.action else {
+        panic!("sibling case must observe a handled delivery");
+    };
+    let pending_key = case
+        .pre
+        .subscription_queue
+        .iter()
+        .find(|key| *key != ready_key)
+        .expect("pending sibling input");
+    let (ready_id, logical_doc) = ready_key.split_once(':').expect("ready delivery identity");
+    let (pending_id, pending_doc) = pending_key
+        .split_once(':')
+        .expect("pending delivery identity");
+    assert_eq!(
+        logical_doc, pending_doc,
+        "siblings must share one physical source row"
+    );
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     node.add_schema(
@@ -499,15 +513,11 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
     .await
     .expect("mixed correlation source schema");
 
-    let ready = resolved_event_trigger(
-        "trigger-a-ready",
-        "MixedCorrelationMember",
-        resolved_task("ready"),
-    );
+    let ready = resolved_event_trigger(ready_id, "MixedCorrelationMember", resolved_task("ready"));
     let pending = ResolvedEventTrigger {
         correlation_field: Some("run_id".into()),
         ..resolved_event_trigger(
-            "trigger-z-pending",
+            pending_id,
             "MixedCorrelationMember",
             resolved_task("{{ event.correlation }}"),
         )
@@ -546,7 +556,16 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
         .await
         .expect("ready sibling delivery timed out")
         .expect("ready sibling must not be blocked by missing correlation");
-    assert_eq!(first.trigger_id.as_deref(), Some("trigger-a-ready"));
+    assert_eq!(first.event_vars["source_doc_id"], doc_id);
+    let observed_ready = format!(
+        "{}:{logical_doc}",
+        first.trigger_id.as_deref().expect("ready trigger")
+    );
+    assert_eq!(
+        vec![observed_ready],
+        case.post.handled,
+        "observed ready delivery"
+    );
 
     let mutation = format!(
         r#"mutation {{
@@ -564,7 +583,19 @@ async fn missing_correlation_defers_only_that_trigger_on_a_shared_document() {
         .await
         .expect("deferred sibling delivery timed out")
         .expect("deferred sibling must become eligible when correlation arrives");
-    assert_eq!(second.trigger_id.as_deref(), Some("trigger-z-pending"));
+    assert_eq!(second.event_vars["source_doc_id"], doc_id);
+    let observed_pending = format!(
+        "{}:{logical_doc}",
+        second.trigger_id.as_deref().expect("pending trigger")
+    );
+    // The Lean queue describes remaining delivery identities, not the source's
+    // internal queue. Successful later emission observes that the pending sibling
+    // survived the ready delivery; no test-local seen-set model is involved.
+    assert_eq!(
+        vec![observed_pending],
+        case.post.subscription_queue,
+        "pending sibling remains deliverable after its correlation arrives"
+    );
     assert_eq!(second.correlation.as_deref(), Some("run-late"));
 }
 
@@ -853,12 +884,7 @@ async fn event_source_filter_probe_gates_fire_on_operator_filter() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     // Trigger requires `kind == "signup"` — `other` events must not fire.
     let trigger = resolved_event_trigger_with_filter(
@@ -977,12 +1003,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     // No filter on the trigger — every create fires, and the fire must
     // carry the full doc projection.
@@ -1121,12 +1142,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-fired", "WebhookEvent", task.clone());
     let snapshot =
@@ -1251,12 +1267,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
 
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
-        name: None,
-        behavior_id: "general".to_string(),
-        prompt_template: "handle webhook".to_string(),
-        goal_objective_template: None,
-        goal_token_budget: None,
-        output_schema_ref: None,
+        ..resolved_task("handle webhook")
     };
     let trigger = resolved_event_trigger("trigger-skip-err", "WebhookEvent", task.clone());
     let snapshot = snapshot_with_event_triggers(

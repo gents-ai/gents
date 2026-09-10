@@ -118,27 +118,64 @@ fn transcript_strong_drain(tool_calls: &[ToolCallSnapshot]) -> bool {
         .all(|call| call.lifecycle_state.as_deref() != Some("running"))
 }
 
+// Fixtures pass distinct host execution IDs (`internal-X`) and model IDs
+// (`result-X`) to the real hook. This is their input association, used to check
+// the persisted result identity; it is not a runtime identity resolver.
+fn fixture_model_call_id(call: &ToolCallSnapshot) -> String {
+    format!(
+        "result-{}",
+        call.tool_call_id
+            .strip_prefix("internal-")
+            .expect("transcript fixture execution ID")
+    )
+}
+
+// Pair closure is independent of StrongDrain. Every stored result must belong
+// to a completed call; a reserved running call need not have a result yet.
 fn transcript_pair_closed(
     messages: &[MessageSnapshot],
     tool_calls: &[ToolCallSnapshot],
     history: &[Message],
 ) -> bool {
-    let tool_calls_reserved_by_assistant_message = tool_calls.iter().all(|call| {
-        messages.iter().any(|message| {
-            message.sequence == call.message_sequence && message.role.as_str() == "assistant"
+    let results = history
+        .iter()
+        .flat_map(|message| match message {
+            Message::User { content } => content.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|content| match content {
+            UserContent::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let reserved = tool_calls.iter().all(|call| {
+        messages.iter().any(|row| {
+            row.sequence == call.message_sequence
+                && row.role == "assistant"
+                && row.session_id == call.session_id
+                && matches!(serde_json::from_str::<Message>(&row.content),
+                    Ok(Message::Assistant { content, .. }) if content.iter().any(|item|
+                        matches!(item, AssistantContent::ToolCall(tool)
+                            if tool.id == fixture_model_call_id(call))))
         })
     });
-    let no_running_tool_calls = transcript_strong_drain(tool_calls);
-    let completed_tool_call_count = tool_calls
+    let completed_have_one_result = tool_calls
         .iter()
         .filter(|call| call.lifecycle_state.as_deref() == Some("completed"))
-        .count();
-    let completed_calls_have_results = completed_tool_call_count == 0
-        || transcript_tool_result_count(history) == completed_tool_call_count;
-
-    tool_calls_reserved_by_assistant_message
-        && no_running_tool_calls
-        && completed_calls_have_results
+        .all(|call| {
+            results
+                .iter()
+                .filter(|result| result.id == fixture_model_call_id(call))
+                .count()
+                == 1
+        });
+    let results_have_completed_call = results.iter().all(|result| {
+        tool_calls.iter().any(|call| {
+            fixture_model_call_id(call) == result.id
+                && call.lifecycle_state.as_deref() == Some("completed")
+        })
+    });
+    reserved && completed_have_one_result && results_have_completed_call
 }
 
 async fn assert_transcript_counts(
@@ -197,6 +234,33 @@ async fn assert_transcript_post_state(
         "{}: expected_strong_drain",
         case.name
     );
+    // The generated read fixtures have one literal text payload per result.
+    // Check the payload component of ToolResultKey, not only result counts/IDs.
+    let expected_payload = format!("payload-{}", case.payload_hash);
+    for call in tool_calls
+        .iter()
+        .filter(|call| call.lifecycle_state.as_deref() == Some("completed"))
+    {
+        assert_eq!(
+            call.result, expected_payload,
+            "{}: durable result payload",
+            case.name
+        );
+    }
+    for message in &history {
+        if let Message::User { content } = message {
+            for item in content {
+                if let UserContent::ToolResult(result) = item {
+                    assert!(
+                        matches!(result.content.as_slice(), [ToolResultContent::Text(text)]
+                        if text.text == expected_payload),
+                        "{}: history result payload",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
     (messages, tool_calls, history)
 }
 
@@ -261,7 +325,23 @@ async fn persist_completed_tool_sequence(
         HookAction::Continue
     ));
 
-    (db, hook, session_id, case.result_sequence as u32)
+    let result_sequences = fetch_message_snapshots_for_session(&db.node, &session_id)
+        .await
+        .into_iter()
+        .filter_map(|row| {
+            matches!(serde_json::from_str::<Message>(&row.content),
+                Ok(Message::User { content }) if content.iter().any(|item|
+                    matches!(item, UserContent::ToolResult(result) if result.id == model_call_id)))
+            .then_some(row.sequence)
+        })
+        .collect::<Vec<_>>();
+    let [result_sequence] = result_sequences.as_slice() else {
+        panic!(
+            "{}: expected one persisted tool-result row, got {result_sequences:?}",
+            case.name
+        );
+    };
+    (db, hook, session_id, *result_sequence)
 }
 
 fn assert_transcript_case_shape() {
@@ -505,8 +585,8 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
     let model_call_ids = (0..parallel.post_tool_call_count)
         .map(|offset| format!("result-{}", parallel.logical_result_id + offset))
         .collect::<Vec<_>>();
-    for (offset, model_call_id) in model_call_ids.iter().enumerate() {
-        let internal_call_id = format!("internal-{}", parallel.logical_result_id + offset);
+    for model_call_id in &model_call_ids {
+        let internal_call_id = model_call_id.replacen("result-", "internal-", 1);
         assert!(matches!(
             hook.on_tool_call(
                 "read",
@@ -535,7 +615,7 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
     );
 
     for (offset, model_call_id) in model_call_ids.iter().enumerate() {
-        let internal_call_id = format!("internal-{}", parallel.logical_result_id + offset);
+        let internal_call_id = model_call_id.replacen("result-", "internal-", 1);
         let payload = format!("payload-{}", parallel.payload_hash);
         assert!(
             matches!(

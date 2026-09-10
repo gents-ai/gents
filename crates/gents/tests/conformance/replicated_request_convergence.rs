@@ -40,8 +40,10 @@ async fn create_owned_request(
 }
 
 async fn seed_owned_request_projection(node: &EmbeddedNode, session_id: &str, request_id: &str) {
-    create_agent_session(node, session_id, AGENT_NAME, CONVERGENCE_CREATED_AT).await;
-    upsert_conversation(node, session_id, request_id, "hello", "processing").await;
+    let mut session = support::session_document(session_id, AGENT_NAME, CONVERGENCE_CREATED_AT);
+    session.agent_did = OWNER_DID.into();
+    support::create_session_document(node, &session).await;
+    support::seed_session_observation_from_request(node, session_id, request_id, "hello").await;
 }
 
 #[allow(clippy::too_many_arguments)]

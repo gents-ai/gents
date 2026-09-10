@@ -127,7 +127,7 @@ pub(super) async fn generated_execution_lease_expiry_case_drives_daemon_recovery
     assert_eq!(case.pre.response, ResponsePhase::Streaming);
     let expected = case.expected.as_ref().expect("legal recovery transition");
     assert_eq!(expected.request, RequestPhase::Failed);
-    assert_eq!(expected.response, ResponsePhase::Failed);
+    assert_eq!(expected.response, ResponsePhase::Error);
     // Continuation/token effects have their own production consumers; this
     // daemon consumer fences the request/response pair and generation takeover.
     let db = test_db(&format!("semantic-lease-{}", case.name)).await;
@@ -543,12 +543,11 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
     let request_doc_id =
         create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
     create_agent_session(&db.node, &session_id, AGENT_NAME, &created_at).await;
-    upsert_conversation(
+    support::seed_session_observation_from_request(
         &db.node,
         &session_id,
         &request_id,
         "streaming request",
-        "processing",
     )
     .await;
     let mut lifecycle = RequestLifecycle::new_with_agent_did(
@@ -571,7 +570,13 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
         .await
         .expect("begin atomic execution");
     if case.pre_status != "complete" {
-        seed_streaming_tail(&writer, &doc_id, case.pre_token_count, &case.pre_live_tail).await;
+        seed_streaming_tail(
+            &writer,
+            &doc_id,
+            case.pre_token_count,
+            &case.pre_tail_reasoning,
+        )
+        .await;
     }
 
     if case.pre_status == "complete" {
@@ -595,10 +600,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
     match case.action.as_str() {
         "begin" => {}
         "write_tokens" => {
-            let delta = case
-                .post_token_count
-                .checked_sub(case.pre_token_count)
-                .expect("write_tokens delta");
+            let delta = case.token_delta.expect("write_tokens action input");
             writer
                 .write_tokens(&doc_id, &tokens(delta))
                 .await
@@ -622,9 +624,13 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
             writer.reset_tail(&doc_id).await.expect("reset tail");
         }
         "finalize_complete" => {
-            if let Some(sequence) = case.post_materialized_seq {
-                mark_materialized(db.node.clone(), &request_id, sequence as u32).await;
-            }
+            let sequence = case.materialize_sequence.expect("finalize action input");
+            mark_materialized(
+                db.node.clone(),
+                &request_id,
+                u32::try_from(sequence).expect("materialization sequence fits runtime"),
+            )
+            .await;
             writer
                 .flush_pending(&doc_id)
                 .await
@@ -642,12 +648,14 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                 .expect("finalize complete");
         }
         "finalize_error" => {
-            if let Some(reason) = case.error_reason.as_deref() {
-                writer
-                    .set_error_message(&doc_id, reason)
-                    .await
-                    .expect("set error reason");
-            }
+            let reason = case
+                .input_error_reason
+                .as_deref()
+                .expect("finalize error input");
+            writer
+                .set_error_message(&doc_id, reason)
+                .await
+                .expect("set error reason");
             writer
                 .flush_pending(&doc_id)
                 .await
@@ -659,7 +667,7 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
             lifecycle
                 .terminalize_owned_without_stream(
                     gents::lifecycle::RequestTerminalOutcome::Failed,
-                    case.error_reason.as_deref(),
+                    Some(reason),
                 )
                 .await
                 .expect("finalize error");
@@ -675,6 +683,16 @@ async fn drive_streaming_response_case(case: &lean_vocab_test::LeanResponseTrans
                 .expect("recover streaming response");
             assert_eq!(report.responses_recovered, 1, "{}", case.name);
             assert_eq!(report.requests_recovered, 1, "{}", case.name);
+
+            // The recovered response stays interrupted: the terminal error
+            // outcome is not a processing request again, so a repeated recovery
+            // sweep must be a no-op rather than re-recovering or resurrecting
+            // the interrupted response/request pair.
+            let repeated = RequestLifecycle::recover_all(&db.node, AGENT_DID)
+                .await
+                .expect("repeat recovery sweep on an interrupted request");
+            assert_eq!(repeated.responses_recovered, 0, "{}", case.name);
+            assert_eq!(repeated.requests_recovered, 0, "{}", case.name);
         }
         "observe_idempotent_finalize" => {
             lifecycle
@@ -760,6 +778,32 @@ async fn assert_streaming_response_shape(
         case.name
     );
 
+    // Streaming-tail reasoning has a direct stored observation. Terminal
+    // reasoning transfer belongs to the transcript materialization owner.
+    let expected_reasoning = match phase {
+        ResponsePhase::Pre => Some(case.pre_tail_reasoning.as_str()),
+        ResponsePhase::Post if case.post_status == "streaming" => {
+            Some(case.post_tail_reasoning.as_str())
+        }
+        ResponsePhase::Post => None,
+    };
+    if let Some(expected) = expected_reasoning {
+        let actual = if row
+            .reasoning
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+        {
+            "nonEmpty"
+        } else {
+            "empty"
+        };
+        assert_eq!(
+            actual, expected,
+            "{} {phase_name}: tail reasoning",
+            case.name
+        );
+    }
+
     if matches!(phase, ResponsePhase::Post) {
         match case.error_reason.as_deref() {
             Some("daemonRestartRecovery") => {
@@ -807,19 +851,15 @@ async fn assert_request_bridge_shape(
         "{}: request lifecycle_state",
         case.name
     );
-    assert_eq!(
-        case.expected_request_persistence.as_deref(),
-        Some("committed"),
-        "{}: terminal bridge persistence",
-        case.name
-    );
+    // Reading the persisted lifecycle is not evidence that response and
+    // request changes committed atomically; that needs the completion owner.
 }
 
 async fn seed_streaming_tail(
     writer: &DefraStreamWriter,
     doc_id: &str,
     token_count: usize,
-    live_tail: &str,
+    tail_reasoning: &str,
 ) {
     if token_count > 0 {
         writer
@@ -827,7 +867,8 @@ async fn seed_streaming_tail(
             .await
             .expect("seed tokens");
         writer.flush_pending(doc_id).await.expect("seed flush");
-    } else if live_tail == "nonEmpty" {
+    }
+    if tail_reasoning == "nonEmpty" {
         writer
             .write_reasoning(doc_id, "seed reasoning")
             .await
@@ -948,11 +989,15 @@ fn request_state_is_terminal(state: &RequestLifecycleState) -> bool {
 }
 
 fn response_status_is_terminal(status: &str) -> bool {
-    matches!(status, "complete" | "completed" | "error")
+    gents::compaction::ResponseStatus::from_defra(status)
+        .is_some_and(gents::compaction::ResponseStatus::is_terminal)
 }
 
 fn inference_call_state_is_terminal(state: &str) -> bool {
-    matches!(state, "cancelled" | "completed" | "failed")
+    lean_state_machine_contract("InferenceCall")
+        .terminal_states
+        .iter()
+        .any(|terminal| terminal == state)
 }
 
 async fn boot_streaming_interrupt_flow_agent(
@@ -1231,6 +1276,14 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
         case.name
     );
 
+    if case.reducer == "summarize" {
+        // The public APIs expose the response gate and bounded splitter, not the
+        // complete summary/checkpoint operation represented by Lean. Test those
+        // owners without manufacturing a reduced tail and calling it execution.
+        check_summarize_gate_and_split(case, input);
+        return;
+    }
+
     let reduced = apply_compaction_reducer(case, input.clone());
     assert_eq!(
         reduced.len(),
@@ -1264,41 +1317,21 @@ fn drive_compaction_reducer_case(case: &lean_vocab_test::LeanCompactionReducerCa
         case.name
     );
 
-    let structurally_identity = abstract_prompt_view(&input) == abstract_prompt_view(&reduced);
-    if case.reducer_is_identity {
-        assert!(
-            structurally_identity,
-            "{}: reducer should be identity on the Lean structural projection",
-            case.name
-        );
-    } else {
-        assert_ne!(
-            reduced, input,
-            "{}: terminal safe reduction should be able to change runtime payloads",
-            case.name
-        );
-    }
-
-    if case.name == "strip_is_strictly_idempotent" {
-        let reapplied = gents::compaction::strip_tool_results(reduced.clone()).0;
-        // Full payload equality, not just the structural projection: production
-        // recovers a stub's recorded facts rather than re-measuring it, which is what
-        // `Compaction.strip_idempotent` states.
-        assert_eq!(
-            reduced, reapplied,
-            "{}: strip must be idempotent on runtime payloads, not just shapes",
-            case.name
-        );
-    }
-
-    if case.name == "provider_view_is_idempotent" {
-        let reapplied = gents::compaction::provider_view(reduced.clone()).0;
-        assert_eq!(
-            reduced, reapplied,
-            "{}: provider_view must be idempotent on runtime payloads (Compaction.providerView_idempotent)",
-            case.name
-        );
-    }
+    // Lean's fixture uses a nonzero result payload: stripping must be visible
+    // in identity checks, even when the row and tool-call shapes are unchanged.
+    assert_eq!(
+        reduced == input,
+        case.reducer_is_identity,
+        "{}: identity must compare full runtime payloads",
+        case.name
+    );
+    let reapplied = apply_compaction_reducer(case, reduced.clone());
+    assert_eq!(
+        reapplied == reduced,
+        case.reducer_is_idempotent,
+        "{}: reapplication must compare full runtime payloads",
+        case.name
+    );
 
     if case.name == "reapply_preserves_view_coherent" {
         let reapplied = apply_compaction_reducer(case, reduced.clone());
@@ -1324,29 +1357,26 @@ fn apply_compaction_reducer(
         "identity" => input,
         "strip" => gents::compaction::strip_tool_results(input).0,
         "provider_view" => gents::compaction::provider_view(input).0,
-        "summarize" => drive_summarize(case, input),
-        "any_valid" if case.safe_to_reduce => gents::compaction::strip_tool_results(input).0,
-        "any_valid" => input,
         other => panic!("unsupported compaction reducer {other:?} for {}", case.name),
     }
 }
 
-/// Drives the summarize reducer through *production*.
-///
-/// The gate and the boundary are both production's: `safe_to_reduce` and
-/// `pair_safe_boundary` are the functions under test, checked against the model
-/// rather than reimplemented here. Before #993 this case computed the gate
-/// inside the test, so the test could not detect the gate's absence from
-/// production at all.
-fn drive_summarize(
+/// Checks the production gate and splitter. This does not execute a summary
+/// provider call or validate full reducer identity/idempotence/checkpoint state.
+fn check_summarize_gate_and_split(
     case: &lean_vocab_test::LeanCompactionReducerCase,
     input: Vec<Message>,
-) -> Vec<Message> {
-    let gate_open = if case.safe_to_reduce {
-        gents::compaction::safe_to_reduce(&input, &gents::compaction::AllTerminal)
-    } else {
-        gents::compaction::safe_to_reduce(&input, &gents::compaction::NoneKnown)
-    };
+) {
+    struct UniformStatus(gents::compaction::ResponseStatus);
+    impl gents::compaction::ResponseStatusIndex for UniformStatus {
+        fn status_of(&self, _message: &Message) -> Option<gents::compaction::ResponseStatus> {
+            Some(self.0)
+        }
+    }
+    // Translate the modeled resolver input, never the expected gate or case group.
+    let status = gents::compaction::ResponseStatus::from_defra(&case.response_status)
+        .expect("generated response status must use the runtime vocabulary");
+    let gate_open = gents::compaction::safe_to_reduce(&input, &UniformStatus(status));
     assert_eq!(
         gate_open, case.safe_to_reduce,
         "{}: production safe_to_reduce must agree with the modelled gate",
@@ -1359,9 +1389,13 @@ fn drive_summarize(
         "{}: production pair_safe_boundary must match Compaction.pairSafeBoundary",
         case.name
     );
+    // The gate is a summarize obligation only: raw strip/provider_view rows
+    // emit `null` here and never consult it, so the assertion is scoped to the
+    // cases that actually carry a gate.
     assert_eq!(
         boundary > 0,
-        case.gate_open,
+        case.gate_open
+            .expect("summarize cases carry a modelled gate"),
         "{}: a boundary that retreats to zero leaves nothing to summarize",
         case.name
     );
@@ -1406,11 +1440,6 @@ fn drive_summarize(
             "an oversized complete tail must be summarized rather than over-retained"
         );
     }
-
-    if !gate_open || boundary == 0 {
-        return input;
-    }
-    input.into_iter().skip(boundary).collect()
 }
 
 fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {

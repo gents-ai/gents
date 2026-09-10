@@ -125,21 +125,24 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
     let steer: codex::TurnSteerResponse = read_typed_response(&mut ws, request_id(203)).await?;
     assert_eq!(steer.turn_id, turn_start.turn.id);
 
-    let (steering_request_id, session_id, metadata) =
-        wait_for_request_metadata(&graphql, &agent_did, &steer_prompt).await?;
+    let (steering_request_id, session_id, input) =
+        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
     assert_eq!(session_id, thread_id);
     assert_eq!(
-        metadata.pointer("/queue/source").and_then(Value::as_str),
-        Some("steering")
+        input.queue.as_ref().expect("steering queue").source,
+        gents_protocol::request_input::QueueSource::Steering
     );
     assert_eq!(
-        metadata.pointer("/queue/policy").and_then(Value::as_str),
-        Some("append")
+        input.queue.as_ref().expect("steering queue").policy,
+        gents_protocol::request_input::QueuePolicy::Append
     );
     assert_eq!(
-        metadata
-            .pointer("/queue/queued_after_request_id")
-            .and_then(Value::as_str),
+        input
+            .queue
+            .as_ref()
+            .expect("steering queue")
+            .queued_after_request_id
+            .as_deref(),
         Some(turn_start.turn.id.as_str())
     );
     assert_ne!(steering_request_id, turn_start.turn.id);
@@ -165,13 +168,11 @@ async fn codex_shim_turn_steer_queues_gents_request_on_active_turn() -> Result<(
         read_typed_response(&mut ws, request_id(205)).await?;
     assert_eq!(second_steer.turn_id, turn_start.turn.id);
 
-    let (second_steering_request_id, second_session_id, second_metadata) =
-        wait_for_request_metadata(&graphql, &agent_did, &second_steer_prompt).await?;
+    let (second_steering_request_id, second_session_id, second_input) =
+        wait_for_request_input(&graphql, &agent_did, &second_steer_prompt).await?;
     assert_eq!(second_session_id, thread_id);
     assert_eq!(
-        second_metadata
-            .pointer("/queue/queued_after_request_id")
-            .and_then(Value::as_str),
+        second_input.queue.as_ref().expect("steering queue").queued_after_request_id.as_deref(),
         Some(steering_request_id.as_str()),
         "second steering request should queue after the current GENTS tail, not after the root turn"
     );
@@ -485,18 +486,21 @@ async fn codex_shim_turn_steer_drains_queued_request_before_completing_turn() ->
     let (_initial_request_id, initial_session_id, _behavior_id) =
         wait_for_request(&graphql, &agent_did, &initial_prompt).await?;
     assert_eq!(initial_session_id, thread_id);
-    let (steering_request_id, steering_session_id, metadata) =
-        wait_for_request_metadata(&graphql, &agent_did, &steer_prompt).await?;
+    let (steering_request_id, steering_session_id, input) =
+        wait_for_request_input(&graphql, &agent_did, &steer_prompt).await?;
     assert_eq!(steering_session_id, thread_id);
     assert_ne!(steering_request_id, turn_start.turn.id);
     assert_eq!(
-        metadata.pointer("/queue/source").and_then(Value::as_str),
-        Some("steering")
+        input.queue.as_ref().expect("steering queue").source,
+        gents_protocol::request_input::QueueSource::Steering
     );
     assert_eq!(
-        metadata
-            .pointer("/queue/queued_after_request_id")
-            .and_then(Value::as_str),
+        input
+            .queue
+            .as_ref()
+            .expect("steering queue")
+            .queued_after_request_id
+            .as_deref(),
         Some(turn_start.turn.id.as_str())
     );
 

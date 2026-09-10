@@ -370,8 +370,10 @@ rows are split into a frontend list consumed by the TypeScript chat projection
 test and a desktop list consumed by the Rust session-snapshot bridge test.
 
 It also emits `ToolExecution` preflight and retry witness rows, plus the
-`ToolRetryDisposition` vocabulary, so Rust tests can reject accidental MCP
-preflight or `call_tool` retry drift before idempotency metadata changes.
+`ToolRetryDisposition` vocabulary. Current consumers observe the real MCP
+preflight gates, safe-read retry, and failed-call/no-eviction paths. The ledger
+retains the full failure/idempotency matrix and disposition vocabulary as runtime
+follow-ups; a test-only copy of the Lean policy is not owner coverage.
 
 ManagedExec exports its state vocabulary, legal transition table, and
 deadline/cancel liveness witness rows. Rust consumes those contracts in the

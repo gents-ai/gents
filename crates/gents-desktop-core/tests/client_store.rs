@@ -1,3 +1,6 @@
+use gents_protocol::session::{
+    AgentSession, SessionObservation, SessionRequestObservation, SessionTitle, SessionTitleSource,
+};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -8,13 +11,13 @@ use gents_desktop_core::client::{
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
-    AgentConversationRow, AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow,
-    AgentRuntimeRow, AgentSessionRow, AgentToolCallRow,
+    AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
+    AgentToolCallRow,
 };
 use tokio::time::{sleep, timeout};
 
 #[test]
-fn store_indexes_conversations_and_runtimes() {
+fn store_indexes_sessions_and_runtimes() {
     let store = ClientStore::from_rows(ClientStoreRows {
         agent_principals: vec![AgentPrincipalRow {
             agent_did: "did:test:amy".to_string(),
@@ -24,34 +27,44 @@ fn store_indexes_conversations_and_runtimes() {
             created_at: None,
             created_by: None,
         }],
-        conversations: vec![
-            AgentConversationRow {
+        sessions: vec![
+            AgentSession {
                 session_id: "session-2".to_string(),
-                agent_name: None,
-                agent_did: Some("did:test:amy".to_string()),
+                agent_did: "did:test:amy".to_string(),
                 requester_did: None,
-                behavior_id: None,
-                title: Some("Second".to_string()),
-                title_source: None,
-                preview_text: None,
-                status: None,
-                created_at: Some("2026-04-14T00:00:00Z".to_string()),
-                updated_at: Some("2026-04-14T00:02:00Z".to_string()),
-                latest_request_id: None,
+                behavior_id: "default".into(),
+                created_at: "2026-04-14T00:00:00Z".to_string(),
+                closed_at: None,
+                title: Some(SessionTitle {
+                    text: "Second".to_string(),
+                    source: SessionTitleSource::User,
+                }),
+                tags: Vec::new(),
+                provenance: None,
+                observation: Some(SessionObservation {
+                    last_activity_at: "2026-04-14T00:02:00Z".to_string(),
+                    preview: None,
+                    latest_request: None,
+                }),
             },
-            AgentConversationRow {
+            AgentSession {
                 session_id: "session-1".to_string(),
-                agent_name: None,
-                agent_did: Some("did:test:amy".to_string()),
+                agent_did: "did:test:amy".to_string(),
                 requester_did: None,
-                behavior_id: None,
-                title: Some("First".to_string()),
-                title_source: None,
-                preview_text: None,
-                status: None,
-                created_at: Some("2026-04-14T00:00:00Z".to_string()),
-                updated_at: Some("2026-04-14T00:03:00Z".to_string()),
-                latest_request_id: None,
+                behavior_id: "default".into(),
+                created_at: "2026-04-14T00:00:00Z".to_string(),
+                closed_at: None,
+                title: Some(SessionTitle {
+                    text: "First".to_string(),
+                    source: SessionTitleSource::User,
+                }),
+                tags: Vec::new(),
+                provenance: None,
+                observation: Some(SessionObservation {
+                    last_activity_at: "2026-04-14T00:03:00Z".to_string(),
+                    preview: None,
+                    latest_request: None,
+                }),
             },
         ],
         runtimes: vec![AgentRuntimeRow {
@@ -84,89 +97,24 @@ fn store_derives_turn_from_retry_chain_tip() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![
             AgentRequestRow {
+                doc_id: Some("req-1".to_string()),
                 request_id: "req-1".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: None,
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
                 superseded_by_request: Some("req-2".to_string()),
-                content: None,
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
-                execution_origin: None,
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-14T00:00:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: None,
-                max_retries: None,
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
             AgentRequestRow {
+                doc_id: Some("req-2".to_string()),
                 request_id: "req-2".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: None,
                 session_id: Some("session-1".to_string()),
                 retry_parent_request: Some("req-1".to_string()),
                 retry_root_request: Some("req-1".to_string()),
-                superseded_by_request: None,
-                content: None,
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Processing),
-                backend_id: None,
-                execution_origin: None,
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-14T00:01:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: None,
-                max_retries: None,
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
         ],
@@ -222,107 +170,48 @@ fn store_derives_turn_from_retry_chain_tip() {
 }
 
 #[test]
-fn store_derives_turn_from_conversation_latest_request_not_random_request_id_order() {
+fn store_derives_turn_from_session_latest_request_not_random_request_id_order() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: None,
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: None,
-            title: Some("Turn ordering".to_string()),
-            title_source: None,
-            preview_text: None,
-            status: None,
-            created_at: Some("2026-04-14T00:00:00Z".to_string()),
-            updated_at: Some("2026-04-14T00:03:00Z".to_string()),
-            latest_request_id: Some("req-a-complete".to_string()),
+            behavior_id: "default".into(),
+            created_at: "2026-04-14T00:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "Turn ordering".to_string(),
+                source: SessionTitleSource::User,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-14T00:03:00Z".to_string(),
+                preview: None,
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-a-complete".into(),
+                    request_id: "req-a-complete".into(),
+                    lifecycle_state: RequestLifecycleState::Completed,
+                }),
+            }),
         }],
         requests: vec![
             AgentRequestRow {
+                doc_id: Some("req-z-still-processing".to_string()),
                 request_id: "req-z-still-processing".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: None,
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
-                content: None,
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Processing),
-                backend_id: None,
-                execution_origin: None,
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-14T00:01:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: None,
-                max_retries: None,
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
             AgentRequestRow {
+                doc_id: Some("req-a-complete".to_string()),
                 request_id: "req-a-complete".to_string(),
                 agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: None,
                 session_id: Some("session-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
-                content: None,
-                temperature: None,
-                top_p: None,
-                top_k: None,
-                seed: None,
-                max_tokens: None,
-                max_total_tokens: None,
-                metadata: None,
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
-                execution_origin: None,
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
                 created_at: Some("2026-04-14T00:02:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: None,
-                max_retries: None,
-                caused_by_trigger_id: None,
-                caused_by_trigger_kind: None,
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_owner_deployment_id: None,
-                workspace_seal_hash: None,
                 ..Default::default()
             },
         ],
@@ -365,34 +254,52 @@ fn focused_request_id_defaults_to_none() {
 #[test]
 fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
     let base = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![
-            AgentConversationRow {
+        sessions: vec![
+            AgentSession {
                 session_id: "session-1".to_string(),
-                agent_name: Some("Amy".to_string()),
-                agent_did: Some("did:test:amy".to_string()),
+                agent_did: "did:test:amy".to_string(),
                 requester_did: None,
-                behavior_id: Some("amy-default".to_string()),
-                title: Some("Old title".to_string()),
-                title_source: None,
-                preview_text: None,
-                status: None,
-                created_at: Some("2026-04-14T00:00:00Z".to_string()),
-                updated_at: Some("2026-04-14T00:01:00Z".to_string()),
-                latest_request_id: Some("req-1".to_string()),
+                behavior_id: "amy-default".to_string(),
+                created_at: "2026-04-14T00:00:00Z".to_string(),
+                closed_at: None,
+                title: Some(SessionTitle {
+                    text: "Old title".to_string(),
+                    source: SessionTitleSource::User,
+                }),
+                tags: Vec::new(),
+                provenance: None,
+                observation: Some(SessionObservation {
+                    last_activity_at: "2026-04-14T00:01:00Z".to_string(),
+                    preview: None,
+                    latest_request: Some(SessionRequestObservation {
+                        request_doc_id: "req-1".into(),
+                        request_id: "req-1".into(),
+                        lifecycle_state: RequestLifecycleState::Processing,
+                    }),
+                }),
             },
-            AgentConversationRow {
+            AgentSession {
                 session_id: "session-1".to_string(),
-                agent_name: Some("Bea".to_string()),
-                agent_did: Some("did:test:bea".to_string()),
+                agent_did: "did:test:bea".to_string(),
                 requester_did: None,
-                behavior_id: Some("bea-default".to_string()),
-                title: Some("Other agent".to_string()),
-                title_source: None,
-                preview_text: None,
-                status: None,
-                created_at: Some("2026-04-14T00:00:00Z".to_string()),
-                updated_at: Some("2026-04-14T00:02:00Z".to_string()),
-                latest_request_id: Some("bea-req-1".to_string()),
+                behavior_id: "bea-default".to_string(),
+                created_at: "2026-04-14T00:00:00Z".to_string(),
+                closed_at: None,
+                title: Some(SessionTitle {
+                    text: "Other agent".to_string(),
+                    source: SessionTitleSource::User,
+                }),
+                tags: Vec::new(),
+                provenance: None,
+                observation: Some(SessionObservation {
+                    last_activity_at: "2026-04-14T00:02:00Z".to_string(),
+                    preview: None,
+                    latest_request: Some(SessionRequestObservation {
+                        request_doc_id: "bea-req-1".into(),
+                        request_id: "bea-req-1".into(),
+                        lifecycle_state: RequestLifecycleState::Processing,
+                    }),
+                }),
             },
         ],
         messages: vec![AgentMessageRow {
@@ -407,75 +314,42 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             timestamp: Some("2026-04-14T00:01:00Z".to_string()),
         }],
         message_source_agent_dids: vec![Some("did:test:amy".to_string())],
-        sessions: vec![AgentSessionRow {
-            session_id: "session-1".to_string(),
-            agent_name: Some("Bea".to_string()),
-            requester_did: None,
-            behavior_id: Some("bea-default".to_string()),
-            started: Some("2026-04-14T00:00:00Z".to_string()),
-            ended: None,
-            status: Some("active".to_string()),
-        }],
-        session_source_agent_dids: vec![Some("did:test:bea".to_string())],
         ..ClientStoreRows::default()
     });
 
     let patch = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
+        sessions: vec![AgentSession {
             session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
+            agent_did: "did:test:amy".to_string(),
             requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            title: Some("Updated title".to_string()),
-            title_source: None,
-            preview_text: Some("new preview".to_string()),
-            status: None,
-            created_at: Some("2026-04-14T00:00:00Z".to_string()),
-            updated_at: Some("2026-04-14T00:03:00Z".to_string()),
-            latest_request_id: Some("req-2".to_string()),
+            behavior_id: "amy-default".to_string(),
+            created_at: "2026-04-14T00:00:00Z".to_string(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: "Updated title".to_string(),
+                source: SessionTitleSource::User,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: "2026-04-14T00:03:00Z".to_string(),
+                preview: Some("new preview".to_string()),
+                latest_request: Some(SessionRequestObservation {
+                    request_doc_id: "req-2".into(),
+                    request_id: "req-2".into(),
+                    lifecycle_state: RequestLifecycleState::Processing,
+                }),
+            }),
         }],
         requests: vec![AgentRequestRow {
+            doc_id: Some("req-2".to_string()),
             request_id: "req-2".to_string(),
             agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
             behavior_id: Some("amy-default".to_string()),
             session_id: Some("session-1".to_string()),
-            retry_parent_request: None,
-            retry_root_request: None,
-            superseded_by_request: None,
             content: Some("hello".to_string()),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
             lifecycle_state: Some(RequestLifecycleState::Completed),
-            backend_id: None,
-            execution_origin: None,
-            caused_by_trigger_id: None,
-            caused_by_trigger_kind: None,
-            caused_by_correlation: None,
-            caused_by_trigger_context: None,
-            caused_by_trigger_doc_id: None,
-            caused_by_source_doc_id: None,
-            caused_by_parent_request_id: None,
-            failure_reason: None,
-            terminalized_at: None,
-            terminal_redrive_attempts: None,
             created_at: Some("2026-04-14T00:02:00Z".to_string()),
-            claimed_at: None,
-            deadline: None,
-            retry_count: None,
-            max_retries: None,
-            interrupt_requested_at: None,
-            valid_until: None,
-            workspace_id: None,
-            workspace_authority: None,
-            workspace_owner_deployment_id: None,
-            workspace_seal_hash: None,
             ..Default::default()
         }],
         messages: vec![AgentMessageRow {
@@ -489,48 +363,37 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
             reasoning: None,
             timestamp: Some("2026-04-14T00:02:00Z".to_string()),
         }],
-        sessions: vec![AgentSessionRow {
-            session_id: "session-1".to_string(),
-            agent_name: Some("Amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            started: Some("2026-04-14T00:00:00Z".to_string()),
-            ended: None,
-            status: Some("active".to_string()),
-        }],
         message_source_agent_dids: vec![Some("did:test:amy".to_string())],
-        session_source_agent_dids: vec![Some("did:test:amy".to_string())],
         ..ClientStoreRows::default()
     });
 
     let merged = base.merge_chat_patch(patch);
 
-    assert_eq!(merged.conversations.len(), 2);
+    assert_eq!(merged.sessions.len(), 2);
     assert_eq!(
         merged
             .conversation_rows("did:test:amy")
             .first()
-            .and_then(|row| row.title.as_deref()),
+            .and_then(|row| row.title.as_ref().map(|title| title.text.as_str())),
         Some("Updated title")
     );
     assert_eq!(
         merged
             .conversation_rows("did:test:bea")
             .first()
-            .and_then(|row| row.title.as_deref()),
+            .and_then(|row| row.title.as_ref().map(|title| title.text.as_str())),
         Some("Other agent")
     );
     assert_eq!(merged.messages.len(), 1);
     assert_eq!(merged.messages[0].content.as_deref(), Some("new"));
-    assert_eq!(merged.sessions.len(), 2);
     assert!(merged
-        .session_source_agent_dids
+        .sessions
         .iter()
-        .any(|source| source.as_deref() == Some("did:test:amy")));
+        .any(|session| session.agent_did == "did:test:amy"));
     assert!(merged
-        .session_source_agent_dids
+        .sessions
         .iter()
-        .any(|source| source.as_deref() == Some("did:test:bea")));
+        .any(|session| session.agent_did == "did:test:bea"));
 }
 
 #[test]

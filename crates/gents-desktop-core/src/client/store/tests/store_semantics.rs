@@ -1,4 +1,6 @@
 use super::super::*;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::session::{AgentSession, SessionObservation, SessionRequestObservation};
 
 fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
     serde_json::from_value(serde_json::json!({
@@ -92,9 +94,9 @@ fn request_row(
     created_at: &str,
     lifecycle_state: &str,
     execution_origin: &str,
-    metadata: Option<String>,
 ) -> AgentRequestRow {
     serde_json::from_value(serde_json::json!({
+        "_docID": request_id,
         "request_id": request_id,
         "agent_did": "did:agent:1",
         "behavior_id": "default",
@@ -102,54 +104,82 @@ fn request_row(
         "content": "turn",
         "lifecycle_state": lifecycle_state,
         "execution_origin": execution_origin,
-        "metadata": metadata,
         "created_at": created_at
     }))
     .expect("request row")
 }
 
 #[test]
-fn unknown_conversation_pointer_preserves_partial_observation() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        conversations: vec![AgentConversationRow {
-            session_id: "session-1".to_string(),
-            agent_name: None,
-            agent_did: Some("did:agent:1".to_string()),
-            requester_did: None,
-            behavior_id: Some("default".to_string()),
-            title: None,
-            title_source: None,
-            preview_text: None,
-            status: Some("active".to_string()),
-            created_at: None,
-            updated_at: None,
-            latest_request_id: Some("not-replicated-yet".to_string()),
-        }],
-        requests: vec![request_row(
+fn session_pointer_requires_the_observed_physical_request() {
+    use gents_protocol::client_protocol::ClientTurnState;
+
+    // A matching logical label is insufficient. Include a positive control so
+    // always returning an unknown turn cannot satisfy the missing-row cases.
+    for (doc_id, expected_turn) in [
+        (None, None),
+        (Some("different-physical-request"), None),
+        (
+            Some("physical-not-replicated-yet"),
+            Some(ClientTurnState::Completed),
+        ),
+    ] {
+        let mut requests = vec![request_row(
             "old-terminal",
             "2026-07-01T00:00:00Z",
             "completed",
             "interactive",
-            None,
-        )],
-        ..ClientStoreRows::default()
-    });
+        )];
+        if let Some(doc_id) = doc_id {
+            let mut row = request_row(
+                "not-replicated-yet",
+                "2026-07-02T00:00:00Z",
+                "completed",
+                "interactive",
+            );
+            row.doc_id = Some(doc_id.into());
+            requests.push(row);
+        }
+        let store = ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![AgentSession {
+                session_id: "session-1".to_string(),
+                agent_did: "did:agent:1".to_string(),
+                requester_did: None,
+                behavior_id: "default".to_string(),
+                created_at: "2026-04-21T12:00:00Z".into(),
+                closed_at: None,
+                title: None,
+                tags: Vec::new(),
+                provenance: None,
+                observation: Some(SessionObservation {
+                    last_activity_at: "2026-07-02T00:00:00Z".into(),
+                    preview: None,
+                    latest_request: Some(SessionRequestObservation {
+                        request_doc_id: "physical-not-replicated-yet".to_string(),
+                        request_id: "not-replicated-yet".to_string(),
+                        lifecycle_state: RequestLifecycleState::Processing,
+                    }),
+                }),
+            }],
+            requests,
+            ..ClientStoreRows::default()
+        });
 
-    assert_eq!(
-        store.latest_request_id_for_session("session-1").as_deref(),
-        Some("not-replicated-yet")
-    );
-    assert_eq!(
-        store
-            .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
-            .as_deref(),
-        Some("not-replicated-yet")
-    );
-    assert_eq!(
-        store.derive_turn_for_agent("session-1", "did:agent:1"),
-        None,
-        "an unknown latest pointer must not regress to an older terminal request"
-    );
+        assert_eq!(
+            store.latest_request_id_for_session("session-1").as_deref(),
+            Some("not-replicated-yet")
+        );
+        assert_eq!(
+            store
+                .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
+                .as_deref(),
+            Some("not-replicated-yet")
+        );
+        assert_eq!(
+            store.derive_turn_for_agent("session-1", "did:agent:1"),
+            expected_turn,
+            "only the exact observed document may supply turn state: {doc_id:?}"
+        );
+    }
 }
 
 #[test]

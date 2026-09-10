@@ -194,67 +194,6 @@ impl ResumeStatsRegistry {
     }
 }
 
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolExecutionOperation {
-    McpListTools,
-    McpCall,
-    NativeCommand,
-}
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolIdempotencyEvidence {
-    Unknown,
-    Idempotent,
-    NonIdempotent,
-}
-
-#[cfg(test)]
-pub(crate) use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
-
-#[cfg(test)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ToolRetryDisposition {
-    DoNotRetry,
-    RetrySafeRead,
-    RetryIdempotentToolCall,
-}
-
-#[cfg(test)]
-impl ToolRetryDisposition {
-    pub(crate) fn as_contract(self) -> &'static str {
-        match self {
-            Self::DoNotRetry => "doNotRetry",
-            Self::RetrySafeRead => "retrySafeRead",
-            Self::RetryIdempotentToolCall => "retryIdempotentToolCall",
-        }
-    }
-}
-
-/// Test-only mirror of `Proofs.ToolExecution.retryDisposition`.
-///
-/// Production retry behavior is still encoded by the `list_tools` safe-read
-/// retry path and the absence of a `call_tool` retry loop.
-#[cfg(test)]
-pub(crate) fn tool_retry_disposition(
-    operation: ToolExecutionOperation,
-    idempotency: ToolIdempotencyEvidence,
-    failure: ToolFailureClass,
-) -> ToolRetryDisposition {
-    match (operation, idempotency, failure) {
-        (ToolExecutionOperation::McpListTools, _, ToolFailureClass::Transport) => {
-            ToolRetryDisposition::RetrySafeRead
-        }
-        (
-            ToolExecutionOperation::McpCall,
-            ToolIdempotencyEvidence::Idempotent,
-            ToolFailureClass::Transport,
-        ) => ToolRetryDisposition::RetryIdempotentToolCall,
-        _ => ToolRetryDisposition::DoNotRetry,
-    }
-}
-
 #[derive(Clone)]
 pub struct McpPool {
     inner: Arc<RwLock<HashMap<String, McpConnection>>>,

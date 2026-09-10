@@ -2428,9 +2428,19 @@ fn calls_without_a_result_are_not_recorded_as_modifications() {
 
 #[test]
 fn every_registered_file_tool_is_classified() {
-    // Guards against a file tool being added to toolset::file_tools without a
-    // matching classification here, which would silently empty the compaction
-    // summary's file lists — the defect this test exists to keep from recurring.
+    // Sweep the native registry so new file tools cannot escape classification.
+    // Bash tools have no path argument for the summary's file lists.
+    const NOT_FILE_TOOLS: [&str; 2] = ["bash", "bash_unrestricted"];
+
+    for name in crate::toolset::NativeTool::ALL_NAMES {
+        if NOT_FILE_TOOLS.contains(&name) {
+            continue;
+        }
+        assert!(
+            super::history::is_read_tool(name) || super::history::is_write_tool(name),
+            "registered native tool {name} has no read/write classification"
+        );
+    }
     for name in ["read_file", "list_files", "glob", "grep"] {
         assert!(
             super::history::is_read_tool(name),
@@ -2754,6 +2764,73 @@ fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
         tool_result_msg("call-1", "fn main() {}"),
     ];
     assert!(!safe_to_reduce(&messages, &StreamingIndex));
+}
+
+// Match the streaming owner's response_key == request_id identity so the real
+// per-turn query can exclude the current response.
+async fn seed_response_status(
+    node: &defra_node::EmbeddedNode,
+    session_id: &str,
+    request_id: &str,
+    status: &str,
+) {
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let status = crate::graphql::escape_graphql_string(status);
+    let created_at = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+            upsert_AgentResponse(
+                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
+                add: {{
+                    response_key: "{request_id}", request_id: "{request_id}",
+                    agent_did: "did:key:gate", requester_did: "did:key:gate",
+                    behavior_id: "gate", session_id: "{session_id}",
+                    content: "partial", status: "{status}", error_message: "",
+                    token_count: 1, progress_seq: 1, created_at: "{created_at}"
+                }},
+                update: {{ status: "{status}" }}
+            ) {{ _docID }}
+        }}"#
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+#[tokio::test]
+async fn per_turn_gate_excludes_the_current_response_and_closes_on_others() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = format!("per-turn-gate-{}", uuid::Uuid::new_v4());
+
+    // Query both scopes after each real document change. Own streaming output
+    // closes the session gate; only a streaming sibling closes the per-turn gate.
+    for (response, session_live, other_live) in [
+        (None, false, false),
+        (Some(("self", "streaming")), true, false),
+        (Some(("other", "streaming")), true, true),
+        (Some(("other", "error")), true, false),
+    ] {
+        if let Some((request_id, status)) = response {
+            seed_response_status(&node, &session_id, request_id, status).await;
+        }
+        assert_eq!(
+            session::session_has_live_response(&node, &session_id)
+                .await
+                .unwrap(),
+            session_live,
+            "session scope after {response:?}"
+        );
+        assert_eq!(
+            session::session_has_other_live_response(&node, &session_id, Some("self"))
+                .await
+                .unwrap(),
+            other_live,
+            "per-turn scope after {response:?}"
+        );
+    }
+    node.shutdown().await;
 }
 
 #[tokio::test]

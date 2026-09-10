@@ -321,6 +321,23 @@ pub mod __test_internals {
         drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
     };
     pub use crate::trigger_engine::run_subagent_source_for_test;
+
+    /// Drive one scan through the same owner as the runtime's cancel-mirror loop.
+    pub async fn scan_cross_deployment_cancel_intents(
+        node: std::sync::Arc<defra_node::EmbeddedNode>,
+        snapshot: std::sync::Arc<crate::ActiveRuntimeSnapshot>,
+        peer_admission: std::sync::Arc<dyn crate::agent::p2p_reconcile::PeerAdmissionAuthority>,
+    ) -> anyhow::Result<()> {
+        let (_snapshot_tx, snapshot_rx) = tokio::sync::watch::channel(snapshot);
+        crate::trigger_engine::cross_deployment_cancel_mirror::CrossDeploymentCancelMirror::new(
+            node,
+            snapshot_rx,
+            peer_admission,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .scan_pending_intents()
+        .await
+    }
 }
 
 #[cfg(test)]

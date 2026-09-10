@@ -149,15 +149,12 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
             &format!(
                 r#"{{
                     AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }}
-                    AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID }}
                 }}"#,
-                escape_graphql_string(&git_thread_id),
                 escape_graphql_string(&git_thread_id),
             ),
         ))
         .await?;
     assert_eq!(empty_projection.pointer("/data/AgentSession/0"), None);
-    assert_eq!(empty_projection.pointer("/data/AgentConversation/0"), None);
 
     send_client_request(
         &mut ws,
@@ -180,14 +177,14 @@ async fn codex_shim_derives_git_info_and_keeps_empty_thread_ephemeral() -> Resul
         .capturing(graphql_query(
             &graphql,
             &format!(
-                r#"{{ AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ title }} }}"#,
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ title }} }}"#,
                 escape_graphql_string(&git_thread_id),
             ),
         ))
         .await?;
     assert_eq!(
         canonical
-            .pointer("/data/AgentConversation/0/title")
+            .pointer("/data/AgentSession/0/title/text")
             .and_then(Value::as_str),
         Some("Named before first turn")
     );
@@ -307,28 +304,31 @@ async fn codex_shim_thread_fork_and_search_project_gents_sessions() -> Result<()
     assert_turn_has_user_text(&forked.thread.turns[0], &prompt);
     assert_turn_has_agent_text(&forked.thread.turns[0], &expected_reply);
 
-    let forked_conversation = serve
+    let forked_session = serve
         .capturing(graphql_query(
             &graphql,
             &format!(
                 r#"{{
-                AgentConversation(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                AgentSession(filter: {{ session_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     session_id
-                    forked_from_session_id
-                    fork_at_user_turn
+                    provenance
                 }}
             }}"#,
                 escape_graphql_string(&forked_id),
             ),
         ))
         .await?;
-    let child = first_graphql_row(&forked_conversation, "AgentConversation")?;
+    let child = first_graphql_row(&forked_session, "AgentSession")?;
     assert_eq!(
-        child.get("forked_from_session_id").and_then(Value::as_str),
+        child
+            .pointer("/provenance/fork/source_session_id")
+            .and_then(Value::as_str),
         Some(thread_id.as_str())
     );
     assert_eq!(
-        child.get("fork_at_user_turn").and_then(Value::as_i64),
+        child
+            .pointer("/provenance/fork/at_user_turn")
+            .and_then(Value::as_i64),
         Some(1)
     );
 

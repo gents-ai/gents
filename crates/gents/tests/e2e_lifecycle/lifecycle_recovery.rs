@@ -12,7 +12,7 @@ use crate::support::snapshots::{
 };
 use crate::support::{
     create_agent_session, create_request, create_request_for_agent_with_signed_fields, first_row,
-    test_db, upsert_conversation, upsert_conversation_for_agent, AGENT_DID, AGENT_NAME, BACKEND_ID,
+    test_db, AGENT_DID, AGENT_NAME, BACKEND_ID,
 };
 
 type StatusRow = AgentRequestRow;
@@ -76,13 +76,18 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         "create failed wake: {:?}",
         response.errors
     );
-    upsert_conversation_for_agent(
+    let mut session = crate::support::session_document(
+        "wake-redrive-session",
+        AGENT_NAME,
+        "2026-08-12T00:00:00Z",
+    );
+    session.agent_did = agent_did.clone();
+    crate::support::create_session_document(&db.node, &session).await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
-        &agent_did,
         "wake-redrive-session",
         "failed-wake",
         "continue after background completion",
-        "active",
     )
     .await;
 
@@ -174,12 +179,12 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
         "create failed wake: {:?}",
         response.errors
     );
-    upsert_conversation(
+    create_agent_session(&db.node, session_id, AGENT_NAME, &terminalized_at).await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
         session_id,
         "failed-wake-backoff",
         "continue",
-        "active",
     )
     .await;
     let message = format!(
@@ -222,12 +227,19 @@ async fn failed_background_wake_waits_for_persisted_backoff() {
     assert_eq!(diagnostics.epochs[0].attempt_count, 2);
     assert!(diagnostics.epochs[0].next_retry_at.is_some());
 
-    upsert_conversation(
+    create_request(
+        &db.node,
+        "later-interactive-request",
+        session_id,
+        "pending",
+        "2099-01-01T00:00:00Z",
+    )
+    .await;
+    crate::support::seed_session_observation_from_request(
         &db.node,
         session_id,
         "later-interactive-request",
         "new user turn",
-        "active",
     )
     .await;
     let displaced = gents::load_background_completion_diagnostics(
@@ -293,7 +305,13 @@ async fn seed_accepted_request_projection(
     request_id: &str,
 ) {
     create_agent_session(node, session_id, AGENT_NAME, "2026-03-23T00:00:00Z").await;
-    upsert_conversation(node, session_id, request_id, "stuck request", "active").await;
+    crate::support::seed_session_observation_from_request(
+        node,
+        session_id,
+        request_id,
+        "stuck request",
+    )
+    .await;
 }
 
 async fn set_execution_lease(

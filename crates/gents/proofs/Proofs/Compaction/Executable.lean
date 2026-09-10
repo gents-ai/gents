@@ -42,6 +42,8 @@ structure CompactionReducerCase where
   preservesOrder      : Bool
   /-- Only reducers with a modeled gate report it; raw strip/sanitize have none. -/
   gateOpen            : Option Bool
+  /-- Input to the uniform response resolver, independent of the expected gate. -/
+  responseStatus      : StreamingResponse.Status
   safeToReduce        : Bool
   reducerIsIdentity   : Bool
   reducerIsIdempotent : Bool
@@ -120,6 +122,7 @@ private def reducerCase (name group : String) (reducer : Reducer)
       | .summarize => some (@decide _ (IsValidReducer.decGate
           (r := summarize (fun _ => splitIndex) ⟨1⟩) view))
       | .strip | .providerView => none
+  , responseStatus := status
   , safeToReduce := decide (PromptView.safeToReduce view)
   , reducerIsIdentity := decide (reduced.messages = source ∧ reduced.summary = view.summary)
   , reducerIsIdempotent := decide

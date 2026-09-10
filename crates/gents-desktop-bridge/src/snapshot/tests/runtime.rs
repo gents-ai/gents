@@ -464,6 +464,18 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             "case {} should surface the trigger bookkeeping timestamp",
             case.name
         );
+        // The single observed attempt passes its status and error through.
+        assert_eq!(
+            recent_runs.last_status.as_deref(),
+            Some("completed"),
+            "case {} should surface the latest attempt's status",
+            case.name
+        );
+        assert!(
+            recent_runs.last_error.is_none(),
+            "case {} must not invent an error for a clean latest attempt",
+            case.name
+        );
         assert_eq!(
             recent_runs.schedule_count,
             usize::from(trigger_kind == "schedule"),

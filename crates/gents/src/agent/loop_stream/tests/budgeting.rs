@@ -159,7 +159,8 @@ fn generated_retention_cases_drive_production_compaction_target() {
 fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
     let third = usize::MAX / 3;
     for value in [0, 1, third, third.saturating_add(1), usize::MAX] {
-        let retained = crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0);
+        let retained =
+            crate::provider_input::budget::compaction_retention_target(usize::MAX, value, 0);
         assert_eq!(retained.checked_add(value.div_ceil(4)), Some(value));
     }
 
@@ -184,7 +185,11 @@ fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
         usize::MAX,
         usize::MAX,
     ));
-    assert!(!crate::provider_input::budget::can_dispatch(usize::MAX, usize::MAX, 0));
+    assert!(!crate::provider_input::budget::can_dispatch(
+        usize::MAX,
+        usize::MAX,
+        0
+    ));
     assert_eq!(
         crate::provider_input::budget::configured_output_ceiling(Some(u64::MAX)),
         usize::try_from(u64::MAX).unwrap_or(usize::MAX)
@@ -196,15 +201,57 @@ fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
     let cases = crate::lean_vocab_test::lean_aggregate_token_budget_cases();
     assert_eq!(
         cases.len(),
-        11,
+        13,
         "Lean should emit the aggregate token-budget witness set"
     );
 
-    for case in cases {
-        let mut ledger = AggregateTokenLedger {
-            limit: case.limit,
-            used: case.used,
-        };
+    for name in [
+        "restart-zero-usage-adds-no-spend",
+        "restart-mixed-rows-preserve-accounted-spend",
+    ] {
+        assert!(
+            cases.iter().any(|case| case.name == name),
+            "Lean must include restart accounting scenario {name}"
+        );
+    }
+
+    // Cross-request durable selection is exercised through the database owner
+    // in completion_factory::tests. This test drives only the ledger arithmetic
+    // owner, which receives rows already selected for one physical request.
+    for case in cases.iter().filter(|case| {
+        case.prior_request_doc_ids
+            .iter()
+            .all(|id| id == &case.request_doc_id)
+    }) {
+        assert_eq!(
+            case.prior_prompt_tokens.len(),
+            case.prior_completion_tokens.len(),
+            "{}: each prior usage row needs both durable components",
+            case.name
+        );
+        // Exercise the same summation owner used by completion_factory on restart.
+        // These decoded rows cover accounted spend, not missing-usage validation
+        // or the database selection of completed calls.
+        let used = crate::provider_usage::sum_charged_from_persisted_parts(
+            case.prior_prompt_tokens
+                .iter()
+                .zip(&case.prior_completion_tokens)
+                .map(|(&prompt, &completion)| {
+                    (
+                        Some(i64::try_from(prompt).expect("fixture prompt tokens fit i64")),
+                        Some(i64::try_from(completion).expect("fixture completion tokens fit i64")),
+                    )
+                }),
+        )
+        .expect("decoded Lean usage rows must rehydrate");
+        assert_eq!(
+            used, case.used,
+            "{}: durable usage rehydration drifted from Lean",
+            case.name
+        );
+        let mut ledger = AggregateTokenBudget::with_prior_usage(case.limit, used)
+            .snapshot()
+            .expect("rehydrated ledger is available");
         assert_eq!(
             ledger.effective_output_tokens(case.input_tokens, case.configured_max_output_tokens,),
             case.effective_output_tokens,

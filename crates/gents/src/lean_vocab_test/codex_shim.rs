@@ -17,7 +17,6 @@ pub(crate) struct LeanCodexShimProjectionCase {
 pub(crate) struct LeanCodexShimSubagentToolCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,
-    pub(crate) tool_name: String,
     pub(crate) projected_item_kind: String,
     pub(crate) collab_tool: Option<String>,
     pub(crate) reciprocal_link: bool,
@@ -96,7 +95,6 @@ pub(crate) struct LeanCodexShimThreadStatusCase {
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) request_state: Option<String>,
     pub(crate) response_status: Option<String>,
-    pub(crate) conversation_status: String,
     pub(crate) projected_status: String,
 }
 

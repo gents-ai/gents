@@ -1839,6 +1839,26 @@ mod tests {
     }
 
     #[test]
+    fn metric_labels_escape_backslash_quote_and_newline() {
+        // Prometheus text-format escaping: a label value containing a
+        // backslash must have it doubled (not dropped), or an attacker-
+        // controlled DID ending in `\` merges the following quote/label into
+        // the escape sequence. Quote and newline are already pinned by the
+        // inference render tests; backslash is not covered elsewhere.
+        let mut lines = Vec::new();
+        push_metric_sample(
+            &mut lines,
+            "gents_runtime_active_generation",
+            &[("agent_did", "did:key:zA\\b\"c\nd".to_string())],
+            1,
+        );
+        assert_eq!(
+            lines[0], r#"gents_runtime_active_generation{agent_did="did:key:zA\\b\"c\nd"} 1"#,
+            "backslash must be doubled and quote/newline escaped, in that order"
+        );
+    }
+
+    #[test]
     fn inference_metrics_group_by_agent_backend_model_and_status() {
         let data = InferenceMetricsQueryData {
             principals: vec![InferencePrincipalRow {

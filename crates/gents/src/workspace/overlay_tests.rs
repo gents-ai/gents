@@ -332,6 +332,13 @@ fn live_tree_hash_drift_fails_closed() {
 
 #[test]
 fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
+    // Pre-claim requests still hold their exclusive workspace binding.
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::Pending
+    )));
+    assert!(super::request_lifecycle_is_live(Some(
+        RequestLifecycleState::WorkspaceBindingPending
+    )));
     assert!(super::request_lifecycle_is_live(Some(
         RequestLifecycleState::Processing
     )));
@@ -496,6 +503,25 @@ fn enabled_workspace_root_allowlist_is_required_when_present() {
 }
 
 #[test]
+fn enabled_workspace_root_ceiling_accepts_placement_under_enabled_root() {
+    let other = tempfile::tempdir().unwrap();
+    let other_root = std::fs::canonicalize(other.path()).unwrap();
+    let placement_path = other_root.join("worktrees").join("ws-1");
+    std::fs::create_dir_all(&placement_path).unwrap();
+    let overlay = bind_workspace_overlay(
+        &ready_workspace(),
+        &placement(&placement_path),
+        bind_input(WorkspaceAuthority::ReadOnly, None, &[other_root], false),
+    )
+    .unwrap();
+    assert_eq!(
+        overlay.root,
+        std::fs::canonicalize(&placement_path).unwrap()
+    );
+    assert_eq!(overlay.seal_hash, None);
+}
+
+#[test]
 fn persisted_cwd_must_stay_under_placement() {
     let (_guard, operator, placement_path) = temp_tree();
     let nested = placement_path.join("src");
@@ -532,7 +558,15 @@ fn persisted_cwd_must_stay_under_placement() {
 
 #[test]
 fn workspace_authority_parse_and_write_flags() {
-    assert!(WorkspaceAuthority::parse("readWrite").is_ok());
+    for (spelling, authority) in [
+        ("readOnly", WorkspaceAuthority::ReadOnly),
+        ("readWrite", WorkspaceAuthority::ReadWrite),
+        ("integrate", WorkspaceAuthority::Integrate),
+    ] {
+        assert_eq!(WorkspaceAuthority::parse(spelling).unwrap(), authority);
+        assert_eq!(authority.as_str(), spelling);
+    }
+    assert!(WorkspaceAuthority::parse("administrator").is_err());
     assert!(WorkspaceAuthority::ReadWrite.allows_file_writes());
     assert!(!WorkspaceAuthority::ReadOnly.allows_file_writes());
     assert!(!WorkspaceAuthority::Integrate.allows_file_writes());

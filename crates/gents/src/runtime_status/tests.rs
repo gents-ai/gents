@@ -23,6 +23,7 @@ struct AgentRuntimeRow {
     behavior_executor_status_json: String,
     last_reconcile_result: String,
     last_reconcile_error: String,
+    last_reconcile_completed_at: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +118,7 @@ async fn fetch_runtime_row(node: &defra_node::EmbeddedNode, agent_did: &str) -> 
                 behavior_executor_status_json
                 last_reconcile_result
                 last_reconcile_error
+                last_reconcile_completed_at
             }}
         }}"#
     );
@@ -451,6 +453,13 @@ async fn runtime_status_persists_diagnostics_while_readiness_owns_lifecycle() {
     assert_eq!(row.reconcile_phase, "idle");
     assert_eq!(row.last_reconcile_result, "startup");
     assert!(row.last_reconcile_error.is_empty());
+    // The owner stamps a completion timestamp on every reconcile publication
+    // (publish_snapshot / publish_error); the CLI `status` command surfaces
+    // it. A writer that stopped stamping must fail here.
+    assert!(
+        !row.last_reconcile_completed_at.is_empty(),
+        "startup publish must stamp last_reconcile_completed_at"
+    );
     let readiness = serde_json::from_str::<gents_protocol::row::BehaviorReadinessSnapshot>(
         &fetch_behavior_readiness_row(node.as_ref(), "did:test:status-test")
             .await
@@ -617,6 +626,10 @@ async fn runtime_status_serializes_persisted_generation_updates() {
 
     let row = fetch_runtime_row(node.as_ref(), "did:test:status-serialize").await;
     assert_eq!(row.last_reconcile_result, "applied");
+    assert!(
+        !row.last_reconcile_completed_at.is_empty(),
+        "applied publish must stamp last_reconcile_completed_at"
+    );
     let readiness = fetch_behavior_readiness_row(node.as_ref(), "did:test:status-serialize").await;
     let readiness: gents_protocol::row::BehaviorReadinessSnapshot =
         serde_json::from_str(&readiness.snapshot_json).expect("decode serialized readiness");

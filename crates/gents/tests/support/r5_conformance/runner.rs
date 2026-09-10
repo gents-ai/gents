@@ -202,7 +202,9 @@ impl Harness {
             Action::RunBackgroundCompletionObserverOnA => {
                 run_background_completion_on_a(&self.a).await?
             }
-            Action::RunCancelMirrorObserverOnB => run_cancel_mirror_on_b(&self.b).await?,
+            Action::RunCancelMirrorObserverOnB => {
+                run_cancel_mirror_on_b(&self.b, self.a.did()).await?;
+            }
             Action::RunUnclaimedSpawnReconcilerOnA => {
                 let _ = reconcile_unclaimed_cross_deployment_spawns(
                     self.a.db.node.clone(),
@@ -236,7 +238,7 @@ impl Harness {
     async fn wait_for_convergence(&mut self) -> Result<()> {
         run_background_completion_on_a(&self.a).await?;
         let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
-        run_cancel_mirror_on_b(&self.b).await?;
+        run_cancel_mirror_on_b(&self.b, self.a.did()).await?;
         Ok(())
     }
 
@@ -858,25 +860,51 @@ async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     Ok(())
 }
 
-async fn run_cancel_mirror_on_b(node: &HarnessNode) -> Result<()> {
-    for bridge in load_bridge_rows(node).await? {
-        let Some(intent_at) = bridge.cancel_cascade_intent_at.as_deref() else {
-            continue;
-        };
-        let Some(child_request_id) = bridge.child_request_id.as_deref() else {
-            continue;
-        };
-        let Some(child) = load_request_optional(node, child_request_id).await? else {
-            continue;
-        };
-        if child.agent_did == node.did()
-            && !child.is_terminal()
-            && child.interrupt_requested_at.is_none()
-        {
-            set_child_interrupt(node, child_request_id, intent_at).await?;
+async fn run_cancel_mirror_on_b(node: &HarnessNode, admitted_parent_did: &str) -> Result<()> {
+    use gents::agent::p2p_reconcile::PeerAdmissionAuthority;
+    use std::sync::Arc;
+
+    // Enrollment is a controlled input to this scenario. The real mirror owns
+    // author coherence, admission checks, child scope, deduplication and writes.
+    struct ScenarioPeer(String);
+    #[async_trait::async_trait]
+    impl PeerAdmissionAuthority for ScenarioPeer {
+        async fn fresh_member_authorized(&self, member_did: &str) -> Result<bool> {
+            Ok(member_did == self.0)
+        }
+        async fn fresh_member_authorized_for_agent(
+            &self,
+            member_did: &str,
+            _owner_agent: &str,
+        ) -> Result<bool> {
+            self.fresh_member_authorized(member_did).await
         }
     }
-    Ok(())
+
+    let snapshot = Arc::new(gents::ActiveRuntimeSnapshot {
+        generation: node.db.process_generation,
+        principal: None,
+        local_did: node.did().to_string(),
+        default_behavior_id: String::new(),
+        behaviors: Default::default(),
+        tool_surfaces: Default::default(),
+        backend_admission_configs: Default::default(),
+        unavailable_behaviors: Default::default(),
+        active_schedules: Default::default(),
+        unavailable_schedules: Default::default(),
+        active_event_triggers: Default::default(),
+        unavailable_event_triggers: Default::default(),
+        active_tasks: Default::default(),
+        dispatchers: Default::default(),
+        behavior_executor_capacities: Default::default(),
+        behavior_executor_queue_capacities: Default::default(),
+    });
+    gents::__test_internals::scan_cross_deployment_cancel_intents(
+        node.db.node.clone(),
+        snapshot,
+        Arc::new(ScenarioPeer(admitted_parent_did.to_string())),
+    )
+    .await
 }
 
 async fn advance_r5_clock_effects(node: &HarnessNode, seconds: u64) -> Result<()> {
@@ -1062,8 +1090,6 @@ struct HarnessRequest {
     agent_did: String,
     behavior_id: String,
     session_id: String,
-    lifecycle_state: RequestLifecycleState,
-    interrupt_requested_at: Option<String>,
 }
 
 impl From<AgentRequestRow> for HarnessRequest {
@@ -1074,15 +1100,7 @@ impl From<AgentRequestRow> for HarnessRequest {
             agent_did: row.agent_did.expect("AgentRequest.agent_did"),
             behavior_id: row.behavior_id.expect("AgentRequest.behavior_id"),
             session_id: row.session_id.expect("AgentRequest.session_id"),
-            lifecycle_state: row.lifecycle_state.expect("AgentRequest.lifecycle_state"),
-            interrupt_requested_at: row.interrupt_requested_at,
         }
-    }
-}
-
-impl HarnessRequest {
-    fn is_terminal(&self) -> bool {
-        self.lifecycle_state.is_terminal()
     }
 }
 

@@ -23,7 +23,7 @@ use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identi
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, test_p2p_db, TestDb};
+use crate::support::{first_optional_row, set_request_lifecycle_state, test_p2p_db, TestDb};
 
 struct RunningAgent {
     db: TestDb,
@@ -55,14 +55,14 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
     );
     assert_eq!(case.route, "declarative_subagent_pairing");
     assert_eq!(case.action, "cancel_parent");
-    assert_eq!(case.parent_deployment, "coordinator");
-    assert_eq!(case.child_deployment, "host");
+    assert_eq!(case.parent_principal, "coordinator");
+    assert_eq!(case.child_principal, "worker");
     assert_eq!(case.bridge_collection, "AgentToolCall");
     assert_eq!(case.child_request_collection, "AgentRequest");
     assert!(case.cancel_intent_written_on_bridge);
     assert!(case.bridge_cancel_replicates_to_host);
     assert!(case.host_interrupts_child);
-    assert!(case.child_terminal_replicates_to_coordinator);
+    assert!(case.child_interrupt_intent_replicates_to_coordinator);
     assert!(case.cancel_ack_returns_to_coordinator);
     assert!(case.no_third_party_rows);
 
@@ -319,6 +319,288 @@ async fn drive_declarative_cancel_propagation() {
     host.booted.shutdown().await;
     coord_db.node.shutdown().await;
     host.db.node.shutdown().await;
+}
+
+/// The end-to-end propagation above only ever observes the terminal `Acked`
+/// outcome of `observe_cancel_cascade_ack`. The same owner also classifies
+/// bridges whose child has not converged: `Pending` while the remote intent
+/// is young, and `Stuck` — with a durable `stuck_since` stamp — once the
+/// intent exceeds the threshold. A regression that reported `Stuck` without
+/// persisting `stuck_since`, or cleared the ack flag for a not-yet-terminal
+/// child, would pass the end-to-end fixture. Drives the real observer over a
+/// locally-owned parent per outcome; no child row means "not done", exactly
+/// the pre-replication state the observer must tolerate.
+#[tokio::test]
+async fn cancel_ack_observer_reports_pending_stuck_and_acked_outcomes() {
+    let db = test_p2p_db("cancel-ack-outcomes").await;
+    let local_did = db.node_identity.did().to_string();
+    let behavior_id = default_behavior_id_for_agent(&local_did);
+
+    // Sub-case A: young intent, child absent -> Pending, ack flag untouched.
+    create_processing_request(
+        db.node.as_ref(),
+        "ack-pending-parent",
+        "ack-pending-session",
+        &local_did,
+        &behavior_id,
+        "pending ack work",
+        0,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let pending_parent_doc_id = fetch_request(db.node.as_ref(), "ack-pending-parent")
+        .await
+        .expect("pending-ack parent request")
+        .doc_id
+        .expect("pending-ack parent _docID");
+    write_cancel_pending_bridge(
+        db.node.as_ref(),
+        "ack-pending-parent",
+        &pending_parent_doc_id,
+        "ack-pending-session",
+        "ack-pending-bridge",
+        &local_did,
+        "ack-pending-child",
+        &chrono::Utc::now().to_rfc3339(),
+    )
+    .await;
+
+    // Sub-case B: ancient intent, child absent -> Stuck with durable
+    // stuck_since, ack flag still pending.
+    create_processing_request(
+        db.node.as_ref(),
+        "ack-stuck-parent",
+        "ack-stuck-session",
+        &local_did,
+        &behavior_id,
+        "stuck ack work",
+        0,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let stuck_parent_doc_id = fetch_request(db.node.as_ref(), "ack-stuck-parent")
+        .await
+        .expect("stuck-ack parent request")
+        .doc_id
+        .expect("stuck-ack parent _docID");
+    write_cancel_pending_bridge(
+        db.node.as_ref(),
+        "ack-stuck-parent",
+        &stuck_parent_doc_id,
+        "ack-stuck-session",
+        "ack-stuck-bridge",
+        &local_did,
+        "ack-stuck-child",
+        "2020-01-01T00:00:00Z",
+    )
+    .await;
+
+    // Sub-case C: child row exists locally and is terminal -> Acked clears
+    // the pending flag and any stuck stamp.
+    create_processing_request(
+        db.node.as_ref(),
+        "ack-acked-parent",
+        "ack-acked-session",
+        &local_did,
+        &behavior_id,
+        "acked work",
+        0,
+        None,
+        None,
+        None,
+    )
+    .await;
+    let acked_parent_doc_id = fetch_request(db.node.as_ref(), "ack-acked-parent")
+        .await
+        .expect("acked parent request")
+        .doc_id
+        .expect("acked parent _docID");
+    write_cancel_pending_bridge(
+        db.node.as_ref(),
+        "ack-acked-parent",
+        &acked_parent_doc_id,
+        "ack-acked-session",
+        "ack-acked-bridge",
+        &local_did,
+        "ack-acked-child",
+        "2020-01-01T00:00:00Z",
+    )
+    .await;
+    exec(
+        db.node.as_ref(),
+        r#"mutation { update_AgentToolCall(
+            filter: { tool_call_id: { _eq: "ack-acked-bridge" } },
+            input: {
+                stuck_since: "2020-01-01T00:01:00Z",
+                started_at: "2026-05-15T00:00:00Z",
+                deadline_at: "2026-05-15T00:05:00Z",
+                completed_at: "2026-05-15T00:01:00Z",
+                cancel_cascade_intent_at: "2020-01-01T00:00:00Z"
+            }
+        ) { _docID } }"#,
+        "seed previously stuck ack bridge",
+    )
+    .await;
+    assert!(fetch_ack_tool_row(db.node.as_ref(), "ack-acked-bridge")
+        .await
+        .stuck_since
+        .is_some());
+    create_processing_request(
+        db.node.as_ref(),
+        "ack-acked-child",
+        "ack-acked-child-session",
+        &local_did,
+        &behavior_id,
+        "child work",
+        1,
+        Some("ack-acked-parent"),
+        Some("ack-acked-bridge"),
+        None,
+    )
+    .await;
+    set_request_lifecycle_state(
+        db.node.as_ref(),
+        &fetch_request(db.node.as_ref(), "ack-acked-child")
+            .await
+            .expect("acked child request")
+            .doc_id
+            .expect("acked child _docID"),
+        "failed",
+    )
+    .await;
+
+    let outcomes = observe_cancel_cascade_ack(db.node.clone(), &local_did)
+        .await
+        .expect("observe cancel ack outcomes");
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| matches!(
+                outcome,
+                CancelAckOutcome::Pending { parent_tool_call_id } if parent_tool_call_id == "ack-pending-bridge"
+            )),
+        "a young remote intent with no converged child must classify as Pending: {outcomes:?}"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| matches!(
+                outcome,
+                CancelAckOutcome::Stuck { parent_tool_call_id, .. } if parent_tool_call_id == "ack-stuck-bridge"
+            )),
+        "an intent past the stuck threshold must classify as Stuck: {outcomes:?}"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .any(|outcome| matches!(
+                outcome,
+                CancelAckOutcome::Acked { parent_tool_call_id } if parent_tool_call_id == "ack-acked-bridge"
+            )),
+        "a terminal local child must classify as Acked: {outcomes:?}"
+    );
+
+    let pending_tool = fetch_ack_tool_row(db.node.as_ref(), "ack-pending-bridge").await;
+    assert_eq!(pending_tool.cancel_pending_remote_ack, Some(true));
+    assert!(
+        pending_tool.stuck_since.is_none(),
+        "the Pending outcome must not stamp stuck_since"
+    );
+
+    let stuck_tool = fetch_ack_tool_row(db.node.as_ref(), "ack-stuck-bridge").await;
+    assert_eq!(
+        stuck_tool.cancel_pending_remote_ack,
+        Some(true),
+        "the Stuck outcome must keep the ack flag pending"
+    );
+    assert!(
+        stuck_tool.stuck_since.is_some(),
+        "the Stuck outcome must durably stamp stuck_since for stuck-bridge observability"
+    );
+
+    let acked_tool = fetch_ack_tool_row(db.node.as_ref(), "ack-acked-bridge").await;
+    assert_eq!(
+        acked_tool.cancel_pending_remote_ack,
+        Some(false),
+        "the Acked outcome must clear the pending ack flag"
+    );
+    assert!(
+        acked_tool.stuck_since.is_none(),
+        "the Acked outcome must clear any stuck stamp"
+    );
+}
+
+async fn write_cancel_pending_bridge(
+    node: &EmbeddedNode,
+    request_id: &str,
+    request_doc_id: &str,
+    session_id: &str,
+    tool_call_id: &str,
+    agent_did: &str,
+    child_request_id: &str,
+    intent_at: &str,
+) {
+    let request_id = escape_graphql_string(request_id);
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let session_id = escape_graphql_string(session_id);
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let agent_did = escape_graphql_string(agent_did);
+    let child_request_id = escape_graphql_string(child_request_id);
+    let intent_at = escape_graphql_string(intent_at);
+    let started_at = escape_graphql_string("2026-05-15T00:00:00Z");
+    let deadline_at = escape_graphql_string("2026-05-15T00:05:00Z");
+    let completed_at = escape_graphql_string("2026-05-15T00:01:00Z");
+    let mutation = format!(
+        r#"mutation {{
+            create_AgentToolCall(input: {{
+                tool_call_key: "{request_id}:{tool_call_id}",
+                request_id: "{request_id}",
+                request_doc_id: "{request_doc_id}",
+                session_id: "{session_id}",
+                agent_did: "{agent_did}",
+                message_sequence: 1,
+                tool_name: "spawn_subagent",
+                tool_call_id: "{tool_call_id}",
+                args: "{{}}",
+                status: "completed",
+                lifecycle_state: "cancelled",
+                cancel_cause: "interrupted",
+                started_at: "{started_at}",
+                deadline_at: "{deadline_at}",
+                completed_at: "{completed_at}",
+                await_mode: "background",
+                cancel_policy: "cascade",
+                child_request_id: "{child_request_id}",
+                cancel_cascade_intent_at: "{intent_at}",
+                cancel_pending_remote_ack: true
+            }}) {{ _docID }}
+        }}"#
+    );
+    exec(node, &mutation, "write cancel-pending bridge fixture").await;
+}
+
+#[derive(Debug, Deserialize)]
+struct AckToolRow {
+    cancel_pending_remote_ack: Option<bool>,
+    stuck_since: Option<String>,
+}
+
+async fn fetch_ack_tool_row(node: &EmbeddedNode, tool_call_id: &str) -> AckToolRow {
+    let tool_call_id = escape_graphql_string(tool_call_id);
+    let query = format!(
+        r#"{{
+            AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }}, limit: 1) {{
+                cancel_pending_remote_ack
+                stuck_since
+            }}
+        }}"#
+    );
+    first_optional_row(&node.execute(&query).await, "AgentToolCall")
+        .expect("cancel-pending bridge fixture row")
 }
 
 async fn boot_agent(db: TestDb, identity: Arc<dyn AgentIdentity>, name: &str) -> RunningAgent {

@@ -505,6 +505,7 @@ mod tests {
 
     use super::*;
     use crate::backend_registry::DEFAULT_MAX_QUEUE_DEPTH;
+    use crate::graphql::escape_graphql_string;
     use crate::lean_vocab_test::lean_backend_health_cases;
     use crate::oauth_credential::test_support::{
         seed_credential, seed_credential_with_refresh_token, test_node,
@@ -724,6 +725,7 @@ mod tests {
         let options = probe_options();
         let client = reqwest::Client::new();
         let health_map = BackendHealthMap::new();
+        let node = test_node().await;
         let listener = ModelsListener::start();
 
         let backends = vec![backend("late-arrival", listener.endpoint(), "unknown")];
@@ -736,6 +738,62 @@ mod tests {
         let outcome =
             probe_backends_cycle(&client, &backends, Utc::now(), &health_map, &options, None).await;
         assert!(outcome.promotable.is_empty());
+
+        // Observe the current probe owner persisting a successful promotion.
+        let endpoint = escape_graphql_string(&listener.endpoint());
+        let seed = format!(
+            r#"mutation {{
+                create_InferenceBackend(input: {{
+                    backend_id: "late-arrival"
+                    name: "late-arrival"
+                    provider_kind: "OpenAiCompatible"
+                    endpoint: "{endpoint}"
+                    max_concurrent: 1
+                    max_queue_depth: 1
+                    enabled: true
+                    models: ["test-model"]
+                    probe_status: "unknown"
+                }}) {{ _docID }}
+            }}"#
+        );
+        let response = node.execute(&seed).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+
+        let outcome = run_backend_probe_cycle(
+            &node,
+            &client,
+            &health_map,
+            &options,
+            "did:key:zPromoteProbe",
+        )
+        .await;
+        assert_eq!(outcome.promotable, vec!["late-arrival".to_string()]);
+
+        let document = node
+            .execute(
+                r#"{ InferenceBackend(filter: { backend_id: { _eq: "late-arrival" } }) { probe_status last_probe } }"#,
+            )
+            .await;
+        assert!(!document.has_errors(), "{:?}", document.errors);
+        let rows = document
+            .data
+            .as_ref()
+            .and_then(|data| data.get("InferenceBackend"))
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(
+            rows[0]["probe_status"], "healthy",
+            "the probe owner must persist its promotion"
+        );
+        assert!(
+            !rows[0]["last_probe"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty(),
+            "promotion must stamp last_probe: {rows:?}"
+        );
     }
 
     #[tokio::test]

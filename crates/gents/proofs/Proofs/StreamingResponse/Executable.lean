@@ -8,6 +8,10 @@ structure ResponseTransitionCase where
   group                      : String
   action                     : String
   legal                      : Bool
+  /-- Action arguments are independent of the expected post-state. -/
+  tokenDelta                 : Option Nat
+  inputErrorReason           : Option String
+  materializeSequence        : Option Transcript.Sequence
   preStatus                  : String
   postStatus                 : String
   preLiveTail                : String
@@ -58,15 +62,18 @@ private structure Sample where
   requestOutcome : RequestState
   pairedLegal : paired = true → BridgeTransition
     ⟨pre, .processing, .uncommitted⟩ ⟨post, requestOutcome, .committed⟩
+  tokenDelta : Option Nat
+  inputErrorReason : Option ErrorReason
+  materializeSequence : Option Transcript.Sequence
 
 private def unpaired (name group action : String) (pre post : ResponseContext)
     (legal : Transition pre post) : Sample :=
-  ⟨name, group, action, pre, post, legal, false, .processing, by intro h; cases h⟩
+  ⟨name, group, action, pre, post, legal, false, .processing, (by intro h; cases h), none, none, none⟩
 
 private def paired (name group action : String) (pre post : ResponseContext)
     (outcome : RequestState) (legal : Transition pre post)
     (bridge : BridgeTransition ⟨pre, .processing, .uncommitted⟩ ⟨post, outcome, .committed⟩) : Sample :=
-  ⟨name, group, action, pre, post, legal, true, outcome, fun _ => bridge⟩
+  ⟨name, group, action, pre, post, legal, true, outcome, (fun _ => bridge), none, none, none⟩
 
 private def base (tokens : Nat := 0) (tail : LiveTail := .empty) : ResponseContext :=
   { docId := 1, requestId := 1, status := .streaming, liveTail := tail
@@ -77,9 +84,11 @@ private def base (tokens : Nat := 0) (tail : LiveTail := .empty) : ResponseConte
 private def samples : List Sample :=
   [ unpaired "begin_emits_streaming_empty" "normal" "begin" (base) (base)
       (Transition.begin rfl rfl rfl rfl rfl)
-  , unpaired "write_tokens_advances_progress" "normal" "write_tokens" (base)
-      { base with liveTail := .nonEmpty, tokenCount := 5, lastProgressAt := 11 }
-      (Transition.writeTokens (delta := 5) rfl (by decide) rfl)
+  , let delta := 5
+    { (unpaired "write_tokens_advances_progress" "normal" "write_tokens" (base)
+        { base with liveTail := .nonEmpty, tokenCount := delta, lastProgressAt := 11 }
+        (Transition.writeTokens (delta := delta) rfl (by decide) rfl)) with
+      tokenDelta := some delta }
   , unpaired "write_reasoning_no_token_bump" "normal" "write_reasoning" (base)
       { base with liveTail := .nonEmpty, tailReasoning := .nonEmpty, lastProgressAt := 11 }
       (Transition.writeReasoning rfl rfl)
@@ -88,19 +97,25 @@ private def samples : List Sample :=
   , unpaired "reset_tail_clears_but_preserves_tokens" "normal" "reset_tail" (base 7 .nonEmpty)
       { base 7 .nonEmpty with liveTail := .empty, tailReasoning := .empty }
       (Transition.resetTail rfl rfl)
-  , paired "finalize_complete_clears_and_materializes" "normal" "finalize_complete"
-      { base 10 .nonEmpty with tailReasoning := .nonEmpty }
-      { base 10 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some 42 } .completed
-      (Transition.finalizeComplete rfl rfl)
-      (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl)
-  , paired "finalize_error_inference_failed_clears" "normal" "finalize_error" (base 8 .nonEmpty)
-      { base 8 with status := .error, errorReason := some .inferenceFailed } .failed
-      (Transition.finalizeError (reason := .inferenceFailed) rfl (by decide) (by decide) rfl)
-      (BridgeTransition.finalizeError (reason := .inferenceFailed) rfl (by decide) (by decide) rfl rfl rfl rfl)
-  , paired "finalize_error_idle_timeout_requires_deadline" "normal" "finalize_error" (base 4 .nonEmpty)
-      { base 4 with status := .error, errorReason := some .streamIdleTimeout } .failed
-      (Transition.finalizeError (reason := .streamIdleTimeout) rfl (by decide) (by decide) rfl)
-      (BridgeTransition.finalizeError (reason := .streamIdleTimeout) rfl (by decide) (by decide) rfl rfl rfl rfl)
+  , let seq := 42
+    { (paired "finalize_complete_clears_and_materializes" "normal" "finalize_complete"
+        { base 10 .nonEmpty with tailReasoning := .nonEmpty }
+        { base 10 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some seq } .completed
+        (Transition.finalizeComplete rfl rfl)
+        (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl)) with
+      materializeSequence := some seq }
+  , let reason := ErrorReason.inferenceFailed
+    { (paired "finalize_error_inference_failed_clears" "normal" "finalize_error" (base 8 .nonEmpty)
+        { base 8 with status := .error, errorReason := some reason } .failed
+        (Transition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl)
+        (BridgeTransition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl rfl rfl rfl)) with
+      inputErrorReason := some reason }
+  , let reason := ErrorReason.streamIdleTimeout
+    { (paired "finalize_error_idle_timeout_requires_deadline" "normal" "finalize_error" (base 4 .nonEmpty)
+        { base 4 with status := .error, errorReason := some reason } .failed
+        (Transition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl)
+        (BridgeTransition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl rfl rfl rfl)) with
+      inputErrorReason := some reason }
   , paired "recover_interrupted_keeps_content" "recovery" "recover_interrupted" (base 6 .nonEmpty)
       { base 6 .nonEmpty with status := .error, errorReason := some .daemonRestartRecovery } .failed
       (Transition.recoverInterrupted rfl rfl)
@@ -112,14 +127,18 @@ private def samples : List Sample :=
   , unpaired "set_interrupted_at_does_not_change_status" "boundary" "set_interrupted_at" (base 2 .nonEmpty)
       { base 2 .nonEmpty with interruptedAt := some 11 }
       (Transition.setInterruptedAt rfl rfl rfl)
-  , paired "bridge_completed_pairs_request_committed" "bridge" "finalize_complete"
-      { base 15 .nonEmpty with tailReasoning := .nonEmpty }
-      { base 15 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some 88 } .completed
-      (Transition.finalizeComplete rfl rfl)
-      (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl) ]
+  , let seq := 88
+    { (paired "bridge_completed_pairs_request_committed" "bridge" "finalize_complete"
+        { base 15 .nonEmpty with tailReasoning := .nonEmpty }
+        { base 15 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some seq } .completed
+        (Transition.finalizeComplete rfl rfl)
+        (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl)) with
+      materializeSequence := some seq } ]
 
 private def sampleCase (s : Sample) : ResponseTransitionCase :=
   { name := s.name, group := s.group, action := s.action, legal := true
+  , tokenDelta := s.tokenDelta, materializeSequence := s.materializeSequence
+  , inputErrorReason := s.inputErrorReason.map ErrorReason.toContract
   , preStatus := s.pre.status.toDefraDB, postStatus := s.post.status.toDefraDB
   , preLiveTail := s.pre.liveTail.toContract, postLiveTail := s.post.liveTail.toContract
   , preTailReasoning := s.pre.tailReasoning.toContract, postTailReasoning := s.post.tailReasoning.toContract

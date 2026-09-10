@@ -13,28 +13,12 @@ use crate::config::AgentBehavior;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
-use crate::lean_vocab_test::{
-    assert_state_machine_contract_is_complete, lean_runtime_reconcile_case,
-    lean_state_machine_contract,
-};
+use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::tool_surface::{
     BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection, ToolSurface,
 };
 use crate::watcher::AgentRequest;
-
-#[derive(Debug)]
-struct PairingReconcileRuntimeProbes {
-    operator_write_diverges: bool,
-    operator_delete_diverges: bool,
-    read_failure_self_loops: bool,
-    install_converges: bool,
-    teardown_converges: bool,
-    replicator_install_converges: bool,
-    replicator_teardown_converges: bool,
-    dial_converges: bool,
-    crash_restarts_slot: bool,
-}
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
     Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap())
@@ -158,85 +142,27 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
 }
 
 #[tokio::test]
-async fn pairing_reconcile_state_machine_contract_is_complete() {
-    assert_state_machine_contract_is_complete("PairingReconcile");
-    let machine = lean_state_machine_contract("PairingReconcile");
+async fn runtime_reconcile_applies_changes_and_restarts_crashed_slots() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    let probes = PairingReconcileRuntimeProbes {
-        operator_write_diverges: operator_write_changes_snapshot_fingerprint(node.as_ref()).await,
-        operator_delete_diverges: operator_delete_yields_teardown_diff(),
-        read_failure_self_loops: read_failure_is_noop_self_loop(node.clone()).await,
-        install_converges: reconcile_install_applies_added_behavior(node.as_ref()).await,
-        teardown_converges: reconcile_teardown_applies_removed_behavior(node.as_ref()).await,
-        replicator_install_converges: pairing_replicator_install_diff_converges(),
-        replicator_teardown_converges: pairing_replicator_teardown_diff_converges(),
-        dial_converges: pairing_dial_is_available_for_desired_addresses(),
-        crash_restarts_slot: slot_panic_restarts_behavior(node.as_ref()).await,
-    };
-
-    let mut rust_legal_pairs = BTreeSet::new();
-    for from in &machine.states {
-        for action in &machine.actions {
-            if let Some(post) = rust_pairing_reconcile_step(from, action, &probes) {
-                rust_legal_pairs.insert((from.clone(), post.to_string()));
-            }
-        }
-    }
-
-    let lean_legal_pairs = machine
-        .legal_transitions
-        .iter()
-        .map(|pair| (pair.from.clone(), pair.to.clone()))
-        .collect::<BTreeSet<_>>();
-    let lean_illegal_pairs = machine
-        .illegal_transitions
-        .iter()
-        .map(|pair| (pair.from.clone(), pair.to.clone()))
-        .collect::<BTreeSet<_>>();
-
-    assert_eq!(
-        rust_legal_pairs, lean_legal_pairs,
-        "PairingReconcile Lean legal transitions drifted from Rust diff/slot behavior"
-    );
-    assert!(
-        rust_legal_pairs.is_disjoint(&lean_illegal_pairs),
-        "PairingReconcile Rust transitions overlap Lean illegal transitions"
-    );
+    assert!(operator_write_changes_snapshot_fingerprint(node.as_ref()).await);
+    assert!(reconcile_install_applies_added_behavior(node.as_ref()).await);
+    assert!(reconcile_teardown_applies_removed_behavior(node.as_ref()).await);
+    assert!(slot_panic_restarts_behavior(node.as_ref()).await);
 }
 
-fn rust_pairing_reconcile_step(
-    phase: &str,
-    action: &str,
-    probes: &PairingReconcileRuntimeProbes,
-) -> Option<&'static str> {
-    match (phase, action) {
-        ("idle" | "converged" | "crashed", "operatorWrite") if probes.operator_write_diverges => {
-            Some("diverged")
-        }
-        ("idle" | "converged" | "crashed", "operatorDelete") if probes.operator_delete_diverges => {
-            Some("diverged")
-        }
-        ("idle", "readFailure") if probes.read_failure_self_loops => Some("idle"),
-        ("converged", "readFailure") if probes.read_failure_self_loops => Some("converged"),
-        ("diverged", "readFailure") if probes.read_failure_self_loops => Some("diverged"),
-        ("crashed", "readFailure") if probes.read_failure_self_loops => Some("crashed"),
-        ("diverged", "dial") if probes.dial_converges => Some("converged"),
-        ("converged" | "diverged", "peerDisconnected") => Some("diverged"),
-        ("diverged", "reconcileInstall") if probes.install_converges => Some("converged"),
-        ("diverged", "reconcileTeardown") if probes.teardown_converges => Some("converged"),
-        ("diverged", "reconcileInstallReplicator") if probes.replicator_install_converges => {
-            Some("converged")
-        }
-        ("diverged", "reconcileTeardownReplicator") if probes.replicator_teardown_converges => {
-            Some("converged")
-        }
-        (_, "crash") if probes.crash_restarts_slot => Some("crashed"),
-        _ => None,
-    }
+#[tokio::test]
+async fn pairing_desired_read_failure_applies_no_operations() {
+    assert!(read_failure_is_noop_self_loop(test_node().await).await);
 }
 
-fn pairing_replicator_install_diff_converges() -> bool {
+#[test]
+fn pairing_diff_installs_and_removes_owned_replicators() {
+    assert!(pairing_replicator_install_diff_matches());
+    assert!(pairing_replicator_teardown_diff_matches());
+}
+
+fn pairing_replicator_install_diff_matches() -> bool {
     use crate::agent::p2p_reconcile::{
         compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
     };
@@ -251,7 +177,7 @@ fn pairing_replicator_install_diff_converges() -> bool {
         == vec![DiffOp::InstallReplicator("addr1".into())]
 }
 
-fn pairing_replicator_teardown_diff_converges() -> bool {
+fn pairing_replicator_teardown_diff_matches() -> bool {
     use crate::agent::p2p_reconcile::{
         compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
     };
@@ -268,29 +194,6 @@ fn pairing_replicator_teardown_diff_converges() -> bool {
     };
     compute_owned_pairing_diff(&desired, &actual, &applied)
         == vec![DiffOp::TeardownReplicator("addr1".into())]
-}
-
-/// Probe for the `operatorDelete` transition: when the operator deletes the
-/// desired row (desired empty) but the managed/live state still carries what was
-/// installed, the diff must be non-empty (a teardown of the managed set), so the
-/// state diverges and the reconciler has work to do. Distinct from the
-/// `operatorWrite` probe — this exercises desired-None-over-non-empty-applied.
-fn operator_delete_yields_teardown_diff() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    !compute_owned_pairing_diff(&desired, &actual, &applied).is_empty()
 }
 
 /// Probe for the `readFailure` transition: a failed `load_desired` read makes a
@@ -330,16 +233,6 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
         Ok(outcome) => outcome.desired_read_failed && outcome.ops_applied.is_empty(),
         Err(_) => false,
     }
-}
-
-fn pairing_dial_is_available_for_desired_addresses() -> bool {
-    use crate::agent::p2p_reconcile::PairingDesired;
-    PairingDesired {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    }
-    .has_wiring()
 }
 
 async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {

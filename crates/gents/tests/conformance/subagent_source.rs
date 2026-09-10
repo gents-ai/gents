@@ -21,7 +21,8 @@ use serde::Deserialize;
 use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, first_row, test_db};
+use crate::support::snapshots::{fetch_tool_call_snapshots_for_session, ToolCallSnapshot};
+use crate::support::{first_optional_row, first_row, set_request_lifecycle_state, test_db};
 
 struct RunningAgent {
     booted: BootedAgent,
@@ -95,35 +96,36 @@ async fn boot_agent_with_policy(
     }
 }
 
-async fn ensure_parent_subagent_authorization(
+/// Single fixture owner for a behavior's subagent authorization: writes the
+/// ToolSelection with the requested targets (each `(name, target DID, target
+/// behavior)`) and points `behavior_id` at it, creating the behavior when
+/// absent. The cross-principal flag stays absent unless a caller opts in.
+async fn ensure_subagent_authorization(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
-    subagent_targets: Vec<String>,
+    selection_id: &str,
+    subagent_targets: Vec<(String, String, String)>,
     spawn_enabled: bool,
     background_enabled: bool,
+    allow_cross_principal: Option<bool>,
 ) {
-    let selection_id = format!("{behavior_id}-r3-subagent-tools");
     let target_entries = subagent_targets
         .into_iter()
-        .map(|target_behavior_id| {
-            gents::subagent_target_entry(
-                target_behavior_id.clone(),
-                agent_did,
-                target_behavior_id,
-                None,
-            )
+        .map(|(target_name, target_did, target_behavior)| {
+            gents::subagent_target_entry(&target_name, &target_did, &target_behavior, None)
         })
         .collect();
     upsert_tool_selection(
         node,
         &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+            selection_id: selection_id.to_string(),
             agent_did: agent_did.to_string(),
             tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
             subagent_targets: Some(target_entries),
             subagent_spawn_enabled: Some(spawn_enabled),
             subagent_background_enabled: Some(background_enabled),
+            subagent_allow_cross_deployment: allow_cross_principal,
             ..Default::default()
         },
     )
@@ -152,15 +154,39 @@ async fn ensure_parent_subagent_authorization(
             created_at: Some("2026-05-12T00:00:00Z".to_string()),
         },
     };
-    behavior.tool_selection_id = Some(selection_id);
+    behavior.tool_selection_id = Some(selection_id.to_string());
     upsert_agent_behavior(node, &behavior).await.unwrap();
 }
 
-#[derive(Debug, Deserialize)]
-struct ToolCallRow {
-    lifecycle_state: Option<String>,
-    result: Option<String>,
-    tool_failure_class: Option<String>,
+async fn ensure_parent_subagent_authorization(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    subagent_targets: Vec<String>,
+    spawn_enabled: bool,
+    background_enabled: bool,
+) {
+    let subagent_targets = subagent_targets
+        .into_iter()
+        .map(|target_behavior_id| {
+            (
+                target_behavior_id.clone(),
+                agent_did.to_string(),
+                target_behavior_id,
+            )
+        })
+        .collect();
+    ensure_subagent_authorization(
+        node,
+        agent_did,
+        behavior_id,
+        &format!("{behavior_id}-r3-subagent-tools"),
+        subagent_targets,
+        spawn_enabled,
+        background_enabled,
+        None,
+    )
+    .await;
 }
 
 async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> AgentRequestRow {
@@ -209,7 +235,7 @@ async fn wait_for_child_request(node: &EmbeddedNode, child_request_id: &str) -> 
 }
 
 #[tokio::test]
-async fn trusted_cross_deployment_path_uses_targeted_bridge_without_parent_replication() {
+async fn trusted_cross_principal_path_uses_targeted_bridge_without_parent_replication() {
     let db = test_db("r3-subagent-source-xdep-targeted-bridge").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-targeted-bridge"));
     let local_did = identity.did().to_string();
@@ -219,7 +245,7 @@ async fn trusted_cross_deployment_path_uses_targeted_bridge_without_parent_repli
     let parent_tool_call_id = "r3-tc-targeted-bridge";
     let child_request_id = "r3-child-targeted-bridge";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -238,7 +264,7 @@ async fn trusted_cross_deployment_path_uses_targeted_bridge_without_parent_repli
     );
     wait_for_subagent_source_subscription().await;
 
-    write_targeted_cross_deployment_bridge(
+    write_targeted_cross_principal_bridge(
         db.node.as_ref(),
         coordinator_did,
         parent_request_id,
@@ -270,7 +296,7 @@ async fn trusted_path_rejects_noncanonical_bridge_author() {
     let db = test_db("r3-subagent-source-xdep-requester-normalization").await;
     let agent_did = db.node_identity.did().to_string();
     let child_request_id = "r3-child-normalized-requester";
-    let (parent_request_doc_id, parent_tool_call_doc_id) = write_targeted_cross_deployment_bridge(
+    let (parent_request_doc_id, parent_tool_call_doc_id) = write_targeted_cross_principal_bridge(
         db.node.as_ref(),
         "did:key:zNormalizedRequester",
         "r3-parent-not-replicated",
@@ -298,6 +324,13 @@ async fn trusted_path_rejects_noncanonical_bridge_author() {
     )
     .await
     .expect_err("signed bridge author identifiers must be canonical before authoring");
+    assert!(
+        matches!(
+            error.downcast_ref::<IllegalToolCallTransition>(),
+            Some(IllegalToolCallTransition::ParentLinkageIncoherent)
+        ),
+        "expected ParentLinkageIncoherent, got {error:?}"
+    );
     assert!(error
         .to_string()
         .contains("AgentRequest parent linkage incoherent"));
@@ -363,35 +396,31 @@ async fn assert_no_child_request_for_tool(
     );
 }
 
-async fn fetch_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
-                }},
-                limit: 1
-            ) {{
-                lifecycle_state
-                result
-                tool_failure_class
-            }}
-        }}"#
-    );
-    first_row(&node.execute(&query).await, "AgentToolCall")
+/// Fetch one tool call through the shared snapshot owner instead of a local
+/// projection; the fixture rows carry every snapshot field.
+async fn fetch_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallSnapshot {
+    fetch_tool_call_snapshots_for_session(node, session_id)
+        .await
+        .into_iter()
+        .find(|snapshot| snapshot.tool_call_id == tool_call_id)
+        .unwrap_or_else(|| panic!("AgentToolCall {session_id}/{tool_call_id} must exist"))
 }
 
-fn assert_tool_call_not_allowed(tool: &ToolCallRow, expected_path: &str, expected_requested: &str) {
+fn assert_tool_call_not_allowed(
+    tool: &ToolCallSnapshot,
+    expected_path: &str,
+    expected_requested: &str,
+) {
     assert_eq!(tool.lifecycle_state.as_deref(), Some("failed"));
     assert_eq!(
         tool.tool_failure_class.as_deref(),
         Some("serviceUnavailable")
     );
-    let result: serde_json::Value =
-        serde_json::from_str(tool.result.as_deref().expect("tool result JSON")).unwrap();
+    let result: serde_json::Value = serde_json::from_str(&tool.result).unwrap();
     assert_eq!(result["failure_class"], "tool_not_allowed");
     assert_eq!(result["service_id"], "subagent");
     assert_eq!(result["path"], expected_path);
@@ -1052,7 +1081,7 @@ async fn cascade_after_source_spawn_reaches_child_request() {
     interrupt_request(db.node.as_ref(), parent_request_id)
         .await
         .unwrap();
-    mark_request_interrupted(db.node.as_ref(), parent_request_id).await;
+    set_request_lifecycle_state(db.node.as_ref(), &parent_request_doc_id, "interrupted").await;
     ToolCallLifecycle::recover_all(db.node.as_ref(), &running.booted.agent_did)
         .await
         .unwrap();
@@ -1083,56 +1112,21 @@ async fn subagent_source_skips_child_when_resolved_did_is_remote() {
     .await;
 
     let remote_did = "did:key:zRemotePeerNotUs";
-    let selection_id = format!("{behavior_id}-r3-did-anchor-tools");
-    upsert_tool_selection(
+    ensure_subagent_authorization(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.clone(),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                "remote-target",
-                remote_did,
-                "remote-behavior",
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        &behavior_id,
+        &format!("{behavior_id}-r3-did-anchor-tools"),
+        vec![(
+            "remote-target".to_string(),
+            remote_did.to_string(),
+            "remote-behavior".to_string(),
+        )],
+        true,
+        true,
+        Some(true),
     )
-    .await
-    .unwrap();
-    let mut behavior = AgentBehaviorDocument {
-        behavior_id: behavior_id.clone(),
-        agent_did: agent_did.clone(),
-        display_name: Some(behavior_id.clone()),
-        description: None,
-        summary: None,
-        system_prompt: None,
-        request_context_template: None,
-        backend_id: None,
-        model_name: None,
-        tool_selection_id: Some(selection_id.clone()),
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        enabled: true,
-        created_at: Some("2026-06-04T00:00:00Z".to_string()),
-    };
-    if let Some(existing) = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .unwrap()
-    {
-        behavior = existing;
-        behavior.tool_selection_id = Some(selection_id.clone());
-    }
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .unwrap();
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
@@ -1259,14 +1253,14 @@ async fn subagent_source_interrupts_child_when_parent_already_interrupted() {
 }
 
 #[tokio::test]
-async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
+async fn subagent_source_refuses_cross_principal_child_when_target_flag_off() {
     let db = test_db("r3-subagent-source-xdep-flag-off").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-flag-off"));
     let local_did = identity.did().to_string();
     let target_behavior_id = "xdep-target-flag-off";
     let remote_parent_did = "did:key:zPairedPeerParent";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -1297,7 +1291,7 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
     );
     wait_for_subagent_source_subscription().await;
 
-    write_cross_deployment_bridge(
+    write_cross_principal_bridge(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1319,14 +1313,14 @@ async fn subagent_source_refuses_cross_deployment_child_when_target_flag_off() {
 }
 
 #[tokio::test]
-async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on() {
+async fn subagent_source_materializes_cross_principal_child_when_target_flag_on() {
     let db = test_db("r3-subagent-source-xdep-flag-on").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-flag-on"));
     let local_did = identity.did().to_string();
     let target_behavior_id = "xdep-target-flag-on";
     let remote_parent_did = "did:key:zPairedPeerParentOn";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -1357,7 +1351,7 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
     );
     wait_for_subagent_source_subscription().await;
 
-    write_cross_deployment_bridge(
+    write_cross_principal_bridge(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1377,15 +1371,15 @@ async fn subagent_source_materializes_cross_deployment_child_when_target_flag_on
 }
 
 #[tokio::test]
-async fn trusted_path_refuses_spawn_targeting_other_host() {
-    let db = test_db("r3-subagent-source-xdep-wrong-host").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-wrong-host"));
+async fn trusted_path_refuses_spawn_targeting_other_principal() {
+    let db = test_db("r3-subagent-source-xdep-wrong-principal").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("r3-xdep-wrong-principal"));
     let local_did = identity.did().to_string();
-    let other_host_did = "did:key:zDifferentTrustedHost";
-    let target_behavior_id = "xdep-target-wrong-host";
-    let remote_parent_did = "did:key:zPairedPeerParentWrongHost";
+    let other_principal_did = "did:key:zDifferentTrustedPrincipal";
+    let target_behavior_id = "xdep-target-wrong-principal";
+    let remote_parent_did = "did:key:zPairedPeerParentWrongPrincipal";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -1393,10 +1387,10 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     )
     .await;
 
-    let parent_request_id = "r3-parent-xdep-wrong-host";
-    let parent_session_id = "r3-session-xdep-wrong-host";
-    let parent_tool_call_id = "r3-tc-xdep-wrong-host";
-    let child_request_id = "r3-child-xdep-wrong-host";
+    let parent_request_id = "r3-parent-xdep-wrong-principal";
+    let parent_session_id = "r3-session-xdep-wrong-principal";
+    let parent_tool_call_id = "r3-tc-xdep-wrong-principal";
+    let child_request_id = "r3-child-xdep-wrong-principal";
     let parent_request_doc_id = create_remote_parent_request(
         db.node.as_ref(),
         remote_parent_did,
@@ -1416,7 +1410,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
     );
     wait_for_subagent_source_subscription().await;
 
-    write_cross_deployment_bridge(
+    write_cross_principal_bridge(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1425,7 +1419,7 @@ async fn trusted_path_refuses_spawn_targeting_other_host() {
         parent_tool_call_id,
         child_request_id,
         target_behavior_id,
-        other_host_did,
+        other_principal_did,
     )
     .await;
 
@@ -1445,7 +1439,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
     let target_behavior_id = "xdep-target-missing-target";
     let remote_parent_did = "did:key:zPairedPeerParentMissingTarget";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -1476,7 +1470,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
     );
     wait_for_subagent_source_subscription().await;
 
-    write_cross_deployment_bridge_with_spawn_target(
+    write_cross_principal_bridge_with_spawn_target(
         db.node.as_ref(),
         remote_parent_did,
         parent_request_id,
@@ -1499,7 +1493,7 @@ async fn trusted_path_refuses_missing_spawn_target_did() {
 }
 
 #[tokio::test]
-async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
+async fn recovery_refuses_cross_principal_orphan_when_flag_off() {
     let db = test_db("r3-subagent-source-orphan-xdep-flag-off").await;
     let parent_request_id = "r3-parent-orphan-xdep";
     let parent_session_id = "r3-session-orphan-xdep";
@@ -1507,56 +1501,21 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     let child_request_id = "child-orphan-xdep";
     let remote_target_did = "did:key:zRemoteTargetForRecovery";
 
-    let selection_id = format!("{}-orphan-xdep-tools", crate::support::AGENT_NAME);
-    upsert_tool_selection(
+    ensure_subagent_authorization(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
-            selection_id: selection_id.clone(),
-            agent_did: crate::support::AGENT_DID.to_string(),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                "remote-recovery-target",
-                remote_target_did,
-                "remote-recovery-behavior",
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(false),
-            ..Default::default()
-        },
+        crate::support::AGENT_DID,
+        crate::support::AGENT_NAME,
+        &format!("{}-orphan-xdep-tools", crate::support::AGENT_NAME),
+        vec![(
+            "remote-recovery-target".to_string(),
+            remote_target_did.to_string(),
+            "remote-recovery-behavior".to_string(),
+        )],
+        true,
+        true,
+        Some(false),
     )
-    .await
-    .unwrap();
-    let mut behavior = match load_agent_behavior(db.node.as_ref(), crate::support::AGENT_NAME)
-        .await
-        .unwrap()
-    {
-        Some(behavior) => behavior,
-        None => AgentBehaviorDocument {
-            behavior_id: crate::support::AGENT_NAME.to_string(),
-            agent_did: crate::support::AGENT_DID.to_string(),
-            display_name: Some(crate::support::AGENT_NAME.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-06-04T00:00:00Z".to_string()),
-        },
-    };
-    behavior.tool_selection_id = Some(selection_id);
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .unwrap();
+    .await;
 
     let parent_request_doc_id = crate::support::create_request(
         db.node.as_ref(),
@@ -1566,13 +1525,14 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
         &chrono::Utc::now().to_rfc3339(),
     )
     .await;
-    create_orphan_cross_deployment_tool_call(
+    create_orphan_cross_principal_tool_call(
         db.node.as_ref(),
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        crate::support::AGENT_DID,
         "remote-recovery-target",
         remote_target_did,
         "remote-recovery-behavior",
@@ -1591,6 +1551,11 @@ async fn recovery_refuses_cross_deployment_orphan_when_flag_off() {
     .await;
     let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
     assert_tool_call_not_allowed(&tool, "/name", "remote-recovery-target");
+    // A denied subagent bridge must not enter native-tool side-effect redrive.
+    assert_eq!(
+        tool.status, "completed",
+        "durable flag-off rejection must not leave the row in a completionPending state"
+    );
 }
 
 #[tokio::test]
@@ -1605,7 +1570,7 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
     let parent_tool_call_id = "r3-tc-orphan-remote-parent";
     let child_request_id = "child-orphan-remote-parent";
 
-    upsert_target_behavior_with_cross_deployment(
+    upsert_target_behavior_with_cross_principal(
         db.node.as_ref(),
         &local_did,
         target_behavior_id,
@@ -1619,13 +1584,15 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
         parent_session_id,
     )
     .await;
-    create_orphan_cross_deployment_tool_call(
+    create_orphan_cross_principal_tool_call(
         db.node.as_ref(),
         parent_request_id,
         &parent_request_doc_id,
         parent_session_id,
         parent_tool_call_id,
         child_request_id,
+        // Reach parent validation after the recovery query's agent filter.
+        &local_did,
         target_behavior_id,
         &local_did,
         target_behavior_id,
@@ -1642,6 +1609,17 @@ async fn recovery_ignores_remote_parent_orphan_even_when_target_is_local() {
         Duration::from_millis(0),
     )
     .await;
+    // An absent remote parent is not a terminal parent. Keep the spawn recoverable.
+    let tool = fetch_tool_call(db.node.as_ref(), parent_session_id, parent_tool_call_id).await;
+    assert_eq!(
+        tool.lifecycle_state.as_deref(),
+        Some("running"),
+        "recovery must leave a remote-parent orphan bridge running (parent absence is not a terminal)"
+    );
+    assert_eq!(
+        tool.status, "called",
+        "recovery must not mark the remote-parent orphan bridge completionPending"
+    );
 }
 
 #[tokio::test]
@@ -1724,7 +1702,7 @@ async fn subagent_source_interrupts_cascade_child_when_parent_reaches_dead_termi
     )
     .await;
 
-    mark_request_dead(db.node.as_ref(), parent_request_id).await;
+    set_request_lifecycle_state(db.node.as_ref(), &parent_request_doc_id, "dead").await;
 
     let args = serde_json::json!({
         "name": running.behavior_id.clone(),
@@ -1780,7 +1758,7 @@ async fn subagent_source_does_not_interrupt_cascade_child_when_parent_completed_
     )
     .await;
 
-    mark_request_completed(db.node.as_ref(), parent_request_id).await;
+    set_request_lifecycle_state(db.node.as_ref(), &parent_request_doc_id, "completed").await;
 
     let args = serde_json::json!({
         "name": running.behavior_id.clone(),
@@ -1839,7 +1817,7 @@ async fn subagent_source_does_not_interrupt_detached_child_when_parent_interrupt
     interrupt_request(db.node.as_ref(), parent_request_id)
         .await
         .unwrap();
-    mark_request_interrupted(db.node.as_ref(), parent_request_id).await;
+    set_request_lifecycle_state(db.node.as_ref(), &parent_request_doc_id, "interrupted").await;
 
     let args = serde_json::json!({
         "name": running.behavior_id.clone(),
@@ -2119,97 +2097,31 @@ async fn assert_child_not_interrupted(
     );
 }
 
-async fn mark_request_dead(node: &EmbeddedNode, request_id: &str) {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                input: {{
-                    lifecycle_state: "dead"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "mark_request_dead failed: {:?}",
-        response.errors
-    );
-}
-
-async fn mark_request_completed(node: &EmbeddedNode, request_id: &str) {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                input: {{
-                    lifecycle_state: "completed"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "mark_request_completed failed: {:?}",
-        response.errors
-    );
-}
-
-async fn upsert_target_behavior_with_cross_deployment(
+async fn upsert_target_behavior_with_cross_principal(
     node: &EmbeddedNode,
     agent_did: &str,
     target_behavior_id: &str,
-    allow_cross_deployment: bool,
+    allow_cross_principal: bool,
 ) {
-    let selection_id = format!("{target_behavior_id}-xdep-tools");
-    upsert_tool_selection(
+    ensure_subagent_authorization(
         node,
-        &ToolSelectionDocument {
-            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.to_string(),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                target_behavior_id,
-                agent_did,
-                target_behavior_id,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(allow_cross_deployment),
-            ..Default::default()
-        },
+        agent_did,
+        target_behavior_id,
+        &format!("{target_behavior_id}-xdep-tools"),
+        vec![(
+            target_behavior_id.to_string(),
+            agent_did.to_string(),
+            target_behavior_id.to_string(),
+        )],
+        true,
+        true,
+        Some(allow_cross_principal),
     )
-    .await
-    .unwrap();
-    let behavior = AgentBehaviorDocument {
-        behavior_id: target_behavior_id.to_string(),
-        agent_did: agent_did.to_string(),
-        display_name: Some(target_behavior_id.to_string()),
-        description: None,
-        summary: None,
-        system_prompt: None,
-        request_context_template: None,
-        backend_id: None,
-        model_name: None,
-        tool_selection_id: Some(selection_id),
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        enabled: true,
-        created_at: Some("2026-06-04T00:00:00Z".to_string()),
-    };
-    upsert_agent_behavior(node, &behavior).await.unwrap();
+    .await;
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn write_targeted_cross_deployment_bridge(
+async fn write_targeted_cross_principal_bridge(
     node: &EmbeddedNode,
     coordinator_did: &str,
     parent_request_id: &str,
@@ -2226,7 +2138,7 @@ async fn write_targeted_cross_deployment_bridge(
         "name": target_behavior_id,
         "agent_did": target_agent_did,
         "behavior_id": target_behavior_id,
-        "prompt": "targeted cross-deployment child prompt",
+        "prompt": "targeted cross-principal child prompt",
         "parent_subagent_depth": parent_subagent_depth,
     })
     .to_string();
@@ -2357,7 +2269,7 @@ async fn create_remote_parent_request(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn write_cross_deployment_bridge(
+async fn write_cross_principal_bridge(
     node: &EmbeddedNode,
     bridge_author_did: &str,
     parent_request_id: &str,
@@ -2368,7 +2280,7 @@ async fn write_cross_deployment_bridge(
     target_behavior_id: &str,
     target_agent_did: &str,
 ) {
-    write_cross_deployment_bridge_with_spawn_target(
+    write_cross_principal_bridge_with_spawn_target(
         node,
         bridge_author_did,
         parent_request_id,
@@ -2384,7 +2296,7 @@ async fn write_cross_deployment_bridge(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn write_cross_deployment_bridge_with_spawn_target(
+async fn write_cross_principal_bridge_with_spawn_target(
     node: &EmbeddedNode,
     bridge_author_did: &str,
     parent_request_id: &str,
@@ -2410,7 +2322,7 @@ async fn write_cross_deployment_bridge_with_spawn_target(
         "name": target_behavior_id,
         "agent_did": target_agent_did,
         "behavior_id": target_behavior_id,
-        "prompt": "cross-deployment child prompt",
+        "prompt": "cross-principal child prompt",
         "parent_subagent_depth": 0
     })
     .to_string();
@@ -2448,19 +2360,20 @@ async fn write_cross_deployment_bridge_with_spawn_target(
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "create cross-deployment AgentToolCall failed: {:?}",
+        "create cross-principal AgentToolCall failed: {:?}",
         response.errors
     );
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn create_orphan_cross_deployment_tool_call(
+async fn create_orphan_cross_principal_tool_call(
     node: &EmbeddedNode,
     parent_request_id: &str,
     parent_request_doc_id: &str,
     parent_session_id: &str,
     parent_tool_call_id: &str,
     child_request_id: &str,
+    tool_call_agent_did: &str,
     target_name: &str,
     target_agent_did: &str,
     target_behavior_id: &str,
@@ -2476,7 +2389,7 @@ async fn create_orphan_cross_deployment_tool_call(
         "name": target_name,
         "agent_did": target_agent_did,
         "behavior_id": target_behavior_id,
-        "prompt": "orphan cross-deployment child prompt",
+        "prompt": "orphan cross-principal child prompt",
         "parent_subagent_depth": 0
     })
     .to_string();
@@ -2510,32 +2423,12 @@ async fn create_orphan_cross_deployment_tool_call(
                 latency_ms: null
             }}) {{ _docID }}
         }}"#,
-        agent_did = escape_graphql_string(crate::support::AGENT_DID),
+        agent_did = escape_graphql_string(tool_call_agent_did),
     );
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "create orphan cross-deployment AgentToolCall failed: {:?}",
-        response.errors
-    );
-}
-
-async fn mark_request_interrupted(node: &EmbeddedNode, request_id: &str) {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                input: {{
-                    lifecycle_state: "interrupted"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "mark_request_interrupted failed: {:?}",
+        "create orphan cross-principal AgentToolCall failed: {:?}",
         response.errors
     );
 }

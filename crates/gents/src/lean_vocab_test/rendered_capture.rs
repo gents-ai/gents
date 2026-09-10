@@ -5,9 +5,12 @@ use serde::Deserialize;
 /// Every expectation below is computed by the Lean model
 /// (`Proofs/Conformance/ContractCases/RenderedCapture.lean`), and
 /// `RenderedCapture.Scenario.trace_realizes` proves each row is reachable by
-/// legal `Step`s from an `assembled` start. Reproducing these rows therefore
-/// inherits `sent_implies_durably_captured`, `sent_requires_a_capture_step`,
-/// and `capture_failure_blocks_send`.
+/// legal `Step`s from an `assembled` start, so the rows exercise
+/// `sent_implies_durably_captured`, `sent_requires_a_capture_step`, and
+/// `capture_failure_blocks_send` at those finite endpoints. Matching the
+/// endpoints is not universal runtime refinement; the production transition
+/// ordering is fenced separately against the real owned loop
+/// (`agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send`).
 ///
 /// `request`, `prior_binding`, and `durable_after` carry the model's *opaque*
 /// canonical-request identity: equal numbers mean equal canonical JSON, and

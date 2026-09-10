@@ -593,7 +593,70 @@ async fn native_stale_publication_rolls_back_child(fx: &Fixture) {
     );
 }
 
-// Append to graph_pipeline::run::workspace_lineage_tests, reusing its Fixture.
+#[tokio::test]
+async fn signed_tuple_must_equal_the_authenticated_entry_observation() {
+    // Compare the signed tuple with the authenticated entry receipt.
+    let fx = Fixture::new(true, false).await;
+    let root = fx.request("entry", "recon", &fx.tuple()).await;
+    execute(&fx.node, &root.graphql_mutation().unwrap()).await;
+    let resolved = fx
+        .observe("scan", &WorkspaceLineage::default())
+        .await
+        .unwrap()
+        .expect("a bound run must resolve a workspace lineage");
+    let expected = resolved.lineage.clone();
+    assert!(expected.workspace_id.is_some());
+    let genuine = fx.request("genuine-scan", "scan", &expected).await;
+    let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
+    workspace_lineage::fence_root_workspace_in_txn(&txn, &genuine)
+        .await
+        .unwrap();
+    // Observe the generation staged by the shared publication owner.
+    let staged = txn
+        .execute("{ GraphRun { update_generation } }")
+        .await
+        .unwrap();
+    assert_eq!(
+        staged["data"]["GraphRun"][0]["update_generation"].as_i64(),
+        Some(1)
+    );
+    txn.discard().await.unwrap();
+
+    let mut tampered = expected.clone();
+    tampered.workspace_seal_hash = Some("attacker-seal".into());
+    let tampered_request = fx.request("tampered-scan", "scan", &tampered).await;
+    let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
+    let error = workspace_lineage::fence_root_workspace_in_txn(&txn, &tampered_request)
+        .await
+        .expect_err("a seal hash differing from the entry observation must be denied");
+    // finalize_graph_workspace rejects the conflicting explicit seal before the
+    // staged-tuple comparison can run.
+    assert!(
+        error
+            .to_string()
+            .contains("conflicts with authenticated entry"),
+        "unexpected denial: {error:#}"
+    );
+    txn.discard().await.unwrap();
+    // Missing explicit hints pass finalization, but the signed tuple must still
+    // include the resolved binding at the publication fence.
+    let omitted = fx
+        .request("omitted-scan", "scan", &WorkspaceLineage::default())
+        .await;
+    let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
+    let error = workspace_lineage::fence_root_workspace_in_txn(&txn, &omitted)
+        .await
+        .expect_err("an omitted resolved binding must not bypass the fence");
+    assert!(
+        error
+            .to_string()
+            .contains("differs from resolved publication evidence"),
+        "unexpected denial: {error:#}"
+    );
+    txn.discard().await.unwrap();
+    fx.node.shutdown().await;
+}
+
 #[tokio::test]
 async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     use crate::defra_write::{BoundedWriteParams, BoundedWriteTool};

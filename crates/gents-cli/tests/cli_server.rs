@@ -9,10 +9,6 @@ use gents::{default_behavior_id_for_agent, default_tool_selection_id_for_behavio
 use serde_json::Value;
 use uuid::Uuid;
 
-fn generated_backend_id_for_agent(agent_did: &str) -> String {
-    format!("{agent_did}:backend")
-}
-
 fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
     let default_behavior_id = default_behavior_id_for_agent(agent_did);
     default_tool_selection_id_for_behavior(&default_behavior_id)
@@ -493,6 +489,65 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .context("seeding self-view fixtures")?;
     }
 
+    // Foreign-principal rows on the same node. Every liveness and readiness
+    // projection is scoped to this server's own agent DID, so none of these
+    // rows may count toward the local runtime's health, budget, or readiness
+    // series — they exist to prove the queries carry that scope. The foreign
+    // readiness row claims Ready but stays current, exercising the /metrics
+    // fleet inventory's per-DID projection.
+    let foreign_readiness_snapshot = serde_json::json!({
+        "format_version": gents_protocol::row::BEHAVIOR_READINESS_FORMAT_VERSION,
+        "process_state": "ready",
+        "active_generation": 1,
+        "router_generation": 1,
+        "default_behavior_id": "foreign-behavior",
+        "behaviors": [{
+            "behavior_id": "foreign-behavior",
+            "state": "ready",
+            "reason": null,
+        }],
+    })
+    .to_string();
+    let foreign_readiness_updated_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let foreign_readiness_snapshot = escape_graphql_string(&foreign_readiness_snapshot);
+    for mutation in [
+        format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "foreign-metrics-req", agent_did: "did:test:foreign-cli", behavior_id: "foreign-behavior", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", agent_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", args: "{{}}", result: "", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{ create_ToolServiceHealthState(input: {{ service_id: "runtime-mcp-pool-obs", agent_did: "did:test:foreign-cli", endpoint: "http://127.0.0.1:9/mcp", status: "unreachable", tool_count: 5, failure_count: 9, k_max: 3, last_probe_at: "2026-06-06T00:00:00Z", last_seen: "2026-06-06T00:00:00Z", updated_at: "2026-06-06T00:00:00Z" }}) {{ _docID }} }}"#
+        ),
+        format!(
+            r#"mutation {{
+                create_CompactionEntry(input: {{
+                    compaction_key: "foreign-metrics-ce",
+                    session_id: "foreign-metrics-session",
+                    agent_did: "did:test:foreign-cli",
+                    sequence: 1,
+                    original_tokens: 4321,
+                    compacted_tokens: 21,
+                    created_at: "2026-06-02T11:00:00Z"
+                }}) {{ _docID }}
+            }}"#
+        ),
+        format!(
+            r#"mutation {{
+                create_AgentBehaviorReadiness(input: {{
+                    agent_did: "did:test:foreign-cli",
+                    snapshot_json: "{foreign_readiness_snapshot}",
+                    updated_at: "{foreign_readiness_updated_at}"
+                }}) {{ _docID }}
+            }}"#
+        ),
+    ] {
+        graphql_query(&graphql, &mutation)
+            .await
+            .context("seeding foreign-principal fences")?;
+    }
+
     let status_response = client
         .get(format!("http://127.0.0.1:{port}/status"))
         .send()
@@ -546,6 +601,109 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         context.get("current_estimate").and_then(Value::as_i64),
         Some(567),
         "expected /status context current_estimate from latest compacted tokens: {status}"
+    );
+
+    // The foreign-principal seeds above must not leak into any local
+    // projection: the runtime's own liveness excludes them (they surface only
+    // in the ignored-foreign counters), the context budget counts only the
+    // locally seeded compaction.
+    assert!(
+        status
+            .pointer("/liveness/active_request_ids")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "foreign processing rows must not count as local activity: {status}"
+    );
+    assert!(
+        status
+            .pointer("/liveness/active_tool_calls")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty),
+        "foreign running tool calls must not count as local activity: {status}"
+    );
+    assert_eq!(
+        status
+            .pointer("/liveness/expired_processing_count")
+            .and_then(Value::as_i64),
+        Some(0),
+        "foreign processing rows must not degrade local liveness: {status}"
+    );
+    assert_eq!(
+        status
+            .pointer("/liveness/ignored_foreign_processing_count")
+            .and_then(Value::as_i64),
+        Some(1),
+        "the foreign processing row must be accounted as ignored-foreign: {status}"
+    );
+    assert_eq!(
+        status
+            .pointer("/liveness/ignored_foreign_tool_call_count")
+            .and_then(Value::as_i64),
+        Some(1),
+        "the foreign running tool call must be accounted as ignored-foreign: {status}"
+    );
+    assert_eq!(
+        budget.get("compaction_count").and_then(Value::as_i64),
+        Some(1),
+        "the foreign session's compaction must not join the local context budget: {status}"
+    );
+    assert_eq!(
+        budget.get("latest_original_tokens").and_then(Value::as_i64),
+        Some(1234),
+        "the foreign compaction (4321 tokens) must not win the latest-token slot: {status}"
+    );
+    assert_eq!(
+        status.get("ok").and_then(Value::as_bool),
+        Some(true),
+        "foreign rows must not degrade the local runtime verdict: {status}"
+    );
+    assert_eq!(
+        status.get("status").and_then(Value::as_str),
+        Some("ok"),
+        "foreign rows must not leave /status degraded: {status}"
+    );
+
+    // /healthz is where the readiness owner projects the local row: it must
+    // select readiness by this server's own DID (never a foreign row), and the
+    // foreign liveness rows may not flip its liveness check to degraded.
+    let health_response = client
+        .get(format!("http://127.0.0.1:{port}/healthz"))
+        .send()
+        .await
+        .context("fetching /healthz after seeding foreign fences")?;
+    assert!(
+        health_response.status().is_success(),
+        "unexpected /healthz status after foreign seeds: {health_response:?}"
+    );
+    let health: Value = health_response
+        .json()
+        .await
+        .context("reading /healthz body after foreign seeds")?;
+    assert_eq!(
+        health
+            .pointer("/checks/runtime/ready")
+            .and_then(Value::as_bool),
+        Some(true),
+        "the local readiness row must stay selected under /healthz: {health}"
+    );
+    assert_eq!(
+        health
+            .pointer("/checks/liveness/expired_processing_count")
+            .and_then(Value::as_i64),
+        Some(0),
+        "foreign processing rows must not degrade the local liveness check: {health}"
+    );
+    assert_eq!(
+        health
+            .pointer("/checks/liveness/ignored_foreign_processing_count")
+            .and_then(Value::as_i64),
+        Some(1),
+        "the foreign processing row must be accounted as ignored-foreign under /healthz: {health}"
+    );
+    assert_eq!(
+        health.get("status").and_then(Value::as_str),
+        Some("ok"),
+        "foreign rows must not leave /healthz degraded: {health}"
     );
 
     let sessions_response = client
@@ -687,6 +845,38 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             })),
         "expected /mcp/pool to include the seeded service and tool count: {mcp_pool}"
     );
+    // The foreign principal has its own ToolServiceHealthState row for the
+    // SAME shared registry service, stamped "unreachable". The /mcp/pool join
+    // must select the local agent's health row, not the foreign one.
+    assert!(
+        !mcp_pool
+            .get("services")
+            .and_then(Value::as_array)
+            .is_some_and(|services| services.iter().any(|service| {
+                service.get("service_id").and_then(Value::as_str) == Some("runtime-mcp-pool-obs")
+                    && service.get("health_status").and_then(Value::as_str) == Some("unreachable")
+            })),
+        "the foreign agent's health row for the same service must not be joined: {mcp_pool}"
+    );
+    assert_eq!(
+        mcp_pool.pointer("/totals/healthy").and_then(Value::as_i64),
+        Some(1),
+        "the foreign unreachable row must not flip the local healthy total: {mcp_pool}"
+    );
+    assert_eq!(
+        mcp_pool
+            .pointer("/totals/unreachable")
+            .and_then(Value::as_i64),
+        Some(0),
+        "the foreign health row must not add a fleet-wide unreachable count: {mcp_pool}"
+    );
+    // "unreachable" is not even a persisted raw state: if the foreign row
+    // somehow joined it would land in the unknown bucket instead.
+    assert_eq!(
+        mcp_pool.pointer("/totals/unknown").and_then(Value::as_i64),
+        Some(0),
+        "the foreign health row must not surface in any local total: {mcp_pool}"
+    );
 
     let mcp_off = client
         .get(format!("http://127.0.0.1:{port}/mcp"))
@@ -742,6 +932,29 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
     assert!(
         body.contains("gents_backend_enabled"),
         "expected backend metrics in metrics body:\n{body}"
+    );
+
+    // The readiness series is a fleet inventory: every AgentBehaviorReadiness
+    // row is projected under its own DID. The foreign row (claiming Ready with
+    // a current timestamp) must appear with its own counts, and the local row
+    // must stay observed — neither row may borrow the other's identity.
+    assert!(
+        body.contains(&format!(
+            r#"gents_runtime_runnable_behaviors{{agent_did="did:test:foreign-cli"}} 1"#
+        )),
+        "the foreign readiness row must be projected under its own DID:\n{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            r#"gents_runtime_behavior_readiness_observed{{agent_did="{agent_did}"}} 1"#
+        )),
+        "the local readiness row must stay observed after the foreign seed:\n{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            r#"gents_runtime_process_state{{agent_did="did:test:foreign-cli",state="ready"}} 1"#
+        )),
+        "the foreign process-state one-hot must be projected from its own row:\n{body}"
     );
 
     Ok(())
@@ -1445,7 +1658,11 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         Some("GENTS_TEST_CLI_BACKEND_KEY")
     );
     let agent_did = agent_did_from_init(&init)?;
-    let backend_id = generated_backend_id_for_agent(&agent_did);
+    let backend_id = init
+        .pointer("/init/backend_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
+        .to_string();
     let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
 
     let (_serve, readiness) = spawn_server_with_ready_json(

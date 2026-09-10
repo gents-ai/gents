@@ -1099,8 +1099,9 @@ mod tests {
         changed!("requester_did", |v: &mut AgentRequestCreate| v
             .requester_did
             .push('x'));
-        changed!("behavior_id", |v: &mut AgentRequestCreate| v.behavior_id =
-            None);
+        changed!("behavior_id", |v: &mut AgentRequestCreate| v
+            .behavior_id
+            .push('x'));
         changed!("session_id", |v: &mut AgentRequestCreate| v
             .session_id
             .push('x'));
@@ -1117,18 +1118,35 @@ mod tests {
         changed!("retry_key", |v: &mut AgentRequestCreate| v.retry_key =
             Some("retry-key".into()));
         changed!("content", |v: &mut AgentRequestCreate| v.content.push('!'));
-        changed!("temperature", |v: &mut AgentRequestCreate| v.temperature =
-            Some(0.0));
-        changed!("top_p", |v: &mut AgentRequestCreate| v.top_p = Some(0.9));
-        changed!("top_k", |v: &mut AgentRequestCreate| v.top_k = Some(40));
-        changed!("seed", |v: &mut AgentRequestCreate| v.seed = Some(7));
-        changed!("max_tokens", |v: &mut AgentRequestCreate| v.max_tokens =
-            Some(512));
-        changed!("max_total_tokens", |v: &mut AgentRequestCreate| v
-            .max_total_tokens =
-            Some(4096));
-        changed!("metadata", |v: &mut AgentRequestCreate| v.metadata =
-            Some("{}".into()));
+        changed!("input.skills", |v: &mut AgentRequestCreate| v
+            .input
+            .selected_skill_ids =
+            vec!["review".into()]);
+        changed!("input.cwd", |v: &mut AgentRequestCreate| v.input.cwd =
+            Some("/workspace".into()));
+        changed!("input.title", |v: &mut AgentRequestCreate| v
+            .input
+            .initial_title =
+            Some(crate::session::SessionTitle {
+                text: "Review".into(),
+                source: crate::session::SessionTitleSource::Task,
+            }));
+        changed!("input.queue", |v: &mut AgentRequestCreate| v.input.queue =
+            Some(crate::request_input::RequestQueue {
+                source: crate::request_input::QueueSource::Goal,
+                policy: crate::request_input::QueuePolicy::Coalesce,
+                key: Some("goal:one".into()),
+                queued_after_request_id: Some("parent".into()),
+                interrupted_request_id: None,
+                background_completion_wake_version: None,
+            }));
+        changed!("input.goal_false", |v: &mut AgentRequestCreate| v
+            .input
+            .goal_continuation =
+            Some(crate::request_input::GoalContinuationInput {
+                sequence: 1,
+                wrapup: false,
+            }));
         changed!("execution_origin", |v: &mut AgentRequestCreate| v
             .execution_origin =
             "trigger".into());
@@ -1186,11 +1204,6 @@ mod tests {
         changed!("workspace_authority", |v: &mut AgentRequestCreate| v
             .workspace_authority =
             Some("authority".into()));
-        changed!(
-            "workspace_owner_deployment_id",
-            |v: &mut AgentRequestCreate| v.workspace_owner_deployment_id =
-                Some("deployment".into())
-        );
         changed!("workspace_seal_hash", |v: &mut AgentRequestCreate| v
             .workspace_seal_hash =
             Some("seal".into()));
@@ -1242,11 +1255,105 @@ mod tests {
     }
 
     #[test]
-    fn claim_backend_is_not_requester_signed() {
-        let base = local_create();
-        let mut runtime_owned = base.clone();
-        runtime_owned.backend_id = Some("backend-a".into());
-        assert_eq!(runtime_owned.signing_payload(), base.signing_payload());
+    fn typed_input_signing_distinguishes_subfields_and_skill_boundaries() {
+        use crate::request_input::{GoalContinuationInput, QueuePolicy, QueueSource, RequestQueue};
+        let mut base = local_create();
+        base.input.selected_skill_ids = vec!["a|b".into(), "c".into()];
+        base.input.cwd = Some("/workspace".into());
+        base.input.initial_title = Some(crate::session::SessionTitle {
+            text: "Review".into(),
+            source: crate::session::SessionTitleSource::Task,
+        });
+        base.input.goal_continuation = Some(GoalContinuationInput {
+            sequence: 1,
+            wrapup: false,
+        });
+        base.input.queue = Some(RequestQueue {
+            source: QueueSource::Goal,
+            policy: QueuePolicy::Coalesce,
+            key: Some("goal:one".into()),
+            queued_after_request_id: Some("parent".into()),
+            interrupted_request_id: Some("interrupted".into()),
+            background_completion_wake_version: Some(1),
+        });
+        let expected = base.signing_payload();
+        let mut variants = Vec::new();
+        macro_rules! changed {
+            ($body:expr) => {{
+                let mut v = base.clone();
+                $body(&mut v);
+                variants.push(v);
+            }};
+        }
+        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids =
+            vec!["a".into(), "b|c".into()]);
+        changed!(|v: &mut AgentRequestCreate| v.input.selected_skill_ids.reverse());
+        changed!(|v: &mut AgentRequestCreate| v.input.cwd = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .initial_title
+            .as_mut()
+            .unwrap()
+            .text
+            .push('!'));
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.initial_title.as_mut().unwrap().source =
+                crate::session::SessionTitleSource::User
+        );
+        changed!(|v: &mut AgentRequestCreate| v.input.goal_continuation = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .goal_continuation
+            .as_mut()
+            .unwrap()
+            .sequence = 2);
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.goal_continuation.as_mut().unwrap().wrapup = true
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().source =
+                QueueSource::BackgroundCompletion
+        );
+        changed!(
+            |v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().policy =
+                QueuePolicy::Append
+        );
+        changed!(|v: &mut AgentRequestCreate| v.input.queue.as_mut().unwrap().key = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .queued_after_request_id = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .interrupted_request_id = None);
+        changed!(|v: &mut AgentRequestCreate| v
+            .input
+            .queue
+            .as_mut()
+            .unwrap()
+            .background_completion_wake_version = None);
+        for variant in variants {
+            assert_ne!(
+                variant.signing_payload(),
+                expected,
+                "typed input semantic was not signed: {:?}",
+                variant.input
+            );
+        }
+        let mut one_skill = local_create();
+        one_skill.input.selected_skill_ids = vec!["a,b".into()];
+        let mut two_skills = one_skill.clone();
+        two_skills.input.selected_skill_ids = vec!["a".into(), "b".into()];
+        assert_ne!(
+            one_skill.signing_payload(),
+            two_skills.signing_payload(),
+            "skill list boundaries must be signed, not delimiter-joined"
+        );
     }
 
     #[test]
@@ -1262,6 +1369,14 @@ mod tests {
         })
         .is_err());
 
+        for behavior in ["", " ", " default", "default "] {
+            let mut value = local_create();
+            value.behavior_id = behavior.into();
+            assert!(
+                value.graphql_input_fields().is_err(),
+                "explicit canonical behavior required"
+            );
+        }
         for hostile in [" request-1", "request-1 "] {
             let mut value = local_create();
             value.request_id = hostile.into();

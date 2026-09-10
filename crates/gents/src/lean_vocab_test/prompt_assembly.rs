@@ -25,8 +25,9 @@ pub(crate) struct LeanPromptAssemblySplit {
     pub(crate) expected: Vec<LeanPromptAssemblyRow>,
 }
 
-/// A sanitize witness. `expected`, `expected_twice`, and every `splits` entry
-/// are computed by running the Lean model, never written by hand.
+/// A sanitize witness from `PromptAssembly.Provider.sanitizeForProviderGlobal`.
+/// `expected`, `expected_twice`, and every `splits` entry are computed by
+/// running the Lean model, never written by hand.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblySanitizeCase {
     pub(crate) name: String,
@@ -36,7 +37,9 @@ pub(crate) struct LeanPromptAssemblySanitizeCase {
     pub(crate) splits: Vec<LeanPromptAssemblySplit>,
 }
 
-/// The assembled layer order from `PromptAssembly.Template.assembleWithContext`.
+/// The assembled layer order emitted from `PromptAssembly.assemble` (see
+/// `Proofs/Conformance/ContractCases/PromptAssembly.lean`); `skill_count`
+/// counts the actual skill selection, never raw references.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanPromptAssemblyLayerCase {
     pub(crate) name: String,
@@ -141,9 +144,14 @@ pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
 /// `PromptAssembly.AggregateBudget`.
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct LeanAggregateTokenBudgetCase {
+    pub(crate) request_doc_id: String,
+    pub(crate) prior_request_doc_ids: Vec<String>,
+    pub(crate) prior_call_kinds: Vec<String>,
     pub(crate) name: String,
     pub(crate) limit: u64,
     pub(crate) used: u64,
+    pub(crate) prior_prompt_tokens: Vec<u64>,
+    pub(crate) prior_completion_tokens: Vec<u64>,
     pub(crate) input_tokens: u64,
     pub(crate) configured_max_output_tokens: u64,
     pub(crate) reported_input_tokens: u64,

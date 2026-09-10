@@ -15,6 +15,8 @@ def callbackCaseJson (witness : Callback.Conformance.CallbackCase) : String :=
     ++ "\"state\":" ++ jsonString witness.state.toDefraDB ++ ","
     ++ "\"journal\":"
       ++ jsonStringArray (witness.journal.map ActionJournalState.toDefraDB) ++ ","
+    ++ "\"journal_prefix_legal\":"
+      ++ boolString (CallbackInvocation.journalPrefixOk witness.invocation.journal) ++ ","
     ++ "\"result_emitted\":" ++ boolString witness.resultEmitted ++ ","
     ++ "\"legal\":" ++ boolString witness.legal
     ++ "}"
