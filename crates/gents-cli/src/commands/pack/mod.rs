@@ -133,198 +133,6 @@ async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Res
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn concurrent_materialization_publishes_complete_assets() {
-        let pack = resolve_pack("mailbox").unwrap();
-        let source = PackSource::Bundled(resolve_pack("mailbox").unwrap());
-        let root = tempfile::tempdir().unwrap();
-        let barrier = std::sync::Barrier::new(8);
-        std::thread::scope(|scope| {
-            for _ in 0..8 {
-                scope.spawn(|| {
-                    barrier.wait();
-                    materialize(&source, root.path()).unwrap();
-                });
-            }
-        });
-        for path in std::iter::once("manifest.json")
-            .chain(pack.manifest.metadata.assets.iter().map(String::as_str))
-        {
-            assert_eq!(
-                std::fs::read(root.path().join(path)).unwrap(),
-                pack.asset(path).unwrap()
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn materialized_assets_are_readable_like_distribution_files() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let pack = resolve_pack("mailbox").unwrap();
-        let source = PackSource::Bundled(resolve_pack("mailbox").unwrap());
-        let root = tempfile::tempdir().unwrap();
-        materialize(&source, root.path()).unwrap();
-        for path in std::iter::once("manifest.json")
-            .chain(pack.manifest.metadata.assets.iter().map(String::as_str))
-        {
-            assert_eq!(
-                std::fs::metadata(root.path().join(path))
-                    .unwrap()
-                    .permissions()
-                    .mode()
-                    & 0o777,
-                0o644,
-                "{path}"
-            );
-        }
-
-        let cached = root.path().join("README.md");
-        std::fs::set_permissions(&cached, std::fs::Permissions::from_mode(0o600)).unwrap();
-        materialize(&source, root.path()).unwrap();
-        assert_eq!(
-            std::fs::metadata(cached).unwrap().permissions().mode() & 0o777,
-            0o644
-        );
-    }
-
-    #[test]
-    fn cache_pruning_removes_only_owned_versions_without_runs() {
-        let parent = tempfile::tempdir().unwrap();
-        let current = parent.path().join("a".repeat(64));
-        let stale = parent.path().join("b".repeat(64));
-        let active = parent.path().join("c".repeat(64));
-        let unowned = parent.path().join("d".repeat(64));
-        for root in [&current, &stale, &active, &unowned] {
-            std::fs::create_dir_all(root).unwrap();
-        }
-        write_cache_marker(&current).unwrap();
-        write_cache_marker(&stale).unwrap();
-        write_cache_marker(&active).unwrap();
-        std::fs::create_dir(active.join("runs")).unwrap();
-
-        prune_stale_asset_cache(parent.path(), &current).unwrap();
-
-        assert!(current.exists());
-        assert!(!stale.exists());
-        assert!(active.exists(), "run artifacts retain their source version");
-        assert!(
-            unowned.exists(),
-            "directories without our marker are not ours"
-        );
-    }
-
-    #[test]
-    fn scenario_cache_lease_excludes_pruning() {
-        let home = tempfile::tempdir().unwrap();
-        let pack = PackSource::Bundled(resolve_pack("pipeline").unwrap());
-        let (root, lease) = materialize_cached_pack(home.path(), &pack).unwrap();
-        let exclusive = cache_lock(root.parent().unwrap()).unwrap();
-        assert!(exclusive.try_lock().is_err());
-        drop(lease);
-        exclusive.try_lock().unwrap();
-    }
-
-    #[test]
-    fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
-        let parent = tempfile::tempdir().unwrap();
-        let home = parent.path().join("missing-home");
-        let error = prune(PackPruneArgs {
-            package: "code_review".to_owned(),
-            home: Some(home.clone()),
-        })
-        .unwrap_err();
-        assert!(error.to_string().contains("no materialized asset cache"));
-        assert!(!home.exists());
-    }
-
-    #[test]
-    fn abandoned_staging_file_does_not_poison_install_or_allow_overwrite() {
-        use std::io::Write;
-        let pack = PackSource::Bundled(resolve_pack("mailbox").unwrap());
-        let root = tempfile::tempdir().unwrap();
-        // Model process death before publication: a partial temporary file
-        // remains, but no destination has been exposed.
-        let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
-        staged.write_all(b"partial").unwrap();
-        let (_file, abandoned) = staged.keep().unwrap();
-        materialize(&pack, root.path()).unwrap();
-        materialize(&pack, root.path()).unwrap();
-        assert_eq!(std::fs::read(abandoned).unwrap(), b"partial");
-        std::fs::write(root.path().join("README.md"), "operator edit").unwrap();
-        assert!(materialize(&pack, root.path())
-            .unwrap_err()
-            .to_string()
-            .contains("installed asset was modified"));
-        assert_eq!(
-            std::fs::read_to_string(root.path().join("README.md")).unwrap(),
-            "operator edit"
-        );
-    }
-
-    #[test]
-    fn every_bundled_document_pack_materializes_a_valid_configuration() {
-        for manifest in pack_catalog().unwrap() {
-            if manifest.metadata.kind != PackKind::Documents {
-                continue;
-            }
-            let pack = resolve_pack(&manifest.name).unwrap();
-            let root = tempfile::tempdir().unwrap();
-            materialize(&PackSource::Bundled(pack), root.path()).unwrap();
-            let (_, report) = crate::desired_state::load_manifest_root(root.path());
-            assert!(
-                report.errors.is_empty(),
-                "{}: {:?}",
-                manifest.name,
-                report.errors
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn resolution_prefers_a_pack_compiled_into_this_binary() {
-        // An unroutable registry: if resolution incorrectly fell through to
-        // it for a bundled pack, this fails fast instead of hanging on a
-        // real network call or silently succeeding some other way.
-        let source = resolve_pack_source("mailbox", Some("http://127.0.0.1:1"))
-            .await
-            .expect("a bundled pack must resolve without touching the registry");
-        assert!(matches!(source, PackSource::Bundled(_)));
-        assert_eq!(source.label(), "bundled");
-    }
-
-    #[tokio::test]
-    async fn resolution_falls_back_to_the_registry_and_reports_both_failures() {
-        // `ResolvedPack`/`PackSource` are not `Debug`, so this checks the
-        // `Err` case by hand rather than via `expect_err`.
-        let result =
-            resolve_pack_source("definitely_not_a_bundled_pack", Some("http://127.0.0.1:1")).await;
-        let Err(error) = result else {
-            panic!("neither bundled nor registry has this pack");
-        };
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("not compiled into this binary"),
-            "{message}"
-        );
-        assert!(
-            message.contains("definitely_not_a_bundled_pack"),
-            "{message}"
-        );
-    }
-
-    #[test]
-    fn split_namespace_defaults_to_gents() {
-        assert_eq!(split_namespace("mailbox"), ("gents", "mailbox"));
-        assert_eq!(split_namespace("acme/widget"), ("acme", "widget"));
-    }
-}
-
 fn materialize(pack: &PackSource, root: &std::path::Path) -> Result<()> {
     use std::io::Write;
     for path in std::iter::once("manifest.json")
@@ -608,5 +416,197 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 "source": pack.label(),
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_materialization_publishes_complete_assets() {
+        let pack = resolve_pack("mailbox").unwrap();
+        let source = PackSource::Bundled(resolve_pack("mailbox").unwrap());
+        let root = tempfile::tempdir().unwrap();
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    materialize(&source, root.path()).unwrap();
+                });
+            }
+        });
+        for path in std::iter::once("manifest.json")
+            .chain(pack.manifest.metadata.assets.iter().map(String::as_str))
+        {
+            assert_eq!(
+                std::fs::read(root.path().join(path)).unwrap(),
+                pack.asset(path).unwrap()
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn materialized_assets_are_readable_like_distribution_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let pack = resolve_pack("mailbox").unwrap();
+        let source = PackSource::Bundled(resolve_pack("mailbox").unwrap());
+        let root = tempfile::tempdir().unwrap();
+        materialize(&source, root.path()).unwrap();
+        for path in std::iter::once("manifest.json")
+            .chain(pack.manifest.metadata.assets.iter().map(String::as_str))
+        {
+            assert_eq!(
+                std::fs::metadata(root.path().join(path))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o644,
+                "{path}"
+            );
+        }
+
+        let cached = root.path().join("README.md");
+        std::fs::set_permissions(&cached, std::fs::Permissions::from_mode(0o600)).unwrap();
+        materialize(&source, root.path()).unwrap();
+        assert_eq!(
+            std::fs::metadata(cached).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+    }
+
+    #[test]
+    fn cache_pruning_removes_only_owned_versions_without_runs() {
+        let parent = tempfile::tempdir().unwrap();
+        let current = parent.path().join("a".repeat(64));
+        let stale = parent.path().join("b".repeat(64));
+        let active = parent.path().join("c".repeat(64));
+        let unowned = parent.path().join("d".repeat(64));
+        for root in [&current, &stale, &active, &unowned] {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        write_cache_marker(&current).unwrap();
+        write_cache_marker(&stale).unwrap();
+        write_cache_marker(&active).unwrap();
+        std::fs::create_dir(active.join("runs")).unwrap();
+
+        prune_stale_asset_cache(parent.path(), &current).unwrap();
+
+        assert!(current.exists());
+        assert!(!stale.exists());
+        assert!(active.exists(), "run artifacts retain their source version");
+        assert!(
+            unowned.exists(),
+            "directories without our marker are not ours"
+        );
+    }
+
+    #[test]
+    fn scenario_cache_lease_excludes_pruning() {
+        let home = tempfile::tempdir().unwrap();
+        let pack = PackSource::Bundled(resolve_pack("pipeline").unwrap());
+        let (root, lease) = materialize_cached_pack(home.path(), &pack).unwrap();
+        let exclusive = cache_lock(root.parent().unwrap()).unwrap();
+        assert!(exclusive.try_lock().is_err());
+        drop(lease);
+        exclusive.try_lock().unwrap();
+    }
+
+    #[test]
+    fn graph_pack_prune_rejects_without_creating_a_cache_tree() {
+        let parent = tempfile::tempdir().unwrap();
+        let home = parent.path().join("missing-home");
+        let error = prune(PackPruneArgs {
+            package: "code_review".to_owned(),
+            home: Some(home.clone()),
+        })
+        .unwrap_err();
+        assert!(error.to_string().contains("no materialized asset cache"));
+        assert!(!home.exists());
+    }
+
+    #[test]
+    fn abandoned_staging_file_does_not_poison_install_or_allow_overwrite() {
+        use std::io::Write;
+        let pack = PackSource::Bundled(resolve_pack("mailbox").unwrap());
+        let root = tempfile::tempdir().unwrap();
+        // Model process death before publication: a partial temporary file
+        // remains, but no destination has been exposed.
+        let mut staged = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+        staged.write_all(b"partial").unwrap();
+        let (_file, abandoned) = staged.keep().unwrap();
+        materialize(&pack, root.path()).unwrap();
+        materialize(&pack, root.path()).unwrap();
+        assert_eq!(std::fs::read(abandoned).unwrap(), b"partial");
+        std::fs::write(root.path().join("README.md"), "operator edit").unwrap();
+        assert!(materialize(&pack, root.path())
+            .unwrap_err()
+            .to_string()
+            .contains("installed asset was modified"));
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("README.md")).unwrap(),
+            "operator edit"
+        );
+    }
+
+    #[test]
+    fn every_bundled_document_pack_materializes_a_valid_configuration() {
+        for manifest in pack_catalog().unwrap() {
+            if manifest.metadata.kind != PackKind::Documents {
+                continue;
+            }
+            let pack = resolve_pack(&manifest.name).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            materialize(&PackSource::Bundled(pack), root.path()).unwrap();
+            let (_, report) = crate::desired_state::load_manifest_root(root.path());
+            assert!(
+                report.errors.is_empty(),
+                "{}: {:?}",
+                manifest.name,
+                report.errors
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn resolution_prefers_a_pack_compiled_into_this_binary() {
+        // An unroutable registry: if resolution incorrectly fell through to
+        // it for a bundled pack, this fails fast instead of hanging on a
+        // real network call or silently succeeding some other way.
+        let source = resolve_pack_source("mailbox", Some("http://127.0.0.1:1"))
+            .await
+            .expect("a bundled pack must resolve without touching the registry");
+        assert!(matches!(source, PackSource::Bundled(_)));
+        assert_eq!(source.label(), "bundled");
+    }
+
+    #[tokio::test]
+    async fn resolution_falls_back_to_the_registry_and_reports_both_failures() {
+        // `ResolvedPack`/`PackSource` are not `Debug`, so this checks the
+        // `Err` case by hand rather than via `expect_err`.
+        let result =
+            resolve_pack_source("definitely_not_a_bundled_pack", Some("http://127.0.0.1:1")).await;
+        let Err(error) = result else {
+            panic!("neither bundled nor registry has this pack");
+        };
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("not compiled into this binary"),
+            "{message}"
+        );
+        assert!(
+            message.contains("definitely_not_a_bundled_pack"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn split_namespace_defaults_to_gents() {
+        assert_eq!(split_namespace("mailbox"), ("gents", "mailbox"));
+        assert_eq!(split_namespace("acme/widget"), ("acme", "widget"));
     }
 }
