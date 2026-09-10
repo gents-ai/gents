@@ -236,7 +236,9 @@ async fn write_discovered_models(
         escape_graphql_string(backend_id),
         models_field,
     );
-    let response = post_graphql(graphql, &mutation).await?;
+    let response = ConfigAccess::Graphql(graphql.to_string())
+        .write("config.inference_backend.models.update", &mutation)
+        .await?;
     extract_mutation_doc_id(&response, "InferenceBackend")
         .with_context(|| format!("updating models on backend {backend_id}"))?;
     Ok(models.len())

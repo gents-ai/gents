@@ -156,7 +156,7 @@ describe("deployment operational state", () => {
     });
   });
 
-  it("still fails closed when the local host stops publishing readiness", () => {
+  it("still accepts a legacy local readiness-stale verdict", () => {
     const state = projectDeploymentOperationalState(
       deployment({
         source: "local-standard",
@@ -171,6 +171,16 @@ describe("deployment operational state", () => {
       reason: "readiness_stale",
       shortLabel: "Runtime unavailable",
     });
+  });
+
+  it("blocks a disconnected local host despite retained Ready state", () => {
+    const state = projectDeploymentOperationalState(
+      deployment({ source: "local-standard", dialSucceeded: false }),
+    );
+    expect(state.behavior.kind).toBe("ready");
+    expect(state.admissionBlocker).toBe(state.transport);
+    expect(state.summary).toBe(state.transport);
+    expect(state.summary.shortLabel).toBe("Not connected");
   });
 
   it("does not let unrelated database work block current signed readiness", () => {

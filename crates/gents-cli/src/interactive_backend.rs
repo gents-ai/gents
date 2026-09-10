@@ -72,6 +72,7 @@ async fn pick_backend() -> Result<BackendSelection> {
     eprintln!("  3) custom URL");
     eprintln!("  4) ChatGPT / Codex subscription   (uses your ChatGPT plan; OAuth setup included)");
     eprintln!("  5) Grok subscription (SuperGrok / X Premium+)   (OAuth setup included)");
+    eprintln!("  6) Claude subscription (Claude Pro / Max)   (OAuth setup included)");
     let choice = prompt_line("> ").await?;
     match choice.trim() {
         "1" | "" => {
@@ -146,6 +147,13 @@ async fn pick_backend() -> Result<BackendSelection> {
             model_name: None,
             api_key: None,
             label: "Grok subscription (SuperGrok / X Premium+)".to_string(),
+        }),
+        "6" => Ok(BackendSelection {
+            inference_url: None,
+            backend_preset: Some(BackendPresetArg::ClaudeCliSubscription),
+            model_name: None,
+            api_key: None,
+            label: "Claude subscription (Claude Pro / Max)".to_string(),
         }),
         other => bail!("unrecognized choice: {other}"),
     }
@@ -335,6 +343,27 @@ mod tests {
         assert_eq!(args.inference_endpoint, None);
         assert_eq!(args.agent_name, "keep-me");
         assert!(args.enable_memory);
+    }
+
+    #[test]
+    fn claude_subscription_selection_seeds_keyless_preset() {
+        let mut args = bare_init_args();
+        BackendSelection {
+            inference_url: None,
+            backend_preset: Some(BackendPresetArg::ClaudeCliSubscription),
+            model_name: None,
+            api_key: None,
+            label: "Claude subscription (Claude Pro / Max)".to_string(),
+        }
+        .apply_to(&mut args);
+
+        assert_eq!(
+            args.backend_preset,
+            Some(BackendPresetArg::ClaudeCliSubscription)
+        );
+        assert_eq!(args.api_key, None);
+        assert_eq!(args.model_name, None);
+        assert_eq!(args.inference_endpoint, None);
     }
 
     #[test]

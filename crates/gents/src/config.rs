@@ -13,7 +13,7 @@ use crate::tool_surface::BehaviorToolConfig;
 pub const DEFAULT_CONTEXT_WINDOW: usize = 131_072;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: usize = 32_768;
 pub const DEFAULT_MAX_TURNS: usize = 250;
-pub const DEFAULT_STREAM_BATCH_MS: u64 = 1_000;
+pub const DEFAULT_STREAM_BATCH_MS: u64 = 100;
 pub const DEFAULT_COMPACTION_THRESHOLD: f64 = 0.75;
 // Moved to gents-loop (G-1): compaction's own default/clamp constants.
 pub use gents_loop::compaction::{

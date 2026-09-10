@@ -220,6 +220,14 @@ pub(crate) fn provider_message_is_tool_call_json_parse_failure(message: &str) ->
         && message.contains("(char ")
 }
 
+/// The Claude Messages parser fails closed on any `tool_use` block it cannot
+/// map onto the surface (unknown name, duplicate id, malformed input,
+/// overlapping block). That is bad model output, not transport: it belongs on
+/// the resample lane next to the vLLM tool-call parse 400 above.
+pub(crate) fn provider_message_is_fail_closed_tool_use(message: &str) -> bool {
+    message.contains("fail-closed: ") && message.contains("tool_use")
+}
+
 #[cfg(test)]
 #[path = "error_tests.rs"]
 mod tests;

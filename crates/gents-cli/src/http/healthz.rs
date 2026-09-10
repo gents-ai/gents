@@ -408,17 +408,14 @@ mod tests {
     }
 
     #[test]
-    fn healthz_fails_closed_when_readiness_is_stale() {
+    fn healthz_does_not_require_unchanged_readiness_to_be_rewritten() {
         let mut data = healthy_data();
         data.behavior_readiness[0].updated_at = "2026-05-13T11:59:00Z".to_string();
 
         let payload = render_healthz_payload_at(&state(), Some(&data), None, observed_at());
 
-        assert_eq!(
-            payload.get("status").and_then(Value::as_str),
-            Some("unhealthy")
-        );
-        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(false));
+        assert_eq!(payload.get("status").and_then(Value::as_str), Some("ok"));
+        assert_eq!(payload.get("ok").and_then(Value::as_bool), Some(true));
     }
 
     #[test]

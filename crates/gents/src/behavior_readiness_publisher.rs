@@ -80,7 +80,6 @@ pub(crate) struct BehaviorReadinessPublisherOwner {
 }
 
 const MAX_PERSIST_ATTEMPTS: usize = 5;
-const READINESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const MIN_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_millis(250);
 const PRODUCTION_PERSIST_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -486,32 +485,16 @@ async fn run_publisher(
     retry_delay: Duration,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let mut heartbeat = tokio::time::interval(READINESS_HEARTBEAT_INTERVAL);
-    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    heartbeat.tick().await;
     loop {
         let command = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Ok(()),
             command = commands.recv() => match command {
-                Some(command) => Some(command),
+                Some(command) => command,
                 None => return Err(anyhow!(
                     "behavior readiness publisher command channel closed"
                 )),
             },
-            _ = heartbeat.tick() => None,
-        };
-        let Some(command) = command else {
-            if state.source.is_some() {
-                let mut candidate = state.clone();
-                let next_observation =
-                    persist_candidate(&writer, &mut candidate, retry_delay, &cancel, true).await?;
-                state = candidate;
-                if *observation.borrow() != next_observation {
-                    observation.send_replace(next_observation);
-                }
-            }
-            continue;
         };
         let close = matches!(&command, Command::Close { .. });
         match command {
@@ -762,8 +745,7 @@ async fn commit_candidate(
     retry_delay: Duration,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let next_observation =
-        persist_candidate(writer, &mut candidate, retry_delay, cancel, false).await?;
+    let next_observation = persist_candidate(writer, &mut candidate, retry_delay, cancel).await?;
     *state = candidate;
     if *observation.borrow() != next_observation {
         observation.send_replace(next_observation);
@@ -776,7 +758,6 @@ async fn persist_candidate(
     state: &mut PublisherState,
     retry_delay: Duration,
     cancel: &CancellationToken,
-    force: bool,
 ) -> Result<BehaviorAdmissionObservation> {
     let source = state
         .source
@@ -802,7 +783,7 @@ async fn persist_candidate(
         sources,
     )
     .map_err(anyhow::Error::msg)?;
-    if force || state.persisted.as_ref() != Some(&snapshot) {
+    if state.persisted.as_ref() != Some(&snapshot) {
         state.updated_at = Utc::now().to_rfc3339();
         for attempt in 1..=MAX_PERSIST_ATTEMPTS {
             let write = tokio::select! {

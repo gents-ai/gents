@@ -53,6 +53,19 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
         self.lifecycle.validate_owned_execution().await
     }
 
+    /// When this turn's buffered tokens are next due to be written, if any
+    /// are buffered. A driver waits on this instead of polling, so a stream
+    /// that goes quiet mid-batch still lands its tokens on time.
+    pub async fn next_flush_deadline(&self) -> Option<tokio::time::Instant> {
+        self.stream_writer.next_flush_deadline(self.doc_id).await
+    }
+
+    /// Writes whatever is buffered for this turn now.
+    pub async fn flush_pending(&self) -> Result<()> {
+        self.stream_writer.flush_pending(self.doc_id).await?;
+        Ok(())
+    }
+
     pub async fn process_item<R>(
         &mut self,
         item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,

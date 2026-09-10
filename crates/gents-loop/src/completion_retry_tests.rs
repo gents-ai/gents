@@ -113,6 +113,19 @@ fn failure_class_parse_signature_can_come_from_classified_reason() {
 }
 
 #[test]
+fn failure_class_fail_closed_tool_use_is_parse_bad_request() {
+    // The Claude Messages parser reports an unmapped tool_use as a
+    // ProviderError string, which classify_completion_error labels transient.
+    // It is bad model output, so failure_class must route it to the resample
+    // lane, not the transport ladder.
+    let text = "ProviderError: fail-closed: tool_use observed (bash_unrestricked)";
+    assert_eq!(
+        failure_class(&transient(text), text),
+        FailureClass::ParseBadRequest
+    );
+}
+
+#[test]
 fn jitter_is_deterministic_for_a_seeded_rng_and_within_25_percent() {
     let base = Duration::from_secs(10);
     let mut rng_a = StdRng::seed_from_u64(42);

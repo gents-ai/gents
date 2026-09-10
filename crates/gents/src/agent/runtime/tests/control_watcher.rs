@@ -299,12 +299,10 @@ async fn control_watcher_recovers_after_resolve_error() {
 
     wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
     tokio::time::advance(CONTROL_RECONCILE_DEBOUNCE + Duration::from_millis(1)).await;
-    let recovered_status =
-        wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "resolving").await;
-
+    // The settle retry may already return the phase to idle after proposing
+    // this fingerprint. Recovery is the queued proposal, not a transient phase.
     let snapshot = proposal_rx.recv().await.expect("recovered snapshot");
     assert_eq!(snapshot.default_behavior_id, agent.default_behavior_id());
-    assert_eq!(recovered_status.reconcile_phase, "resolving");
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();

@@ -1,5 +1,10 @@
 use super::*;
 
+#[path = "tests/backpressure.rs"]
+mod backpressure;
+#[path = "tests/overflow.rs"]
+mod overflow;
+
 fn response_patch(content: &str, progress_seq: i64) -> ClientStore {
     ClientStore::from_rows(crate::client::store::ClientStoreRows {
         responses: vec![serde_json::from_value(serde_json::json!({
@@ -160,7 +165,7 @@ async fn build_observer_fixture() -> (
         peer_dir,
         Vec::new(),
     );
-    let subscription = node.subscribe(&[EventName::Update]);
+    let subscription = node.subscribe_document_changes();
     let (_tx, rx) = watch::channel::<Option<String>>(None);
     let handle = spawn_observer_with_selection(
         node.clone(),
@@ -208,7 +213,7 @@ async fn seed_message(node: &EmbeddedNode, session_id: &str, seq: i64, content: 
 }
 
 #[tokio::test]
-async fn coalesces_burst_into_one_fetch_per_doc() {
+async fn streaming_commits_converge_without_a_forced_batch_window() {
     let (_tempdir, node, store, handle) = build_observer_fixture().await;
 
     let create = r#"mutation {
@@ -244,10 +249,13 @@ async fn coalesces_burst_into_one_fetch_per_doc() {
 
     let fetches = metrics_after.docs_fetched - metrics_before.docs_fetched;
     let flushes = metrics_after.debounce_flushes - metrics_before.debounce_flushes;
-    assert!(fetches <= 5, "expected <=5 fetches, got {fetches}");
     assert!(
-        flushes >= 1 && flushes <= 5,
-        "expected 1..=5 flushes, got {flushes}"
+        fetches <= 51,
+        "more fetches than committed documents: {fetches}"
+    );
+    assert!(
+        flushes >= 1 && flushes <= 51,
+        "expected 1..=51 flushes, got {flushes}"
     );
 
     let snap = store.snapshot();

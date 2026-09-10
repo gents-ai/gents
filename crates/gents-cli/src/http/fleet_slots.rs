@@ -59,6 +59,7 @@ pub(crate) struct FleetBackendAdmissionCounters {
     pub(crate) configured: bool,
     pub(crate) enabled: bool,
     pub(crate) probe_status: String,
+    /// Last reported semantic readiness, not current peer connectivity.
     pub(crate) accepting_admission: bool,
     pub(crate) running: i64,
     pub(crate) queued: i64,
@@ -406,9 +407,10 @@ fn build_fleet_slot_snapshot(
 /// behaviors currently bound to it — never from `InferenceBackend`'s
 /// `enabled`/`probe_status` (measured health stays unpersisted; see
 /// `backend_health.rs`). A backend accepts once any bound behavior's own
-/// runtime reports it `Ready`; with no such signal it fails closed to
-/// not-accepting, matching every other unconfigured/stale edge in this
-/// snapshot.
+/// runtime reports it `Ready`; with no such signal the projection is
+/// not-accepting. This is last-known capacity information, not an admission
+/// gate or a connectivity probe. The runtime's admission owner and transport
+/// health remain authoritative for live execution and reachability.
 fn backend_admission_from_readiness(
     behaviors: &BTreeMap<String, BehaviorRow>,
     readiness_by_agent: &BTreeMap<String, AgentBehaviorReadinessRow>,

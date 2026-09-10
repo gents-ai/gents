@@ -1468,10 +1468,6 @@ mod tests {
                 snapshot_json: "{}".to_string(),
                 ..metrics_readiness("did:test:metrics")
             }],
-            vec![AgentBehaviorReadinessRow {
-                updated_at: "2026-08-28T23:59:00Z".to_string(),
-                ..metrics_readiness("did:test:metrics")
-            }],
         ] {
             let mut lines = Vec::new();
             push_behavior_readiness_metrics_at(
@@ -1490,6 +1486,28 @@ mod tests {
                 r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 0"#
             ));
         }
+    }
+
+    #[test]
+    fn behavior_readiness_metrics_keep_unchanged_semantic_state_observed() {
+        let mut lines = Vec::new();
+        push_behavior_readiness_metrics_at(
+            &mut lines,
+            "did:test:metrics",
+            &[AgentBehaviorReadinessRow {
+                updated_at: "2026-08-28T23:59:00Z".to_string(),
+                ..metrics_readiness("did:test:metrics")
+            }],
+            readiness_observed_at(),
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered
+            .contains(r#"gents_runtime_runnable_behaviors{agent_did="did:test:metrics"} 1"#));
+        assert!(rendered
+            .contains(r#"gents_runtime_unavailable_behaviors{agent_did="did:test:metrics"} 1"#));
+        assert!(rendered.contains(
+            r#"gents_runtime_behavior_readiness_observed{agent_did="did:test:metrics"} 1"#
+        ));
     }
 
     #[test]

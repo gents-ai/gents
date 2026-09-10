@@ -79,20 +79,10 @@ pub(super) fn is_transaction_conflict_text(text: &str) -> bool {
 }
 
 pub(super) fn graphql_value_is_transaction_conflict(value: &serde_json::Value) -> bool {
-    // Match DefraDB's `QueryResponse::is_transaction_conflict`: a conflict is
-    // replayable only when the response has no data field at all. `data: null`
-    // is still a present response payload and must fail closed.
-    if value.get("data").is_some() {
-        return false;
-    }
-    let Some(errors) = value.get("errors").and_then(serde_json::Value::as_array) else {
-        return false;
-    };
-    errors.len() == 1
-        && errors[0]
-            .pointer("/extensions/code")
-            .and_then(serde_json::Value::as_str)
-            == Some("TXN_CONFLICT")
+    // Share the embedded DB's classification, including its JSON null/absent
+    // representation of no result. Malformed replies remain non-replayable.
+    <query::QueryResponse as serde::Deserialize>::deserialize(value)
+        .is_ok_and(|response| response.is_transaction_conflict())
 }
 
 #[cfg(test)]
@@ -120,7 +110,7 @@ mod tests {
         assert!(!graphql_value_is_transaction_conflict(&serde_json::json!({
             "errors": [{"message": "transaction conflict; please retry"}]
         })));
-        assert!(!graphql_value_is_transaction_conflict(&serde_json::json!({
+        assert!(graphql_value_is_transaction_conflict(&serde_json::json!({
             "data": null,
             "errors": [{"message": "opaque", "extensions": {"code": "TXN_CONFLICT"}}]
         })));
@@ -134,7 +124,7 @@ mod tests {
     fn conflict_shape_matches_pinned_defradb_serialization() {
         let response = query::QueryResponse::transaction_conflict("opaque");
         let value = serde_json::to_value(response).expect("serialize DefraDB response");
-        assert!(value.get("data").is_none());
+        assert_eq!(value.get("data"), Some(&serde_json::Value::Null));
         assert!(graphql_value_is_transaction_conflict(&value));
 
         let success = serde_json::to_value(query::QueryResponse::success(serde_json::json!({
@@ -142,5 +132,20 @@ mod tests {
         })))
         .expect("serialize successful DefraDB response");
         assert!(success.get("errors").is_none());
+    }
+
+    #[test]
+    fn malformed_or_mixed_replies_are_not_replayable() {
+        for value in [
+            serde_json::Value::Null,
+            serde_json::json!({"errors": "TXN_CONFLICT"}),
+            serde_json::json!({"errors": [{"extensions": {"code": "TXN_CONFLICT"}}]}),
+            serde_json::json!({"data": null, "errors": [
+                {"message": "conflict", "extensions": {"code": "TXN_CONFLICT"}},
+                {"message": "another error"}
+            ]}),
+        ] {
+            assert!(!graphql_value_is_transaction_conflict(&value), "{value}");
+        }
     }
 }

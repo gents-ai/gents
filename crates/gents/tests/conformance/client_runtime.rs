@@ -291,6 +291,31 @@ fn generated_behavior_readiness_cases_drive_the_production_projector() {
             .behaviors
             .get("20")
             .unwrap_or_else(|| panic!("{} missing selected behavior", case.name));
+        // The generated model projects semantic runtime state, not an
+        // observation lease. Idle age and clock skew cannot change its answer.
+        for timestamp in ["1970-01-01T00:00:00Z", "2999-01-01T00:00:00Z"] {
+            let mut aged_row = row.clone();
+            aged_row.updated_at = timestamp.to_string();
+            let aged = project_behavior_readiness(
+                case.observation_present.then_some(&aged_row),
+                "did:test:lean-readiness",
+                ["20"],
+                Some("20"),
+                chrono::DateTime::parse_from_rfc3339("2026-08-28T00:00:10Z")
+                    .unwrap()
+                    .with_timezone(&chrono::Utc),
+            );
+            assert_eq!(
+                aged.behaviors, projection.behaviors,
+                "{}: {timestamp}",
+                case.name
+            );
+            assert_eq!(
+                aged.unknown_reason, projection.unknown_reason,
+                "{}: {timestamp}",
+                case.name
+            );
+        }
         let (state, reason) = match projected {
             ProjectedBehaviorReadiness::Ready => ("ready", None),
             ProjectedBehaviorReadiness::Unavailable(reason) => {

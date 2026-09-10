@@ -190,6 +190,8 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         maybe_inline_codex_login(&access, initialized_identity.identity.did(), &summary).await;
     let grok_login =
         maybe_inline_grok_login(&access, initialized_identity.identity.did(), &summary).await;
+    let claude_login =
+        maybe_inline_claude_login(&access, initialized_identity.identity.did(), &summary).await;
 
     let output = json!({
         "status": "initialized",
@@ -225,10 +227,14 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         "grok_login": grok_login
             .outcome()
             .map(crate::commands::grok_login::grok_login_result_json),
+        "claude_login": claude_login
+            .outcome()
+            .map(crate::commands::claude_login::claude_login_result_json),
         "next_steps": init_next_steps(
             &summary,
             codex_login.is_authenticated(),
             grok_login.is_authenticated(),
+            claude_login.is_authenticated(),
         ),
         "init": summary,
     });
@@ -311,6 +317,72 @@ async fn maybe_inline_grok_login(
         Err(error) => {
             eprintln!("Grok login failed: {error:#}");
             InlineGrokLoginState::Unauthenticated
+        }
+    }
+}
+
+enum InlineClaudeLoginState {
+    Unauthenticated,
+    ExistingCredential,
+    Completed(crate::commands::claude_login::ClaudeLoginOutcome),
+}
+
+impl InlineClaudeLoginState {
+    fn is_authenticated(&self) -> bool {
+        matches!(self, Self::ExistingCredential | Self::Completed(_))
+    }
+
+    fn outcome(&self) -> Option<&crate::commands::claude_login::ClaudeLoginOutcome> {
+        match self {
+            Self::Completed(outcome) => Some(outcome),
+            Self::Unauthenticated | Self::ExistingCredential => None,
+        }
+    }
+}
+
+async fn maybe_inline_claude_login(
+    access: &ConfigAccess,
+    agent_did: &str,
+    summary: &InitSummary,
+) -> InlineClaudeLoginState {
+    if summary.provider_kind != gents::BackendProviderKind::ClaudeCliSubscription {
+        return InlineClaudeLoginState::Unauthenticated;
+    }
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return InlineClaudeLoginState::Unauthenticated;
+    }
+    let provider =
+        gents::claude_oauth::normalize_provider(gents::claude_oauth::CLAUDE_OAUTH_PROVIDER);
+    // The credential lookup is provider-generic; the grok probe just owns the copy.
+    match crate::commands::grok_auth_probe::load_oauth_credential(access, agent_did, &provider)
+        .await
+    {
+        Ok(Some(_)) => return InlineClaudeLoginState::ExistingCredential,
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("Could not check for an existing Claude credential: {error:#}");
+        }
+    }
+    if !crate::interactive_backend::confirm("Log in to Claude now to finish setup?", true).await {
+        return InlineClaudeLoginState::Unauthenticated;
+    }
+    match crate::commands::claude_login::run_claude_login(
+        access,
+        agent_did,
+        &crate::commands::claude_login::ClaudeLoginOptions {
+            provider,
+            manual: false,
+            open_browser: true,
+            client_id: None,
+            token_url: None,
+        },
+    )
+    .await
+    {
+        Ok(outcome) => InlineClaudeLoginState::Completed(outcome),
+        Err(error) => {
+            eprintln!("Claude login failed: {error:#}");
+            InlineClaudeLoginState::Unauthenticated
         }
     }
 }
@@ -955,6 +1027,7 @@ fn init_next_steps(
     summary: &InitSummary,
     codex_logged_in: bool,
     grok_logged_in: bool,
+    claude_logged_in: bool,
 ) -> Vec<String> {
     let mut steps = Vec::new();
     if summary.provider_kind == gents::BackendProviderKind::ChatGptCodex && !codex_logged_in {
@@ -962,6 +1035,11 @@ fn init_next_steps(
     }
     if summary.provider_kind == gents::BackendProviderKind::XaiGrokOAuth && !grok_logged_in {
         steps.push("gents grok-login".to_string());
+    }
+    if summary.provider_kind == gents::BackendProviderKind::ClaudeCliSubscription
+        && !claude_logged_in
+    {
+        steps.push("gents claude-login".to_string());
     }
     if is_probably_ollama_endpoint(&summary.endpoint) {
         steps.push(format!("ollama pull {}", summary.model_name));
@@ -1063,12 +1141,47 @@ mod tests {
     }
 
     #[test]
+    fn claude_next_steps_lead_with_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::ClaudeCliSubscription,
+                "claude-cli://subscription",
+            ),
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            steps.first().map(String::as_str),
+            Some("gents claude-login")
+        );
+    }
+
+    #[test]
+    fn claude_next_steps_drop_login_after_inline_login() {
+        let steps = init_next_steps(
+            &init_summary(
+                BackendProviderKind::ClaudeCliSubscription,
+                "claude-cli://subscription",
+            ),
+            false,
+            false,
+            true,
+        );
+        assert!(!steps.iter().any(|step| step == "gents claude-login"));
+        let state = InlineClaudeLoginState::ExistingCredential;
+        assert!(state.is_authenticated());
+        assert!(state.outcome().is_none());
+    }
+
+    #[test]
     fn chatgpt_codex_next_steps_lead_with_login() {
         let steps = init_next_steps(
             &init_summary(
                 BackendProviderKind::ChatGptCodex,
                 "https://chatgpt.com/backend-api/codex",
             ),
+            false,
             false,
             false,
         );
@@ -1083,6 +1196,7 @@ mod tests {
                 "https://chatgpt.com/backend-api/codex",
             ),
             true,
+            false,
             false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));
@@ -1101,6 +1215,7 @@ mod tests {
             ),
             state.is_authenticated(),
             false,
+            false,
         );
         assert!(!steps.iter().any(|step| step == "gents codex-login"));
     }
@@ -1112,6 +1227,7 @@ mod tests {
                 BackendProviderKind::OpenAiCompatible,
                 "http://127.0.0.1:8080/v1",
             ),
+            false,
             false,
             false,
         );
@@ -1126,6 +1242,7 @@ mod tests {
                 BackendProviderKind::XaiGrokOAuth,
                 "https://cli-chat-proxy.grok.com/v1",
             ),
+            false,
             false,
             false,
         );

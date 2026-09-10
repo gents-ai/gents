@@ -306,27 +306,6 @@ impl ClientSyncStateOwner {
         });
     }
 
-    pub(super) fn set_last_error_for_records(
-        &self,
-        expected_records: &[PeerRecord],
-        message: String,
-    ) -> bool {
-        self.tx.send_if_modified(|state| {
-            let previous = state.peers.clone();
-            for expected in expected_records {
-                if !state.directory.iter().any(|record| record == expected) {
-                    continue;
-                }
-                if let Some(status) = state.peers.iter_mut().find(|status| {
-                    status.peer_id == expected.peer_id && status.addr == expected.addr
-                }) {
-                    status.last_error = Some(message.clone());
-                }
-            }
-            state.peers != previous
-        })
-    }
-
     /// Patch one diagnostic only while both the durable peer generation and
     /// the previously observed diagnostic still match. Delayed projection
     /// work cannot use this path to overwrite newer supervisor state.
@@ -692,27 +671,6 @@ mod tests {
         .await
         .expect("offline initializer may write after live owner exits");
         assert_eq!(initialized.agent_did, "did:key:other");
-    }
-
-    #[tokio::test]
-    async fn stale_index_failure_cannot_tag_a_new_peer_generation() {
-        let old = record("a");
-        let (_tempdir, owner) =
-            ClientSyncStateOwner::for_test(vec![old.clone()], vec![peer("a")]).await;
-        let mut repaired = old.clone();
-        repaired.pairing_network_id = Some("network-new".to_string());
-        owner
-            .replace_record(&old, repaired.clone())
-            .await
-            .unwrap()
-            .expect("replace generation");
-
-        assert!(!owner.set_last_error_for_records(&[old], "stale index failure".to_string()));
-        assert_eq!(
-            owner.snapshot().directory[0].pairing_network_id,
-            repaired.pairing_network_id
-        );
-        assert_eq!(owner.snapshot().peers[0].last_error, None);
     }
 
     #[tokio::test]

@@ -13,12 +13,9 @@ use super::super::paths::DesktopPaths;
 use super::super::peer_directory::{PeerDirectory, PeerRecord};
 use super::super::principal_identity::PrincipalIdentity;
 use super::super::query::load_full_snapshot_with_peer_records;
-use super::super::schema::{
-    client_recovery_collection_names, ensure_runtime_schemas, subscribe_all_collections,
-};
+use super::super::schema::{ensure_runtime_schemas, subscribe_all_collections};
 use super::p2p_ops::{
     p2p_connect_peer, p2p_connected_peers, p2p_listen_addresses, p2p_local_peer_id,
-    p2p_sync_branchable_collection,
 };
 use super::route_manager::{is_enrollment_peer, ClientRouteManager};
 use super::supervisor::spawn_p2p_supervisor_task;
@@ -41,10 +38,21 @@ impl ClientCore {
         paths: DesktopPaths,
         options: ClientCoreOptions,
     ) -> Result<Self> {
+        let started = Instant::now();
+        let mut previous = started;
+        let mut checkpoint = |stage: &'static str| {
+            let now = Instant::now();
+            tracing::debug!(target: "gents_desktop_core::startup", stage,
+                stage_ms = now.duration_since(previous).as_millis(),
+                elapsed_ms = now.duration_since(started).as_millis(),
+                "client startup stage completed");
+            previous = now;
+        };
         paths.ensure_root_dirs().await?;
         gents::storage_backend::reject_legacy_store(paths.node_data_dir())?;
 
         let principal = PrincipalIdentity::load_or_create(&paths).await?;
+        checkpoint("paths_and_identity");
         let node = Arc::new(
             NodeBuilder::default()
                 .data_path(paths.node_data_dir())
@@ -56,6 +64,8 @@ impl ClientCore {
                 .context("starting embedded desktop node")?,
         );
 
+        checkpoint("embedded_node");
+
         let loaded_peer_directory = PeerDirectory::open_writer(paths.peer_directory_path()).await?;
         let sync_state = super::sync_state::ClientSyncStateOwner::new(
             P2PHealth::default(),
@@ -64,11 +74,13 @@ impl ClientCore {
         );
         sync_state.clear_ephemeral_pairing_readiness().await?;
         let records = sync_state.records();
+        checkpoint("peer_directory");
         ensure_runtime_schemas(node.as_ref()).await?;
-        ensure_desktop_schema_migrations(Arc::clone(&node)).await?;
+        checkpoint("runtime_schemas");
         subscribe_all_collections(node.as_ref()).await?;
+        checkpoint("collection_subscriptions");
 
-        let observer_subscription = node.subscribe(&[defra_node::EventName::Update]);
+        let observer_subscription = node.subscribe_document_changes();
 
         let (selected_agent_did, _) = watch::channel::<Option<String>>(None);
 
@@ -76,6 +88,7 @@ impl ClientCore {
             load_full_snapshot_with_peer_records(node.as_ref(), &records, principal.did()).await?
         };
         let (store, _store_updates) = ObservedStore::new(initial_snapshot);
+        checkpoint("initial_snapshot");
 
         let p2p = node
             .p2p_arc()
@@ -97,6 +110,7 @@ impl ClientCore {
         };
         let (initial_health, initial_database_sync, initial_database_sync_error) =
             super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
+        checkpoint("bootstrap_and_health");
         for status in peer_statuses {
             if let Some(expected) = records
                 .iter()
@@ -168,18 +182,10 @@ fn desktop_p2p_config(paths: &DesktopPaths, options: &ClientCoreOptions) -> P2PC
         rate_limit_rate: options.rate_limit_rate,
         max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
         max_pending_dags: options.max_pending_dags,
-        // Desktop peers commonly sit behind a runtime relay. Re-announce only
-        // after DefraDB has verified and merged the block so downstream peers
-        // can fetch it from a transport-routable origin.
-        rebroadcast_on_merge: true,
+        // DefraDB forwards merges to explicit downstream replicators itself.
+        // Gossip rebroadcast adds a coalescing wait inside the merge loop.
+        rebroadcast_on_merge: false,
     }
-}
-
-async fn ensure_desktop_schema_migrations(node: Arc<EmbeddedNode>) -> Result<()> {
-    gents::migration::ensure_all_runtime_migrations(node)
-        .await
-        .context("ensure desktop runtime schema migrations")?;
-    Ok(())
 }
 
 pub(super) async fn bootstrap_saved_peers(
@@ -340,33 +346,6 @@ pub(super) async fn force_connect_peer_with_retry_until(
     }
 }
 
-pub(super) async fn request_client_recovery_sync(
-    node: &EmbeddedNode,
-    p2p: &Arc<dyn P2POps>,
-) -> Result<Vec<String>> {
-    if p2p_connected_peers(p2p).await?.is_empty() {
-        anyhow::bail!("no connected peers available for session index request");
-    }
-
-    let resolve_id = |collection_name| -> Result<String> {
-        let collection = node
-            .get_collection(collection_name)
-            .map_err(|error| {
-                anyhow::anyhow!("loading collection id for {collection_name}: {error}")
-            })?
-            .ok_or_else(|| anyhow::anyhow!("collection {collection_name} not found"))?;
-        Ok(collection.collection_id)
-    };
-    let mut requested = Vec::new();
-    for collection_name in client_recovery_collection_names() {
-        let collection_id = resolve_id(collection_name)?;
-        p2p_sync_branchable_collection(p2p, &collection_id).await?;
-        requested.push(collection_name.to_string());
-    }
-
-    Ok(requested)
-}
-
 pub(super) async fn is_connected_peer(p2p: &Arc<dyn P2POps>, peer_id: &str) -> Result<bool> {
     let peers = p2p_connected_peers(p2p).await?;
     Ok(peers.iter().any(|peer| {
@@ -415,6 +394,10 @@ mod tests {
 
         let config = desktop_p2p_config(&paths, &options);
 
+        assert!(
+            !config.rebroadcast_on_merge,
+            "merge delivery must not wait for gossip"
+        );
         assert_eq!(config.max_pending_dags, 77);
         assert_eq!(
             config.max_doc_sync_request_doc_ids,
