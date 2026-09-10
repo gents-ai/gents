@@ -52,9 +52,10 @@ plugins install under the pack's namespace, so two packs from different
 namespaces may each carry a `format_check` without one replacing the other.
 
 `kind` is `documents`, `graph`, `assets`, or `plugins`. A `plugins` pack
-installs no documents of its own: it exists to ship capabilities, and its
-plugins are callable from any pack in the same home, so one pack can build on
-another's capabilities instead of vendoring a copy.
+installs no documents of its own: it exists to ship capabilities. Its plugins
+land in the same store `gents plugin install` uses, one store per home, so
+they are callable by name whichever pack put them there and one pack can
+build on another's capabilities instead of vendoring a copy.
 
 ## Plugins
 
@@ -63,9 +64,12 @@ own, and also carried inside a pack as one of its declared assets. It is the
 one artifact every language Afterburner compiles down to, since some of them
 (Python to an emscripten-pyodide bundle, for instance) have no bare-`.wasm`
 form to ship instead, and only Afterburner's own runtime knows how to
-dispatch every one of those shapes. The same admitted plugin is callable two
-ways, from one definition: as a deterministic stage in a graph, and as an
-ordinary tool a model can pick. A plugin declares:
+dispatch every one of those shapes.
+
+Today a plugin is called directly, by name (`gents plugin run`). Offering the
+same admitted plugin to a graph stage and to a model as an ordinary tool is
+the reason it is one definition rather than two, and neither of those call
+paths is wired yet. A plugin declares:
 
 - `artifact`, the compiled `.afb` inside the pack, under `plugins/`. It must
   also appear in `assets`, so the pack's own digest covers it and nothing can

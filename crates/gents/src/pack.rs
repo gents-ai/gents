@@ -42,10 +42,13 @@ pub struct PackMetadata {
     pub dependencies: Vec<String>,
     /// The capabilities this pack builds and ships.
     ///
-    /// A plugin is a complete, sandboxed Afterburner `.afb`, and the same
-    /// admitted plugin is callable two ways: as a deterministic stage
-    /// inside this pack's graph, and as an ordinary tool a model can pick.
-    /// Naming it here is what makes it either.
+    /// A plugin is a complete, sandboxed Afterburner `.afb`. Naming it
+    /// here is what `gents pack build` compiles and what `gents pack
+    /// install` places in the plugin store, from where `gents plugin run`
+    /// calls it by name. Offering the same admitted plugin to a graph
+    /// stage and to a model as a tool is the point of one definition, and
+    /// neither of those two call paths is wired yet: today a plugin is
+    /// built, shipped, installed, and called directly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PackPlugin>,
 }
