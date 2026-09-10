@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use defra_node::{EmbeddedNode, ExecuteRetryPolicy, QueryRequest};
@@ -36,6 +36,35 @@ enum TxnBackend<'a> {
 }
 
 type MutationWriteGate = tokio::sync::Mutex<()>;
+
+// Embedded DefraDB operations are local and normally complete in milliseconds.
+// Bound every phase that can retain the process-wide mutation gate so one
+// wedged transaction cannot stop response progress, recovery, and hydration.
+const EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT: Duration = Duration::from_secs(60);
+const EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+const EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn embedded_phase_timeout(phase: &str, timeout: Duration) -> anyhow::Error {
+    tracing::error!(
+        phase,
+        timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX),
+        "embedded DefraDB canonical write phase timed out"
+    );
+    retry::transaction_storage_failure(anyhow::anyhow!(
+        "embedded transaction {phase} timed out after {timeout:?}"
+    ))
+}
+
+async fn cleanup_while_holding_write_gate<F, T>(
+    write_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    cleanup: F,
+) -> std::result::Result<T, tokio::time::error::Elapsed>
+where
+    F: Future<Output = T>,
+{
+    let _write_guard = write_guard;
+    tokio::time::timeout(EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT, cleanup).await
+}
 
 fn mutation_write_gate(node: &EmbeddedNode) -> Arc<MutationWriteGate> {
     static GATES: OnceLock<StdMutex<HashMap<usize, Weak<MutationWriteGate>>>> = OnceLock::new();
@@ -124,9 +153,21 @@ impl Drop for RollbackOnDrop {
                 let runner = runner.clone();
                 let write_guard = write_guard.take();
                 runtime.spawn(async move {
-                    let _write_guard = write_guard;
-                    if let Err(error) = runner.rollback_txn(&handle).await {
-                        tracing::debug!(%error, "discarding cancelled embedded transaction");
+                    match cleanup_while_holding_write_gate(
+                        write_guard,
+                        runner.rollback_txn(&handle),
+                    )
+                    .await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => {
+                            tracing::debug!(%error, "discarding cancelled embedded transaction");
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                timeout_ms = EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT.as_millis(),
+                                "cancelled embedded transaction rollback timed out; releasing mutation gate"
+                            );
+                        }
                     }
                 });
             }
@@ -154,10 +195,13 @@ where
         write_guard: Some(write_guard),
         armed: true,
     };
-    let handle = runner
-        .begin_txn(false)
-        .await
-        .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
+    let handle = tokio::time::timeout(
+        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+        runner.begin_txn(false),
+    )
+    .await
+    .map_err(|_| embedded_phase_timeout("begin", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT))?
+    .map_err(|error| anyhow::anyhow!("begin_txn: {error}"))?;
     rollback.set_embedded_handle(handle.clone());
     cancellation_rollback_scheduled.store(true, Ordering::Release);
     after_begin(handle.clone()).await;
@@ -283,7 +327,17 @@ impl<'a> ConfigApplyTxn<'a> {
         identity: Option<Did>,
         cancellation_rollback_scheduled: Arc<AtomicBool>,
     ) -> Result<Self> {
-        let write_guard = mutation_write_gate(node).lock_owned().await;
+        let write_guard = tokio::time::timeout(
+            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            mutation_write_gate(node).lock_owned(),
+        )
+        .await
+        .map_err(|_| {
+            embedded_phase_timeout(
+                "write-gate acquisition",
+                EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            )
+        })?;
         let runner = node.runner().clone();
         let (rollback_on_drop, handle) = tokio::spawn(begin_embedded_owned(
             runner,
@@ -359,14 +413,19 @@ impl<'a> ConfigApplyTxn<'a> {
                 handle,
                 identity,
             } => {
-                let response = node
-                    .execute_request_in_txn(
+                let response = tokio::time::timeout(
+                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    node.execute_request_in_txn(
                         QueryRequest::new(document)
                             .with_variables(variables.clone())
                             .with_identity(identity.clone()),
                         handle,
-                    )
-                    .await;
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+                })?;
                 if response.is_transaction_conflict() {
                     return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
                 }
@@ -433,12 +492,17 @@ impl<'a> ConfigApplyTxn<'a> {
         else {
             anyhow::bail!("native transaction responses require embedded access");
         };
-        let response = node
-            .execute_request_in_txn(
+        let response = tokio::time::timeout(
+            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            node.execute_request_in_txn(
                 QueryRequest::new(document).with_identity(identity.clone()),
                 handle,
-            )
-            .await;
+            ),
+        )
+        .await
+        .map_err(|_| {
+            embedded_phase_timeout("execute", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+        })?;
         if response.is_transaction_conflict() {
             return Err(retry::transaction_conflict(ConflictSource::StructuredCode));
         }
@@ -475,9 +539,21 @@ impl<'a> ConfigApplyTxn<'a> {
                     },
                 }),
             TxnBackend::Embedded { node, handle, .. } => {
-                match node.runner().commit_txn(handle).await {
-                    Ok(()) => Ok(()),
-                    Err(error) => {
+                match tokio::time::timeout(
+                    EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    node.runner().commit_txn(handle),
+                )
+                .await
+                {
+                    Err(_) => Err(CommitFailure {
+                        error: embedded_phase_timeout(
+                            "commit",
+                            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                        ),
+                        cleanup: CommitCleanup::Required,
+                    }),
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(error)) => {
                         let conflict = matches!(
                             &error,
                             query::TransactionError::Execution(message)
@@ -507,11 +583,13 @@ impl<'a> ConfigApplyTxn<'a> {
                 id,
                 client,
             } => graphql::txn_discard(endpoint, id, client).await,
-            TxnBackend::Embedded { node, handle, .. } => node
-                .runner()
-                .rollback_txn(handle)
-                .await
-                .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
+            TxnBackend::Embedded { node, handle, .. } => tokio::time::timeout(
+                EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
+                node.runner().rollback_txn(handle),
+            )
+            .await
+            .map_err(|_| embedded_phase_timeout("rollback", EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT))?
+            .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
         };
         if result.is_ok() {
             self.disarm_rollback();
@@ -777,7 +855,21 @@ where
                 }
             };
             telemetry.cancelled_rollback = RollbackStatus::Scheduled;
-            let attempt_result: Result<(), TransactionAttemptFailure> = match callback(&txn).await {
+            let callback_result = match backend {
+                WriteBackend::Embedded => {
+                    tokio::time::timeout(EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT, callback(&txn))
+                        .await
+                        .map_err(|_| {
+                            embedded_phase_timeout(
+                                "callback",
+                                EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT,
+                            )
+                        })
+                        .and_then(|result| result)
+                }
+                WriteBackend::Http => callback(&txn).await,
+            };
+            let attempt_result: Result<(), TransactionAttemptFailure> = match callback_result {
                 Ok(value) => {
                     let affected_documents = txn.affected_documents();
                     match txn.commit_inner().await {
@@ -1120,8 +1212,23 @@ impl ConfigAccess {
         retry_policy: ExecuteRetryPolicy,
     ) -> Result<defra_node::QueryResponse> {
         let gate = mutation_write_gate(node);
-        let _write_guard = gate.lock().await;
-        let response = node.execute_with_retry(mutation, retry_policy).await;
+        let _write_guard =
+            tokio::time::timeout(EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT, gate.lock())
+                .await
+                .map_err(|_| {
+                    embedded_phase_timeout(
+                        "write-gate acquisition",
+                        EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+                    )
+                })?;
+        let response = tokio::time::timeout(
+            EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
+            node.execute_with_retry(mutation, retry_policy),
+        )
+        .await
+        .map_err(|_| {
+            embedded_phase_timeout("auto-commit", EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT)
+        })?;
         crate::graphql::ensure_no_errors(&response, operation.as_str())?;
         Ok(response)
     }

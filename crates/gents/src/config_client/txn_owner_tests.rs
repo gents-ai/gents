@@ -200,6 +200,76 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     node.shutdown().await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn stalled_callback_releases_the_embedded_write_gate() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type WriteAfterStall { value: String }")
+        .await
+        .unwrap();
+    let entered = Arc::new(Notify::new());
+    let entered_for_callback = Arc::clone(&entered);
+    let mut stalled = Box::pin(ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.stalled_callback",
+        move |_| {
+            let entered = Arc::clone(&entered_for_callback);
+            Box::pin(async move {
+                entered.notify_one();
+                std::future::pending::<Result<()>>().await
+            })
+        },
+    ));
+
+    tokio::select! {
+        () = entered.notified() => {}
+        result = &mut stalled => panic!("transaction finished before callback stalled: {result:?}"),
+    }
+    tokio::time::advance(super::EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT).await;
+    let error = stalled.await.expect_err("stalled transaction times out");
+    assert!(
+        error.to_string().contains("callback timed out"),
+        "{error:#}"
+    );
+    assert!(
+        super::retry::is_transaction_storage_failure(&error),
+        "callback timeout must use the standard storage-failure retry classification"
+    );
+
+    ConfigAccess::write_local(
+        &node,
+        "test.write_after_stall",
+        r#"mutation { create_WriteAfterStall(input: {value: "committed"}) { _docID } }"#,
+    )
+    .await
+    .expect("a later canonical write is not blocked by the stalled transaction");
+    let response = node.execute("{ WriteAfterStall { value } }").await;
+    assert_eq!(
+        response.data.unwrap()["WriteAfterStall"][0]["value"],
+        "committed"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let guard = Arc::clone(&gate).lock_owned().await;
+    let cleanup = tokio::spawn(super::cleanup_while_holding_write_gate(
+        Some(guard),
+        std::future::pending::<()>(),
+    ));
+
+    tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
+    cleanup
+        .await
+        .expect("cleanup task joins")
+        .expect_err("stalled cleanup times out");
+    let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
+        .await
+        .expect("the embedded write gate is released after cleanup times out");
+}
+
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
