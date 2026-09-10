@@ -583,13 +583,29 @@ impl<'a> ConfigApplyTxn<'a> {
                 id,
                 client,
             } => graphql::txn_discard(endpoint, id, client).await,
-            TxnBackend::Embedded { node, handle, .. } => tokio::time::timeout(
-                EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
-                node.runner().rollback_txn(handle),
-            )
-            .await
-            .map_err(|_| embedded_phase_timeout("rollback", EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT))?
-            .map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
+            TxnBackend::Embedded { node, handle, .. } => {
+                match tokio::time::timeout(
+                    EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
+                    node.runner().rollback_txn(handle),
+                )
+                .await
+                {
+                    Ok(result) => result.map_err(|error| anyhow::anyhow!("rollback_txn: {error}")),
+                    Err(_) => {
+                        let error = embedded_phase_timeout(
+                            "rollback",
+                            EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT,
+                        );
+                        tracing::warn!(
+                            "embedded rollback timed out; releasing mutation gate with transaction outcome ambiguous"
+                        );
+                        // Do not let Drop schedule a second bounded rollback
+                        // while retaining the same process-wide write gate.
+                        self.disarm_rollback();
+                        return Err(error);
+                    }
+                }
+            }
         };
         if result.is_ok() {
             self.disarm_rollback();
