@@ -5,7 +5,7 @@ type CodeReviewJob {
   head_ref: String
   workspace_id: String
   workspace_authority: String
-  workspace_owner_deployment_id: String
+  workspace_owner_agent_did: String
   lens_count: String
   lens_min: String
   lens_max: String
