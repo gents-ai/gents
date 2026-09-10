@@ -38,7 +38,9 @@ type AgentRequest @branchable {
     content: String @immutable
     # Execution-owner aggregate budget from InferenceExecution, not a caller
     # override; consumed tokens rehydrate from InferenceCall records.
-    max_total_tokens: Int @immutable
+    # First claim writes this pin; subsequent claims preserve it via the
+    # execution generation CAS. It cannot be immutable at document creation.
+    max_total_tokens: Int
     # RequestInput invocation facts: selected_skill_ids, cwd, initial_title,
     # queue (source/policy/keys) and goal_continuation. Canonical strict
     # struct stored as JSON; encode empty nillable lists as null, decode
