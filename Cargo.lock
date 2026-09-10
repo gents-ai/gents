@@ -4090,30 +4090,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "gents-lens-workspace-capability"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
-name = "gents-lens-workspace-receipt-capability"
-version = "0.1.0"
-dependencies = [
- "lens_sdk",
- "serde_json",
-]
-
-[[package]]
 name = "gents-migration"
 version = "0.16.4"
 dependencies = [
  "anyhow",
  "defra-node",
- "gents-lean-contract",
  "gents-lens-fixture-add-label",
- "gents-lens-workspace-capability",
  "gents-protocol",
  "hex",
  "serde",

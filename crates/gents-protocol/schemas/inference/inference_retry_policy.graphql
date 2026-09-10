@@ -1,0 +1,12 @@
+type InferenceRetryPolicy @branchable @index(fields: ["agent_did", "retry_policy_id"], unique: true) {
+    retry_policy_id: String
+    agent_did: String @index
+    display_name: String
+    max_transport_retries: Int
+    backoff_ms: [Int]
+    max_resample_retries: Int
+    allow_repair: Boolean
+    interactive_max_retries: Int
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}

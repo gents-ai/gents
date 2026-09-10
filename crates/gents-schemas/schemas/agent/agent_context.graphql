@@ -1,0 +1,12 @@
+type AgentContext @branchable @index(fields: ["agent_did", "context_id"], unique: true) {
+    context_id: String
+    agent_did: String @index
+    display_name: String
+    description: String
+    system_prompt: String
+    tools_id: String @index
+    compaction_id: String @index
+    skill_ids: [String!]
+    tags: [String!]
+    updated_at: DateTime @index(direction: DESC)
+}

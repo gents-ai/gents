@@ -88,3 +88,60 @@ fn lean_workspace_references_preserve_exact_owner_and_attenuate_authority() {
         );
     }
 }
+
+#[test]
+fn signed_request_input_fields_match_lean_bytes() {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+
+    fn read_length(cursor: &mut &[u8]) -> usize {
+        let length = cursor.iter().position(|byte| *byte != 0).unwrap();
+        assert_eq!(cursor[length], 255, "invalid canonical length delimiter");
+        *cursor = &cursor[length + 1..];
+        length
+    }
+
+    for case in &lean_contract_snapshot().request_input_cases {
+        let name = case["name"].as_str().unwrap();
+        let mut request = AgentRequestCreate::base(
+            "request-1",
+            "did:key:agent",
+            "did:key:agent",
+            "default",
+            "session-1",
+            "input-fields-follow-this-content",
+            "interactive",
+            "2026-08-30T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self("did:key:agent"),
+        );
+        request.input = serde_json::from_value(case["input"].clone()).unwrap();
+        let expected: Vec<Vec<u8>> =
+            serde_json::from_value(case["canonical_input_fields"].clone()).unwrap();
+        let payload = request.signing_payload();
+        let mut cursor = payload.as_slice();
+        let count = read_length(&mut cursor);
+        let mut fields = Vec::new();
+        for _ in 0..count {
+            let length = read_length(&mut cursor);
+            fields.push(cursor[..length].to_vec());
+            cursor = &cursor[length..];
+        }
+        assert!(
+            cursor.is_empty(),
+            "{name}: trailing signature payload bytes"
+        );
+        let start = fields
+            .iter()
+            .position(|field| field == b"input-fields-follow-this-content")
+            .unwrap()
+            + 1;
+        assert_eq!(
+            &fields[start..start + expected.len()],
+            expected.as_slice(),
+            "{name}: real signing owner must use Lean's typed-input framing"
+        );
+        // The next immutable semantic is execution_origin, encoded as a present
+        // optional field. This also rejects extra fields in the input segment.
+        assert_eq!(fields[start + expected.len()], vec![1], "{name}");
+        assert_eq!(fields[start + expected.len() + 1], b"interactive", "{name}");
+    }
+}

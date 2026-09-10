@@ -1,3 +1,9 @@
+# One cumulative compaction record. The canonical cursor below is the
+# AgentMessage.sequence through which this entry's cumulative compacted
+# provider prefix is known to project; entries must retain it whenever the
+# runtime can prove the raw/provider split, and copied entries must pass the
+# same chain validation as newly produced ones (no cursor inference from
+# messages_compacted).
 type CompactionEntry @branchable {
     compaction_key: String @index(unique: true)
     session_id: String @index

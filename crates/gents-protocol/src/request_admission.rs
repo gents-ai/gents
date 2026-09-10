@@ -232,9 +232,10 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
     ] {
         require_identifier(name, value)?;
     }
+    // Behavior selection is required even for new sessions.
+    require_identifier("behavior_id", request.behavior_id)?;
     for (name, value) in [
         ("requester_did", request.requester_did),
-        ("behavior_id", request.behavior_id),
         ("retry_parent_request", request.retry_parent_request),
         (
             "retry_parent_request_doc_id",
@@ -262,10 +263,6 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
             request.caused_by_parent_tool_call_doc_id,
         ),
         ("workspace_id", request.workspace_id),
-        (
-            "workspace_owner_deployment_id",
-            request.workspace_owner_deployment_id,
-        ),
     ] {
         require_optional_identifier(name, value)?;
     }
@@ -573,20 +570,16 @@ impl AgentRequestAdmissionRecord {
         push_text(&mut fields, request.request_id);
         push_text(&mut fields, request.agent_did);
         push_option(&mut fields, request.requester_did);
-        push_option(&mut fields, request.behavior_id);
+        push_text(&mut fields, request.behavior_id);
         push_text(&mut fields, request.session_id);
         push_option(&mut fields, request.retry_parent_request);
         push_option(&mut fields, request.retry_parent_request_doc_id);
         push_option(&mut fields, request.retry_root_request);
         push_option(&mut fields, request.retry_key);
         push_text(&mut fields, request.content);
-        push_f64(&mut fields, request.temperature);
-        push_f64(&mut fields, request.top_p);
-        push_i64(&mut fields, request.top_k);
-        push_i64(&mut fields, request.seed);
-        push_i64(&mut fields, request.max_tokens);
-        push_i64(&mut fields, request.max_total_tokens);
-        push_option(&mut fields, request.metadata);
+        // Typed invocation input, encoded by the canonical framing below; the
+        // removed per-request sampling/metadata/deployment scalars are gone.
+        push_request_input(&mut fields, request.input);
         push_option(&mut fields, request.execution_origin);
         push_option(&mut fields, request.caused_by_trigger_id);
         push_option(&mut fields, request.caused_by_trigger_doc_id);
@@ -605,7 +598,6 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.caused_by_parent_tool_call_doc_id);
         push_option(&mut fields, request.workspace_id);
         push_option(&mut fields, request.workspace_authority);
-        push_option(&mut fields, request.workspace_owner_deployment_id);
         push_option(&mut fields, request.workspace_seal_hash);
         push_text(&mut fields, self.kind.as_str());
         push_text(&mut fields, &self.signer_did);
@@ -669,14 +661,88 @@ fn push_u64(fields: &mut Vec<Vec<u8>>, value: Option<u64>) {
     );
 }
 
-fn push_f64(fields: &mut Vec<Vec<u8>>, value: Option<f64>) {
-    push_option(
-        fields,
-        value
-            .as_ref()
-            .map(|value| format!("{:016x}", value.to_bits()))
-            .as_deref(),
-    );
+/// Title provenance wire names shared by the canonical session title owner.
+fn title_source_wire_name(source: crate::session::SessionTitleSource) -> &'static str {
+    match source {
+        crate::session::SessionTitleSource::Placeholder => "placeholder",
+        crate::session::SessionTitleSource::Generated => "generated",
+        crate::session::SessionTitleSource::Task => "task",
+        crate::session::SessionTitleSource::User => "user",
+    }
+}
+
+/// Queue enum wire names matching the canonical queue owners.
+fn queue_source_wire_name(source: crate::request_input::QueueSource) -> &'static str {
+    match source {
+        crate::request_input::QueueSource::User => "user",
+        crate::request_input::QueueSource::BackgroundCompletion => "background_completion",
+        crate::request_input::QueueSource::Steering => "steering",
+        crate::request_input::QueueSource::Goal => "goal",
+    }
+}
+
+fn queue_policy_wire_name(policy: crate::request_input::QueuePolicy) -> &'static str {
+    match policy {
+        crate::request_input::QueuePolicy::Append => "append",
+        crate::request_input::QueuePolicy::Coalesce => "coalesce",
+    }
+}
+
+/// Canonical typed-input framing, mirroring the Lean
+/// `Enrollment.requestInputFields` byte contract: explicit option tags,
+/// collection lengths, and the fixed field order of RequestInput and
+/// RequestQueue. This is the one canonical input encoder for signing and
+/// verification; callers must never substitute unescaped JSON or metadata.
+fn push_input_option(fields: &mut Vec<Vec<u8>>, value: Option<&str>) {
+    match value {
+        Some(value) => {
+            push_text(fields, "some");
+            push_text(fields, value);
+        }
+        None => push_text(fields, "none"),
+    }
+}
+
+fn push_request_input(fields: &mut Vec<Vec<u8>>, input: &crate::request_input::RequestInput) {
+    push_text(fields, &input.selected_skill_ids.len().to_string());
+    for skill_id in &input.selected_skill_ids {
+        push_text(fields, skill_id);
+    }
+    push_input_option(fields, input.cwd.as_deref());
+    match &input.initial_title {
+        Some(title) => {
+            push_text(fields, "some");
+            push_text(fields, &title.text);
+            push_text(fields, title_source_wire_name(title.source));
+        }
+        None => push_text(fields, "none"),
+    }
+    match &input.queue {
+        Some(queue) => {
+            push_text(fields, "some");
+            push_text(fields, queue_source_wire_name(queue.source));
+            push_text(fields, queue_policy_wire_name(queue.policy));
+            push_input_option(fields, queue.key.as_deref());
+            push_input_option(fields, queue.queued_after_request_id.as_deref());
+            push_input_option(fields, queue.interrupted_request_id.as_deref());
+            push_input_option(
+                fields,
+                queue
+                    .background_completion_wake_version
+                    .map(|version| version.to_string())
+                    .as_deref(),
+            );
+        }
+        None => push_text(fields, "none"),
+    }
+    match &input.goal_continuation {
+        Some(goal) => {
+            push_text(fields, "some");
+            push_text(fields, &goal.sequence.to_string());
+            push_text(fields, if goal.wrapup { "true" } else { "false" });
+        }
+        None => push_text(fields, "none"),
+    }
 }
 
 fn serialize_fields(fields: &[Vec<u8>]) -> Vec<u8> {
@@ -759,20 +825,13 @@ impl AgentRequestCreate {
             request_id,
             agent_did: agent_did.into(),
             requester_did: requester_did.into(),
-            behavior_id: Some(behavior_id.into()),
+            behavior_id: behavior_id.into(),
             session_id: session_id.into(),
             retry_parent_request: None,
             retry_parent_request_doc_id: None,
             retry_key: None,
             content: content.into(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
-            max_total_tokens: None,
-            metadata: None,
-            backend_id: None,
+            input: crate::request_input::RequestInput::default(),
             execution_origin: execution_origin.into(),
             caused_by_trigger_id: None,
             caused_by_trigger_doc_id: None,
@@ -791,7 +850,6 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_doc_id: None,
             workspace_id: None,
             workspace_authority: None,
-            workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
             initial_lifecycle_state: RequestLifecycleState::Pending,
             admission,
@@ -803,20 +861,14 @@ impl AgentRequestCreate {
             request_id: &self.request_id,
             agent_did: &self.agent_did,
             requester_did: Some(&self.requester_did),
-            behavior_id: self.behavior_id.as_deref(),
+            behavior_id: &self.behavior_id,
             session_id: &self.session_id,
             retry_parent_request: self.retry_parent_request.as_deref(),
             retry_parent_request_doc_id: self.retry_parent_request_doc_id.as_deref(),
             retry_root_request: self.retry_root_request.as_deref(),
             retry_key: self.retry_key.as_deref(),
             content: &self.content,
-            temperature: self.temperature,
-            top_p: self.top_p,
-            top_k: self.top_k,
-            seed: self.seed,
-            max_tokens: self.max_tokens,
-            max_total_tokens: self.max_total_tokens,
-            metadata: self.metadata.as_deref(),
+            input: &self.input,
             execution_origin: Some(&self.execution_origin),
             caused_by_trigger_id: self.caused_by_trigger_id.as_deref(),
             caused_by_trigger_doc_id: self.caused_by_trigger_doc_id.as_deref(),
@@ -835,7 +887,6 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id.as_deref(),
             workspace_id: self.workspace_id.as_deref(),
             workspace_authority: self.workspace_authority.as_deref(),
-            workspace_owner_deployment_id: self.workspace_owner_deployment_id.as_deref(),
             workspace_seal_hash: self.workspace_seal_hash.as_deref(),
         }
     }
@@ -867,7 +918,7 @@ impl AgentRequestCreate {
         text(&mut fields, "request_id", &self.request_id);
         text(&mut fields, "agent_did", &self.agent_did);
         text(&mut fields, "requester_did", &self.requester_did);
-        optional_text(&mut fields, "behavior_id", self.behavior_id.as_deref());
+        text(&mut fields, "behavior_id", &self.behavior_id);
         text(&mut fields, "session_id", &self.session_id);
         optional_text(
             &mut fields,
@@ -886,14 +937,13 @@ impl AgentRequestCreate {
         );
         optional_text(&mut fields, "retry_key", self.retry_key.as_deref());
         text(&mut fields, "content", &self.content);
-        optional_scalar(&mut fields, "temperature", self.temperature);
-        optional_scalar(&mut fields, "top_p", self.top_p);
-        optional_scalar(&mut fields, "top_k", self.top_k);
-        optional_scalar(&mut fields, "seed", self.seed);
-        optional_scalar(&mut fields, "max_tokens", self.max_tokens);
-        optional_scalar(&mut fields, "max_total_tokens", self.max_total_tokens);
-        optional_text(&mut fields, "metadata", self.metadata.as_deref());
-        optional_text(&mut fields, "backend_id", self.backend_id.as_deref());
+        if self.input != crate::request_input::RequestInput::default() {
+            let input = serde_json::to_value(&self.input)
+                .map_err(|_| "AgentRequest input serialization failed")?;
+            let input = crate::graphql::graphql_input_literal(&input)
+                .map_err(|_| "AgentRequest input is not a GraphQL value")?;
+            fields.push(format!("input: {input}"));
+        }
         text(&mut fields, "execution_origin", &self.execution_origin);
         optional_text(
             &mut fields,
@@ -955,11 +1005,6 @@ impl AgentRequestCreate {
             &mut fields,
             "workspace_authority",
             self.workspace_authority.as_deref(),
-        );
-        optional_text(
-            &mut fields,
-            "workspace_owner_deployment_id",
-            self.workspace_owner_deployment_id.as_deref(),
         );
         optional_text(
             &mut fields,

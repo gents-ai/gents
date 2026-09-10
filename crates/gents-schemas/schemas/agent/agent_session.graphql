@@ -1,10 +1,45 @@
-type AgentSession @branchable {
-    session_id: String @index(unique: true)
-    agent_name: String @index
+# Single durable session document per `gents_protocol::session::AgentSession`.
+# Identity, owner and requester scope are established at creation; display names
+# resolve from the principal/behavior, never copied into session identity.
+# Absent requester scope grants no wildcard authority.
+#
+# Nested canonical values (title, provenance, observation) use the verified JSON
+# scalar storage encoding: canonical strict structs round-trip through the
+# protocol owners; readers select the bare field name, never an object
+# subselection. Unknown keys fail on decode. Canonical JSON provenance is
+# the sole source of truth for provenance references: no mirrored projection
+# columns exist, so no synchronization writer is required.
+#
+# Ordering for projection/listing is created_at then the logical session_id /
+# request_id labels, never the physical document ID.
+type AgentSession @branchable @index(fields: ["agent_did", "session_id"], unique: true) {
+    # Logical session label; unique only within the agent_did scope.
+    session_id: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
-    behavior_id: String @index
-    started: DateTime
-    ended: DateTime
-    status: String
+    # The only configuration selection: AgentBehavior -> AgentContext and
+    # InferenceProfile. No context/profile/backend/model copies or overrides.
+    behavior_id: String @index @immutable
+    # Original creation time, unchanged by resume, close or later requests.
+    created_at: String @index @immutable
+    # Explicit close time; absent for an open session. Reopening clears it
+    # without resetting creation or provenance. Not a request terminalization.
+    closed_at: String @index
+    # SessionTitle: text plus typed source (placeholder/generated/task/user).
+    # Absence means no title and permits generation.
+    title: JSON
+    # SessionProvenance: task_id, graph_run_id, parent_request_doc_id, fork
+    # (source_session_id + at_user_turn). Stable across close/resume/retry;
+    # references support filtering/inspection, never authorization.
+    provenance: JSON
+    # SessionObservation: last_activity_at, bounded preview, and the latest
+    # request identity (request_doc_id + request_id) with observed
+    # RequestLifecycleState. A read observation only: never lifecycle, retry,
+    # goal-continuation or hydration authority. Maintained by the existing
+    # session projection owner through canonical patches.
+    observation: JSON
+    # User-managed labels for filtering/grouping/UI ordering. Mutable through
+    # the authorized update path; never execution, permission or provenance.
+    # Encode an empty nillable list as null in mutations, never [].
+    tags: [String!]
 }

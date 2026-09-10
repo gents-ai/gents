@@ -8,6 +8,10 @@ pub const AGENT_PRINCIPAL_NAME: &str = "AgentPrincipal";
 pub const AGENT_PRINCIPAL: &str = include_str!("../schemas/agent/agent_principal.graphql");
 pub const AGENT_BEHAVIOR_NAME: &str = "AgentBehavior";
 pub const AGENT_BEHAVIOR: &str = include_str!("../schemas/agent/agent_behavior.graphql");
+pub const AGENT_CONTEXT_NAME: &str = "AgentContext";
+pub const AGENT_CONTEXT: &str = include_str!("../schemas/agent/agent_context.graphql");
+pub const COMPACTION_CONFIG_NAME: &str = "CompactionConfig";
+pub const COMPACTION_CONFIG: &str = include_str!("../schemas/agent/compaction_config.graphql");
 pub const AGENT_RUNTIME_NAME: &str = "AgentRuntime";
 pub const AGENT_RUNTIME: &str = include_str!("../schemas/agent/agent_runtime.graphql");
 pub const AGENT_BEHAVIOR_READINESS_NAME: &str = "AgentBehaviorReadiness";
@@ -18,8 +22,6 @@ pub const AGENT_DIRECTORY_ENTRY: &str =
     include_str!("../schemas/agent/agent_directory_entry.graphql");
 pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
 pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
-pub const AGENT_CONVERSATION_NAME: &str = "AgentConversation";
-pub const AGENT_CONVERSATION: &str = include_str!("../schemas/agent/agent_conversation.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
 pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
@@ -50,8 +52,8 @@ pub const PROVIDER_CONTEXT_REDUCTION: &str =
 pub const PROJECTION_ACP_BINDING_NAME: &str = "ProjectionAcpBinding";
 pub const PROJECTION_ACP_BINDING: &str =
     include_str!("../schemas/agent/projection_acp_binding.graphql");
-pub const TOOL_SELECTION_NAME: &str = "ToolSelection";
-pub const TOOL_SELECTION: &str = include_str!("../schemas/agent/tool_selection.graphql");
+pub const TOOLS_NAME: &str = "Tools";
+pub const TOOLS: &str = include_str!("../schemas/agent/tools.graphql");
 pub const SKILL_NAME: &str = "Skill";
 pub const SKILL: &str = include_str!("../schemas/agent/skill.graphql");
 pub const DATASTORE_TOOL_SURFACE_NAME: &str = "DatastoreToolSurface";
@@ -144,11 +146,13 @@ pub const SESSION_HYDRATION_REQUEST: &str =
 pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL,
     AGENT_BEHAVIOR,
+    COMPACTION_CONFIG,
+    AGENT_CONTEXT,
     AGENT_RUNTIME,
     AGENT_BEHAVIOR_READINESS,
     AGENT_DIRECTORY_ENTRY,
     AGENT_MEMORY,
-    TOOL_SELECTION,
+    TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
     CHAIN_KEY_BINDING,
@@ -165,7 +169,6 @@ pub const ALL: &[&str] = &[
     CALLBACK_BINDING,
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
-    AGENT_CONVERSATION,
     AGENT_REQUEST,
     AGENT_RESPONSE,
     AGENT_TOOL_RESULT,
@@ -207,11 +210,13 @@ pub const ALL: &[&str] = &[
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
     AGENT_BEHAVIOR_NAME,
+    COMPACTION_CONFIG_NAME,
+    AGENT_CONTEXT_NAME,
     AGENT_RUNTIME_NAME,
     AGENT_BEHAVIOR_READINESS_NAME,
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
-    TOOL_SELECTION_NAME,
+    TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
     CHAIN_KEY_BINDING_NAME,
@@ -228,7 +233,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_BINDING_NAME,
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
-    AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
@@ -276,7 +280,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
-    AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
@@ -527,7 +530,12 @@ mod tests {
         assert!(EVENT_TRIGGER.contains("workspace_authority: String"));
         assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));
         assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));
-        assert!(AGENT_REQUEST.contains("workspace_owner_deployment_id: String @index @immutable"));
+        assert!(
+            !AGENT_REQUEST.lines().any(|line| line
+                .trim_start()
+                .starts_with("workspace_owner_deployment_id:")),
+            "workspace ownership resolves from the workspace, not a copied deployment selector"
+        );
         assert!(AGENT_REQUEST.contains("workspace_seal_hash: String @immutable"));
     }
 

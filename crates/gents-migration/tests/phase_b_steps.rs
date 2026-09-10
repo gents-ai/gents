@@ -1,4 +1,4 @@
-//! Phase B: inactive+fields lock, PatchVersioned (lensless + fixture lens),
+//! Migration engine: inactive+fields lock, PatchVersioned (lensless + fixture lens),
 //! crash-window resume, chain-replay pin authoring.
 
 use defra_node::EmbeddedNode;
@@ -291,41 +291,48 @@ async fn crash_resume_after_inactive_patch_before_activate() {
 }
 
 #[tokio::test]
-async fn chain_replay_prints_baseline_pins_for_authoring() {
+async fn canonical_catalog_pins_for_authoring() {
     // Authoring aid: register the canonical SDL directly so stale pins cannot
-    // prevent the test from printing every replacement root VersionID.
+    // prevent the test from reporting every missing or stale root VersionID.
     let node = fresh_node().await;
-    for entry in gents_migration::DEFAULT_BASELINE {
-        node.add_schema(entry.sdl)
+    let catalog = gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
+        .iter()
+        .copied()
+        .zip(gents_protocol::schemas::RUNTIME_ALL.iter().copied())
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .copied()
+                .zip(gents_protocol::schemas::ALL.iter().copied()),
+        )
+        .collect::<Vec<_>>();
+    for (name, sdl) in &catalog {
+        node.add_schema(sdl)
             .await
-            .unwrap_or_else(|error| panic!("register {} for pin authoring: {error}", entry.name));
+            .unwrap_or_else(|error| panic!("register {name} for pin authoring: {error}"));
     }
 
-    println!("=== baseline version pins (authoring paste targets) ===");
     let mut mismatches = Vec::new();
-    for entry in gents_migration::DEFAULT_BASELINE {
+    for (name, _) in catalog {
         let cv = node
-            .get_collection(entry.name)
+            .get_collection(name)
             .expect("get")
-            .unwrap_or_else(|| panic!("missing {}", entry.name));
-        println!(
-            "  {} => {}, fields={}",
-            entry.name,
-            cv.version_id,
-            cv.fields.len()
-        );
-        if entry.expected_version != Some(cv.version_id.as_str()) {
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let expected = gents_migration::DEFAULT_BASELINE
+            .iter()
+            .find(|entry| entry.name == name)
+            .and_then(|entry| entry.expected_version);
+        if expected != Some(cv.version_id.as_str()) {
             mismatches.push(format!(
-                "{}: expected {:?}, computed {}",
-                entry.name, entry.expected_version, cv.version_id
+                "{name}: expected {expected:?}, computed {}",
+                cv.version_id
             ));
         }
     }
+    node.shutdown().await;
     assert!(
         mismatches.is_empty(),
-        "baseline root pins are stale:\n{}",
+        "baseline root pins are stale or missing:\n{}",
         mismatches.join("\n")
     );
-
-    node.shutdown().await;
 }

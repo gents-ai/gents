@@ -12,7 +12,8 @@ pub struct BaselineCollection<'a> {
     pub name: &'a str,
     /// GraphQL SDL for `add_schema`.
     pub sdl: &'a str,
-    /// Pinned root VersionID. `None` until chain-replay freezes pins.
+    /// Pinned root VersionID. Production entries must specify a pin; dynamic
+    /// registries may omit it while authoring a new migration.
     pub expected_version: Option<&'a str>,
     /// Full post-state expectation for the active baseline version.
     pub expected_state: CollectionExpectation,
@@ -213,7 +214,7 @@ impl DynamicRegistry {
 }
 
 // ---------------------------------------------------------------------------
-// Default production registry (cutover baseline, zero steps)
+// Default production registry (canonical baseline, zero steps)
 // ---------------------------------------------------------------------------
 
 macro_rules! baseline_entry {
@@ -227,144 +228,14 @@ macro_rules! baseline_entry {
     };
 }
 
-// Frozen at the migration cutover. New fields belong in DEFAULT_STEPS so
-// existing stores retain a known lineage instead of silently changing roots.
-const INFERENCE_PROFILE_BASELINE_SDL: &str = r#"
-type InferenceProfile {
-    profile_id: String @index(unique: true)
-    display_name: String
-    context_window: Int
-    max_output_tokens: Int
-    max_turns: Int
-    temperature: Float
-    top_p: Float
-    top_k: Int
-    min_p: Float
-    frequency_penalty: Float
-    presence_penalty: Float
-    repetition_penalty: Float
-    stream_batch_ms: Int
-    stream_liveness_timeout_secs: Int
-    deadline_duration_secs: Int
-    retry_max_transport: Int
-    retry_backoff_ms: [Int]
-    retry_max_resample: Int
-    retry_allow_repair: Boolean
-    retry_interactive_max: Int
-    updated_at: DateTime @index(direction: DESC)
-}
-"#;
-
-const INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH: &str = r#"[
-  {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"reasoning_effort","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const INFERENCE_PROFILE_ADD_SEED_PATCH: &str = r#"[
-  {"op":"add","path":"/InferenceProfile/Fields/-","value":{"Name":"seed","Kind":"Int"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-// Frozen at the migration cutover. Live `gents_protocol::schemas::TOOL_SELECTION`
-// may grow fields; those belong in DEFAULT_STEPS so existing stores keep a
-// known lineage instead of silently changing roots.
-const TOOL_SELECTION_BASELINE_SDL: &str = include_str!("baseline/tool_selection.graphql");
-const GOAL_BASELINE_SDL: &str = include_str!("baseline/goal.graphql");
-const TASK_BASELINE_SDL: &str = include_str!("baseline/task.graphql");
-const INFERENCE_CALL_BASELINE_SDL: &str = include_str!("baseline/inference_call.graphql");
-
-const INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH: &str = r#"[
-  {"op":"add","path":"/InferenceCall/Fields/-","value":{"Name":"context_accounting_json","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const TOOL_SELECTION_ADD_LSP_FIELDS_PATCH: &str = r#"[
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_lsp","Kind":"Boolean"}},
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"lsp_config","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH: &str = r#"[
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"required_mcp_service_ids","Kind":21}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH: &str = r#"[
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"eth_tool_ids","Kind":"[String]"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH: &str = r#"[
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_goal_tools","Kind":"Boolean"}},
-  {"op":"add","path":"/ToolSelection/Fields/-","value":{"Name":"enable_goal_creation","Kind":"Boolean"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const GOAL_ADD_CREATION_KEY_PATCH: &str = r#"[
-  {"op":"add","path":"/Goal/Fields/-","value":{"Name":"creation_key","Kind":"String","Immutable":true}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const TASK_ADD_GOAL_DECLARATION_PATCH: &str = r#"[
-  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_objective_template","Kind":"String"}},
-  {"op":"add","path":"/Task/Fields/-","value":{"Name":"goal_token_budget","Kind":"Int"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const CALLBACK_RESULT_BASELINE_SDL: &str = include_str!("baseline/callback_result.graphql");
-
-const CALLBACK_RESULT_ADD_BINDING_ID_PATCH: &str = r#"[
-  {"op":"add","path":"/CallbackResult/Fields/-","value":{"Name":"binding_id","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const EVENT_TRIGGER_BASELINE_SDL: &str = include_str!("baseline/event_trigger.graphql");
-const ISOLATED_WORKSPACE_BASELINE_SDL: &str = include_str!("baseline/isolated_workspace.graphql");
-const WORKSPACE_RECEIPT_BASELINE_SDL: &str = include_str!("baseline/workspace_receipt.graphql");
-
-const EVENT_TRIGGER_ADD_WORKSPACE_AUTHORITY_PATCH: &str = r#"[
-  {"op":"add","path":"/EventTrigger/Fields/-","value":{"Name":"workspace_authority","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const CALLBACK_RESULT_ADD_WORK_UNIT_ID_PATCH: &str = r#"[
-  {"op":"add","path":"/CallbackResult/Fields/-","value":{"Name":"work_unit_id","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const WORKSPACE_RECEIPT_ADD_LINEAGE_FIELDS_PATCH: &str = r#"[
-  {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"work_unit_id","Kind":"String"}},
-  {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"caused_by_correlation","Kind":"String"}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const ISOLATED_WORKSPACE_ADD_PATH_CAPABILITY_PATCH: &str = r#"[
-  {"op":"add","path":"/IsolatedWorkspace/Fields/-","value":{"Name":"path_capability","Kind":"String","Immutable":true}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-const WORKSPACE_RECEIPT_ADD_PATH_CAPABILITY_DIGEST_PATCH: &str = r#"[
-  {"op":"add","path":"/WorkspaceReceipt/Fields/-","value":{"Name":"path_capability_digest","Kind":"String","Immutable":true}},
-  {"op":"replace","path":"/IsActive","value":false}
-]"#;
-
-/// Frozen baseline SDL set, ordered like
-/// `gents_protocol::schemas::{RUNTIME_ALL, ALL}` and feature-invariant (includes
-/// AgentMemory). Collections with post-cutover changes use frozen local SDL
-/// constants here and advance through [`DEFAULT_STEPS`].
-///
-/// A *brand-new* collection is added here, not as a
-/// [`MigrationStep::AddCollection`]. The two are mutually exclusive: the
-/// baseline is asserted set-equal and order-equal to the protocol catalog, no
-/// pin-authoring workflow exists for steps, and `Registry::managed_names`
-/// excludes AddCollection collections from eager materialization. Adding a new
-/// collection changes no existing lineage — `register_baseline` simply
-/// registers it on stores that lack it.
+/// Fresh canonical schema baseline. Root pins are checked against DefraDB;
+/// historical migrations are intentionally absent from this refactor baseline.
+/// Re-author pins after changing the protocol catalog with the pin-authoring test.
 pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_BACKEND_NAME,
         gents_protocol::schemas::INFERENCE_BACKEND,
-        "bafyreifljyf2sr7czygvf6y6cy2rlsg2c2brmzegx5wpedpqnf6hn745ju"
+        "bafyreiamcmhv7qxizirye3dntmr57e5he5uttsk74nm65abbxqy5vj2dxm"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_PRINCIPAL_NAME,
@@ -374,7 +245,17 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_BEHAVIOR_NAME,
         gents_protocol::schemas::AGENT_BEHAVIOR,
-        "bafyreie27gfobswc4wntubqfg4ki3laofglss3mam53uqrru6shtjlutwu"
+        "bafyreifal4nxjp5tj5eoagpiwr3emkt7gmbigajsxukvhu5k73tva73pam"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::COMPACTION_CONFIG_NAME,
+        gents_protocol::schemas::COMPACTION_CONFIG,
+        "bafyreih3w3aeusza2pu5uwgr3fqkcdwicq3xvfxa7ujcpkkwbub6w5q244"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::AGENT_CONTEXT_NAME,
+        gents_protocol::schemas::AGENT_CONTEXT,
+        "bafyreieq6mlc6yvruovlup5ctquafgmdbzj4c5a7nl4hcxjmdrtzsjykp4"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RUNTIME_NAME,
@@ -397,9 +278,9 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         "bafyreidqrnco3ylgzeucb6vu2dhhkviklq23nwpn4npqblkm64bntdbbli"
     ),
     baseline_entry!(
-        gents_protocol::schemas::TOOL_SELECTION_NAME,
-        TOOL_SELECTION_BASELINE_SDL,
-        "bafyreifdr2gaba4tyjixvdhl3ksay3wytxq6cujpvgb2cymtyw7dankgee"
+        gents_protocol::schemas::TOOLS_NAME,
+        gents_protocol::schemas::TOOLS,
+        "bafyreianpmeiccjdnuvgby5mfnstrhe7o54whywumqqmbaguarnj2ja6bq"
     ),
     baseline_entry!(
         gents_protocol::schemas::SKILL_NAME,
@@ -433,8 +314,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::ISOLATED_WORKSPACE_NAME,
-        ISOLATED_WORKSPACE_BASELINE_SDL,
-        "bafyreiet4b2ljharppkzevalc4krhgzby3sron4fx5ttzng7h26dus3yka"
+        gents_protocol::schemas::ISOLATED_WORKSPACE,
+        "bafyreics4oao7ekjv6r557och3izrt3ipauotv4d5gtdsucd3ankmp22tm"
     ),
     baseline_entry!(
         gents_protocol::schemas::WORKSPACE_PLACEMENT_NAME,
@@ -458,8 +339,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::WORKSPACE_RECEIPT_NAME,
-        WORKSPACE_RECEIPT_BASELINE_SDL,
-        "bafyreibhkbakhtousobptnsedlksgpm2x4fwicmdbmutx2ndpvrai5vame"
+        gents_protocol::schemas::WORKSPACE_RECEIPT,
+        "bafyreicagx2x2cdnt7t67blfcsfyyxaoy4ufjv4zgydxs7d4ftfjo6jscy"
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_MODULE_NAME,
@@ -478,8 +359,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_RESULT_NAME,
-        CALLBACK_RESULT_BASELINE_SDL,
-        "bafyreib7bwk6btbxbumfe6pabj4avfh6alhtgck4jxrifo5odi5qx5l2ru"
+        gents_protocol::schemas::CALLBACK_RESULT,
+        "bafyreichkodewhaughsevpjuvqiqsm5ofl6tnzyc5mdvljxs4laujl4pqa"
     ),
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,
@@ -488,29 +369,33 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        INFERENCE_PROFILE_BASELINE_SDL,
-        "bafyreibhnljm6hqgbiyct7fq53vpfagmn2q2pe2apykujttk6tghwtqb5e"
+        gents_protocol::schemas::INFERENCE_PROFILE,
+        "bafyreibd54aukeo6tjk6x46fz5p4d7jmijsgblkzotqtrekm77s4wvpjtm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::INFERENCE_RETRY_POLICY_NAME,
+        gents_protocol::schemas::INFERENCE_RETRY_POLICY,
+        "bafyreiaxi52fh44qighc3utd5j2glpj5kswavb3w7nqurcfe2ymzbkumcm"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::INFERENCE_EXECUTION_NAME,
+        gents_protocol::schemas::INFERENCE_EXECUTION,
+        "bafyreihjwsdfpjfihlqy7sjaxmiwxn3j2n4osbbgfty6bu5iesvaqpufg4"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::INFERENCE_SAMPLING_NAME,
+        gents_protocol::schemas::INFERENCE_SAMPLING,
+        "bafyreiahd7xljxsayg3kkipq5x566bb5sq23byhhixnjbzaxal7nvspq64"
     ),
     baseline_entry!(
         gents_protocol::schemas::INFERENCE_CALL_NAME,
-        INFERENCE_CALL_BASELINE_SDL,
-        "bafyreidz4yn2zxshvpjekf42uotxd3wnrurzldnt2t4ldlnomi2gibtipm"
+        gents_protocol::schemas::INFERENCE_CALL,
+        "bafyreib6rfxuo7nk2gugwotw52ozguu2vvquyobfqsur5n7jsqurbvhfni"
     ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_CONVERSATION_NAME,
-        gents_protocol::schemas::AGENT_CONVERSATION,
-        "bafyreide7lgaj6zensfdbrhhafhpj3yxedj3luuhmnttt23qoma7isnnoa"
-    ),
-    // Client-authored plane (#1123): kept chain-free so a fresh client store
-    // fresh-applying the live SDL mints the same version identity as the
-    // server. Do not add DEFAULT_STEPS entries for this collection — neither
-    // PatchVersioned nor PatchInPlace (see CLIENT_AUTHORED_COLLECTIONS) —
-    // any future change must land directly in the live SDL and this pin
-    // must move with it.
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreickw3hziop2mcgtphz6iqfhcvtqchcg4wylzbvzodf6wtazgsaqgm"
+        "bafyreif3leoim3hhyongabh4poz5eab5afib33smpa25vgg7s2vj3l6t5m"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -520,22 +405,21 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
         gents_protocol::schemas::AGENT_TOOL_RESULT,
-        "bafyreihsejgpwhha27y2sdaigigxdqv6tvqr6h7latzmlpns2qusqzck34"
+        "bafyreievrced2cec6gsu4bg4htj2i4dq2sofvnyysmekokbue5rrbmi65e"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
         gents_protocol::schemas::AGENT_SESSION,
-        "bafyreih3e34ribdzce6ajpiuwjehx6tu3loeldugxj6y3ce35yv7tdzwi4"
+        "bafyreiellcxq57kc7pua4iglqrovadmt4bifjg2blyc2rxxm2snrvdfp3y"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_NAME,
-        GOAL_BASELINE_SDL,
-        "bafyreig5hlyzlujmegnnlww6tjt6krquzuq2ltgh2pjqwwzxzjbognuguu"
+        gents_protocol::schemas::GOAL,
+        "bafyreibftdbl5ykoxainbguuhspcchp5aevzrsbbcpnwdqyb6ngsqknyie"
     ),
     baseline_entry!(
         gents_protocol::schemas::GOAL_CREATION_CLAIM_NAME,
         gents_protocol::schemas::GOAL_CREATION_CLAIM,
-        // Fresh collection root authored from the live immutable claim SDL.
         "bafyreicgpz3pvsz3k7ijl2znkewhjbhhqpd5g3ykmwp7wg3bpd3nvrr67q"
     ),
     baseline_entry!(
@@ -580,8 +464,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::TASK_NAME,
-        TASK_BASELINE_SDL,
-        "bafyreih2yansmfmsye5xktsx2rbf7tri4zvtifselok46pdmm4qmde7blu"
+        gents_protocol::schemas::TASK,
+        "bafyreifbgh5b2bkhgqeimqoefnri6yhy36yds663gb55m65razbf2ex7ei"
     ),
     baseline_entry!(
         gents_protocol::schemas::SCHEDULE_NAME,
@@ -590,8 +474,8 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
     baseline_entry!(
         gents_protocol::schemas::EVENT_TRIGGER_NAME,
-        EVENT_TRIGGER_BASELINE_SDL,
-        "bafyreidtnxrndbqf7bkw7nzydp45hxgutjewh5w3ug2naxx3f4oudsnymq"
+        gents_protocol::schemas::EVENT_TRIGGER,
+        "bafyreieuvelv4wihnkpc5bl5zqanjgtjgcgg2jqkf6amv3zflq25iav2hu"
     ),
     baseline_entry!(
         gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE_NAME,
@@ -695,180 +579,10 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     ),
 ];
 
-/// Ordered post-baseline schema evolution chain.
-pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[
-    MigrationStep::PatchVersioned {
-        id: "inference-call-add-context-accounting",
-        collection: gents_protocol::schemas::INFERENCE_CALL_NAME,
-        patch: INFERENCE_CALL_ADD_CONTEXT_ACCOUNTING_PATCH,
-        lens: None,
-        expected_version: Some("bafyreigecktl6sgfz5ykqc62dkakr3l7h5lmlm3a24z7ragutlfo6ffzqa"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["context_accounting_json"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "inference-profile-add-reasoning-effort",
-        collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        patch: INFERENCE_PROFILE_ADD_REASONING_EFFORT_PATCH,
-        lens: None,
-        // Authored by applying the inactive patch to the frozen baseline.
-        expected_version: Some("bafyreigiimbcequesxdifamoiiqio2loqn7uco7kt4slp2ws3no4prl25e"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["reasoning_effort"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "inference-profile-add-seed",
-        collection: gents_protocol::schemas::INFERENCE_PROFILE_NAME,
-        patch: INFERENCE_PROFILE_ADD_SEED_PATCH,
-        lens: None,
-        expected_version: Some("bafyreid4qn3axuic3fced2jp2vpsvjwrn4gisexrp3ri2zkiou3eeinyme"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["reasoning_effort", "seed"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "tool-selection-add-lsp-fields",
-        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
-        patch: TOOL_SELECTION_ADD_LSP_FIELDS_PATCH,
-        lens: None,
-        // Authored by applying the inactive patch to the frozen ToolSelection baseline.
-        expected_version: Some("bafyreihyt6oslmynrjdmayvbljsj3ctu3tb2dohkk4fzwpnxytxvmnykne"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["enable_lsp", "lsp_config"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "tool-selection-add-required-mcp-services",
-        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
-        patch: TOOL_SELECTION_ADD_REQUIRED_MCP_SERVICES_PATCH,
-        lens: None,
-        // Pin is authored by applying this inactive patch after the LSP step.
-        expected_version: Some("bafyreic3lmedyjtjwokmidt4ezkq6t4y2ayx47e47zhbdmkidiocvn5bte"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&[
-            "enable_lsp",
-            "lsp_config",
-            "required_mcp_service_ids",
-        ]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "tool-selection-add-eth-tool-ids",
-        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
-        patch: TOOL_SELECTION_ADD_ETH_TOOL_IDS_PATCH,
-        lens: None,
-        expected_version: Some("bafyreidukeawdy34oyw3gginz2qqrbhi2z6alsulv6qkp6h2wffzli5egi"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&[
-            "enable_lsp",
-            "lsp_config",
-            "required_mcp_service_ids",
-            "eth_tool_ids",
-        ]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "tool-selection-add-goal-capabilities",
-        collection: gents_protocol::schemas::TOOL_SELECTION_NAME,
-        patch: TOOL_SELECTION_ADD_GOAL_CAPABILITIES_PATCH,
-        lens: None,
-        // Authored by applying this inactive patch after the eth-tool step.
-        expected_version: Some("bafyreihipolad5f5pjxqurbunxt6rhwxnjf5ko7guwsu5bdb3mdfcdos3a"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&[
-            "enable_lsp",
-            "lsp_config",
-            "required_mcp_service_ids",
-            "eth_tool_ids",
-            "enable_goal_tools",
-            "enable_goal_creation",
-        ]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "goal-add-creation-key",
-        collection: gents_protocol::schemas::GOAL_NAME,
-        patch: GOAL_ADD_CREATION_KEY_PATCH,
-        lens: None,
-        // Authored by adding immutable creation_key to the frozen Goal root.
-        expected_version: Some("bafyreie4kcz64yk24nk35sbbnfczrkegwjrapfaakwe4xtl33lneium3my"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["creation_key"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "task-add-goal-declaration",
-        collection: gents_protocol::schemas::TASK_NAME,
-        patch: TASK_ADD_GOAL_DECLARATION_PATCH,
-        lens: None,
-        // Authored by adding the optional durable-goal declaration fields to
-        // the frozen Task root.
-        expected_version: Some("bafyreiainbeubl2bupbo5xg7ry57f35ta4jnb2otsmzddyge3la4lsrxle"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&[
-            "goal_objective_template",
-            "goal_token_budget",
-        ]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "callback-result-add-binding-id",
-        collection: gents_protocol::schemas::CALLBACK_RESULT_NAME,
-        patch: CALLBACK_RESULT_ADD_BINDING_ID_PATCH,
-        lens: None,
-        expected_version: Some("bafyreica3zpcebkzqvbkeweck5frjr3stgv6rabjkdkjzdfujrg3uqenni"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["binding_id"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "event-trigger-add-workspace-authority",
-        collection: gents_protocol::schemas::EVENT_TRIGGER_NAME,
-        patch: EVENT_TRIGGER_ADD_WORKSPACE_AUTHORITY_PATCH,
-        lens: None,
-        expected_version: Some("bafyreig4ta2rafasuureoay2lzsogkgjio52se4n5mmzhzkjvpghtftztu"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["workspace_authority"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "callback-result-add-work-unit-id",
-        collection: gents_protocol::schemas::CALLBACK_RESULT_NAME,
-        patch: CALLBACK_RESULT_ADD_WORK_UNIT_ID_PATCH,
-        lens: None,
-        expected_version: Some("bafyreifz4nmwt64jumql4olqxgt7d72xakoymx54wli5zankmlg5l3xqvq"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["work_unit_id"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "workspace-receipt-add-lineage-fields",
-        collection: gents_protocol::schemas::WORKSPACE_RECEIPT_NAME,
-        patch: WORKSPACE_RECEIPT_ADD_LINEAGE_FIELDS_PATCH,
-        lens: None,
-        expected_version: Some("bafyreihrwpefsqgyqikoou4vvd2e5s73lv4y36j2uwjd35uqpge6rn7cjm"),
-        expected_transform: None,
-        expected_state: CollectionExpectation::fields(&["work_unit_id", "caused_by_correlation"]),
-    },
-    // These lenses apply only to predecessor-version rows. Current-version
-    // missing fields do not acquire compatibility through a runtime fallback.
-    MigrationStep::PatchVersioned {
-        id: "isolated-workspace-add-path-capability",
-        collection: gents_protocol::schemas::ISOLATED_WORKSPACE_NAME,
-        patch: ISOLATED_WORKSPACE_ADD_PATH_CAPABILITY_PATCH,
-        lens: Some(LensSpec {
-            wasm: include_bytes!(env!("GENTS_LENS_WORKSPACE_CAPABILITY_WASM_PATH")),
-            args_json: None,
-        }),
-        expected_version: Some("bafyreie5rouy5bdaidhrp3pf6oohfm3rhxva75lfwfbbncahgjotnavj5m"),
-        expected_transform: Some("baf3ce596b81fd1d4d238306d7fe37cb669"),
-        expected_state: CollectionExpectation::fields(&["path_capability"]),
-    },
-    MigrationStep::PatchVersioned {
-        id: "workspace-receipt-add-path-capability-digest",
-        collection: gents_protocol::schemas::WORKSPACE_RECEIPT_NAME,
-        patch: WORKSPACE_RECEIPT_ADD_PATH_CAPABILITY_DIGEST_PATCH,
-        lens: Some(LensSpec {
-            wasm: include_bytes!(env!("GENTS_LENS_WORKSPACE_RECEIPT_CAPABILITY_WASM_PATH")),
-            args_json: None,
-        }),
-        expected_version: Some("bafyreigqpu3bfxaowmfc4h35a62shgmizjnbnhb3ednof2t3ypvd76b3jy"),
-        expected_transform: Some("baf1bc0014532c6ccdce492e37b453b017c"),
-        expected_state: CollectionExpectation::fields(&["path_capability_digest"]),
-    },
-];
+/// Future schema evolution starts here, after the canonical baseline lands.
+pub static DEFAULT_STEPS: &[MigrationStep<'static>] = &[];
 
-/// Production registry: frozen baseline plus the ordered migration chain.
+/// Production registry: canonical pinned baseline plus future migrations.
 pub static DEFAULT_REGISTRY: Registry<'static> = Registry {
     baseline: DEFAULT_BASELINE,
     steps: DEFAULT_STEPS,
@@ -880,51 +594,14 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 }
 
 // ---------------------------------------------------------------------------
-// Client-authored (conversation-plane) collections (#1123 / #1125)
+// Client-authored collections
 // ---------------------------------------------------------------------------
 
-/// Collections a paired client fresh-applies its bundled SDL into and then
-/// authors documents into directly: the conversation-plane transcript
-/// (`AgentRequest`, `AgentResponse`, `AgentMessage`, `AgentToolCall`,
-/// `AgentToolResult`, `AgentSession`, `AgentConversation`,
-/// `CompactionEntry`), the signed `PeerEndpoint` heartbeat,
-/// `PersonaConfigRequest`, `SessionHydrationRequest`, and the fleet-discovery
-/// `AgentDirectoryEntry`. It also includes the authenticated-enrollment
-/// request/decision/revision/route-receipt exchange: those documents use
-/// exact owner-scoped push rather than the machine template, but still cross
-/// stores and therefore need the same genesis-version identity fence.
-///
-/// A client mints its store from the collection's *current* SDL with no
-/// server-side history: a single `add_schema` call produces a genesis
-/// version whose DAG-CBOR block has empty `heads`. A server-side
-/// [`MigrationStep::PatchVersioned`] step instead chains a new version onto
-/// its predecessor's CID as `heads`. Because a version's CID is the hash of
-/// that DAG-CBOR block, a chain-tip CID (non-empty heads) can never equal a
-/// fresh client's genesis CID (empty heads) — even when the two collections
-/// end up with byte-identical fields. This is a structural property of
-/// DefraDB's version DAG, not something schema authoring discipline alone
-/// can avoid.
-///
-/// Until #1123's option 1 or 2 lands (a mechanism that lets `ensure_migrations`
-/// accept more than one known root/tip per collection), every collection in
-/// this list MUST evolve by **re-pinning its baseline** to the new
-/// fresh-apply CID — never through `DEFAULT_STEPS`, of either kind:
-/// [`MigrationStep::PatchVersioned`] chains the version DAG so the CIDs can
-/// never match again, and [`MigrationStep::PatchInPlace`] keeps the CID
-/// while diverging the server's indexes/policies from what a bare fresh
-/// apply mints — a silent divergence no CID comparison can detect. PR #1125
-/// is the worked example: `AgentRequest` had drifted onto a chain (a
-/// `PatchVersioned` step appended fields after the baseline), which broke
-/// fresh mobile stores against a v0.11 server; the fix folded the fields
-/// into the baseline SDL and re-pinned the root to the fresh-apply CID.
-///
-/// `tests/fresh_apply_parity.rs` enforces CID parity for every collection
-/// listed here; the step guard in
-/// `default_baseline_matches_ordered_protocol_catalog`
-/// (`tests/baseline_ensure.rs`) statically rejects a `DEFAULT_STEPS` entry
-/// of any kind targeting any of them. The
-/// `client_authored_collections_fence` test in the `gents` crate keeps this
-/// list synced with the client push surface that gents actually configures.
+/// Collections authored by paired clients must share the server's fresh-apply
+/// schema root. A versioned migration has predecessor heads and therefore a
+/// different CID from fresh application, even with identical final fields.
+/// In-place steps can also diverge metadata without changing that CID.
+/// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
     gents_protocol::schemas::AGENT_RESPONSE_NAME,
@@ -932,7 +609,6 @@ pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
     gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
     gents_protocol::schemas::AGENT_SESSION_NAME,
-    gents_protocol::schemas::AGENT_CONVERSATION_NAME,
     gents_protocol::schemas::COMPACTION_ENTRY_NAME,
     gents_protocol::schemas::PEER_ENDPOINT_NAME,
     gents_protocol::schemas::NETWORK_ENROLLMENT_REQUEST_NAME,

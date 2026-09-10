@@ -10,7 +10,7 @@
 //! gents_migration::ensure_migrations(&node).await?;
 //! ```
 //!
-//! That single call registers the frozen baseline SDL, replays pending steps,
+//! That single call registers the canonical pinned baseline SDL, replays pending steps,
 //! verifies every managed collection's lineage, and (when upstream supports
 //! it) eagerly materializes documents. There is no public "register schemas
 //! only" path — any bypass forks the version lineage.

@@ -512,7 +512,6 @@ fn graphql_write_tools_field(decls: Option<&[WriteToolDecl]>) -> Option<String> 
     graphql_fields::graphql_string_list_field("write_tools", Some(&entries))
 }
 
-
 /// Canonical per-principal id for the seeded `wide-open` preset. Prefixed with
 /// the agent DID so it is globally unique AND passes the runtime document view's
 /// `agent_did` hydration filter + cross-agent rejection (a single global preset

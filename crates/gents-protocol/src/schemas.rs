@@ -9,14 +9,13 @@
 // agent domain
 pub use gents_schemas::{
     is_local_audit_collection, is_local_only_collection, AGENT_BEHAVIOR, AGENT_BEHAVIOR_NAME,
-    AGENT_BEHAVIOR_READINESS, AGENT_BEHAVIOR_READINESS_NAME, AGENT_CONVERSATION,
-    AGENT_CONVERSATION_NAME, AGENT_DIRECTORY_ENTRY, AGENT_DIRECTORY_ENTRY_NAME, AGENT_MEMORY,
-    AGENT_MEMORY_NAME, AGENT_MESSAGE, AGENT_MESSAGE_NAME, AGENT_NETWORK, AGENT_NETWORK_NAME,
-    AGENT_PRINCIPAL, AGENT_PRINCIPAL_NAME, AGENT_REQUEST, AGENT_REQUEST_NAME, AGENT_RESPONSE,
-    AGENT_RESPONSE_NAME, AGENT_RUNTIME, AGENT_RUNTIME_NAME, AGENT_SESSION, AGENT_SESSION_NAME,
-    AGENT_TOOL_APPROVAL, AGENT_TOOL_APPROVAL_NAME, AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME,
-    AGENT_TOOL_RESULT, AGENT_TOOL_RESULT_NAME, ALL as AGENT_ALL,
-    ALL_COLLECTION_NAMES as AGENT_COLLECTION_NAMES,
+    AGENT_BEHAVIOR_READINESS, AGENT_BEHAVIOR_READINESS_NAME, AGENT_DIRECTORY_ENTRY,
+    AGENT_DIRECTORY_ENTRY_NAME, AGENT_MEMORY, AGENT_MEMORY_NAME, AGENT_MESSAGE, AGENT_MESSAGE_NAME,
+    AGENT_NETWORK, AGENT_NETWORK_NAME, AGENT_PRINCIPAL, AGENT_PRINCIPAL_NAME, AGENT_REQUEST,
+    AGENT_REQUEST_NAME, AGENT_RESPONSE, AGENT_RESPONSE_NAME, AGENT_RUNTIME, AGENT_RUNTIME_NAME,
+    AGENT_SESSION, AGENT_SESSION_NAME, AGENT_TOOL_APPROVAL, AGENT_TOOL_APPROVAL_NAME,
+    AGENT_TOOL_CALL, AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT, AGENT_TOOL_RESULT_NAME,
+    ALL as AGENT_ALL, ALL_COLLECTION_NAMES as AGENT_COLLECTION_NAMES,
     BRANCHABLE_COLLECTION_NAMES as BRANCHABLE_AGENT_COLLECTION_NAMES, CALLBACK_BINDING,
     CALLBACK_BINDING_NAME, CALLBACK_INVOCATION, CALLBACK_INVOCATION_NAME, CALLBACK_MODULE,
     CALLBACK_MODULE_NAME, CALLBACK_RESULT, CALLBACK_RESULT_NAME, CHAIN_KEY_BINDING,
@@ -38,10 +37,13 @@ pub use gents_schemas::{
     PROJECTION_ACP_BINDING, PROJECTION_ACP_BINDING_NAME, PROVIDER_CONTEXT_REDUCTION,
     PROVIDER_CONTEXT_REDUCTION_NAME, RENDERED_REQUEST, RENDERED_REQUEST_NAME, REPOSITORY_PLACEMENT,
     REPOSITORY_PLACEMENT_NAME, SCHEDULE, SCHEDULE_NAME, SESSION_HYDRATION_REQUEST,
-    SESSION_HYDRATION_REQUEST_NAME, SKILL, SKILL_NAME, TASK, TASK_NAME, TOOL_SELECTION,
-    TOOL_SELECTION_NAME, WORKSPACE_BINDING, WORKSPACE_BINDING_NAME, WORKSPACE_PLACEMENT,
-    WORKSPACE_PLACEMENT_NAME, WORKSPACE_RECEIPT, WORKSPACE_RECEIPT_NAME, WORKSPACE_ROOT,
-    WORKSPACE_ROOT_NAME,
+    SESSION_HYDRATION_REQUEST_NAME, SKILL, SKILL_NAME, TASK, TASK_NAME, TOOLS, TOOLS_NAME,
+    WORKSPACE_BINDING, WORKSPACE_BINDING_NAME, WORKSPACE_PLACEMENT, WORKSPACE_PLACEMENT_NAME,
+    WORKSPACE_RECEIPT, WORKSPACE_RECEIPT_NAME, WORKSPACE_ROOT, WORKSPACE_ROOT_NAME,
+};
+
+pub use gents_schemas::{
+    AGENT_CONTEXT, AGENT_CONTEXT_NAME, COMPACTION_CONFIG, COMPACTION_CONFIG_NAME,
 };
 
 // inference domain
@@ -51,6 +53,15 @@ pub const INFERENCE_CALL_NAME: &str = "InferenceCall";
 pub const INFERENCE_CALL: &str = include_str!("../schemas/inference/inference_call.graphql");
 pub const INFERENCE_PROFILE_NAME: &str = "InferenceProfile";
 pub const INFERENCE_PROFILE: &str = include_str!("../schemas/inference/inference_profile.graphql");
+pub const INFERENCE_SAMPLING_NAME: &str = "InferenceSampling";
+pub const INFERENCE_SAMPLING: &str =
+    include_str!("../schemas/inference/inference_sampling.graphql");
+pub const INFERENCE_EXECUTION_NAME: &str = "InferenceExecution";
+pub const INFERENCE_EXECUTION: &str =
+    include_str!("../schemas/inference/inference_execution.graphql");
+pub const INFERENCE_RETRY_POLICY_NAME: &str = "InferenceRetryPolicy";
+pub const INFERENCE_RETRY_POLICY: &str =
+    include_str!("../schemas/inference/inference_retry_policy.graphql");
 pub const OAUTH_CREDENTIAL_NAME: &str = "OAuthCredential";
 pub const OAUTH_CREDENTIAL: &str = include_str!("../schemas/inference/oauth_credential.graphql");
 
@@ -72,11 +83,13 @@ pub const RUNTIME_COLLECTION_NAMES: &[&str] = &[INFERENCE_BACKEND_NAME];
 pub const ALL: &[&str] = &[
     AGENT_PRINCIPAL,
     AGENT_BEHAVIOR,
+    COMPACTION_CONFIG,
+    AGENT_CONTEXT,
     AGENT_RUNTIME,
     AGENT_BEHAVIOR_READINESS,
     AGENT_DIRECTORY_ENTRY,
     AGENT_MEMORY,
-    TOOL_SELECTION,
+    TOOLS,
     SKILL,
     DATASTORE_TOOL_SURFACE,
     CHAIN_KEY_BINDING,
@@ -95,8 +108,10 @@ pub const ALL: &[&str] = &[
     CALLBACK_RESULT,
     OAUTH_CREDENTIAL,
     INFERENCE_PROFILE,
+    INFERENCE_RETRY_POLICY,
+    INFERENCE_EXECUTION,
+    INFERENCE_SAMPLING,
     INFERENCE_CALL,
-    AGENT_CONVERSATION,
     AGENT_REQUEST,
     AGENT_RESPONSE,
     AGENT_TOOL_RESULT,
@@ -138,11 +153,13 @@ pub const ALL: &[&str] = &[
 pub const ALL_COLLECTION_NAMES: &[&str] = &[
     AGENT_PRINCIPAL_NAME,
     AGENT_BEHAVIOR_NAME,
+    COMPACTION_CONFIG_NAME,
+    AGENT_CONTEXT_NAME,
     AGENT_RUNTIME_NAME,
     AGENT_BEHAVIOR_READINESS_NAME,
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
-    TOOL_SELECTION_NAME,
+    TOOLS_NAME,
     SKILL_NAME,
     DATASTORE_TOOL_SURFACE_NAME,
     CHAIN_KEY_BINDING_NAME,
@@ -161,8 +178,10 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_RESULT_NAME,
     OAUTH_CREDENTIAL_NAME,
     INFERENCE_PROFILE_NAME,
+    INFERENCE_RETRY_POLICY_NAME,
+    INFERENCE_EXECUTION_NAME,
+    INFERENCE_SAMPLING_NAME,
     INFERENCE_CALL_NAME,
-    AGENT_CONVERSATION_NAME,
     AGENT_REQUEST_NAME,
     AGENT_RESPONSE_NAME,
     AGENT_TOOL_RESULT_NAME,
@@ -212,11 +231,31 @@ mod tests {
 
     #[test]
     fn all_contains_every_schema() {
+        let schema_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas");
+        let mut expected: Vec<String> = AGENT_ALL.iter().map(|sdl| sdl.to_string()).collect();
+        for domain in ["inference", "services"] {
+            for entry in std::fs::read_dir(schema_dir.join(domain)).unwrap() {
+                let path = entry.unwrap().path();
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension == "graphql")
+                {
+                    expected.push(std::fs::read_to_string(path).unwrap());
+                }
+            }
+        }
+        let registered: Vec<_> = ALL.iter().chain(RUNTIME_ALL.iter()).copied().collect();
         assert_eq!(
-            ALL.len(),
-            AGENT_ALL.len() + 5,
-            "ALL should enumerate every non-runtime schema"
+            registered.len(),
+            expected.len(),
+            "catalog must register every schema exactly once"
         );
+        for sdl in expected {
+            assert!(
+                registered.contains(&sdl.as_str()),
+                "unregistered schema: {sdl}"
+            );
+        }
     }
 
     #[test]
