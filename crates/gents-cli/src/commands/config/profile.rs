@@ -1,68 +1,45 @@
-use anyhow::Result;
+use crate::cli::InferenceProfileSetArgs;
+use anyhow::{Context, Result};
 use gents::document_config::InferenceProfile;
 use serde_json::json;
 
-use crate::cli::*;
-use crate::config_writes::{write_inference_profile_document, ConfigAccess};
-use crate::print_json;
-
-/// Decode this command's args into the document type
-/// `InferenceProfile::validate` owns. The two are field-for-field identical.
-fn to_document_profile(args: &InferenceProfileUpsertArgs) -> InferenceProfile {
-    InferenceProfile {
-        profile_id: args.profile_id.clone(),
-        display_name: args.display_name.clone(),
-        context_window: args.context_window,
-        max_output_tokens: args.max_output_tokens,
-        max_turns: args.max_turns,
-        temperature: args.temperature,
-        top_p: args.top_p,
-        top_k: args.top_k,
-        seed: args.seed,
-        min_p: args.min_p,
-        frequency_penalty: args.frequency_penalty,
-        presence_penalty: args.presence_penalty,
-        repetition_penalty: args.repetition_penalty,
-        reasoning_effort: args.reasoning_effort.clone(),
-        stream_batch_ms: args.stream_batch_ms,
-        stream_liveness_timeout_secs: args.stream_liveness_timeout_secs,
-        deadline_duration_secs: args.deadline_duration_secs,
-        retry_max_transport: args.retry_max_transport,
-        retry_backoff_ms: args.retry_backoff_ms.clone(),
-        retry_max_resample: args.retry_max_resample,
-        retry_allow_repair: args.retry_allow_repair,
-        retry_interactive_max: args.retry_interactive_max,
-    }
+fn decode_profile(contents: &[u8]) -> Result<InferenceProfile> {
+    let profile: InferenceProfile =
+        serde_json::from_slice(contents).context("decoding canonical InferenceProfile document")?;
+    profile.validate()?;
+    Ok(profile)
 }
 
-pub(super) async fn inference_profile_set(args: InferenceProfileUpsertArgs) -> Result<()> {
-    let access = ConfigAccess::Graphql(args.graphql.clone());
-    let doc_id = write_inference_profile_document(&access, &to_document_profile(&args)).await?;
-    let output = json!({
-        "doc_id": doc_id,
-        "profile_id": args.profile_id,
-        "display_name": args.display_name,
-        "context_window": args.context_window,
-        "max_output_tokens": args.max_output_tokens,
-        "max_turns": args.max_turns,
-        "temperature": args.temperature,
-        "top_p": args.top_p,
-        "top_k": args.top_k,
-        "seed": args.seed,
-        "min_p": args.min_p,
-        "frequency_penalty": args.frequency_penalty,
-        "presence_penalty": args.presence_penalty,
-        "repetition_penalty": args.repetition_penalty,
-        "reasoning_effort": args.reasoning_effort,
-        "stream_batch_ms": args.stream_batch_ms,
-        "stream_liveness_timeout_secs": args.stream_liveness_timeout_secs,
-        "deadline_duration_secs": args.deadline_duration_secs,
-        "retry_max_transport": args.retry_max_transport,
-        "retry_backoff_ms": args.retry_backoff_ms,
-        "retry_max_resample": args.retry_max_resample,
-        "retry_allow_repair": args.retry_allow_repair,
-        "retry_interactive_max": args.retry_interactive_max,
-    });
-    print_json(&output)?;
-    Ok(())
+pub(super) async fn inference_profile_set(args: InferenceProfileSetArgs) -> Result<()> {
+    let profile = decode_profile(
+        &std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?,
+    )?;
+    let (access, _) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let doc_id = gents::config_client::write_inference_profile_document(&access, &profile).await?;
+    crate::print_json(
+        &json!({"doc_id":doc_id,"agent_did":profile.agent_did,"profile_id":profile.profile_id,"backend_id":profile.backend_id,"model_name":profile.model_name}),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn canonical_model_effort_and_policy_links_are_preserved() {
+        let profile=decode_profile(br#"{"agent_did":"owner","profile_id":"chosen","backend_id":"provider","model_name":"exact-model","reasoning_effort":"high","sampling_id":"sampling","execution_id":"execution"}"#).unwrap();
+        assert_eq!(profile.model_name, "exact-model");
+        assert_eq!(profile.reasoning_effort, Some(gents::ReasoningEffort::High));
+        assert_eq!(profile.sampling_id.as_deref(), Some("sampling"));
+        assert_eq!(profile.execution_id.as_deref(), Some("execution"));
+    }
+    #[test]
+    fn retired_flat_sampling_and_missing_owner_are_rejected() {
+        for input in [
+            r#"{"profile_id":"p","backend_id":"b","model_name":"m"}"#,
+            r#"{"agent_did":"owner","profile_id":"p","backend_id":"b","model_name":"m","temperature":1}"#,
+        ] {
+            assert!(decode_profile(input.as_bytes()).is_err());
+        }
+    }
 }

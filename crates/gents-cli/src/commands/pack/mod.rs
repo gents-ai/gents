@@ -22,14 +22,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         }
         PackCommand::Show(args) => {
             let pack = resolve_pack(&args.package)?;
-            let graph = if matches!(pack.manifest.metadata.kind, PackKind::Graph) {
-                Some(gents::graph_package::load_resolved_graph_package(&pack)?.catalog_entry())
-            } else {
-                None
-            };
-            crate::print_json(
-                &json!({"manifest": pack.manifest, "digest": pack.digest, "graph": graph}),
-            )
+            crate::print_json(&json!({"manifest": pack.manifest, "digest": pack.digest}))
         }
         PackCommand::Install(args) => install(args).await,
         PackCommand::Prune(args) => prune(args),

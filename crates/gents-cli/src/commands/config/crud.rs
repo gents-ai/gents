@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
 use gents::Collection;
-use serde_json::{json, Value};
+use gents::graphql::escape_graphql_string;
+use serde_json::{Value, json};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
@@ -9,78 +9,62 @@ use crate::config_import::apply_delete_collection;
 use crate::config_writes::ConfigAccess;
 use crate::desired_state;
 use crate::request_helpers::resolve_dual_id;
-use crate::shared::ConfigExportBundle;
-use crate::{
-    graphql_rows, print_json, resolve_config_access, CONFIG_EXPORT_FORMAT,
-    EXPORT_AGENT_BEHAVIOR_FIELDS, EXPORT_EVENT_TRIGGER_FIELDS, EXPORT_INFERENCE_BACKEND_FIELDS,
-    EXPORT_INFERENCE_PROFILE_FIELDS, EXPORT_SCHEDULE_FIELDS, EXPORT_TOOL_SELECTION_FIELDS,
-    EXPORT_TOOL_SERVICE_REGISTRY_FIELDS, EXPORT_WORKSPACE_ROOT_FIELDS,
-};
+use crate::{graphql_rows, print_json, resolve_config_access};
 
 #[derive(Clone, Copy)]
 pub(super) struct ConfigDocumentSpec {
     pub(super) noun: &'static str,
     pub(super) collection: Collection,
-    pub(super) fields: &'static str,
 }
 
 pub(super) const BACKEND_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "backend",
     collection: Collection::InferenceBackend,
-    fields: EXPORT_INFERENCE_BACKEND_FIELDS,
 };
 
 pub(super) const BEHAVIOR_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "behavior",
     collection: Collection::AgentBehavior,
-    fields: EXPORT_AGENT_BEHAVIOR_FIELDS,
 };
 
-pub(super) const TOOL_SELECTION_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
-    noun: "tool selection",
-    collection: Collection::ToolSelection,
-    fields: EXPORT_TOOL_SELECTION_FIELDS,
+pub(super) const TOOLS_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
+    noun: "tools",
+    collection: Collection::Tools,
 };
 
 pub(super) const PROFILE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "profile",
     collection: Collection::InferenceProfile,
-    fields: EXPORT_INFERENCE_PROFILE_FIELDS,
 };
 
 pub(super) const TRIGGER_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "trigger",
-    collection: Collection::EventTrigger,
-    fields: EXPORT_EVENT_TRIGGER_FIELDS,
+    collection: Collection::Trigger,
 };
 
 pub(super) const SCHEDULE_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "schedule",
     collection: Collection::Schedule,
-    fields: EXPORT_SCHEDULE_FIELDS,
 };
 
 pub(super) const MCP_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
     noun: "mcp",
     collection: Collection::ToolServiceRegistry,
-    fields: EXPORT_TOOL_SERVICE_REGISTRY_FIELDS,
-};
-
-// list/show only: WorkspaceRoot is local-only config with no agent_did and
-// no incoming/outgoing references (see workspace_root.rs), so it does not
-// route through config_rm's desired-state reference-safety check — rm is
-// implemented directly in commands/config/workspace_root.rs instead.
-pub(super) const WORKSPACE_ROOT_SPEC: ConfigDocumentSpec = ConfigDocumentSpec {
-    noun: "workspace root",
-    collection: Collection::WorkspaceRoot,
-    fields: EXPORT_WORKSPACE_ROOT_FIELDS,
 };
 
 pub(super) async fn config_list(spec: ConfigDocumentSpec, args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} list", spec.noun))?;
-    let mut rows = query_collection(&access, spec, None, None).await?;
+    let agent_did = super::binding::resolve_target_agent_did(
+        None,
+        None,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+        Some(&access),
+    )
+    .await?;
+    let mut rows = query_collection(&access, spec, &agent_did, None).await?;
     sort_rows(&mut rows, spec.collection.unique_field());
 
     match args.output.ensure_supported(
@@ -105,7 +89,15 @@ pub(super) async fn config_show(spec: ConfigDocumentSpec, args: ConfigShowArgs) 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref())
         .await
         .with_context(|| format!("resolving access for config {} show", spec.noun))?;
-    let row = load_one(&access, spec, &id).await?;
+    let agent_did = super::binding::resolve_target_agent_did(
+        None,
+        None,
+        args.home.as_deref(),
+        args.graphql.as_deref(),
+        Some(&access),
+    )
+    .await?;
+    let row = load_one(&access, spec, &agent_did, &id).await?;
 
     match args
         .output
@@ -133,9 +125,9 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
     )
     .await?;
     let mut desired = live.clone();
-    remove_target(&mut desired, spec.collection, &id);
+    remove_target(&mut desired, spec.collection, &id)?;
 
-    let deletes = desired_state::prune::prune_safe_deletes(&desired, &live);
+    let deletes = desired_state::prune::prune_safe_deletes(&desired, &live)?;
     let target_selected = deletes
         .iter()
         .any(|doc| doc.collection == spec.collection && doc.id == id);
@@ -153,13 +145,13 @@ pub(super) async fn config_rm(spec: ConfigDocumentSpec, args: ConfigShowArgs) ->
         );
     }
 
-    let collection = spec.collection.graphql_type();
-    let unique_field = spec.collection.unique_field();
+    let collection = spec.collection;
+    let agent_did = &live.agent_principal.agent_did;
     let id_ref = &id;
     let deleted = access
         .transact("cli.config.delete", move |txn| {
             Box::pin(async move {
-                apply_delete_collection(txn, collection, unique_field, std::slice::from_ref(id_ref))
+                apply_delete_collection(txn, collection, agent_did, std::slice::from_ref(id_ref))
                     .await
             })
         })
@@ -190,178 +182,102 @@ async fn live_manifest_for_delete(
     home: Option<&std::path::Path>,
     graphql: Option<&str>,
 ) -> Result<desired_state::DesiredStateManifest> {
-    let target = load_one(access, spec, id).await?;
     let agent_did =
         super::binding::resolve_target_agent_did(None, None, home, graphql, Some(access)).await?;
-    let mut bundle = empty_bundle(access.mode(), &agent_did);
-    bundle.agent_principal = Some(synthetic_principal(&agent_did));
-    push_doc(&mut bundle, spec.collection, target);
-    normalize_bundle_for_manifest(&mut bundle);
-    let desired_with_target = desired_state::manifest_from_export_bundle(&bundle)?;
-    let mut live_bundle =
-        crate::build_desired_state_live_bundle(access, &desired_with_target).await?;
-    normalize_bundle_for_manifest(&mut live_bundle);
-    desired_state::manifest_from_export_bundle(&live_bundle)
+    let bundle = crate::build_config_export_bundle(access, &agent_did).await?;
+    let docs = bundle.docs_for_collection(spec.collection)?;
+    anyhow::ensure!(
+        docs.iter().any(|row| row
+            .get(spec.collection.unique_field())
+            .and_then(Value::as_str)
+            == Some(id)),
+        "target configuration is absent from the selected owner"
+    );
+    desired_state::manifest_from_export_bundle(&bundle)
 }
 
 async fn query_collection(
     access: &ConfigAccess,
     spec: ConfigDocumentSpec,
-    filter_field: Option<&str>,
-    filter_value: Option<&str>,
+    agent_did: &str,
+    id: Option<&str>,
 ) -> Result<Vec<Value>> {
-    let args = match (filter_field, filter_value) {
-        (Some(field), Some(value)) => format!(
-            r#"(filter: {{ {field}: {{ _eq: "{}" }} }})"#,
-            escape_graphql_string(value)
-        ),
-        (None, None) => String::new(),
-        _ => unreachable!("filter field and value are supplied together"),
-    };
-    let query = format!(
-        r#"{{
-            {collection}{args} {{
-                {fields}
-            }}
-        }}"#,
-        collection = spec.collection.graphql_type(),
-        args = args,
-        fields = spec.fields,
+    let mut filter = format!(
+        r#"agent_did: {{ _eq: "{}" }}"#,
+        escape_graphql_string(agent_did)
     );
-    graphql_rows(access, spec.collection.graphql_type(), &query).await
-}
-
-async fn load_one(access: &ConfigAccess, spec: ConfigDocumentSpec, id: &str) -> Result<Value> {
-    let rows =
-        query_collection(access, spec, Some(spec.collection.unique_field()), Some(id)).await?;
-    rows.into_iter().next().ok_or_else(|| {
-        anyhow::anyhow!(
-            "not found: no {} document with {} {}",
-            spec.collection.graphql_type(),
+    if let Some(id) = id {
+        filter.push_str(&format!(
+            r#", {}: {{ _eq: "{}" }}"#,
             spec.collection.unique_field(),
-            id
-        )
-    })
-}
-
-fn empty_bundle(access_mode: &str, agent_did: &str) -> ConfigExportBundle {
-    ConfigExportBundle {
-        format: CONFIG_EXPORT_FORMAT.to_string(),
-        agent_did: agent_did.to_string(),
-        exported_at: chrono::Utc::now().to_rfc3339(),
-        access_mode: access_mode.to_string(),
-        agent_principal: None,
-        agent_behaviors: Vec::new(),
-        skills: Vec::new(),
-        datastore_tool_surfaces: Vec::new(),
-        chain_key_bindings: Vec::new(),
-        eth_tools: Vec::new(),
-        workspace_roots: Vec::new(),
-        tool_selections: Vec::new(),
-        inference_backends: Vec::new(),
-        inference_profiles: Vec::new(),
-        tool_service_registries: Vec::new(),
-        projection_acp_bindings: Vec::new(),
-        tasks: Vec::new(),
-        schedules: Vec::new(),
-        event_triggers: Vec::new(),
+            escape_graphql_string(id)
+        ));
     }
-}
-
-fn synthetic_principal(agent_did: &str) -> Value {
-    json!({
-        "agent_did": agent_did,
-        "display_name": null,
-        "default_behavior_id": null,
-        "enabled": true,
-    })
-}
-
-fn push_doc(bundle: &mut ConfigExportBundle, collection: Collection, doc: Value) {
-    match collection {
-        Collection::AgentBehavior => bundle.agent_behaviors.push(doc),
-        Collection::Skill => bundle.skills.push(doc),
-        Collection::DatastoreToolSurface => bundle.datastore_tool_surfaces.push(doc),
-        Collection::ChainKeyBinding => bundle.chain_key_bindings.push(doc),
-        Collection::EthTool => bundle.eth_tools.push(doc),
-        Collection::WorkspaceRoot => bundle.workspace_roots.push(doc),
-        Collection::ToolSelection => bundle.tool_selections.push(doc),
-        Collection::InferenceBackend => bundle.inference_backends.push(doc),
-        Collection::InferenceProfile => bundle.inference_profiles.push(doc),
-        Collection::ToolServiceRegistry => bundle.tool_service_registries.push(doc),
-        Collection::ProjectionAcpBinding => bundle.projection_acp_bindings.push(doc),
-        Collection::Task => bundle.tasks.push(doc),
-        Collection::Schedule => bundle.schedules.push(doc),
-        Collection::EventTrigger => bundle.event_triggers.push(doc),
-        Collection::AgentPrincipal => bundle.agent_principal = Some(doc),
-    }
-}
-
-fn normalize_bundle_for_manifest(bundle: &mut ConfigExportBundle) {
-    for row in &mut bundle.tool_selections {
-        if let Some(object) = row.as_object_mut() {
-            ensure_bool(object, "enable_file_tools", false);
-            ensure_string(object, "file_tools_mode", "Off");
-            ensure_bool(object, "enable_bash", false);
-            ensure_string(object, "bash_mode", "Off");
-            ensure_bool(object, "enable_meta_tools", false);
-            // Keep the new nullable fields absent: absence is a compatibility
-            // state, not equivalent to materializing either boolean.
+    let fields = gents::config_client::config_projection(spec.collection, None)?
+        .0
+        .join(" ");
+    let query = format!(
+        "{{ {}(filter: {{ {filter} }}) {{ _docID {fields} }} }}",
+        spec.collection.graphql_type()
+    );
+    let rows = graphql_rows(access, spec.collection.graphql_type(), &query).await?;
+    let mut ids = std::collections::BTreeSet::new();
+    for row in &rows {
+        anyhow::ensure!(
+            row.get("agent_did").and_then(Value::as_str) == Some(agent_did),
+            "configuration query returned a foreign owner"
+        );
+        let row_id = row
+            .get(spec.collection.unique_field())
+            .and_then(Value::as_str)
+            .context("configuration row has no logical ID")?;
+        anyhow::ensure!(
+            ids.insert(row_id),
+            "ambiguous scoped configuration {} {row_id:?}",
+            spec.collection.graphql_type()
+        );
+        if let Some(id) = id {
+            anyhow::ensure!(
+                row_id == id,
+                "configuration query returned a different logical ID"
+            );
         }
     }
+    Ok(rows)
 }
 
-fn ensure_bool(object: &mut serde_json::Map<String, Value>, field: &str, default: bool) {
-    if object.get(field).map(Value::is_null).unwrap_or(true) {
-        object.insert(field.to_string(), Value::Bool(default));
-    }
-}
-
-fn ensure_string(object: &mut serde_json::Map<String, Value>, field: &str, default: &str) {
-    if object.get(field).map(Value::is_null).unwrap_or(true) {
-        object.insert(field.to_string(), Value::String(default.to_string()));
-    }
+async fn load_one(
+    access: &ConfigAccess,
+    spec: ConfigDocumentSpec,
+    agent_did: &str,
+    id: &str,
+) -> Result<Value> {
+    query_collection(access, spec, agent_did, Some(id))
+        .await?
+        .into_iter()
+        .next()
+        .with_context(|| {
+            format!(
+                "not found: {} {agent_did:?}/{id:?}",
+                spec.collection.graphql_type()
+            )
+        })
 }
 
 fn remove_target(
     manifest: &mut desired_state::DesiredStateManifest,
     collection: Collection,
     id: &str,
-) {
-    match collection {
-        Collection::AgentBehavior => manifest.agent_behaviors.retain(|row| row.behavior_id != id),
-        Collection::ToolSelection => manifest
-            .tool_selections
-            .retain(|row| row.selection_id != id),
-        Collection::InferenceBackend => manifest
-            .inference_backends
-            .retain(|row| row.backend_id != id),
-        Collection::InferenceProfile => manifest
-            .inference_profiles
-            .retain(|row| row.profile_id != id),
-        Collection::Skill => manifest.skills.retain(|row| row.skill_id != id),
-        Collection::DatastoreToolSurface => manifest
-            .datastore_tool_surfaces
-            .retain(|row| row.surface_id != id),
-        Collection::ChainKeyBinding => manifest
-            .chain_key_bindings
-            .retain(|row| row.binding_id != id),
-        Collection::EthTool => manifest.eth_tools.retain(|row| row.tool_id != id),
-        Collection::ToolServiceRegistry => manifest
-            .tool_service_registries
-            .retain(|row| row.service_id != id),
-        Collection::ProjectionAcpBinding => manifest
-            .projection_acp_bindings
-            .retain(|row| row.binding_id != id),
-        Collection::Task => manifest.tasks.retain(|row| row.task_id != id),
-        Collection::Schedule => manifest.schedules.retain(|row| row.schedule_id != id),
-        Collection::EventTrigger => manifest.event_triggers.retain(|row| row.trigger_id != id),
-        Collection::AgentPrincipal => {}
-        // WorkspaceRoot has no desired-state manifest list yet (not part of
-        // Collection::ALL / CONFIG_APPLY_ORDER); nothing to retain against
-        // until a follow-up task wires the file-based CRUD surface.
-        Collection::WorkspaceRoot => {}
+) -> Result<()> {
+    let key = collection
+        .dir_name()
+        .context("principal deletion is not a config document removal")?;
+    let mut encoded = serde_json::to_value(&*manifest)?;
+    if let Some(rows) = encoded.get_mut(key).and_then(Value::as_array_mut) {
+        rows.retain(|row| row.get(collection.unique_field()).and_then(Value::as_str) != Some(id));
     }
+    *manifest = serde_json::from_value(encoded)?;
+    Ok(())
 }
 
 fn sort_rows(rows: &mut [Value], id_field: &str) {
@@ -374,7 +290,10 @@ fn sort_rows(rows: &mut [Value], id_field: &str) {
 }
 
 fn print_list_table(spec: ConfigDocumentSpec, rows: &[Value]) {
-    let id_field = spec.collection.unique_field();
+    print_document_table(spec.collection.unique_field(), rows);
+}
+
+pub(super) fn print_document_table(id_field: &str, rows: &[Value]) {
     let headers = ["ID", "ENABLED", "NAME"];
     let rendered = rows
         .iter()
@@ -443,4 +362,47 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
         w1 = widths[1],
         w2 = widths[2],
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents::config_client::{DesiredStateApplyPlan, apply_desired_state_plan};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn canonical_reads_keep_shared_labels_in_the_selected_owner() -> Result<()> {
+        let node = Arc::new(gents::defra_node::EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        let access = ConfigAccess::Local(node.clone());
+        for owner in ["owner-a", "owner-b"] {
+            let config = serde_json::from_value(json!({
+                "agent_principal":{"agent_did":owner},
+                "tools":[{"agent_did":owner,"tools_id":"same","display_name":owner,
+                    "host":{"bash":{"allowed_argv_prefixes":[]}}}]
+            }))?;
+            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+            access
+                .transact("test.config.crud.seed", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+                })
+                .await?;
+        }
+        let rows = query_collection(&access, TOOLS_SPEC, "owner-a", None).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["display_name"], "owner-a");
+        assert_eq!(rows[0]["host"]["bash"]["allowed_argv_prefixes"], json!([]));
+        assert_eq!(
+            load_one(&access, TOOLS_SPEC, "owner-b", "same").await?["display_name"],
+            "owner-b"
+        );
+        assert!(
+            load_one(&access, TOOLS_SPEC, "absent", "same")
+                .await
+                .is_err()
+        );
+        node.shutdown().await;
+        Ok(())
+    }
 }

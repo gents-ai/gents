@@ -108,26 +108,28 @@ pub(crate) async fn authorized_children(
 ) -> Result<BTreeMap<String, (String, DescendantEdge)>> {
     let mut children = BTreeMap::new();
     for session in sessions {
-        let query = format!(
-            r#"{{ AgentRequest(filter: {{
-            session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }},
-            requester_did: {{ _eq: "{}" }}
-        }}, order: {{ created_at: DESC }}, limit: 1) {{ request_id }} }}"#,
-            escape_graphql_string(session),
-            escape_graphql_string(principal),
-            escape_graphql_string(principal)
-        );
-        let response = node.execute(&query).await;
-        ensure_no_errors(&response, "Grok subagent caller scope")?;
-        let Some(caller) = response
-            .data
-            .as_ref()
-            .and_then(|v| v.pointer("/AgentRequest/0/request_id"))
-            .and_then(Value::as_str)
-        else {
+        let head = gents::config_client::ConfigAccess::transact_local(
+            node,
+            None,
+            "grok.subagent_caller",
+            |txn| {
+                Box::pin(async move {
+                    gents::session::load_latest_request_in_txn(
+                        txn,
+                        principal,
+                        session,
+                        Some(Some(principal)),
+                    )
+                    .await
+                })
+            },
+        )
+        .await?;
+        let Some(head) = head else {
             continue;
         };
-        let mut query = DescendantQuery::all(caller);
+        let caller = head.observed.request_id;
+        let mut query = DescendantQuery::all(&caller);
         loop {
             let page = resolve_session_descendant_graph(DescendantGraphAccess::Local(node), &query)
                 .await?;
@@ -147,14 +149,17 @@ pub(crate) async fn authorized_children(
                 if let Some((_, previous)) = children.get(id) {
                     let previous: &DescendantEdge = previous;
                     anyhow::ensure!(
-                        previous.child_request_id == edge.child_request_id,
+                        previous.child_request_id == edge.child_request_id
+                            && previous.child_request_doc_id == edge.child_request_doc_id
+                            && previous.principal_did == edge.principal_did
+                            && previous.child_requester_did == edge.child_requester_did,
                         "ambiguous subagent session identity"
                     );
                     if edge.controllable() && !previous.controllable() {
-                        children.insert(id.clone(), (caller.to_owned(), edge));
+                        children.insert(id.clone(), (caller.clone(), edge));
                     }
                 } else {
-                    children.insert(id.clone(), (caller.to_owned(), edge));
+                    children.insert(id.clone(), (caller.clone(), edge));
                 }
             }
             if !page.has_more {
@@ -175,28 +180,66 @@ async fn snapshot(
     edge: &DescendantEdge,
     context_window: u64,
 ) -> Result<Option<Value>> {
-    let id = escape_graphql_string(&edge.child_request_id);
-    let response = node.execute(&format!(r#"{{ child: AgentRequest(filter: {{request_id: {{_eq: "{id}"}}}}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#)).await;
+    let owner = edge
+        .principal_did
+        .as_deref()
+        .context("child principal missing")?;
+    let session = edge
+        .child_session_id
+        .as_deref()
+        .context("child session missing")?;
+    let physical = edge
+        .child_request_doc_id
+        .as_deref()
+        .context("child physical identity missing")?;
+    let scope =
+        gents::session::session_scope_filter(owner, session, edge.child_requester_did.as_deref());
+    let response = node.execute(&format!(r#"{{ child: AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#, escape_graphql_string(physical), escape_graphql_string(&edge.child_request_id))).await;
     ensure_no_errors(&response, "Grok subagent snapshot")?;
-    let children = decode_rows::<ChildRequestRow>(&response, "child", "child snapshot");
-    let [child] = children.as_slice() else {
+    let children = decode_rows::<ChildRequestRow>(&response, "child", "child snapshot")?;
+    anyhow::ensure!(children.len() <= 1, "duplicate physical child snapshot");
+    let Some(child) = children.first() else {
         return Ok(None);
     };
     anyhow::ensure!(
-        Some(&child.session_id) == edge.child_session_id.as_ref(),
-        "child session changed"
+        child.doc_id.as_deref() == Some(physical)
+            && child.agent_did == owner
+            && child.session_id == session
+            && child.requester_did == edge.child_requester_did
+            && child.request_id == edge.child_request_id,
+        "child snapshot crossed validated physical scope"
     );
-    let response = node
-        .execute(&child_responses_query([edge.child_request_id.as_str()]))
-        .await;
+    let response = node.execute(&child_responses_query(&children)).await;
     ensure_no_errors(&response, "Grok subagent response")?;
-    let responses = decode_response_rows(&response);
+    let responses = decode_response_rows(&response)?;
+    anyhow::ensure!(
+        responses.len() <= 1,
+        "duplicate response for physical child"
+    );
+    for row in &responses {
+        anyhow::ensure!(
+            row.request_doc_id == physical
+                && row.agent_did == owner
+                && row.session_id == session
+                && row.requester_did == edge.child_requester_did
+                && row.request_id == child.request_id,
+            "child response crossed validated physical scope"
+        );
+    }
     let response = responses.first();
-    let tool_response = node
-        .execute(&child_tools_query([edge.child_request_id.as_str()]))
-        .await;
+    let tool_response = node.execute(&child_tools_query(&children)).await;
     ensure_no_errors(&tool_response, "Grok subagent tools")?;
-    let tools = decode_child_tool_rows(&tool_response);
+    let tools = decode_child_tool_rows(&tool_response)?;
+    for row in &tools {
+        anyhow::ensure!(
+            row.request_doc_id == physical
+                && row.agent_did == owner
+                && row.session_id == session
+                && row.requester_did == edge.child_requester_did
+                && row.request_id == child.request_id,
+            "child tool crossed validated physical scope"
+        );
+    }
     let tools = tools.iter().collect::<Vec<_>>();
     let progress = progress_update(
         child,
@@ -268,23 +311,49 @@ async fn snapshot(
 }
 
 async fn final_output(node: &EmbeddedNode, child: &ChildRequestRow) -> Result<String> {
-    let id = escape_graphql_string(&child.request_id);
-    let response = node.execute(&format!(r#"{{ AgentResponse(filter: {{request_id: {{_eq: "{id}"}}}}, order: {{created_at: DESC}}, limit: 1) {{materialized_message_sequence content}} }}"#)).await;
+    let filter = child_result_filter(std::slice::from_ref(child));
+    let response = node.execute(&format!(r#"{{ AgentResponse(filter: {{ {filter} }}, limit: 2) {{request_id request_doc_id agent_did requester_did session_id materialized_message_sequence content}} }}"#)).await;
     ensure_no_errors(&response, "Grok child final response")?;
-    let row = response
+    let rows = response
         .data
         .as_ref()
-        .and_then(|v| v.pointer("/AgentResponse/0"));
+        .and_then(|data| data.get("AgentResponse"))
+        .and_then(Value::as_array)
+        .context("missing child final response rows")?;
+    anyhow::ensure!(rows.len() <= 1, "duplicate child final response");
+    let row = rows.first();
+    if let Some(row) = row {
+        anyhow::ensure!(
+            row["request_id"].as_str() == Some(child.request_id.as_str())
+                && row["request_doc_id"].as_str() == child.doc_id.as_deref()
+                && row["agent_did"].as_str() == Some(child.agent_did.as_str())
+                && row["session_id"].as_str() == Some(child.session_id.as_str())
+                && row.get("requester_did") == Some(&json!(child.requester_did)),
+            "child final response crossed physical scope"
+        );
+    }
     if let Some(sequence) = row.and_then(|v| v["materialized_message_sequence"].as_i64()) {
-        let session = escape_graphql_string(&child.session_id);
-        let response = node.execute(&format!(r#"{{ AgentMessage(filter: {{session_id: {{_eq: "{session}"}}, request_id: {{_eq: "{id}"}}, sequence: {{_eq: {sequence}}}, role: {{_eq: "assistant"}}}}, limit: 2) {{content}} }}"#)).await;
+        let response = node.execute(&format!(r#"{{ AgentMessage(filter: {{ {filter}, sequence: {{_eq: {sequence}}}, role: {{_eq: "assistant"}} }}, limit: 2) {{request_id request_doc_id agent_did requester_did session_id content}} }}"#)).await;
         ensure_no_errors(&response, "Grok child final message")?;
-        if let Some(blob) = response
+        let messages = response
             .data
             .as_ref()
-            .and_then(|v| v.pointer("/AgentMessage/0/content"))
-            .and_then(Value::as_str)
-        {
+            .and_then(|data| data.get("AgentMessage"))
+            .and_then(Value::as_array)
+            .context("missing child final message rows")?;
+        anyhow::ensure!(messages.len() <= 1, "duplicate child final message");
+        if let Some(message) = messages.first() {
+            anyhow::ensure!(
+                message["request_id"].as_str() == Some(child.request_id.as_str())
+                    && message["request_doc_id"].as_str() == child.doc_id.as_deref()
+                    && message["agent_did"].as_str() == Some(child.agent_did.as_str())
+                    && message["session_id"].as_str() == Some(child.session_id.as_str())
+                    && message.get("requester_did") == Some(&json!(child.requester_did)),
+                "child final message crossed physical scope"
+            );
+            let blob = message["content"]
+                .as_str()
+                .context("child final message content missing")?;
             if let Message::Assistant { content, .. } =
                 gents_protocol::transcript::decode_persisted_message("assistant", blob)
             {

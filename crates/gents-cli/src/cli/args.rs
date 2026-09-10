@@ -1348,7 +1348,7 @@ pub(crate) struct TraceExportArgs {
     pub(crate) graphql: Option<String>,
     #[arg(long, help = "Restrict export to one session_id")]
     pub(crate) session_id: Option<String>,
-    #[arg(long, help = "Restrict export to one inferred request_id")]
+    #[arg(long, help = "Restrict export to one request_id")]
     pub(crate) request_id: Option<String>,
     #[arg(long, help = "Run id to stamp on exported JSONL records")]
     pub(crate) run_id: Option<String>,
@@ -1494,7 +1494,7 @@ pub(crate) enum ConfigCommand {
     #[command(about = "Write a ToolSelection document")]
     Tools {
         #[command(subcommand)]
-        command: ToolSelectionCommand,
+        command: ToolsConfigCommand,
     },
     #[command(about = "Write an InferenceProfile document")]
     Profile {
@@ -1549,7 +1549,7 @@ pub(crate) enum ToolPackageArg {
 #[derive(Subcommand)]
 pub(crate) enum BackendCommand {
     #[command(name = "set")]
-    Set(BackendUpsertArgs),
+    Set(BackendSetArgs),
     #[command(name = "discover-models")]
     DiscoverModels(BackendDiscoverModelsArgs),
     #[command(name = "list", about = "List InferenceBackend documents")]
@@ -1571,7 +1571,7 @@ pub(crate) enum BehaviorCommand {
     Create(BehaviorCreateArgs),
     #[command(
         name = "clone",
-        about = "Clone an existing persona's tool selection into a new AgentBehavior"
+        about = "Clone an existing persona's context and tools into a new AgentBehavior"
     )]
     Clone(BehaviorCloneArgs),
     #[command(
@@ -1600,38 +1600,35 @@ pub(crate) enum WorkspaceRootCommand {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ToolSelectionCommand {
+pub(crate) enum ToolsConfigCommand {
     #[command(name = "set")]
-    Set(ToolSelectionUpsertArgs),
-    #[command(name = "list", about = "List ToolSelection documents")]
+    Set(ToolsSetArgs),
+    #[command(name = "list", about = "List Tools documents")]
     List(ConfigListArgs),
-    #[command(name = "show", about = "Show a ToolSelection document")]
+    #[command(name = "show", about = "Show a Tools document")]
     Show(ConfigShowArgs),
-    #[command(name = "rm", about = "Delete a ToolSelection document")]
+    #[command(name = "rm", about = "Delete a Tools document")]
     Rm(ConfigShowArgs),
     #[command(
         name = "subagent-target-entry",
-        about = "Build a single --subagent-target JSON entry from its parts",
-        after_help = "Example:\n  gents config tools set --graphql <url> --agent-did <did> \\\n    --selection-id main --subagent-target \"$(gents config tools \\\n    subagent-target-entry --name researcher --agent-did did:key:z... \\\n    --behavior-id did:key:z...:default)\""
+        about = "Emit a canonical SubagentTarget document"
     )]
     SubagentTargetEntry(SubagentTargetEntryArgs),
 }
 
 #[derive(Debug, clap::Args)]
 pub(crate) struct SubagentTargetEntryArgs {
-    #[arg(long, help = "Model-facing name used by spawn_subagent")]
-    pub(crate) name: String,
-    #[arg(
-        long,
-        help = "DID of the agent that owns the target behavior (local or remote)"
-    )]
+    #[arg(long, help = "Logical ID referenced by Tools.subagents.target_ids")]
+    pub(crate) target_id: String,
+    #[arg(long, help = "Principal that owns this target configuration")]
     pub(crate) agent_did: String,
-    #[arg(long, help = "Behavior id on the owning agent")]
+    #[arg(long, help = "Principal that owns the destination behavior")]
+    pub(crate) target_agent_did: String,
+    #[arg(long, help = "Model-facing target name")]
+    pub(crate) name: String,
+    #[arg(long)]
     pub(crate) behavior_id: String,
-    #[arg(
-        long,
-        help = "Optional human-readable description surfaced to the model"
-    )]
+    #[arg(long)]
     pub(crate) description: Option<String>,
 }
 
@@ -1668,55 +1665,6 @@ pub(crate) enum ToolsCommand {
         about = "Explain final model-callable tools per behavior"
     )]
     Explain(ToolExplainArgs),
-    #[command(name = "holds", about = "List tool calls held awaiting approval")]
-    Holds(ToolsHoldsArgs),
-    #[command(
-        name = "approve",
-        about = "Approve (or deny) a held tool call by writing the decision document"
-    )]
-    Approve(ToolsApproveArgs),
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ToolsHoldsArgs {
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(long, help = "GraphQL endpoint to read instead of local home state")]
-    pub(crate) graphql: Option<String>,
-    #[arg(long, help = "Scope to one agent DID. Defaults to the home agent")]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long, help = "List holds across every agent")]
-    pub(crate) all: bool,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct ToolsApproveArgs {
-    #[arg(value_name = "TOOL_CALL_ID")]
-    pub(crate) tool_call_id: String,
-    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
-    pub(crate) home: Option<PathBuf>,
-    #[arg(
-        long,
-        help = "GraphQL endpoint to write through instead of local home state"
-    )]
-    pub(crate) graphql: Option<String>,
-    #[arg(
-        long,
-        help = "Agent DID the held call belongs to. Defaults to the home agent"
-    )]
-    pub(crate) agent_did: Option<String>,
-    #[arg(long, help = "Record a denial instead of an approval")]
-    pub(crate) deny: bool,
-    #[arg(
-        long,
-        help = "Reason recorded on the decision (shown to the model on deny)"
-    )]
-    pub(crate) reason: Option<String>,
-    #[arg(
-        long,
-        help = "Approver DID recorded on the decision. Defaults to the home agent DID"
-    )]
-    pub(crate) approver_did: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -1860,6 +1808,7 @@ pub(crate) struct WorkspaceRootUpsertArgs {
     pub(crate) disabled: bool,
 }
 
+/// Replace one canonical behavior document through the shared config writer.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorUpsertArgs {
     #[arg(long)]
@@ -1871,29 +1820,24 @@ pub(crate) struct BehaviorUpsertArgs {
     #[arg(long)]
     pub(crate) display_name: Option<String>,
     #[arg(long)]
-    pub(crate) system_prompt_file: Option<PathBuf>,
-    #[arg(long)]
-    pub(crate) backend_id: Option<String>,
-    #[arg(long)]
-    pub(crate) model_name: Option<String>,
-    #[arg(long)]
-    pub(crate) tool_selection_id: Option<String>,
-    #[arg(long)]
-    pub(crate) inference_profile_id: Option<String>,
-    #[arg(long)]
-    pub(crate) compaction_strategy: Option<String>,
-    #[arg(long)]
-    pub(crate) compaction_threshold: Option<f64>,
-    #[arg(long, default_value_t = true)]
+    pub(crate) description: Option<String>,
+    #[arg(
+        long,
+        help = "Optional AgentContext reference owned by this agent (literal prompt, skills, tools, compaction)"
+    )]
+    pub(crate) context_id: Option<String>,
+    #[arg(
+        long,
+        help = "Required InferenceProfile reference; Task -> Behavior -> Profile is the only model-selection path"
+    )]
+    pub(crate) inference_profile_id: String,
+    #[arg(long = "tag", help = "Optional UI/discovery label (repeatable)")]
+    pub(crate) tags: Vec<String>,
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub(crate) enabled: bool,
 }
 
-/// Routes through the shared persona materializer (`gents::agent::persona_ops`):
-/// a `PersonaConfigRequest` row is submitted and polled to a terminal status
-/// rather than writing `AgentBehavior`/`ToolSelection` directly, so admission
-/// and materialization never drift from the reconciler / self-config tool's
-/// own writes. `--model` and `--backend-id`/`--model-name` are two spellings
-/// of the same `backend_id|model_name` value; supply one or the other.
+/// Submit an owned, signed persona creation request.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorCreateArgs {
     #[arg(long)]
@@ -1911,29 +1855,22 @@ pub(crate) struct BehaviorCreateArgs {
     pub(crate) preset: Option<String>,
     #[arg(
         long,
-        help = "Optional workspace root scope; must be a published WorkspaceRoot path"
+        help = "Optional host cwd from the principal's published choices"
     )]
     pub(crate) root: Option<String>,
     #[arg(
         long,
-        help = "behavior_id of an existing enabled persona to clone the tool selection from; mutually exclusive with --preset"
+        help = "behavior_id of an existing enabled persona to clone the context/tools from; mutually exclusive with --preset"
     )]
     pub(crate) clone_from: Option<String>,
-    #[arg(long, help = r#""backend_id|model_name", e.g. "openai|gpt-5""#)]
-    pub(crate) model: Option<String>,
-    #[arg(long, help = "Alternative to --model")]
-    pub(crate) backend_id: Option<String>,
-    #[arg(long, help = "Alternative to --model")]
-    pub(crate) model_name: Option<String>,
-    #[arg(long)]
-    pub(crate) profile_id: Option<String>,
+    #[arg(
+        long,
+        help = "Required published InferenceProfile id under the target agent's scope"
+    )]
+    pub(crate) profile_id: String,
 }
 
-/// See [`BehaviorCreateArgs`] doc comment: same materializer routing. The
-/// clone's `agent_did` is derived from `source_behavior_id` (a clone always
-/// creates a sibling persona of the same agent as its source); `--model`/
-/// `--profile-id` default to the source behavior's own current values when
-/// omitted.
+/// Clone a behavior belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorCloneArgs {
     #[arg(long)]
@@ -1946,14 +1883,14 @@ pub(crate) struct BehaviorCloneArgs {
     pub(crate) display_name: String,
     #[arg(long, help = "Override the source's workspace root scope")]
     pub(crate) root: Option<String>,
-    #[arg(long, help = r#"Override the source's model, "backend_id|model_name""#)]
-    pub(crate) model: Option<String>,
-    #[arg(long, help = "Override the source's inference profile")]
-    pub(crate) profile_id: Option<String>,
+    #[arg(
+        long,
+        help = "Required published InferenceProfile id for the clone; no implicit source fallback"
+    )]
+    pub(crate) profile_id: String,
 }
 
-/// See [`BehaviorCreateArgs`] doc comment: same materializer routing. The
-/// target's `agent_did` is derived from `behavior_id` itself.
+/// Disable a behavior belonging to the initialized home signer.
 #[derive(clap::Args)]
 pub(crate) struct BehaviorDisableArgs {
     #[arg(long)]
@@ -1964,191 +1901,20 @@ pub(crate) struct BehaviorDisableArgs {
     pub(crate) behavior_id: String,
 }
 
-#[derive(clap::Args)]
-pub(crate) struct ToolSelectionUpsertArgs {
+#[derive(Debug, clap::Args)]
+pub(crate) struct ToolsSetArgs {
     #[arg(long)]
-    pub(crate) graphql: String,
+    pub(crate) home: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) agent_did: String,
-    #[arg(long)]
-    pub(crate) selection_id: String,
-    #[arg(long)]
-    pub(crate) display_name: Option<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_display_name: bool,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        value_name = "BOOL",
-        help = "Enable or disable file tools. Omit to preserve existing setting"
-    )]
-    pub(crate) enable_file_tools: Option<bool>,
-    #[arg(long)]
-    pub(crate) file_tools_mode: Option<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_file_tools_mode: bool,
-    #[arg(
-        long,
-        help = "Optional per-behavior file-tool root; relative paths resolve from the daemon cwd and must stay within any node-level tool root"
-    )]
-    pub(crate) file_tool_root: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_file_tool_root: bool,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        value_name = "BOOL",
-        help = "Enable or disable bash tools. Omit to preserve existing setting"
-    )]
-    pub(crate) enable_bash: Option<bool>,
-    #[arg(long)]
-    pub(crate) bash_mode: Option<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_bash_mode: bool,
-    #[arg(
-        long,
-        help = "Command policy for bash: read_only, workspace_write, managed_write, or unrestricted"
-    )]
-    pub(crate) command_execution_policy: Option<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_command_execution_policy: bool,
-    #[arg(
-        long,
-        help = "Network policy hint for bash commands: inherit, disabled, or enabled"
-    )]
-    pub(crate) command_network_mode: Option<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_command_network_mode: bool,
-    #[arg(
-        long = "command-allowed-argv-prefix",
-        help = "Argv prefix allowed for bash (subcommand-precise). When set, every command must match a prefix; also admits heads outside the read-only base allowlist. Prefer over replacing the base when extending"
-    )]
-    pub(crate) command_allowed_argv_prefixes: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_command_allowed_argv_prefixes: bool,
-    #[arg(
-        long = "command-forbidden-argv-prefix",
-        help = "Argv prefix always denied for bash (wins over allowed prefixes and the read-only allowlist)"
-    )]
-    pub(crate) command_forbidden_argv_prefixes: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_command_forbidden_argv_prefixes: bool,
-    #[arg(long = "cli-tool-name")]
-    pub(crate) cli_tool_names: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_cli_tool_names: bool,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        value_name = "BOOL",
-        help = "Enable or disable meta MCP tools. Omit to preserve existing setting"
-    )]
-    pub(crate) enable_meta_tools: Option<bool>,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        value_name = "BOOL",
-        help = "Enable or disable goal get/update tools independently of generic meta tools. Omit to preserve the disabled default"
-    )]
-    pub(crate) enable_goal_tools: Option<bool>,
-    #[arg(
-        long,
-        num_args = 0..=1,
-        default_missing_value = "true",
-        value_name = "BOOL",
-        help = "Enable or disable model-facing goal creation. Omit to preserve the disabled default"
-    )]
-    pub(crate) enable_goal_creation: Option<bool>,
-    #[arg(long = "allowed-mcp-service-id")]
-    pub(crate) allowed_mcp_service_ids: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_allowed_mcp_service_ids: bool,
-    #[arg(
-        long = "backgroundable-tool-name",
-        help = "Host tool that may be spawned as a background process via spawn_process, e.g. bash_unrestricted"
-    )]
-    pub(crate) backgroundable_tool_names: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_backgroundable_tool_names: bool,
-    #[arg(
-        long,
-        help = "Enable or disable the feature-gated memory tool: --enable-memory true|false. Omit to leave the existing document setting unchanged (default is disabled)"
-    )]
-    pub(crate) enable_memory: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable the sessions history convenience tool: --enable-session-history-tool true|false. Omit to leave the existing document setting unchanged (default is disabled)"
-    )]
-    pub(crate) enable_session_history_tool: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable the context_budget tool: --enable-context-budget true|false. Omit to leave the existing document setting unchanged (default is enabled)"
-    )]
-    pub(crate) enable_context_budget: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable the read-only defra_query tool: --enable-defra-query true|false. Omit to leave the existing document setting unchanged (default is enabled)"
-    )]
-    pub(crate) enable_defra_query: Option<bool>,
-    #[arg(
-        long = "defra-query-collection",
-        help = "Restrict defra_query to these collections (repeatable); omit for all collections"
-    )]
-    pub(crate) defra_query_collections: Vec<String>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_defra_query_collections: bool,
-    #[arg(
-        long = "subagent-target",
-        help = "SubagentTarget JSON entry allowed for spawn_subagent, e.g. \
-                {\"name\":\"researcher\",\"agent_did\":\"did:key:...\",\"behavior_id\":\"did:key:...:default\",\"description\":\"...\"} \
-                (repeatable); or @path/@- to read one entry or a JSON array of entries from a \
-                file/stdin; omit to preserve existing targets. See `config tools \
-                subagent-target-entry --help` to build a single entry from its parts."
-    )]
-    pub(crate) subagent_targets: Vec<String>,
-    #[arg(
-        long,
-        default_value_t = false,
-        help = "Clear existing subagent_targets when no --subagent-target values are provided"
-    )]
-    pub(crate) clear_subagent_targets: bool,
-    #[arg(
-        long,
-        help = "Enable or disable spawn_subagent: --subagent-spawn-enabled true|false. Omit to preserve existing setting"
-    )]
-    pub(crate) subagent_spawn_enabled: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable subagent steering tools: --subagent-steering-enabled true|false. Omit to preserve existing setting"
-    )]
-    pub(crate) subagent_steering_enabled: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable background subagent steering: --subagent-background-enabled true|false. Omit to preserve existing setting"
-    )]
-    pub(crate) subagent_background_enabled: Option<bool>,
-    #[arg(
-        long,
-        help = "Enable or disable remote-DID subagent targets: --subagent-allow-cross-deployment true|false. Omit to preserve existing setting"
-    )]
-    pub(crate) subagent_allow_cross_deployment: Option<bool>,
-    #[arg(
-        long,
-        help = "Cross-deployment spawn timeout in seconds. Omit to preserve existing setting"
-    )]
-    pub(crate) cross_deployment_spawn_timeout_seconds: Option<i64>,
-    #[arg(long, default_value_t = false)]
-    pub(crate) clear_cross_deployment_spawn_timeout_seconds: bool,
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Canonical Tools JSON document to create or replace")]
+    pub(crate) file: PathBuf,
 }
 
 #[derive(Subcommand)]
 pub(crate) enum InferenceProfileCommand {
     #[command(name = "set")]
-    Set(InferenceProfileUpsertArgs),
+    Set(InferenceProfileSetArgs),
     #[command(name = "list", about = "List InferenceProfile documents")]
     List(ConfigListArgs),
     #[command(name = "show", about = "Show an InferenceProfile document")]
@@ -2159,9 +1925,9 @@ pub(crate) enum InferenceProfileCommand {
 
 #[derive(Subcommand)]
 pub(crate) enum ConfigTriggerCommand {
-    #[command(name = "list", about = "List EventTrigger documents")]
+    #[command(name = "list", about = "List Trigger documents")]
     List(ConfigListArgs),
-    #[command(name = "show", about = "Show an EventTrigger document")]
+    #[command(name = "show", about = "Show a Trigger document")]
     Show(ConfigShowArgs),
 }
 
@@ -2267,107 +2033,25 @@ pub(crate) struct ConfigTaskRunArgs {
 }
 
 #[derive(clap::Args)]
-pub(crate) struct InferenceProfileUpsertArgs {
+pub(crate) struct InferenceProfileSetArgs {
+    /// Canonical InferenceProfile JSON document, including its owning agent DID.
     #[arg(long)]
-    pub(crate) graphql: String,
+    pub(crate) file: PathBuf,
     #[arg(long)]
-    pub(crate) profile_id: String,
+    pub(crate) home: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) display_name: Option<String>,
-    #[arg(long)]
-    pub(crate) context_window: Option<i64>,
-    #[arg(long)]
-    pub(crate) max_output_tokens: Option<i64>,
-    #[arg(long)]
-    pub(crate) max_turns: Option<i64>,
-    #[arg(long)]
-    pub(crate) temperature: Option<f64>,
-    /// Sampling knobs beyond temperature (#649). Unset leaves the served
-    /// model's `generation_config.json` default in force.
-    #[arg(long)]
-    pub(crate) top_p: Option<f64>,
-    #[arg(long)]
-    pub(crate) top_k: Option<i64>,
-    /// Requested provider sampling seed. Reproducibility still depends on the
-    /// pinned provider, model, and hardware configuration.
-    #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
-    pub(crate) seed: Option<i64>,
-    #[arg(long)]
-    pub(crate) min_p: Option<f64>,
-    #[arg(long)]
-    pub(crate) frequency_penalty: Option<f64>,
-    #[arg(long)]
-    pub(crate) presence_penalty: Option<f64>,
-    #[arg(long)]
-    pub(crate) repetition_penalty: Option<f64>,
-    #[arg(
-        long,
-        value_parser = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
-    )]
-    pub(crate) reasoning_effort: Option<String>,
-    #[arg(long)]
-    pub(crate) stream_batch_ms: Option<i64>,
-    #[arg(long)]
-    pub(crate) stream_liveness_timeout_secs: Option<i64>,
-    #[arg(long)]
-    pub(crate) deadline_duration_secs: Option<i64>,
-    #[arg(long)]
-    pub(crate) retry_max_transport: Option<i64>,
-    #[arg(long, value_delimiter = ',')]
-    pub(crate) retry_backoff_ms: Option<Vec<i64>>,
-    #[arg(long)]
-    pub(crate) retry_max_resample: Option<i64>,
-    #[arg(long)]
-    pub(crate) retry_allow_repair: Option<bool>,
-    #[arg(long)]
-    pub(crate) retry_interactive_max: Option<i64>,
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(clap::Args)]
-pub(crate) struct BackendUpsertArgs {
+pub(crate) struct BackendSetArgs {
+    /// Canonical InferenceBackend JSON document, including its owning agent DID.
     #[arg(long)]
-    pub(crate) graphql: String,
+    pub(crate) file: PathBuf,
     #[arg(long)]
-    pub(crate) backend_id: String,
+    pub(crate) home: Option<PathBuf>,
     #[arg(long)]
-    pub(crate) name: String,
-    #[arg(
-        long,
-        value_enum,
-        help = "Backend preset with provider/auth defaults for common local and hosted backends"
-    )]
-    pub(crate) backend_preset: Option<BackendPresetArg>,
-    #[arg(
-        long,
-        help = "Backend provider kind. OpenAiCompatible covers OpenAI-style local and hosted endpoints"
-    )]
-    pub(crate) provider_kind: Option<String>,
-    #[arg(
-        long,
-        value_enum,
-        help = "OpenAI-style wire API for OpenAiCompatible backends: responses or chat-completions"
-    )]
-    pub(crate) openai_wire_api: Option<OpenAiWireApiArg>,
-    #[arg(
-        long,
-        help = "Inference backend base URL, usually including /v1. Falls back to the preset default when available"
-    )]
-    pub(crate) endpoint: Option<String>,
-    #[arg(long, help = "Raw API key stored directly in the backend document")]
-    pub(crate) api_key: Option<String>,
-    #[arg(
-        long,
-        help = "Environment variable name holding this backend's API key"
-    )]
-    pub(crate) api_key_env_var: Option<String>,
-    #[arg(long)]
-    pub(crate) max_concurrent: i64,
-    #[arg(long, default_value_t = default_backend_max_queue_depth())]
-    pub(crate) max_queue_depth: i64,
-    #[arg(long, default_value_t = true)]
-    pub(crate) enabled: bool,
-    #[arg(long, default_value = "healthy")]
-    pub(crate) probe_status: String,
+    pub(crate) graphql: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -2408,7 +2092,7 @@ pub(crate) struct BackendDiscoverModelsArgs {
     pub(crate) home: Option<PathBuf>,
     #[arg(
         long,
-        help = "Replace the backend document's models[] with the discovered models (requires --backend-id; nothing is written without this flag)"
+        help = "Publish the discovered model catalog observation for the selected backend (requires --backend-id; nothing is written without this flag)"
     )]
     pub(crate) write: bool,
 }
@@ -2908,20 +2592,9 @@ pub(crate) struct RequestSubmitArgs {
     pub(crate) session_id: Option<String>,
     #[arg(long)]
     pub(crate) behavior_id: Option<String>,
+    /// Canonical request input JSON (skills, cwd, title, and queue settings).
     #[arg(long)]
-    pub(crate) temperature: Option<f64>,
-    #[arg(long)]
-    pub(crate) top_p: Option<f64>,
-    #[arg(long)]
-    pub(crate) top_k: Option<i64>,
-    #[arg(long, value_parser = clap::value_parser!(i64).range(0..))]
-    pub(crate) seed: Option<i64>,
-    #[arg(long)]
-    pub(crate) max_tokens: Option<i64>,
-    #[arg(long, value_parser = clap::value_parser!(i64).range(1..))]
-    pub(crate) max_total_tokens: Option<i64>,
-    #[arg(long)]
-    pub(crate) metadata: Option<String>,
+    pub(crate) input: Option<String>,
     #[arg(
         long = "valid-until",
         help = "TTL for this request (e.g. 30s, 5m, 2h, 1d). Default: 5m. Use \"none\" or 0 to disable."
@@ -3277,6 +2950,11 @@ pub(crate) struct SessionForkArgs {
         help = "Override the caller agent DID (defaults to local identity)"
     )]
     pub(crate) agent_did: Option<String>,
+    #[arg(
+        long,
+        help = "Exact source requester DID; omit for a session with no requester"
+    )]
+    pub(crate) requester_did: Option<String>,
     #[arg(long, value_name = "SOURCE_SESSION_ID")]
     pub(crate) from: String,
     #[arg(

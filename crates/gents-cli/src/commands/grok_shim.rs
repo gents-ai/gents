@@ -77,8 +77,7 @@ pub(crate) struct GrokShimBindArgs {
 ///
 /// Resolution order mirrors the Codex shim's bound-behavior resolution: an
 /// explicit `--grok-shim-behavior-id` override wins, then the agent
-/// principal's configured `default_behavior_id`, then the synthesized
-/// `<did>:default` fallback. The behavior must exist and select a model and
+/// principal's configured `default_behavior_id`. The behavior must exist and select a model and
 /// backend before the socket is published, so a misconfigured home fails fast
 /// instead of serving a fabricated model catalog.
 ///
@@ -90,8 +89,8 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     let node = args.node.clone();
     let behavior_id =
         resolve_grok_shim_behavior_id(node.as_ref(), args.behavior_id.as_deref(), &args.agent_did)
-            .await;
-    let bound = resolve_bound_model_context(node.as_ref(), &behavior_id)
+            .await?;
+    let bound = resolve_bound_model_context(node.as_ref(), &args.agent_did, &behavior_id)
         .await
         .with_context(|| {
             format!(
@@ -213,39 +212,9 @@ impl AcpDelegateFactoryInputs {
     }
 }
 
-/// Resolve the behavior the Grok shim binds to.
-///
-/// An explicit override always wins. Otherwise the agent principal's
-/// configured `default_behavior_id` is used — that is the id behaviors are
-/// actually stored under — and only a missing or unset principal falls back to
-/// the synthesized `<did>:default` form, keeping legacy homes compatible.
-pub(crate) async fn resolve_grok_shim_behavior_id(
-    node: &EmbeddedNode,
-    override_behavior_id: Option<&str>,
-    agent_did: &str,
-) -> String {
-    if let Some(value) = explicit_behavior_override(override_behavior_id) {
-        return value;
-    }
-    match gents::load_agent_principal(node, agent_did).await {
-        Ok(Some(principal)) => principal
-            .default_behavior_id
-            .filter(|id| !id.trim().is_empty())
-            .unwrap_or_else(|| gents::default_behavior_id_for_agent(agent_did)),
-        _ => gents::default_behavior_id_for_agent(agent_did),
-    }
-}
+pub(crate) use crate::commands::inference_binding::resolve_bound_behavior_id as resolve_grok_shim_behavior_id;
 
-/// The trimmed, non-empty form of an explicit behavior override, if any.
-///
-/// Exposed `pub(crate)` so the CLI surface and tests can share the exact
-/// trimming rule the async resolver applies.
-pub(crate) fn explicit_behavior_override(override_behavior_id: Option<&str>) -> Option<String> {
-    override_behavior_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
+pub(crate) use crate::commands::inference_binding::explicit_behavior_override;
 
 #[cfg(test)]
 mod tests {

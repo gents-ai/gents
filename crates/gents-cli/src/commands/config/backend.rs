@@ -1,109 +1,85 @@
-use std::time::Duration;
-
-use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
-use gents::{discover_backend_models, BackendProviderKind, InferenceBackend};
-use gents_protocol::graphql::{extract_mutation_doc_id, string_list_field};
-use serde_json::{json, Value};
-
 use crate::cli::*;
-use crate::config_writes::{
-    write_inference_backend_document, ConfigAccess, InferenceBackendUpsertDocument,
+use crate::shared::ResolvedBackendConfig;
+use crate::{resolve_agent_did, BackendResolutionMode};
+use anyhow::{Context, Result};
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
-use crate::print_json;
-use crate::shared::*;
-use crate::{
-    normalize_optional_string, post_graphql, resolve_agent_did, BackendResolutionMode,
-    EXPORT_INFERENCE_BACKEND_FIELDS,
-};
+use gents::document_config::{BackendAuth, BackendModelCatalog, InferenceBackend};
+use gents::{discover_backend_models, BackendProviderKind, Collection};
+use serde_json::json;
 
-/// Decode this command's resolved args into the document type
-/// `InferenceBackend::validate` owns. `models` isn't a `backend set` flag —
-/// this writer always stamps the `"default"` placeholder
-/// `write_inference_backend_document` below actually sends — so the
-/// no-lockout conjunct never fires here (it needs a non-empty advertised
-/// list to compare a current model against).
-fn to_document_backend(
-    args: &BackendUpsertArgs,
-    backend: &ResolvedBackendConfig,
-) -> InferenceBackend {
-    InferenceBackend {
-        backend_id: args.backend_id.clone(),
-        name: args.name.clone(),
-        provider_kind: backend.provider_kind,
-        openai_wire_api: backend.openai_wire_api,
-        endpoint: backend.endpoint.clone(),
-        api_key: backend.api_key.clone(),
-        api_key_env_var: backend.api_key_env_var.clone(),
-        max_concurrent: args.max_concurrent,
-        max_queue_depth: args.max_queue_depth,
-        enabled: args.enabled,
-        models: vec!["default".to_string()],
-        probe_status: args.probe_status.clone(),
-    }
+fn backend_plan(contents: &[u8]) -> Result<(InferenceBackend, DesiredStateApplyPlan)> {
+    let backend: InferenceBackend =
+        serde_json::from_slice(contents).context("decoding canonical InferenceBackend document")?;
+    backend.validate()?;
+    let value = serde_json::to_value(&backend)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceBackend,
+        add: value.clone(),
+        update: value,
+    }])?;
+    Ok((backend, plan))
 }
 
-pub(super) async fn backend_set(args: BackendUpsertArgs) -> Result<()> {
-    let backend = resolve_backend_upsert_config(&args)?;
-    // Document rules (backend_id/endpoint non-empty, api_key shape,
-    // max_concurrent/max_queue_depth positive) are owned by
-    // `InferenceBackend::validate` (#1331) — previously unchecked by this
-    // writer entirely (the api_key-xor-env_var shape check in
-    // `resolve_backend_upsert_config` above is a separate, earlier,
-    // raw-flag sanity check shared with `gents init`; this is the
-    // document-shape gate right before the write).
-    to_document_backend(&args, &backend).validate(None)?;
-    let access = ConfigAccess::Graphql(args.graphql.clone());
-    let doc = InferenceBackendUpsertDocument {
-        backend_id: args.backend_id.clone(),
-        name: args.name.clone(),
-        provider_kind: backend.provider_kind,
-        openai_wire_api: backend.openai_wire_api,
-        endpoint: backend.endpoint.clone(),
-        api_key: backend.api_key.clone(),
-        api_key_env_var: backend.api_key_env_var.clone(),
-        max_concurrent: args.max_concurrent,
-        max_queue_depth: args.max_queue_depth,
-        enabled: args.enabled,
-        models_on_add: vec!["default".to_string()],
-        models_on_update: None,
-        probe_status: args.probe_status.clone(),
-    };
-    let doc_id = write_inference_backend_document(&access, &doc).await?;
-    let output = json!({
-        "doc_id": doc_id,
-        "backend_id": args.backend_id,
-        "backend_preset": args.backend_preset.map(BackendPresetArg::as_str),
-        "provider_kind": backend.provider_kind.as_str(),
-        "openai_wire_api": backend.openai_wire_api.map(gents::OpenAiWireApi::as_str),
-        "endpoint": backend.endpoint,
-        "api_key": backend.api_key.as_ref().map(|_| "<redacted>"),
-        "api_key_env_var": backend.api_key_env_var,
-        "max_concurrent": args.max_concurrent,
-        "max_queue_depth": args.max_queue_depth,
-        "enabled": args.enabled,
-        "probe_status": args.probe_status,
-    });
-    print_json(&output)?;
-    Ok(())
+pub(super) async fn backend_set(args: BackendSetArgs) -> Result<()> {
+    let (backend, plan) = backend_plan(
+        &std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?,
+    )?;
+    let (access, _) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let doc_id = access
+        .transact("cli.backend.set", |txn| {
+            let backend = &backend;
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(txn, plan).await?;
+                Ok(read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceBackend,
+                    &backend.agent_did,
+                    &backend.backend_id,
+                )
+                .await?
+                .context("replaced backend missing")?
+                .0)
+            })
+        })
+        .await?;
+    crate::print_json(
+        &json!({"doc_id":doc_id,"agent_did":backend.agent_did,"backend_id":backend.backend_id,"provider_kind":backend.provider_kind.as_str(),"endpoint":backend.endpoint}),
+    )
 }
 
 pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> Result<()> {
-    if args.write && normalize_optional_string(args.backend_id.as_deref()).is_none() {
-        anyhow::bail!(
-            "--write requires --backend-id: the discovered models are written to that backend document"
-        );
-    }
-    let target = resolve_backend_discovery_target(&args).await?;
+    anyhow::ensure!(
+        !args.write || args.backend_id.is_some(),
+        "--write requires --backend-id"
+    );
+    let (stored, target) = resolve_backend_discovery_target(&args).await?;
+    let timeout = std::time::Duration::from_secs(
+        stored
+            .as_ref()
+            .and_then(|backend| backend.discovery_timeout_secs)
+            .unwrap_or(10) as u64,
+    );
+    let connect = std::time::Duration::from_secs(
+        stored
+            .as_ref()
+            .and_then(|backend| backend.connect_timeout_secs)
+            .unwrap_or(10) as u64,
+    )
+    .min(timeout);
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .connect_timeout(connect)
+        .timeout(timeout)
         .build()
         .context("building backend discovery client")?;
-    let is_oauth = target.provider_kind.is_agent_scoped_oauth();
-    let (oauth_credential, oauth_agent_did) = if is_oauth {
-        let (credential, agent_did) =
+    let (oauth_credential, oauth_agent_did) = if target.provider_kind.is_agent_scoped_oauth() {
+        let (credential, owner) =
             load_oauth_credential_for_discovery(&args, target.provider_kind).await?;
-        (credential, Some(agent_did))
+        (credential, Some(owner))
     } else {
         (None, None)
     };
@@ -153,43 +129,43 @@ pub(super) async fn backend_discover_models(args: BackendDiscoverModelsArgs) -> 
         Err(error) => return Err(error),
     };
 
-    // An empty list would render `models: null` and wipe the column, so it is never written.
-    let models_written = if args.write && !discovered_models.is_empty() {
-        write_discovered_models(
-            args.graphql
-                .as_deref()
-                .expect("checked graphql when backend_id is set"),
-            target
-                .backend_id
-                .as_deref()
-                .expect("checked backend_id when --write is set"),
-            &discovered_models,
-        )
-        .await?
+    let models_written = if args.write {
+        let backend = stored
+            .as_ref()
+            .context("catalog publication needs a stored backend")?;
+        let catalog = BackendModelCatalog {
+            agent_did: matches!(backend.auth, BackendAuth::PrincipalOAuth)
+                .then(|| backend.agent_did.clone()),
+            observed_at: chrono::Utc::now().to_rfc3339(),
+            models: discovered_models.clone(),
+        };
+        let (access, _) =
+            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+        access
+            .transact("cli.backend.discovery", |txn| {
+                let catalog = catalog.clone();
+                Box::pin(
+                    async move { gents::record_model_catalog_in_txn(txn, backend, catalog).await },
+                )
+            })
+            .await?;
+        discovered_models.len()
     } else {
         0
     };
-    let output = json!({
-        "backend_id": target.backend_id,
-        "backend_preset": target.preset.map(BackendPresetArg::as_str),
-        "provider_kind": target.provider_kind.as_str(),
-        "endpoint": target.endpoint,
-        "api_key": target.api_key.as_ref().map(|_| "<redacted>"),
-        "api_key_env_var": target.api_key_env_var,
-        "discovered_models": discovered_models,
-        "models_written": models_written,
-        "write_skipped": (args.write && models_written == 0)
-            .then_some("discovery returned no models; models[] left unchanged"),
-    });
-    print_json(&output)?;
-    Ok(())
+    crate::print_json(&json!({
+        "backend_id":args.backend_id,"backend_preset":args.backend_preset.map(BackendPresetArg::as_str),
+        "provider_kind":target.provider_kind.as_str(),"endpoint":target.endpoint,
+        "api_key":target.api_key.as_ref().map(|_|"<redacted>"),"api_key_env_var":target.api_key_env_var,
+        "discovered_models":discovered_models,"models_written":models_written,"catalog_written":args.write,
+    }))
 }
 
 async fn load_oauth_credential_for_discovery(
     args: &BackendDiscoverModelsArgs,
     provider_kind: BackendProviderKind,
 ) -> Result<(Option<gents::oauth_credential::OAuthCredential>, String)> {
-    let (provider, login) = match provider_kind {
+    let (provider, _login) = match provider_kind {
         BackendProviderKind::ChatGptCodex => (
             gents::chatgpt_codex::CHATGPT_CODEX_PROVIDER,
             "gents codex-login",
@@ -204,14 +180,9 @@ async fn load_oauth_credential_for_discovery(
         ),
         _ => anyhow::bail!("load_oauth_credential_for_discovery called for non-OAuth provider"),
     };
-    let Some(graphql) = normalize_optional_string(args.graphql.as_deref()) else {
-        anyhow::bail!(
-            "--graphql is required to discover models for a {provider_kind} backend: its OAuth \
-             credential is a DefraDB document. Run `{login}` first if needed."
-        );
-    };
     let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
-    let access = ConfigAccess::Graphql(graphql);
+    let (access, _) =
+        crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
     let credential =
         crate::commands::codex_auth_probe::load_oauth_credential(&access, &agent_did, provider)
             .await?;
@@ -258,246 +229,85 @@ fn discovery_error_is_auth(error: &anyhow::Error) -> bool {
 
 async fn resolve_backend_discovery_target(
     args: &BackendDiscoverModelsArgs,
-) -> Result<DiscoveredBackendTarget> {
-    if let Some(backend_id) = normalize_optional_string(args.backend_id.as_deref()) {
-        if args.graphql.is_none() {
-            anyhow::bail!("--graphql is required when --backend-id is set");
-        }
-        if args.backend_preset.is_some()
-            || normalize_optional_string(args.provider_kind.as_deref()).is_some()
-            || normalize_optional_string(args.endpoint.as_deref()).is_some()
-            || normalize_optional_string(args.api_key.as_deref()).is_some()
-            || normalize_optional_string(args.api_key_env_var.as_deref()).is_some()
-        {
-            anyhow::bail!(
-                "--backend-id uses the stored backend document; do not combine it with explicit preset, endpoint, provider, or auth flags"
-            );
-        }
-        let backend = load_backend_row(
-            args.graphql
-                .as_deref()
-                .expect("checked graphql when backend_id is set"),
-            &backend_id,
-        )
-        .await?;
-        let provider_kind = BackendProviderKind::parse_optional(
-            backend.get("provider_kind").and_then(Value::as_str),
-        )?;
-        let endpoint = backend
-            .get("endpoint")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| anyhow::anyhow!("backend {backend_id} is missing endpoint"))?
-            .to_string();
-        let api_key = normalize_optional_string(backend.get("api_key").and_then(Value::as_str));
-        let api_key_env_var =
-            normalize_optional_string(backend.get("api_key_env_var").and_then(Value::as_str));
-        if api_key.is_some() && api_key_env_var.is_some() {
-            anyhow::bail!(
-                "backend {backend_id} sets both raw api_key and api_key_env_var; discovery is ambiguous"
-            );
-        }
-        let resolved_api_key = match (api_key, api_key_env_var.clone()) {
-            (Some(raw), None) => Some(raw),
-            (None, Some(name)) => Some(resolve_required_env_api_key(&name)?),
-            (None, None) => None,
-            (Some(_), Some(_)) => unreachable!("guarded above"),
+) -> Result<(Option<InferenceBackend>, ResolvedBackendConfig)> {
+    if let Some(id) = args.backend_id.as_deref() {
+        anyhow::ensure!(
+            args.backend_preset.is_none()
+                && args.provider_kind.is_none()
+                && args.endpoint.is_none()
+                && args.api_key.is_none()
+                && args.api_key_env_var.is_none(),
+            "--backend-id uses stored configuration; explicit provider, endpoint and auth flags cannot override it"
+        );
+        let owner = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())?;
+        let (access, _) =
+            crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+        let backend = access
+            .transact("cli.backend.discovery_target", |txn| {
+                let owner = &owner;
+                Box::pin(async move {
+                    let (_, value) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::InferenceBackend,
+                        owner,
+                        id,
+                    )
+                    .await?
+                    .context("backend absent in selected owner")?;
+                    Ok(serde_json::from_value::<InferenceBackend>(value)?)
+                })
+            })
+            .await?;
+        backend.validate()?;
+        let target = ResolvedBackendConfig {
+            provider_kind: backend.provider_kind,
+            openai_wire_api: backend.openai_wire_api,
+            endpoint: backend.endpoint.clone(),
+            api_key: backend.auth.resolve_api_key()?,
+            api_key_env_var: match &backend.auth {
+                BackendAuth::Environment { variable } => Some(variable.clone()),
+                _ => None,
+            },
         };
-        return Ok(DiscoveredBackendTarget {
-            backend_id: Some(backend_id),
-            preset: None,
-            provider_kind,
-            endpoint,
-            api_key: resolved_api_key,
-            api_key_env_var,
-        });
+        return Ok((Some(backend), target));
     }
-
-    let preset = args.backend_preset;
-    let api_key = normalize_optional_string(args.api_key.as_deref());
-    let explicit_api_key_env_var = normalize_optional_string(args.api_key_env_var.as_deref());
-    if api_key.is_some() && explicit_api_key_env_var.is_some() {
-        anyhow::bail!("provide either --api-key or --api-key-env-var, not both");
-    }
-    let endpoint = resolve_backend_endpoint(
-        args.endpoint.as_deref(),
-        preset,
-        BackendResolutionMode::ConfigWrite,
-    )?;
-    let provider_kind = resolve_backend_provider_kind(args.provider_kind.as_deref(), preset)?;
-    let api_key_env_var =
-        resolve_backend_api_key_env_var(explicit_api_key_env_var, api_key.is_some(), preset);
-    let resolved_api_key = match (api_key, api_key_env_var.clone()) {
-        (Some(raw), None) => Some(raw),
-        (None, Some(name)) => Some(resolve_required_env_api_key(&name)?),
-        (None, None) => None,
-        (Some(_), Some(_)) => unreachable!("guarded above"),
-    };
-    Ok(DiscoveredBackendTarget {
-        backend_id: None,
-        preset,
-        provider_kind,
-        endpoint,
-        api_key: resolved_api_key,
-        api_key_env_var,
-    })
-}
-
-fn resolve_required_env_api_key(name: &str) -> Result<String> {
-    let value = std::env::var(name)
-        .with_context(|| format!("required backend API key env var {name} is not set"))?;
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        anyhow::bail!("required backend API key env var {name} is empty");
-    }
-    Ok(trimmed.to_string())
-}
-
-async fn load_backend_row(graphql: &str, backend_id: &str) -> Result<Value> {
-    let response = post_graphql(
-        graphql,
-        &format!(
-            r#"{{
-                InferenceBackend(
-                    filter: {{ backend_id: {{ _eq: "{}" }} }},
-                    limit: 1
-                ) {{
-                    {}
-                }}
-            }}"#,
-            escape_graphql_string(backend_id),
-            EXPORT_INFERENCE_BACKEND_FIELDS,
-        ),
-    )
-    .await?;
-    response
-        .get("data")
-        .and_then(|data| data.get("InferenceBackend"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("backend {backend_id} not found"))
-}
-
-fn resolve_backend_upsert_config(args: &BackendUpsertArgs) -> Result<ResolvedBackendConfig> {
-    crate::resolve_helpers::resolve_backend_config_with_preset(
+    let mut target = crate::resolve_helpers::resolve_backend_config_with_preset(
         args.backend_preset,
         args.endpoint.as_deref(),
         args.provider_kind.as_deref(),
-        args.openai_wire_api,
+        None,
         args.api_key.as_deref(),
         args.api_key_env_var.as_deref(),
         BackendResolutionMode::ConfigWrite,
-    )
-}
-
-fn resolve_backend_endpoint(
-    explicit: Option<&str>,
-    preset: Option<BackendPresetArg>,
-    mode: BackendResolutionMode,
-) -> Result<String> {
-    normalize_optional_string(explicit)
-        .or_else(|| preset.and_then(|candidate| candidate.default_endpoint().map(str::to_string)))
-        .or_else(|| {
-            (mode == BackendResolutionMode::Init)
-                .then(|| std::env::var("INFERENCE_ENDPOINT").ok())
-                .flatten()
-                .and_then(|value| {
-                    let trimmed = value.trim();
-                    (!trimmed.is_empty()).then(|| trimmed.to_string())
-                })
-        })
-        .or_else(|| {
-            (mode == BackendResolutionMode::Init).then(|| crate::DEFAULT_INIT_ENDPOINT.to_string())
-        })
-        .ok_or_else(|| match mode {
-            BackendResolutionMode::Init => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass it explicitly: `gents init --inference-url http://HOST:PORT/v1 --model-name MODEL`\n  2. Or choose a preset with a default endpoint: `gents init --backend-preset openrouter --model-name MODEL`\n  3. Or set INFERENCE_ENDPOINT before running `gents init`"
-            ),
-            BackendResolutionMode::ConfigWrite => anyhow::anyhow!(
-                "an inference endpoint is required\nNext:\n  1. Pass --inference-url explicitly\n  2. Or choose a preset with a default endpoint, such as --backend-preset openrouter"
-            ),
-        })
-}
-
-fn resolve_backend_provider_kind(
-    explicit: Option<&str>,
-    preset: Option<BackendPresetArg>,
-) -> Result<BackendProviderKind> {
-    match normalize_optional_string(explicit) {
-        Some(value) => BackendProviderKind::parse_optional(Some(&value)),
-        None => Ok(
-            preset.map_or_else(BackendProviderKind::default, |candidate| {
-                candidate.provider_kind()
-            }),
-        ),
+    )?;
+    if target.api_key.is_none() {
+        if let Some(variable) = &target.api_key_env_var {
+            target.api_key = BackendAuth::Environment {
+                variable: variable.clone(),
+            }
+            .resolve_api_key()?;
+        }
     }
-}
-
-fn resolve_backend_api_key_env_var(
-    explicit: Option<String>,
-    raw_api_key_present: bool,
-    preset: Option<BackendPresetArg>,
-) -> Option<String> {
-    explicit.or_else(|| {
-        (!raw_api_key_present)
-            .then(|| preset.and_then(|candidate| candidate.default_api_key_env_var()))
-            .flatten()
-            .map(ToOwned::to_owned)
-    })
+    Ok((None, target))
 }
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
-
     use super::*;
-
-    /// `backend set` validates the document before writing (#1331). The
-    /// claude-cli-subscription preset must pass that gate on its own: a
-    /// non-empty placeholder endpoint, no api_key, positive max_*.
     #[test]
-    fn config_backend_claude_cli_subscription_preset_passes_validation() {
-        let cli = Cli::try_parse_from([
-            "gents",
-            "config",
-            "backend",
-            "set",
-            "--graphql",
-            "http://127.0.0.1:1/graphql",
-            "--backend-id",
-            "claude-max",
-            "--name",
-            "Claude Max",
-            "--backend-preset",
-            "claude-cli-subscription",
-            "--max-concurrent",
-            "1",
-        ])
-        .expect("parse");
-        let Command::Config {
-            command:
-                ConfigCommand::Backend {
-                    command: BackendCommand::Set(args),
-                },
-        } = cli.command
-        else {
-            panic!("expected config backend set")
-        };
-        let backend = resolve_backend_upsert_config(&args).expect("resolve preset");
-        assert_eq!(
-            backend.provider_kind,
-            BackendProviderKind::ClaudeCliSubscription
-        );
-        assert_eq!(
-            backend.endpoint,
-            gents::claude_subscription::default_backend_endpoint()
-        );
-        assert_eq!(backend.api_key, None);
-        assert_eq!(backend.api_key_env_var, None);
-        to_document_backend(&args, &backend)
-            .validate(None)
-            .expect("preset document validates");
+    fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
+        let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_o_auth"}}"#).unwrap();
+        assert_eq!(backend.auth, BackendAuth::PrincipalOAuth);
+        assert_eq!(backend.max_concurrent, None);
+        assert!(plan.documents()[0].add.get("catalogs").is_none());
+        assert!(plan.documents()[0].add.get("models").is_none());
+    }
+    #[test]
+    fn retired_auth_and_observation_fields_are_not_config() {
+        for field in ["api_key", "models", "probe_status"] {
+            let mut value = json!({"agent_did":"owner","backend_id":"local","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}});
+            value[field] = json!("invalid");
+            assert!(backend_plan(&serde_json::to_vec(&value).unwrap()).is_err());
+        }
     }
 }

@@ -1,13 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
 use gents_protocol::client_protocol::{project_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
-use super::super::store::query_node_json;
 use super::super::{trace, ConnectionState, ShimState, TurnStreamControl};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -15,11 +13,14 @@ pub(super) struct ActiveCodexTurn {
     pub(super) turn_id: String,
     pub(super) interrupt_request_id: String,
     pub(super) current_request_id: String,
+    pub(super) current_request_doc_id: String,
+    pub(super) interrupt_request_doc_id: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct NextSteeringRequest {
     pub(super) request_id: String,
+    pub(super) request_doc_id: String,
     pub(super) created_at: String,
     lifecycle_state: Option<RequestLifecycleState>,
 }
@@ -137,15 +138,22 @@ impl Drop for TurnStreamRegistration {
     }
 }
 
-pub(super) fn cancel_abandoned_steering_request(state: &ShimState, request_id: String) {
+pub(super) fn cancel_abandoned_steering_request(
+    state: &ShimState,
+    request: &crate::SubmittedRequest,
+) {
     let node = state.node.clone();
+    let request = request.clone();
     tokio::spawn(async move {
-        if let Err(error) = gents::interrupt_request(node.as_ref(), &request_id).await {
-            tracing::warn!(
-                %error,
-                request_id,
-                "Codex shim failed to interrupt abandoned steering request"
-            );
+        if let Err(error) = gents::interrupt_request_by_doc_id(
+            &node,
+            &request.request_doc_id,
+            &request.agent_did,
+            request.requester_did.as_deref(),
+        )
+        .await
+        {
+            tracing::warn!(%error,request_id=%request.request_id,"Codex shim failed to interrupt abandoned steering request");
         }
     });
 }
@@ -154,7 +162,13 @@ pub(super) async fn load_active_codex_turn(
     state: &ShimState,
     thread_id: &str,
 ) -> Result<Option<ActiveCodexTurn>> {
-    let rows = load_thread_request_rows(state, thread_id).await?;
+    let rows = load_thread_request_rows(
+        state,
+        &state.agent_did,
+        Some(state.local_requester_did()),
+        thread_id,
+    )
+    .await?;
     active_codex_turn_from_rows(&rows, None)
 }
 
@@ -163,7 +177,13 @@ pub(super) async fn next_steering_request_after(
     thread_id: &str,
     queued_after_request_id: &str,
 ) -> Result<Option<NextSteeringRequest>> {
-    let rows = load_thread_request_rows(state, thread_id).await?;
+    let rows = load_thread_request_rows(
+        state,
+        &state.agent_did,
+        Some(state.local_requester_did()),
+        thread_id,
+    )
+    .await?;
     Ok(next_steering_request_after_from_rows(
         &rows,
         queued_after_request_id,
@@ -172,10 +192,12 @@ pub(super) async fn next_steering_request_after(
 
 pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
     state: &ShimState,
+    agent_did: &str,
+    requester_did: Option<&str>,
     thread_id: &str,
     request_id: &str,
 ) -> Result<String> {
-    let rows = load_thread_request_rows(state, thread_id).await?;
+    let rows = load_thread_request_rows(state, agent_did, requester_did, thread_id).await?;
     let by_id = rows
         .iter()
         .map(|row| (row.request_id.as_str(), row))
@@ -199,6 +221,7 @@ fn next_steering_request_after_from_rows(
         })
         .map(|row| NextSteeringRequest {
             request_id: row.request_id.clone(),
+            request_doc_id: row.doc_id.clone().expect("validated physical request"),
             created_at: row
                 .created_at
                 .clone()
@@ -212,8 +235,14 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
     thread_id: &str,
     turn_id: &str,
     interrupt_request_id: &str,
-) -> Result<Vec<String>> {
-    let rows = load_thread_request_rows(state, thread_id).await?;
+) -> Result<Vec<(String, String)>> {
+    let rows = load_thread_request_rows(
+        state,
+        &state.agent_did,
+        Some(state.local_requester_did()),
+        thread_id,
+    )
+    .await?;
     let by_id = rows
         .iter()
         .map(|row| (row.request_id.as_str(), row))
@@ -226,7 +255,12 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
     }) {
         let (root, _) = codex_turn_root_and_depth(row, &by_id)?;
         if root == turn_id {
-            request_ids.push(row.request_id.clone());
+            request_ids.push((
+                row.request_id.clone(),
+                row.doc_id
+                    .clone()
+                    .context("steering request has no physical identity")?,
+            ));
         }
     }
     Ok(request_ids)
@@ -285,7 +319,14 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
         }),
     );
     let request_id = active.interrupt_request_id.clone();
-    if let Err(error) = gents::interrupt_request(state.node.as_ref(), &request_id).await {
+    if let Err(error) = gents::interrupt_request_by_doc_id(
+        state.node.as_ref(),
+        &active.interrupt_request_doc_id,
+        &state.agent_did,
+        Some(state.local_requester_did()),
+    )
+    .await
+    {
         trace::shim_event_fields(
             &state.trace_path,
             "turn_interrupt_latch_failed",
@@ -324,9 +365,16 @@ pub(in crate::commands::codex_shim) async fn interrupt_active_turn(
             "request_ids": cleanup_request_ids,
         }),
     );
-    for request_id in cleanup_request_ids {
+    for (request_id, request_doc_id) in cleanup_request_ids {
         connection.take_steering_input(&request_id).await;
-        if let Err(error) = gents::interrupt_request(state.node.as_ref(), &request_id).await {
+        if let Err(error) = gents::interrupt_request_by_doc_id(
+            state.node.as_ref(),
+            &request_doc_id,
+            &state.agent_did,
+            Some(state.local_requester_did()),
+        )
+        .await
+        {
             trace::shim_event_fields(
                 &state.trace_path,
                 "turn_interrupt_cleanup_latch_failed",
@@ -381,86 +429,43 @@ fn stream_key(thread_id: &str, turn_id: &str) -> String {
 
 async fn load_thread_request_rows(
     state: &ShimState,
+    agent_did: &str,
+    requester_did: Option<&str>,
     thread_id: &str,
 ) -> Result<Vec<RequestWithResponseStatus>> {
-    let thread_id = escape_graphql_string(thread_id);
-    let agent_did = escape_graphql_string(state.agent_did.as_ref());
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{thread_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }}
-                }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
-            ) {{
-                request_id
-                lifecycle_state
-                superseded_by_request
-                metadata
-                created_at
-            }}
-            AgentResponse(
-                filter: {{
-                    session_id: {{ _eq: "{thread_id}" }},
-                    agent_did: {{ _eq: "{agent_did}" }}
-                }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                status
-                created_at
-            }}
-        }}"#
-    );
-    let response = query_node_json(state.node.as_ref(), &query).await?;
-    let mut rows = response
-        .pointer("/data/AgentRequest")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(decode_request_row)
-        .collect::<Result<Vec<_>>>()?;
-    let latest_response_status = response
-        .pointer("/data/AgentResponse")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .fold(
-            BTreeMap::<String, (String, String)>::new(),
-            |mut latest, row| {
-                let Some(request_id) = row.get("request_id").and_then(Value::as_str) else {
-                    return latest;
-                };
-                let Some(status) = row.get("status").and_then(Value::as_str) else {
-                    return latest;
-                };
-                let created_at = row
-                    .get("created_at")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let replace = latest
-                    .get(request_id)
-                    .is_none_or(|(_, previous_created_at)| created_at > *previous_created_at);
-                if replace {
-                    latest.insert(request_id.to_string(), (status.to_string(), created_at));
-                }
-                latest
-            },
-        );
-    for row in &mut rows {
-        row.response_status = latest_response_status
-            .get(&row.request_id)
-            .map(|(status, _)| status.clone());
-    }
-    Ok(rows)
+    let scope = gents::session::session_scope_filter(agent_did, thread_id, requester_did);
+    gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.active.rows",|txn| {
+        let scope=&scope;
+        Box::pin(async move {
+            let response=txn.execute(&format!(r#"{{
+                AgentRequest(filter:{{{scope}}},order:[{{created_at:ASC}},{{request_id:ASC}}]){{
+                    _docID request_id agent_did requester_did session_id behavior_id lifecycle_state superseded_by_request input created_at
+                }}
+                AgentResponse(filter:{{{scope}}}){{request_doc_id request_id status}}
+            }}"#)).await?;
+            let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
+            let mut rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
+            let mut labels=BTreeSet::new();
+            for row in &rows {anyhow::ensure!(labels.insert(row.request_id.clone()),"ambiguous scoped active request label");}
+            let mut statuses=BTreeMap::new();
+            for value in response.pointer("/data/AgentResponse").and_then(Value::as_array).context("active response query omitted rows")? {
+                let physical=value.get("request_doc_id").and_then(Value::as_str).context("active response missing physical request")?;
+                anyhow::ensure!(statuses.insert(physical,value.get("status").and_then(Value::as_str)).is_none(),"duplicate response for active physical request");
+            }
+            for row in &mut rows {row.response_status=statuses.get(row.doc_id.as_deref().expect("validated physical request")).copied().flatten().map(ToOwned::to_owned);}
+            Ok(rows)
+        })
+    }).await
 }
 
 fn decode_request_row(row: Value) -> Result<RequestWithResponseStatus> {
     let request: AgentRequestRow =
         serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
+    request
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("AgentRequest row missing physical identity")?;
     request
         .created_at
         .as_deref()
@@ -513,10 +518,19 @@ fn active_codex_turn_from_rows(
         })
         .map(|(row, _, _)| row.request_id.clone())
         .unwrap_or_else(|| tail.request_id.clone());
+    let interrupt_request_doc_id = by_id
+        .get(interrupt_request_id.as_str())
+        .and_then(|row| row.doc_id.clone())
+        .context("interrupt request has no physical identity")?;
     Ok(Some(ActiveCodexTurn {
         turn_id: root,
         interrupt_request_id,
         current_request_id: tail.request_id.clone(),
+        current_request_doc_id: tail
+            .doc_id
+            .clone()
+            .context("active request has no physical identity")?,
+        interrupt_request_doc_id,
     }))
 }
 
@@ -547,22 +561,10 @@ fn codex_turn_root_and_depth<'a>(
 }
 
 fn steering_parent_id(row: &RequestWithResponseStatus) -> Option<String> {
-    let metadata = row.metadata.as_deref()?.trim();
-    if metadata.is_empty() {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(metadata).ok()?;
-    let queue = value.get("queue")?;
-    let source = queue.get("source").and_then(Value::as_str)?;
-    if source != "steering" {
-        return None;
-    }
-    queue
-        .get("queued_after_request_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|request_id| !request_id.is_empty())
-        .map(ToOwned::to_owned)
+    let queue = row.input.as_ref()?.queue.as_ref()?;
+    (queue.source == gents_protocol::request_input::QueueSource::Steering)
+        .then(|| queue.queued_after_request_id.clone())
+        .flatten()
 }
 
 impl RequestWithResponseStatus {
@@ -585,7 +587,7 @@ mod tests {
         lifecycle_state: &str,
         queued_after: Option<&str>,
     ) -> RequestWithResponseStatus {
-        let metadata = queued_after.map(|parent| {
+        let input = queued_after.map(|parent| {
             serde_json::json!({
                 "queue": {
                     "source": "steering",
@@ -594,13 +596,13 @@ mod tests {
                     "queued_after_request_id": parent
                 }
             })
-            .to_string()
         });
         RequestWithResponseStatus {
             request: serde_json::from_value(json!({
                 "request_id": request_id,
                 "lifecycle_state": lifecycle_state,
-                "metadata": metadata,
+                "input": input,
+                "_docID": format!("physical:{request_id}"),
                 "created_at": request_id,
             }))
             .expect("canonical AgentRequest test row"),
@@ -626,6 +628,8 @@ mod tests {
                 turn_id: "turn-1".to_string(),
                 interrupt_request_id: "turn-1".to_string(),
                 current_request_id: "steer-2".to_string(),
+                current_request_doc_id: "physical:steer-2".into(),
+                interrupt_request_doc_id: "physical:turn-1".into(),
             }
         );
     }

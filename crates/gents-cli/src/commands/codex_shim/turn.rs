@@ -15,7 +15,7 @@ use submission::create_agent_request_with_retry;
 
 use super::progress::timestamp_millis;
 use super::protocol::{
-    codex_steering_metadata, codex_turn_metadata, selected_skill_ids_from_input,
+    codex_steering_input, codex_turn_input, selected_skill_ids_from_input,
     send_committed_user_message, send_error, send_notification, send_result,
     send_thread_status_changed, timestamp_seconds, turn_value_with_timing, user_text_from_input,
 };
@@ -61,14 +61,14 @@ pub(super) async fn start_gents_turn(
 
     let cwd = state.thread_cwd(&thread_id).await;
     let thread_name = state.thread_name(&thread_id).await;
-    let metadata = codex_turn_metadata(&cwd, &selected_skill_ids, Some(&thread_name));
+    let request_input = codex_turn_input(&cwd, &selected_skill_ids, Some(&thread_name));
 
     let submitted = match create_agent_request_with_retry(
         state,
         &user_text,
         Some(&thread_id),
         RequestSubmitOptions {
-            metadata: Some(metadata),
+            input: Some(request_input),
             ..RequestSubmitOptions::default()
         },
     )
@@ -253,13 +253,13 @@ pub(super) async fn steer_gents_turn(
 
     let turn_id = active_turn.turn_id.clone();
     let queued_after_request_id = active_turn.current_request_id.clone();
-    let metadata = codex_steering_metadata(&cwd, &queued_after_request_id, &selected_skill_ids);
+    let request_input = codex_steering_input(&cwd, &queued_after_request_id, &selected_skill_ids);
     let submitted = match create_agent_request_with_retry(
         state,
         &user_text,
         Some(&params.thread_id),
         RequestSubmitOptions {
-            metadata: Some(metadata),
+            input: Some(request_input),
             ..RequestSubmitOptions::default()
         },
     )
@@ -278,7 +278,7 @@ pub(super) async fn steer_gents_turn(
     };
 
     let Some(current_active) = load_active_codex_turn(state, &params.thread_id).await? else {
-        cancel_abandoned_steering_request(state, submitted.request_id.clone());
+        cancel_abandoned_steering_request(state, &submitted);
         return send_error(
             &connection.outbound,
             request_id,
@@ -289,7 +289,7 @@ pub(super) async fn steer_gents_turn(
     };
     if current_active.turn_id != turn_id {
         let current_turn_id = current_active.turn_id.clone();
-        cancel_abandoned_steering_request(state, submitted.request_id.clone());
+        cancel_abandoned_steering_request(state, &submitted);
         return send_error(
             &connection.outbound,
             request_id,

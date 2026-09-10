@@ -37,32 +37,6 @@ fn env_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn parse_tools_set(extra: &[&str]) -> ToolSelectionUpsertArgs {
-    let mut argv = vec![
-        "gents",
-        "config",
-        "tools",
-        "set",
-        "--graphql",
-        "http://127.0.0.1/api/v0/graphql",
-        "--agent-did",
-        "did:key:z-test",
-        "--selection-id",
-        "s1",
-    ];
-    argv.extend_from_slice(extra);
-    let cli = Cli::try_parse_from(argv).expect("config tools set should parse");
-    match cli.command {
-        Command::Config {
-            command:
-                ConfigCommand::Tools {
-                    command: ToolSelectionCommand::Set(args),
-                },
-        } => args,
-        _ => panic!("expected `config tools set`"),
-    }
-}
-
 fn parse_init(extra: &[&str]) -> InitArgs {
     let mut argv = vec!["gents", "init"];
     argv.extend_from_slice(extra);
@@ -141,58 +115,6 @@ fn assert_task_run_args(args: ConfigTaskRunArgs) {
         crate::DEFAULT_INTERACTIVE_WAIT_TIMEOUT_SECS
     );
     assert_eq!(args.poll_secs, 1);
-}
-
-#[test]
-fn enable_defra_query_flag_accepts_false_true_and_omission() {
-    assert_eq!(parse_tools_set(&[]).enable_defra_query, None);
-    assert_eq!(
-        parse_tools_set(&["--enable-defra-query", "false"]).enable_defra_query,
-        Some(false)
-    );
-    assert_eq!(
-        parse_tools_set(&["--enable-defra-query", "true"]).enable_defra_query,
-        Some(true)
-    );
-}
-
-#[test]
-fn enable_context_budget_flag_accepts_false_true_and_omission() {
-    assert_eq!(parse_tools_set(&[]).enable_context_budget, None);
-    assert_eq!(
-        parse_tools_set(&["--enable-context-budget", "false"]).enable_context_budget,
-        Some(false)
-    );
-    assert_eq!(
-        parse_tools_set(&["--enable-context-budget", "true"]).enable_context_budget,
-        Some(true)
-    );
-}
-
-#[test]
-fn enable_memory_flag_accepts_false_true_and_omission() {
-    assert_eq!(parse_tools_set(&[]).enable_memory, None);
-    assert_eq!(
-        parse_tools_set(&["--enable-memory", "false"]).enable_memory,
-        Some(false)
-    );
-    assert_eq!(
-        parse_tools_set(&["--enable-memory", "true"]).enable_memory,
-        Some(true)
-    );
-}
-
-#[test]
-fn enable_session_history_tool_flag_accepts_false_true_and_omission() {
-    assert_eq!(parse_tools_set(&[]).enable_session_history_tool, None);
-    assert_eq!(
-        parse_tools_set(&["--enable-session-history-tool", "false"]).enable_session_history_tool,
-        Some(false)
-    );
-    assert_eq!(
-        parse_tools_set(&["--enable-session-history-tool", "true"]).enable_session_history_tool,
-        Some(true)
-    );
 }
 
 #[test]
@@ -303,69 +225,6 @@ fn server_p2p_admission_env_parse() {
     assert_eq!(args.p2p_max_concurrent_dag_fetches, Some(9));
     assert_eq!(args.p2p_rate_limit_burst, Some(5678));
     assert_eq!(args.p2p_rate_limit_rate, Some(42.25));
-}
-
-#[test]
-fn subagent_tool_flags_preserve_when_omitted_and_parse_when_present() {
-    let omitted = parse_tools_set(&[]);
-    assert_eq!(omitted.enable_file_tools, None);
-    assert_eq!(omitted.enable_bash, None);
-    assert_eq!(omitted.enable_meta_tools, None);
-    assert_eq!(omitted.enable_goal_tools, None);
-    assert_eq!(omitted.enable_goal_creation, None);
-    assert!(omitted.subagent_targets.is_empty());
-    assert!(!omitted.clear_subagent_targets);
-    assert_eq!(omitted.subagent_spawn_enabled, None);
-    assert_eq!(omitted.subagent_steering_enabled, None);
-    assert_eq!(omitted.subagent_background_enabled, None);
-    assert_eq!(omitted.subagent_allow_cross_deployment, None);
-    assert_eq!(omitted.cross_deployment_spawn_timeout_seconds, None);
-
-    let configured = parse_tools_set(&[
-        "--subagent-target",
-        r#"{"name":"worker","agent_did":"did:key:z-test","behavior_id":"worker","description":"worker"}"#,
-        "--subagent-spawn-enabled",
-        "true",
-        "--subagent-steering-enabled",
-        "true",
-        "--subagent-background-enabled",
-        "false",
-        "--subagent-allow-cross-deployment",
-        "true",
-        "--cross-deployment-spawn-timeout-seconds",
-        "90",
-    ]);
-    assert_eq!(configured.subagent_targets.len(), 1);
-    assert_eq!(configured.subagent_spawn_enabled, Some(true));
-    assert_eq!(configured.subagent_steering_enabled, Some(true));
-    assert_eq!(configured.subagent_background_enabled, Some(false));
-    assert_eq!(configured.subagent_allow_cross_deployment, Some(true));
-    assert_eq!(configured.cross_deployment_spawn_timeout_seconds, Some(90));
-}
-
-#[test]
-fn tool_bool_flags_are_patch_optional() {
-    let bare = parse_tools_set(&["--enable-file-tools", "--enable-bash"]);
-    assert_eq!(bare.enable_file_tools, Some(true));
-    assert_eq!(bare.enable_bash, Some(true));
-
-    let explicit = parse_tools_set(&[
-        "--enable-file-tools",
-        "false",
-        "--enable-bash",
-        "false",
-        "--enable-meta-tools",
-        "false",
-        "--enable-goal-tools",
-        "true",
-        "--enable-goal-creation",
-        "false",
-    ]);
-    assert_eq!(explicit.enable_file_tools, Some(false));
-    assert_eq!(explicit.enable_bash, Some(false));
-    assert_eq!(explicit.enable_meta_tools, Some(false));
-    assert_eq!(explicit.enable_goal_tools, Some(true));
-    assert_eq!(explicit.enable_goal_creation, Some(false));
 }
 
 #[test]
@@ -980,5 +839,31 @@ fn claude_login_parses_oauth_flags_and_rejects_seat_flags() {
             Cli::try_parse_from(["gents", "claude-login", removed, "x"]).is_err(),
             "{removed} must be gone"
         );
+    }
+}
+
+#[test]
+fn tools_set_accepts_canonical_document_and_rejects_retired_flat_flags() {
+    let cli = Cli::try_parse_from(["gents", "config", "tools", "set", "--file", "tools.json", "--home", ".gents"]).unwrap();
+    match cli.command {
+        Command::Config { command: ConfigCommand::Tools { command: ToolsConfigCommand::Set(args) }} => {
+            assert_eq!(args.file, std::path::PathBuf::from("tools.json"));
+            assert_eq!(args.home, Some(std::path::PathBuf::from(".gents")));
+        }
+        _ => panic!("expected tools set"),
+    }
+    assert!(Cli::try_parse_from(["gents", "config", "tools", "set", "--file", "tools.json", "--enable-bash"]).is_err());
+}
+
+#[test]
+fn subagent_target_entry_distinguishes_owner_from_destination() {
+    let cli = Cli::try_parse_from(["gents", "config", "tools", "subagent-target-entry", "--target-id", "worker", "--agent-did", "caller", "--target-agent-did", "remote", "--name", "worker", "--behavior-id", "research"]).unwrap();
+    match cli.command {
+        Command::Config { command: ConfigCommand::Tools { command: ToolsConfigCommand::SubagentTargetEntry(args) }} => {
+            assert_eq!(args.agent_did, "caller");
+            assert_eq!(args.target_agent_did, "remote");
+            assert_eq!(args.target_id, "worker");
+        }
+        _ => panic!("expected target document builder"),
     }
 }

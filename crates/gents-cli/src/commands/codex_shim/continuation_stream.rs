@@ -206,8 +206,14 @@ async fn project_child_lifecycle_update(
     link: &LinkedSubagentThread,
     links: &[LinkedSubagentThread],
 ) -> Result<()> {
-    let turn_id =
-        codex_turn_id_for_request(state, &link.parent_session_id, &link.parent_request_id).await?;
+    let turn_id = codex_turn_id_for_request(
+        state,
+        &link.parent_agent_did,
+        link.parent_requester_did.as_deref(),
+        &link.parent_session_id,
+        &link.parent_request_id,
+    )
+    .await?;
     if connection
         .has_turn_stream(&link.parent_session_id, &turn_id)
         .await
@@ -217,7 +223,7 @@ async fn project_child_lifecycle_update(
 
     let response = query_node_json(
         state.node.as_ref(),
-        &gents_tool_progress_query(&link.parent_request_id, &link.parent_session_id),
+        &gents_tool_progress_query(&link.parent_request_doc_id, &link.parent_session_id),
     )
     .await?;
     let Some(mut tool) = response
@@ -300,13 +306,11 @@ async fn project_background_continuation(
         session_id: session_id.clone(),
         agent_did,
         behavior_id: request.behavior_id,
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: request.metadata,
+        request_doc_id: request
+            .doc_id
+            .context("continuation has no physical request")?,
+        requester_did: request.requester_did,
+        input: request.input,
         created_at: request.created_at,
     };
     let cwd = state.thread_cwd(&session_id).await;
@@ -375,15 +379,18 @@ async fn load_background_continuation_requests(
                 filter: {{
                     session_id: {{ _eq: "{thread_id}" }},
                     agent_did: {{ _eq: "{agent_did}" }},
+                    requester_did: {{ _eq: "{agent_did}" }},
                     behavior_id: {{ _eq: "{behavior_id}" }}
                 }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
+                _docID
+                requester_did
                 request_id
                 session_id
                 agent_did
                 behavior_id
-                metadata
+                input
                 lifecycle_state
                 created_at
             }}
@@ -413,29 +420,15 @@ async fn load_background_continuation_requests(
         .collect::<Result<Vec<_>>>()
         .map(|rows| {
             rows.into_iter()
-                .filter(|row| is_background_completion_metadata(row.metadata.as_deref()))
+                .filter(|row| is_background_completion_input(row.input.as_ref()))
                 .collect()
         })
 }
 
-pub(super) fn is_background_completion_metadata(metadata: Option<&str>) -> bool {
-    let Some(metadata) = metadata.map(str::trim).filter(|value| !value.is_empty()) else {
-        return false;
-    };
-    serde_json::from_str::<Value>(metadata)
-        .ok()
-        .and_then(|value| value.get("queue").cloned())
-        .is_some_and(|queue| {
-            queue
-                .get("source")
-                .and_then(Value::as_str)
-                .is_some_and(|source| source == "background_completion")
-                && queue.get("policy").and_then(Value::as_str) == Some("coalesce")
-                && queue
-                    .get("key")
-                    .and_then(Value::as_str)
-                    .is_some_and(|key| !key.trim().is_empty())
-        })
+pub(super) fn is_background_completion_input(
+    input: Option<&gents_protocol::request_input::RequestInput>,
+) -> bool {
+    input.is_some_and(gents::lifecycle::is_background_completion_request)
 }
 
 fn continuation_request_has_started(lifecycle_state: Option<RequestLifecycleState>) -> bool {
@@ -455,26 +448,32 @@ fn baseline_turn_is_terminal(turn: Option<&codex::Turn>) -> bool {
 mod tests {
     use super::{
         baseline_turn_is_terminal, continuation_request_has_started,
-        is_background_completion_metadata, turn_value_with_timing,
+        is_background_completion_input, turn_value_with_timing,
     };
     use gents_codex_protocol as codex;
     use gents_protocol::client_protocol::RequestLifecycleState;
 
     #[test]
     fn recognizes_only_the_canonical_background_completion_source() {
-        assert!(is_background_completion_metadata(Some(
+        fn decode(value: &str) -> gents_protocol::request_input::RequestInput {
+            serde_json::from_str(value).unwrap()
+        }
+        assert!(is_background_completion_input(Some(&decode(
             r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}}"#
-        )));
-        assert!(!is_background_completion_metadata(Some(
-            r#"{"queue":{"source":"subagent_completion","policy":"coalesce","key":"background_completion:thread-1"}}"#
-        )));
-        assert!(!is_background_completion_metadata(Some(
+        ))));
+        assert!(
+            serde_json::from_str::<gents_protocol::request_input::RequestInput>(
+                r#"{"queue":{"source":"subagent_completion","policy":"coalesce"}}"#
+            )
+            .is_err()
+        );
+        assert!(!is_background_completion_input(Some(&decode(
             r#"{"queue":{"source":"steering","policy":"coalesce","key":"background_completion:thread-1"}}"#
-        )));
-        assert!(!is_background_completion_metadata(Some(
+        ))));
+        assert!(!is_background_completion_input(Some(&decode(
             r#"{"queue":{"source":"background_completion","policy":"append","key":"background_completion:thread-1"}}"#
-        )));
-        assert!(!is_background_completion_metadata(Some("{}")));
+        ))));
+        assert!(!is_background_completion_input(Some(&decode("{}"))));
     }
 
     #[test]

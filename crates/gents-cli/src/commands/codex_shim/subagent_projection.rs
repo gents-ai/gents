@@ -12,17 +12,19 @@ use serde::Deserialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-use super::bound_behavior::model_selection_id;
+use super::bound_behavior::load_bound_model_selection_id;
 use super::progress::{observed_tool_status, GentsToolCallProgress};
 use super::projection_state::{ChildStatus, CollabProjection, CollabTool, ProjectionStatus};
 use super::store::query_node_json;
 use super::ShimState;
 
-const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 4] = [
+const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 6] = [
     "AgentRequest",
     "AgentResponse",
     "AgentToolCall",
     "AgentBehavior",
+    "InferenceProfile",
+    "InferenceBackend",
 ];
 
 #[derive(Clone, Debug)]
@@ -73,11 +75,17 @@ impl SubagentProjectionUpdateFilter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct LinkedSubagentThread {
     pub(super) request_id: String,
+    pub(super) request_doc_id: String,
+    pub(super) requester_did: Option<String>,
+    pub(super) latest_request_doc_id: String,
     pub(super) latest_request_id: String,
     pub(super) latest_request_content: String,
     pub(super) latest_request_created_at: Option<String>,
     pub(super) session_id: String,
     pub(super) parent_request_id: String,
+    pub(super) parent_request_doc_id: String,
+    pub(super) parent_agent_did: String,
+    pub(super) parent_requester_did: Option<String>,
     pub(super) parent_tool_call_id: String,
     pub(super) parent_session_id: String,
     pub(super) root_session_id: String,
@@ -112,6 +120,10 @@ impl RequestProjectionRow {
     fn decode(row: Value) -> Result<Self> {
         let row: AgentRequestRow =
             serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
+        row.doc_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .context("AgentRequest row missing physical identity")?;
         row.session_id
             .as_deref()
             .context("AgentRequest row missing session_id")?;
@@ -154,6 +166,9 @@ impl RequestProjectionRow {
 
 #[derive(Clone, Debug, Deserialize)]
 struct ToolLinkRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_doc_id: String,
     request_id: String,
     session_id: String,
     agent_did: String,
@@ -176,22 +191,6 @@ struct ResponseRow {
     created_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct ConversationHeadRow {
-    session_id: String,
-    #[serde(default)]
-    latest_request_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct BehaviorPresentationRow {
-    behavior_id: String,
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    model_name: Option<String>,
-}
-
 #[derive(Clone, Debug)]
 struct AuthorizedRequest {
     row_index: usize,
@@ -200,6 +199,7 @@ struct AuthorizedRequest {
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct RequestContextKey {
+    requester_did: Option<String>,
     session_id: String,
     agent_did: String,
     behavior_id: Option<String>,
@@ -207,6 +207,8 @@ struct RequestContextKey {
 }
 
 const REQUEST_ROW_FIELDS: &str = r#"
+    _docID
+    requester_did
     request_id
     content
     session_id
@@ -218,10 +220,14 @@ const REQUEST_ROW_FIELDS: &str = r#"
     created_at
     subagent_depth
     caused_by_parent_request_id
+    caused_by_parent_request_doc_id
     caused_by_parent_tool_call_id
+    caused_by_parent_tool_call_doc_id
 "#;
 
 const TOOL_LINK_ROW_FIELDS: &str = r#"
+    _docID
+    request_doc_id
     request_id
     session_id
     agent_did
@@ -273,13 +279,13 @@ async fn load_authorized_subagent_threads_for_roots(
     .await?;
     let mut requests =
         decode_request_rows(&response).context("decoding Codex root AgentRequest rows")?;
-    let mut seen_request_ids = requests
+    let mut seen_request_doc_ids = requests
         .iter()
-        .map(|row| row.request_id.clone())
+        .map(|row| row.doc_id.clone().expect("validated physical request"))
         .collect::<HashSet<_>>();
     let mut tools = Vec::<ToolLinkRow>::new();
     let mut seen_tool_edges = HashSet::<(String, String, String)>::new();
-    let mut scanned_sessions = HashSet::<String>::new();
+    let mut scanned_sessions = HashSet::<RequestContextKey>::new();
     let mut scanned_parent_requests = HashSet::<String>::new();
 
     // Walk only the graph frontier reachable from scoped, Codex-stamped roots.
@@ -292,16 +298,20 @@ async fn load_authorized_subagent_threads_for_roots(
             &tools,
             state.agent_did.as_ref(),
             state.behavior_id.as_ref(),
-        );
-        let mut frontier_sessions = requests
+        )?;
+        let frontier_sessions = requests
             .iter()
             .filter(|row| is_projectable_root(row, &state.agent_did, &state.behavior_id))
-            .map(|row| row.session_id().to_string())
-            .chain(links.iter().map(|link| link.session_id.clone()))
+            .map(request_context_key)
+            .chain(links.iter().map(|link| RequestContextKey {
+                session_id: link.session_id.clone(),
+                agent_did: link.agent_did.clone(),
+                requester_did: link.requester_did.clone(),
+                behavior_id: Some(link.behavior_id.clone()),
+                depth: link.depth,
+            }))
             .filter(|session_id| scanned_sessions.insert(session_id.clone()))
             .collect::<Vec<_>>();
-        frontier_sessions.sort();
-        frontier_sessions.dedup();
 
         if !frontier_sessions.is_empty() {
             let response = query_node_json(
@@ -311,13 +321,13 @@ async fn load_authorized_subagent_threads_for_roots(
             .await?;
             let rows = decode_request_rows(&response)
                 .context("decoding linked-session AgentRequest rows")?;
-            extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
+            extend_unique_requests(&mut requests, &mut seen_request_doc_ids, rows);
         }
 
         let mut parent_request_ids = requests
             .iter()
-            .filter(|row| scanned_sessions.contains(row.session_id()))
-            .map(|row| row.request_id.clone())
+            .filter(|row| scanned_sessions.contains(&request_context_key(row)))
+            .map(|row| row.doc_id.clone().expect("validated physical parent"))
             .filter(|request_id| scanned_parent_requests.insert(request_id.clone()))
             .collect::<Vec<_>>();
         parent_request_ids.sort();
@@ -337,8 +347,8 @@ async fn load_authorized_subagent_threads_for_roots(
                     child_request_ids.push(child_request_id.to_string());
                 }
                 let key = (
-                    tool.request_id.clone(),
-                    tool.tool_call_id.clone(),
+                    tool.request_doc_id.clone(),
+                    tool.doc_id.clone(),
                     tool.child_request_id.clone().unwrap_or_default(),
                 );
                 if seen_tool_edges.insert(key) {
@@ -347,7 +357,6 @@ async fn load_authorized_subagent_threads_for_roots(
             }
         }
 
-        child_request_ids.retain(|request_id| !seen_request_ids.contains(request_id));
         child_request_ids.sort();
         child_request_ids.dedup();
         if !child_request_ids.is_empty() {
@@ -358,7 +367,7 @@ async fn load_authorized_subagent_threads_for_roots(
             .await?;
             let rows =
                 decode_request_rows(&response).context("decoding child AgentRequest frontier")?;
-            extend_unique_requests(&mut requests, &mut seen_request_ids, rows);
+            extend_unique_requests(&mut requests, &mut seen_request_doc_ids, rows);
         }
 
         if frontier_sessions.is_empty()
@@ -374,165 +383,71 @@ async fn load_authorized_subagent_threads_for_roots(
         &tools,
         state.agent_did.as_ref(),
         state.behavior_id.as_ref(),
-    );
+    )?;
     attach_canonical_request_heads(state, &requests, &mut links).await?;
-    attach_client_head_projections(state, &mut links).await?;
-    attach_runtime_models(state, &mut links).await;
+    attach_runtime_models(state, &mut links).await?;
     Ok(links)
 }
 
 async fn attach_canonical_request_heads(
     state: &ShimState,
-    requests: &[RequestProjectionRow],
+    _requests: &[RequestProjectionRow],
     links: &mut [LinkedSubagentThread],
 ) -> Result<()> {
-    let mut session_ids = links
-        .iter()
-        .map(|link| link.session_id.clone())
-        .collect::<Vec<_>>();
-    session_ids.sort_unstable();
-    session_ids.dedup();
-    if session_ids.is_empty() {
-        return Ok(());
+    for link in links {
+        let owner = link.agent_did.clone();
+        let session = link.session_id.clone();
+        let requester = link.requester_did.clone();
+        let updated = gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.subagent.head",|txn| {
+            let owner = owner.clone(); let session=session.clone(); let requester=requester.clone();
+            Box::pin(async move {
+                let Some(head) = gents::session::load_latest_request_in_txn(txn,&owner,&session,Some(requester.as_deref())).await? else { return Ok(None); };
+                let scope = gents::session::session_scope_filter(&owner,&session,requester.as_deref());
+                let physical = escape_graphql_string(&head.observed.request_doc_id);
+                let response = txn.execute(&format!(r#"{{AgentRequest(filter:{{{scope},_docID:{{_eq:"{physical}"}}}}){{{REQUEST_ROW_FIELDS}}} AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{request_id status created_at}}}}"#)).await?;
+                let mut requests = decode_request_rows(&response)?;
+                let responses = decode_rows::<ResponseRow>(&response,"AgentResponse")?;
+                anyhow::ensure!(requests.len()==1 && responses.len()<=1,"ambiguous subagent physical head");
+                Ok(Some((requests.remove(0),responses.into_iter().next())))
+            })
+        }).await?;
+        let Some((latest, response)) = updated else {
+            anyhow::bail!("authorized subagent head disappeared");
+        };
+        anyhow::ensure!(
+            latest.behavior_id.as_deref() == Some(link.behavior_id.as_str())
+                && latest.depth() == link.depth,
+            "subagent head crossed behavior/depth"
+        );
+        apply_latest_request(link, &latest);
+        link.client_projection = project_persisted_attempt(
+            latest
+                .lifecycle_state
+                .map(|state| state.as_str())
+                .unwrap_or(""),
+            nonempty(latest.superseded_by_request.as_deref()).is_some(),
+            response.as_ref().and_then(|row| row.status.as_deref()),
+        );
     }
-    let response = query_node_json(
-        state.node.as_ref(),
-        &conversation_heads_for_sessions_query(&session_ids),
-    )
-    .await?;
-    let heads = decode_rows::<ConversationHeadRow>(&response, "AgentConversation")
-        .context("decoding subagent AgentConversation heads")?
-        .into_iter()
-        .filter_map(|row| {
-            nonempty(row.latest_request_id.as_deref())
-                .map(|request_id| (row.session_id, request_id.to_string()))
-        })
-        .collect::<HashMap<_, _>>();
-    apply_canonical_request_heads(requests, &heads, links);
     Ok(())
 }
 
-fn apply_canonical_request_heads(
-    requests: &[RequestProjectionRow],
-    heads: &HashMap<String, String>,
-    links: &mut [LinkedSubagentThread],
-) {
-    let requests_by_id = requests
-        .iter()
-        .map(|row| (row.request_id.as_str(), row))
-        .collect::<HashMap<_, _>>();
-    for link in links {
-        let Some(request_id) = heads.get(&link.session_id) else {
-            continue;
-        };
-        let Some(request) = requests_by_id.get(request_id.as_str()) else {
-            continue;
-        };
-        if request.session_id() != link.session_id
-            || request.agent_did() != link.agent_did
-            || nonempty(request.behavior_id.as_deref()) != Some(link.behavior_id.as_str())
-            || request.depth() != link.depth
-        {
-            continue;
-        }
-        apply_latest_request(link, request);
-    }
-}
-
-async fn attach_client_head_projections(
+async fn attach_runtime_models(
     state: &ShimState,
     links: &mut [LinkedSubagentThread],
 ) -> Result<()> {
-    let mut request_ids = links
-        .iter()
-        .map(|link| link.latest_request_id.clone())
-        .filter(|request_id| !request_id.trim().is_empty())
-        .collect::<Vec<_>>();
-    request_ids.sort_unstable();
-    request_ids.dedup();
-    if request_ids.is_empty() {
-        return Ok(());
-    }
-
-    let response = query_node_json(
-        state.node.as_ref(),
-        &responses_for_request_ids_query(&request_ids),
-    )
-    .await?;
-    let latest_by_request = decode_rows::<ResponseRow>(&response, "AgentResponse")
-        .context("decoding subagent AgentResponse rows")?
-        .into_iter()
-        .fold(HashMap::<String, ResponseRow>::new(), |mut latest, row| {
-            let replace = latest
-                .get(&row.request_id)
-                .is_none_or(|previous| row.created_at > previous.created_at);
-            if replace {
-                latest.insert(row.request_id.clone(), row);
-            }
-            latest
-        });
+    let mut models = HashMap::new();
     for link in links {
-        let Some(head) = link.client_projection.filter(|head| head.is_active()) else {
-            continue;
-        };
-        let response_status = latest_by_request
-            .get(&link.latest_request_id)
-            .and_then(|row| nonempty(row.status.as_deref()));
-        link.client_projection =
-            project_persisted_attempt(head.request_state.as_str(), false, response_status);
+        let key = (link.agent_did.clone(), link.behavior_id.clone());
+        if !models.contains_key(&key) {
+            models.insert(
+                key.clone(),
+                load_bound_model_selection_id(&state.node, &key.0, &key.1).await?,
+            );
+        }
+        link.model = models.get(&key).cloned();
     }
     Ok(())
-}
-
-async fn attach_runtime_models(state: &ShimState, links: &mut [LinkedSubagentThread]) {
-    let mut behavior_ids = links
-        .iter()
-        .map(|link| link.behavior_id.clone())
-        .filter(|behavior_id| !behavior_id.trim().is_empty())
-        .collect::<Vec<_>>();
-    behavior_ids.sort_unstable();
-    behavior_ids.dedup();
-    if behavior_ids.is_empty() {
-        return;
-    }
-
-    let query = format!(
-        r#"{{
-            AgentBehavior(filter: {{ behavior_id: {{ _in: [{}] }} }}) {{
-                behavior_id
-                backend_id
-                model_name
-            }}
-        }}"#,
-        graphql_string_list(behavior_ids.iter().map(String::as_str)),
-    );
-    let response = match query_node_json(state.node.as_ref(), &query).await {
-        Ok(response) => response,
-        Err(error) => {
-            tracing::debug!(%error, "unable to load child behavior model metadata");
-            return;
-        }
-    };
-    let rows = match decode_rows::<BehaviorPresentationRow>(&response, "AgentBehavior") {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::debug!(%error, "unable to decode child behavior model metadata");
-            return;
-        }
-    };
-    let models = rows
-        .into_iter()
-        .filter_map(|row| {
-            let model_name = nonempty(row.model_name.as_deref())?;
-            let model = nonempty(row.backend_id.as_deref())
-                .map(|backend_id| model_selection_id(backend_id, model_name))
-                .unwrap_or_else(|| model_name.to_string());
-            Some((row.behavior_id, model))
-        })
-        .collect::<HashMap<_, _>>();
-    for link in links {
-        link.model = models.get(&link.behavior_id).cloned();
-    }
 }
 
 fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -> String {
@@ -551,6 +466,7 @@ fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -
                 filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
                     behavior_id: {{ _eq: "{behavior_id}" }},
+                    requester_did: {{ _eq: "{agent_did}" }},
                     execution_origin: {{ _eq: "interactive" }}{session_filter}
                 }},
                 order: {{ created_at: ASC }}
@@ -561,23 +477,29 @@ fn root_requests_query(state: &ShimState, root_session_ids: Option<&[String]>) -
     )
 }
 
-fn requests_for_sessions_query(session_ids: &[String]) -> String {
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ session_id: {{ _in: [{}] }} }},
-                order: {{ created_at: ASC }}
-            ) {{ {REQUEST_ROW_FIELDS} }}
-        }}"#,
-        graphql_string_list(session_ids.iter().map(String::as_str)),
-    )
+fn requests_for_sessions_query(scopes: &[RequestContextKey]) -> String {
+    let filters = scopes
+        .iter()
+        .map(|scope| {
+            format!(
+                "{{{}}}",
+                gents::session::session_scope_filter(
+                    &scope.agent_did,
+                    &scope.session_id,
+                    scope.requester_did.as_deref()
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{AgentRequest(filter:{{_or:[{filters}]}},order:{{created_at:ASC}}){{{REQUEST_ROW_FIELDS}}}}}")
 }
 
 fn spawn_tools_for_requests_query(request_ids: &[String]) -> String {
     format!(
         r#"{{
             AgentToolCall(filter: {{
-                request_id: {{ _in: [{}] }},
+                request_doc_id: {{ _in: [{}] }},
                 tool_name: {{ _eq: "spawn_subagent" }},
                 child_request_id: {{ _ne: "" }}
             }}) {{ {TOOL_LINK_ROW_FIELDS} }}
@@ -605,43 +527,14 @@ fn graphql_string_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String 
         .join(", ")
 }
 
-fn responses_for_request_ids_query(request_ids: &[String]) -> String {
-    format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _in: [{}] }} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                status
-                created_at
-            }}
-        }}"#,
-        graphql_string_list(request_ids.iter().map(String::as_str)),
-    )
-}
-
-fn conversation_heads_for_sessions_query(session_ids: &[String]) -> String {
-    format!(
-        r#"{{
-            AgentConversation(filter: {{ session_id: {{ _in: [{}] }} }}) {{
-                session_id
-                latest_request_id
-            }}
-        }}"#,
-        graphql_string_list(session_ids.iter().map(String::as_str)),
-    )
-}
-
 fn extend_unique_requests(
     requests: &mut Vec<RequestProjectionRow>,
-    seen_request_ids: &mut HashSet<String>,
+    seen_request_doc_ids: &mut HashSet<String>,
     rows: Vec<RequestProjectionRow>,
 ) {
-    requests.extend(
-        rows.into_iter()
-            .filter(|row| seen_request_ids.insert(row.request_id.clone())),
-    );
+    requests.extend(rows.into_iter().filter(|row| {
+        seen_request_doc_ids.insert(row.doc_id.clone().expect("validated physical request"))
+    }));
 }
 
 fn resolve_authorized_subagent_threads(
@@ -649,7 +542,7 @@ fn resolve_authorized_subagent_threads(
     tools: &[ToolLinkRow],
     shim_agent_did: &str,
     shim_behavior_id: &str,
-) -> Vec<LinkedSubagentThread> {
+) -> Result<Vec<LinkedSubagentThread>> {
     let roots = requests
         .iter()
         .enumerate()
@@ -740,6 +633,9 @@ fn resolve_authorized_subagent_threads(
                     let root_session_id = authorized.get(parent_index)?;
                     let parent = &requests[*parent_index];
                     (parent.depth() + 1 == child_depth).then_some(())?;
+                    (child.requester_did.as_deref() == Some(parent.agent_did())
+                        && child.caused_by_parent_request_doc_id == parent.doc_id)
+                        .then_some(())?;
                     let key = (
                         parent.request_id.clone(),
                         parent.session_id().to_string(),
@@ -748,6 +644,9 @@ fn resolve_authorized_subagent_threads(
                     );
                     let tool = tools_by_parent_call.get(&key)?.iter().find(|tool| {
                         tool.tool_name == "spawn_subagent"
+                            && Some(tool.request_doc_id.as_str()) == parent.doc_id.as_deref()
+                            && Some(tool.doc_id.as_str())
+                                == child.caused_by_parent_tool_call_doc_id.as_deref()
                             && nonempty(tool.child_request_id.as_deref())
                                 == Some(child.request_id.as_str())
                             && nonempty(tool.spawn_target_did.as_deref())
@@ -759,17 +658,34 @@ fn resolve_authorized_subagent_threads(
                 continue;
             };
             let parent = &requests[parent_index];
-            let behavior_id = nonempty(child.behavior_id.as_deref())
-                .unwrap_or("subagent")
-                .to_string();
+            let Some(behavior_id) = child
+                .behavior_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .map(ToOwned::to_owned)
+            else {
+                continue;
+            };
             let nickname = spawn_nickname(&tool.args).unwrap_or_else(|| behavior_id.clone());
             links.push(LinkedSubagentThread {
                 request_id: child.request_id.clone(),
+                request_doc_id: child
+                    .doc_id
+                    .clone()
+                    .expect("validated physical child identity"),
+                latest_request_doc_id: child
+                    .doc_id
+                    .clone()
+                    .expect("validated physical child identity"),
+                requester_did: child.requester_did.clone(),
                 latest_request_id: child.request_id.clone(),
                 latest_request_content: child.content().to_string(),
                 latest_request_created_at: child.created_at.clone(),
                 session_id: child.session_id().to_string(),
                 parent_request_id: parent.request_id.clone(),
+                parent_request_doc_id: parent.doc_id.clone().expect("verified physical parent"),
+                parent_agent_did: parent.agent_did().to_owned(),
+                parent_requester_did: parent.requester_did.clone(),
                 parent_tool_call_id: parent_tool_call_id.to_string(),
                 parent_session_id: parent.session_id().to_string(),
                 root_session_id: root_session_id.clone(),
@@ -805,41 +721,40 @@ fn resolve_authorized_subagent_threads(
             .then_with(|| left.created_at.cmp(&right.created_at))
             .then_with(|| left.session_id.cmp(&right.session_id))
     });
-    let mut seen_sessions = HashSet::new();
-    links.retain(|link| seen_sessions.insert(link.session_id.clone()));
-    let latest_by_context = requests.iter().enumerate().fold(
-        HashMap::<RequestContextKey, usize>::new(),
-        |mut latest, (index, row)| {
-            let key = request_context_key(row);
-            let replace = latest.get(&key).is_none_or(|previous| {
-                let previous = &requests[*previous];
-                (&row.created_at, &row.request_id) > (&previous.created_at, &previous.request_id)
-            });
-            if replace {
-                latest.insert(key, index);
+    let mut seen_sessions = HashMap::new();
+    let mut unique = Vec::new();
+    for link in links {
+        let scope = (link.agent_did.clone(), link.requester_did.clone());
+        for root in &roots {
+            let row = &requests[root.row_index];
+            if row.session_id() == link.session_id {
+                anyhow::ensure!(
+                    row.agent_did() == link.agent_did && row.requester_did == link.requester_did,
+                    "ambiguous Codex root/child thread label across canonical scopes: {}",
+                    link.session_id
+                );
             }
-            latest
-        },
-    );
-    let requests_by_id = requests
-        .iter()
-        .map(|row| (row.request_id.as_str(), row))
-        .collect::<HashMap<_, _>>();
-    for link in &mut links {
-        let Some(spawn_request) = requests_by_id.get(link.request_id.as_str()) else {
-            continue;
-        };
-        let Some(latest_index) = latest_by_context.get(&request_context_key(spawn_request)) else {
-            continue;
-        };
-        let latest = &requests[*latest_index];
-        apply_latest_request(link, latest);
+        }
+        if let Some(existing) = seen_sessions.get(&link.session_id) {
+            anyhow::ensure!(
+                existing == &scope,
+                "ambiguous Codex thread label across canonical session scopes: {}",
+                link.session_id
+            );
+        } else {
+            seen_sessions.insert(link.session_id.clone(), scope);
+            unique.push(link);
+        }
     }
-    links
+    Ok(unique)
 }
 
 fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestProjectionRow) {
     link.latest_request_id = latest.request_id.clone();
+    link.latest_request_doc_id = latest
+        .doc_id
+        .clone()
+        .expect("validated physical request identity");
     link.latest_request_content = latest.content().to_string();
     link.latest_request_created_at = latest.created_at.clone();
     link.client_projection = project_persisted_attempt(
@@ -856,16 +771,18 @@ fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestProject
 
 fn request_context_key(row: &RequestProjectionRow) -> RequestContextKey {
     RequestContextKey {
+        requester_did: row.requester_did.clone(),
         session_id: row.session_id().to_string(),
         agent_did: row.agent_did().to_string(),
-        behavior_id: nonempty(row.behavior_id.as_deref()).map(ToOwned::to_owned),
+        behavior_id: row.behavior_id.clone(),
         depth: row.depth(),
     }
 }
 
 fn is_projectable_root(row: &RequestProjectionRow, agent_did: &str, behavior_id: &str) -> bool {
     row.agent_did() == agent_did
-        && nonempty(row.behavior_id.as_deref()) == Some(behavior_id)
+        && row.requester_did.as_deref() == Some(agent_did)
+        && row.behavior_id.as_deref() == Some(behavior_id)
         && row.depth() == 0
         && nonempty(row.caused_by_parent_request_id.as_deref()).is_none()
         && nonempty(row.caused_by_parent_tool_call_id.as_deref()).is_none()
@@ -880,7 +797,7 @@ fn spawn_nickname(args: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn decode_rows<T>(response: &Value, collection: &str) -> serde_json::Result<Vec<T>>
+fn decode_rows<T>(response: &Value, collection: &str) -> Result<Vec<T>>
 where
     T: for<'de> Deserialize<'de>,
 {
@@ -888,9 +805,9 @@ where
         .pointer(&format!("/data/{collection}"))
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .with_context(|| format!("missing {collection} rows"))?
         .into_iter()
-        .map(serde_json::from_value)
+        .map(|row| serde_json::from_value(row).map_err(Into::into))
         .collect()
 }
 
@@ -899,7 +816,7 @@ fn decode_request_rows(response: &Value) -> Result<Vec<RequestProjectionRow>> {
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
         .cloned()
-        .unwrap_or_default()
+        .context("missing AgentRequest rows")?
         .into_iter()
         .map(RequestProjectionRow::decode)
         .collect()
@@ -1106,6 +1023,43 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[tokio::test]
+    async fn signed_local_self_request_matches_shim_root_selection() {
+        use gents::AgentIdentity;
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            gents::KeyIdentity::load_or_create(temp.path().join("agent.key"), None).unwrap();
+        let did = identity.did().to_owned();
+        let create = gents::build_signed_request(
+            gents::RequestSpec::new(
+                gents::RequestIdentity {
+                    request_id: "local-root".into(),
+                    agent_did: did.clone(),
+                    requester_did: None,
+                    behavior_id: "behavior".into(),
+                    session_id: "session".into(),
+                    content: "hello".into(),
+                    execution_origin: gents::lifecycle::ExecutionOrigin::Interactive,
+                    created_at: "2026-09-01T00:00:00Z".into(),
+                },
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&did),
+            ),
+            gents::RequestSigner::Identity(&identity),
+        )
+        .await
+        .unwrap();
+        assert_eq!(create.requester_did, did);
+        let mut row = RequestProjectionRow::decode(serde_json::json!({"_docID":"physical-root","request_id":create.request_id,"agent_did":create.agent_did,"requester_did":create.requester_did,"behavior_id":create.behavior_id,"session_id":create.session_id,"subagent_depth":0})).unwrap();
+        assert!(is_projectable_root(&row, &did, "behavior"));
+        row.requester_did = None;
+        assert!(
+            !is_projectable_root(&row, &did, "behavior"),
+            "exact absent scope is not this signed local session"
+        );
+        row.requester_did = Some("foreign-requester".into());
+        assert!(!is_projectable_root(&row, &did, "behavior"));
+    }
+
     fn request(
         request_id: &str,
         session_id: &str,
@@ -1114,7 +1068,9 @@ mod tests {
         parent_tool_call_id: Option<&str>,
     ) -> RequestProjectionRow {
         RequestProjectionRow::decode(json!({
+            "_docID": format!("doc:{request_id}"),
             "request_id": request_id,
+            "requester_did": if depth == 0 { Some("did:root") } else if depth == 1 { Some("did:root") } else { Some("did:child") },
             "content": format!("content for {request_id}"),
             "session_id": session_id,
             "agent_did": if depth == 0 { "did:root" } else { "did:child" },
@@ -1122,7 +1078,9 @@ mod tests {
             "lifecycle_state": if depth == 0 { "processing" } else { "completed" },
             "subagent_depth": depth,
             "caused_by_parent_request_id": parent_request_id,
+            "caused_by_parent_request_doc_id": parent_request_id.map(|id|format!("doc:{id}")),
             "caused_by_parent_tool_call_id": parent_tool_call_id,
+            "caused_by_parent_tool_call_doc_id": parent_tool_call_id.map(|id|format!("tool:{id}")),
         }))
         .expect("canonical AgentRequest test row")
     }
@@ -1150,6 +1108,8 @@ mod tests {
             ),
         ];
         let tools = vec![ToolLinkRow {
+            doc_id: "tool:spawn-call".into(),
+            request_doc_id: "doc:root-request".into(),
             request_id: "root-request".to_string(),
             session_id: root_session.clone(),
             agent_did: "did:root".to_string(),
@@ -1160,11 +1120,88 @@ mod tests {
             args: r#"{"name":"reviewer"}"#.to_string(),
         }];
 
-        let links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
+        let links =
+            resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root").unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].session_id, child_session);
         assert_eq!(links[0].root_session_id, root_session);
         assert_eq!(links[0].nickname, "reviewer");
+    }
+
+    #[test]
+    fn matching_logical_edges_cannot_substitute_physical_parent_or_requester() {
+        let root_session = Uuid::new_v4().to_string();
+        let child_session = Uuid::new_v4().to_string();
+        let root = request("parent", &root_session, 0, None, None);
+        let child = request("child", &child_session, 1, Some("parent"), Some("spawn"));
+        let tool = ToolLinkRow {
+            doc_id: "tool:spawn".into(),
+            request_doc_id: "doc:parent".into(),
+            request_id: "parent".into(),
+            session_id: root_session,
+            agent_did: "did:root".into(),
+            tool_call_id: "spawn".into(),
+            tool_name: "spawn_subagent".into(),
+            child_request_id: Some("child".into()),
+            spawn_target_did: Some("did:child".into()),
+            args: "{}".into(),
+        };
+        let resolve = |child: RequestProjectionRow, tool: ToolLinkRow| {
+            resolve_authorized_subagent_threads(&[root.clone(), child], &[tool], "did:root", "root")
+                .unwrap()
+        };
+        assert_eq!(resolve(child.clone(), tool.clone()).len(), 1);
+        let mut foreign_parent = child.clone();
+        foreign_parent.caused_by_parent_request_doc_id = Some("foreign-parent-doc".into());
+        assert!(resolve(foreign_parent, tool.clone()).is_empty());
+        let mut foreign_requester = child.clone();
+        foreign_requester.requester_did = Some("did:unrelated".into());
+        assert!(resolve(foreign_requester, tool.clone()).is_empty());
+        let mut foreign_tool = tool.clone();
+        foreign_tool.doc_id = "foreign-tool-doc".into();
+        assert!(resolve(child.clone(), foreign_tool).is_empty());
+        let mut foreign_tool_parent = tool;
+        foreign_tool_parent.request_doc_id = "foreign-parent-doc".into();
+        assert!(resolve(child, foreign_tool_parent).is_empty());
+    }
+
+    #[test]
+    fn identical_wire_labels_cannot_choose_between_distinct_principals() {
+        let root_session = Uuid::new_v4().to_string();
+        let child_session = Uuid::new_v4().to_string();
+        let root = request("parent", &root_session, 0, None, None);
+        let child = request("child", &child_session, 1, Some("parent"), Some("spawn"));
+        let mut other = request(
+            "other",
+            &child_session,
+            1,
+            Some("parent"),
+            Some("other-spawn"),
+        );
+        other.agent_did = Some("did:other-child".into());
+        let tool = |tool_id: &str, child_id: &str, target: &str| ToolLinkRow {
+            doc_id: format!("tool:{tool_id}"),
+            request_doc_id: "doc:parent".into(),
+            request_id: "parent".into(),
+            session_id: root_session.clone(),
+            agent_did: "did:root".into(),
+            tool_call_id: tool_id.into(),
+            tool_name: "spawn_subagent".into(),
+            child_request_id: Some(child_id.into()),
+            spawn_target_did: Some(target.into()),
+            args: "{}".into(),
+        };
+        let tools = [
+            tool("spawn", "child", "did:child"),
+            tool("other-spawn", "other", "did:other-child"),
+        ];
+        assert!(resolve_authorized_subagent_threads(
+            &[root, child, other],
+            &tools,
+            "did:root",
+            "root"
+        )
+        .is_err());
     }
 
     #[test]
@@ -1192,6 +1229,8 @@ mod tests {
         ];
         let tools = vec![
             ToolLinkRow {
+                doc_id: "tool:spawn-call".into(),
+                request_doc_id: "doc:root-request".into(),
                 request_id: "root-request".to_string(),
                 session_id: root_session.clone(),
                 agent_did: "did:root".to_string(),
@@ -1202,6 +1241,8 @@ mod tests {
                 args: r#"{"name":"reviewer"}"#.to_string(),
             },
             ToolLinkRow {
+                doc_id: "tool:nested-spawn-call".into(),
+                request_doc_id: "doc:child-followup".into(),
                 request_id: "child-followup".to_string(),
                 session_id: child_session.clone(),
                 agent_did: "did:child".to_string(),
@@ -1213,7 +1254,8 @@ mod tests {
             },
         ];
 
-        let links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
+        let links =
+            resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root").unwrap();
         assert_eq!(links.len(), 2);
         assert_eq!(links[0].session_id, child_session);
         assert_eq!(links[1].session_id, grandchild_session);
@@ -1222,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn link_status_tracks_latest_request_in_authorized_child_session() {
+    fn verified_head_updates_status_and_physical_request_identity() {
         let root_session = Uuid::new_v4().to_string();
         let child_session = Uuid::new_v4().to_string();
         let mut child = request(
@@ -1243,6 +1285,8 @@ mod tests {
             followup,
         ];
         let tools = vec![ToolLinkRow {
+            doc_id: "tool:spawn-call".into(),
+            request_doc_id: "doc:root-request".into(),
             request_id: "root-request".to_string(),
             session_id: root_session,
             agent_did: "did:root".to_string(),
@@ -1253,9 +1297,12 @@ mod tests {
             args: r#"{"name":"reviewer"}"#.to_string(),
         }];
 
-        let links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
+        let mut links =
+            resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root").unwrap();
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].request_id, "child-request");
+        apply_latest_request(&mut links[0], &requests[2]);
+        assert_eq!(links[0].latest_request_doc_id, "doc:child-followup");
         assert_eq!(links[0].latest_request_id, "child-followup");
         assert_eq!(
             links[0].latest_request_content,
@@ -1268,62 +1315,26 @@ mod tests {
     }
 
     #[test]
-    fn canonical_conversation_head_overrides_local_timestamp_fallback() {
-        let root_session = Uuid::new_v4().to_string();
-        let child_session = Uuid::new_v4().to_string();
-        let mut canonical = request(
-            "child-request",
-            &child_session,
-            1,
-            Some("root-request"),
-            Some("spawn-call"),
-        );
-        canonical.created_at = Some("2026-01-01T00:00:01Z".to_string());
-        canonical.lifecycle_state = Some(RequestLifecycleState::Completed);
-        let mut timestamp_fallback = request("child-followup", &child_session, 1, None, None);
-        timestamp_fallback.created_at = Some("2026-01-01T00:00:02Z".to_string());
-        timestamp_fallback.lifecycle_state = Some(RequestLifecycleState::Processing);
-        let requests = vec![
-            request("root-request", &root_session, 0, None, None),
-            canonical,
-            timestamp_fallback,
-        ];
-        let tools = vec![ToolLinkRow {
-            request_id: "root-request".to_string(),
-            session_id: root_session,
-            agent_did: "did:root".to_string(),
-            tool_call_id: "spawn-call".to_string(),
-            tool_name: "spawn_subagent".to_string(),
-            child_request_id: Some("child-request".to_string()),
-            spawn_target_did: Some("did:child".to_string()),
-            args: r#"{"name":"reviewer"}"#.to_string(),
-        }];
-        let mut links = resolve_authorized_subagent_threads(&requests, &tools, "did:root", "root");
-        assert_eq!(links[0].latest_request_id, "child-followup");
-
-        apply_canonical_request_heads(
-            &requests,
-            &HashMap::from([(child_session, "child-request".to_string())]),
-            &mut links,
-        );
-
-        assert_eq!(links[0].latest_request_id, "child-request");
-        assert_eq!(
-            links[0].client_projection,
-            project_persisted_attempt("completed", false, None)
-        );
-    }
-
-    #[test]
     fn graph_frontier_queries_are_scoped_and_escape_values() {
-        let sessions = vec!["session-a".to_string(), "session-\"b".to_string()];
+        let sessions = ["session-a", "session-\"b"]
+            .into_iter()
+            .map(|session_id| RequestContextKey {
+                session_id: session_id.into(),
+                agent_did: "did:owner".into(),
+                requester_did: Some("did:requester".into()),
+                behavior_id: Some("bound".into()),
+                depth: 1,
+            })
+            .collect::<Vec<_>>();
         let requests = vec!["request-a".to_string(), "request-\"b".to_string()];
         let session_query = requests_for_sessions_query(&sessions);
-        assert!(session_query.contains("session_id: { _in:"));
+        assert!(session_query.contains("session_id:"));
+        assert!(session_query.contains("did:owner"));
+        assert!(session_query.contains("did:requester"));
         assert!(session_query.contains(r#""session-\"b""#));
 
         let tool_query = spawn_tools_for_requests_query(&requests);
-        assert!(tool_query.contains("request_id: { _in:"));
+        assert!(tool_query.contains("request_doc_id: { _in:"));
         assert!(tool_query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
         assert!(tool_query.contains(r#"child_request_id: { _ne: "" }"#));
         assert!(tool_query.contains(r#""request-\"b""#));
@@ -1371,6 +1382,12 @@ mod tests {
             ..Default::default()
         };
         tool.subagent_link = Some(LinkedSubagentThread {
+            parent_request_doc_id: "test-parent-doc".into(),
+            parent_agent_did: "did:parent".into(),
+            parent_requester_did: None,
+            request_doc_id: "test-request-doc".into(),
+            latest_request_doc_id: "test-request-doc".into(),
+            requester_did: Some("did:parent".into()),
             request_id: "child-request".to_string(),
             latest_request_id: "child-request".to_string(),
             latest_request_content: "Inspect the patch".to_string(),

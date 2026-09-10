@@ -28,7 +28,7 @@ pub(crate) const DEFAULT_MEMORY_MODE: &str = "disabled";
 pub(crate) struct CodexSidecar {
     /// Empty threads created by this shim remain process-local until their
     /// first AgentRequest lets the runtime materialize the canonical session.
-    pub(crate) created: BTreeSet<String>,
+    pub(crate) created: BTreeMap<String, String>,
     pub(crate) cwd: BTreeMap<String, PathBuf>,
     pub(crate) loaded: BTreeSet<String>,
     pub(crate) archived: BTreeSet<String>,
@@ -77,6 +77,12 @@ pub(super) struct RootContinuationStreamControl {
 }
 
 impl ShimState {
+    /// LocalSelf admission proves signer = requester = target principal.
+    /// Child streams instead carry their actual committed requester explicitly.
+    pub(super) fn local_requester_did(&self) -> &str {
+        self.agent_did.as_ref()
+    }
+
     pub(super) fn next_thread_id(&self) -> String {
         uuid::Uuid::new_v4().to_string()
     }
@@ -150,15 +156,20 @@ impl ShimState {
             .lock()
             .await
             .created
-            .insert(thread_id.to_string());
+            .entry(thread_id.to_string())
+            .or_insert_with(|| chrono::Utc::now().to_rfc3339());
+    }
+
+    pub(super) async fn thread_created_at(&self, thread_id: &str) -> Option<String> {
+        self.sidecar.lock().await.created.get(thread_id).cloned()
     }
 
     pub(super) async fn is_thread_created(&self, thread_id: &str) -> bool {
-        self.sidecar.lock().await.created.contains(thread_id)
+        self.sidecar.lock().await.created.contains_key(thread_id)
     }
 
     pub(super) async fn created_thread_ids(&self) -> Vec<String> {
-        self.sidecar.lock().await.created.iter().cloned().collect()
+        self.sidecar.lock().await.created.keys().cloned().collect()
     }
 
     pub(super) async fn thread_name(&self, thread_id: &str) -> String {

@@ -85,6 +85,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
                 source_session_id: &args.from,
                 fork_at_user_turn: args.at_user_turn,
                 caller_agent_did: &agent_did,
+                caller_requester_did: args.requester_did.as_deref(),
                 target_behavior_id: args.behavior.as_deref(),
             },
         )
@@ -122,6 +123,7 @@ async fn session_fork(args: SessionForkArgs) -> Result<()> {
             source_session_id: &args.from,
             fork_at_user_turn: args.at_user_turn,
             caller_agent_did: &agent_did,
+            caller_requester_did: args.requester_did.as_deref(),
             target_behavior_id: args.behavior.as_deref(),
         },
     )

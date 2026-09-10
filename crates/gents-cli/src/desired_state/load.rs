@@ -1,406 +1,455 @@
-use std::fs;
-use std::path::Path;
-
-use serde::Deserialize;
-
-use super::normalize::normalize_manifest;
-use super::validate::validate_manifest;
-use super::{
-    DesiredAgentBehavior, DesiredAgentPrincipal, DesiredCallbackBinding, DesiredChainKeyBinding,
-    DesiredDatastoreToolSurface, DesiredEthTool, DesiredEventTrigger, DesiredInferenceBackend,
-    DesiredInferenceProfile, DesiredProjectionAcpBinding, DesiredRepositoryPlacement,
-    DesiredSchedule, DesiredSkill, DesiredStateCounts, DesiredStateManifest,
-    DesiredStateValidationReport, DesiredTask, DesiredToolSelection, DesiredToolServiceRegistry,
-    HasUniqueId, CALLBACK_BINDINGS_DIR, REPOSITORY_PLACEMENTS_DIR,
-};
+use super::{DesiredStateManifest, DesiredStateValidationReport};
+use anyhow::{Context, Result};
 use gents::Collection;
+use serde_json::{Map, Value};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 pub(crate) fn load_manifest_root(
     root: &Path,
 ) -> (Option<DesiredStateManifest>, DesiredStateValidationReport) {
-    let root_display = root.display().to_string();
     let mut errors = Vec::new();
-
-    if !root.exists() {
-        errors.push(format!("manifest root does not exist: {root_display}"));
-        return (None, empty_report(root_display, errors));
-    }
-    if !root.is_dir() {
-        errors.push(format!("manifest root is not a directory: {root_display}"));
-        return (None, empty_report(root_display, errors));
-    }
-
-    for name in gents::DESIRED_STATE_APPLY_ORDER
-        .iter()
-        .filter_map(|collection| collection.dir_name())
-        .chain([CALLBACK_BINDINGS_DIR, REPOSITORY_PLACEMENTS_DIR])
-    {
-        let old = name.replace('_', "-");
-        if old != name && root.join(&old).exists() {
-            errors.push(format!(
-                "unsupported directory {old}; rename it to {name} (no legacy layout support)"
-            ));
+    let manifest = match load_root(root) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            errors.push(format!("{error:#}"));
+            None
         }
-    }
-    let principal = load_agent_principal(root, &mut errors);
-
-    let mut agent_behaviors: Vec<DesiredAgentBehavior> =
-        load_per_doc_collection(root, Collection::AgentBehavior, &mut errors);
-    let skills: Vec<DesiredSkill> = load_per_doc_collection(root, Collection::Skill, &mut errors);
-    let datastore_tool_surfaces: Vec<DesiredDatastoreToolSurface> =
-        load_per_doc_collection(root, Collection::DatastoreToolSurface, &mut errors);
-    let chain_key_bindings: Vec<DesiredChainKeyBinding> =
-        load_per_doc_collection(root, Collection::ChainKeyBinding, &mut errors);
-    let eth_tools: Vec<DesiredEthTool> =
-        load_per_doc_collection(root, Collection::EthTool, &mut errors);
-    let tool_selections: Vec<DesiredToolSelection> =
-        load_per_doc_collection(root, Collection::ToolSelection, &mut errors);
-    let inference_backends: Vec<DesiredInferenceBackend> =
-        load_per_doc_collection(root, Collection::InferenceBackend, &mut errors);
-    let inference_profiles: Vec<DesiredInferenceProfile> =
-        load_per_doc_collection(root, Collection::InferenceProfile, &mut errors);
-    let tool_service_registries: Vec<DesiredToolServiceRegistry> =
-        load_per_doc_collection(root, Collection::ToolServiceRegistry, &mut errors);
-    let projection_acp_bindings: Vec<DesiredProjectionAcpBinding> =
-        load_per_doc_collection(root, Collection::ProjectionAcpBinding, &mut errors);
-    let mut tasks: Vec<DesiredTask> = load_per_doc_collection(root, Collection::Task, &mut errors);
-    let schedules: Vec<DesiredSchedule> =
-        load_per_doc_collection(root, Collection::Schedule, &mut errors);
-    let event_triggers: Vec<DesiredEventTrigger> =
-        load_per_doc_collection(root, Collection::EventTrigger, &mut errors);
-    let callback_bindings: Vec<DesiredCallbackBinding> =
-        load_per_doc_dir(root, CALLBACK_BINDINGS_DIR, "binding_id", &mut errors);
-    let repository_placements: Vec<DesiredRepositoryPlacement> = load_per_doc_dir(
-        root,
-        REPOSITORY_PLACEMENTS_DIR,
-        "repository_id",
-        &mut errors,
-    );
-
-    for behavior in &mut agent_behaviors {
-        let dir = per_doc_dir(root, Collection::AgentBehavior, behavior.unique_id());
-        if let Err(error) = hydrate_sidecar(&mut behavior.system_prompt, &dir) {
-            errors.push(error);
-        }
-        if let Err(error) = hydrate_sidecar(&mut behavior.request_context_template, &dir) {
-            errors.push(error);
-        }
-    }
-    for task in &mut tasks {
-        let dir = per_doc_dir(root, Collection::Task, task.unique_id());
-        let mut wrapped = Some(std::mem::take(&mut task.prompt_template));
-        if let Err(error) = hydrate_sidecar(&mut wrapped, &dir) {
-            errors.push(error);
-        }
-        task.prompt_template = wrapped.unwrap_or_default();
-    }
-
-    let counts = DesiredStateCounts {
-        agent_principal: usize::from(principal.is_some()),
-        agent_behaviors: agent_behaviors.len(),
-        skills: skills.len(),
-        datastore_tool_surfaces: datastore_tool_surfaces.len(),
-        chain_key_bindings: chain_key_bindings.len(),
-        eth_tools: eth_tools.len(),
-        tool_selections: tool_selections.len(),
-        inference_backends: inference_backends.len(),
-        inference_profiles: inference_profiles.len(),
-        tool_service_registries: tool_service_registries.len(),
-        projection_acp_bindings: projection_acp_bindings.len(),
-        tasks: tasks.len(),
-        schedules: schedules.len(),
-        event_triggers: event_triggers.len(),
-        callback_bindings: callback_bindings.len(),
-        repository_placements: repository_placements.len(),
     };
-
-    let agent_did = principal.as_ref().map(|p| p.agent_did.clone());
-
-    let manifest = principal.map(|principal| {
-        let mut manifest = DesiredStateManifest {
-            agent_principal: principal,
-            agent_behaviors,
-            skills,
-            datastore_tool_surfaces,
-            chain_key_bindings,
-            eth_tools,
-            tool_selections,
-            inference_backends,
-            inference_profiles,
-            tool_service_registries,
-            projection_acp_bindings,
-            tasks,
-            schedules,
-            event_triggers,
-            callback_bindings,
-            repository_placements,
-        };
-        normalize_manifest(&mut manifest);
-        validate_manifest(&manifest, &mut errors);
-        manifest
-    });
-
-    (
-        manifest,
-        DesiredStateValidationReport {
-            status: if errors.is_empty() {
-                "validated"
-            } else {
-                "invalid"
-            },
-            ok: errors.is_empty(),
-            root: root_display,
-            agent_did,
-            counts,
-            errors,
+    let counts = manifest
+        .as_ref()
+        .map(crate::shared::ConfigApplyCounts::from_config)
+        .transpose();
+    let counts = match counts {
+        Ok(counts) => counts.unwrap_or_default(),
+        Err(error) => {
+            errors.push(error.to_string());
+            Default::default()
+        }
+    };
+    let report = DesiredStateValidationReport {
+        validation_scope: "offline_shape",
+        status: if errors.is_empty() {
+            "validated"
+        } else {
+            "invalid"
         },
-    )
-}
-
-fn empty_report(root_display: String, errors: Vec<String>) -> DesiredStateValidationReport {
-    DesiredStateValidationReport {
-        status: "invalid",
-        ok: false,
-        root: root_display,
-        agent_did: None,
-        counts: DesiredStateCounts::empty(),
+        ok: errors.is_empty(),
+        root: root.display().to_string(),
+        agent_did: manifest
+            .as_ref()
+            .map(|config| config.agent_principal.agent_did.clone()),
+        counts,
         errors,
-    }
+    };
+    (manifest, report)
 }
 
-fn load_agent_principal(root: &Path, errors: &mut Vec<String>) -> Option<DesiredAgentPrincipal> {
-    let file_name = Collection::AgentPrincipal
-        .file_name()
-        .expect("AgentPrincipal has a top-level file");
-    let path = root.join(file_name);
-    if !path.exists() {
-        errors.push(format!(
-            "required manifest file is missing: {}",
-            path.display()
-        ));
-        return None;
-    }
-    let bytes = read_document_json(&path, errors)?;
-    match serde_json::from_slice(&bytes) {
-        Ok(value) => Some(value),
-        Err(error) => {
-            errors.push(format!("invalid {}: {error}", path.display()));
-            None
+fn load_root(root: &Path) -> Result<DesiredStateManifest> {
+    anyhow::ensure!(
+        root.is_dir(),
+        "manifest root is not a directory: {}",
+        root.display()
+    );
+    // A document-bearing unknown directory must not silently disappear on apply.
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || !entry.path().is_dir() {
+            continue;
+        }
+        let known = Collection::ALL
+            .into_iter()
+            .any(|collection| collection.dir_name() == Some(name.as_str()));
+        if !known {
+            for child in fs::read_dir(entry.path())? {
+                anyhow::ensure!(
+                    !child?.path().join("object.json").exists(),
+                    "unsupported document collection directory {name}"
+                );
+            }
         }
     }
-}
-
-/// Read a document JSON file and expand `${VAR}` references. Interpolation is
-/// scoped to document JSON: `.md` sidecars carry runtime `{{ }}` templates and
-/// are hydrated separately, untouched.
-fn read_document_json(path: &Path, errors: &mut Vec<String>) -> Option<Vec<u8>> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            errors.push(if error.kind() == std::io::ErrorKind::NotFound {
-                format!("per-doc dir is missing object.json: {}", path.display())
+    let compact = root.join("pack_config.json");
+    let mut locations = BTreeMap::new();
+    let mut handles = Vec::new();
+    let value = if compact.exists() {
+        anyhow::ensure!(
+            !root.join("agent_principal.json").exists(),
+            "mixed compact and per-document manifest roots"
+        );
+        for collection in Collection::ALL {
+            if let Some(directory) = collection.dir_name() {
+                let path = root.join(directory);
+                if path.is_dir() {
+                    for entry in fs::read_dir(path)? {
+                        anyhow::ensure!(
+                            !entry?.path().join("object.json").exists(),
+                            "mixed compact and per-document manifest roots"
+                        );
+                    }
+                }
+            }
+        }
+        read_json(&compact)?
+    } else {
+        let mut object = Map::new();
+        object.insert(
+            "agent_principal".into(),
+            read_json(&root.join("agent_principal.json"))?,
+        );
+        for collection in Collection::ALL {
+            let Some(directory) = collection.dir_name() else {
+                continue;
+            };
+            let legacy = directory.replace('_', "-");
+            anyhow::ensure!(
+                legacy == directory || !root.join(&legacy).exists(),
+                "unsupported directory {legacy}; use {directory}"
+            );
+            let path = root.join(directory);
+            if !path.exists() {
+                continue;
+            }
+            anyhow::ensure!(
+                path.is_dir(),
+                "manifest collection is not a directory: {}",
+                path.display()
+            );
+            let mut entries = fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+            entries.sort_by_key(|entry| entry.file_name());
+            let mut rows = Vec::new();
+            for entry in entries {
+                let handle = entry
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("document handle is not UTF-8"))?;
+                if handle.starts_with('.') || !entry.path().is_dir() {
+                    continue;
+                }
+                let path = entry.path();
+                let row = read_json(&path.join("object.json"))?;
+                let index = rows.len();
+                // Decode once through the common owner before checking the logical ID.
+                locations.insert((collection, index), path);
+                handles.push((collection, index, handle));
+                rows.push(row);
+            }
+            object.insert(directory.into(), Value::Array(rows));
+        }
+        Value::Object(object)
+    };
+    // Sidecar locations use decoded exact IDs, never path fragments supplied as IDs.
+    let config = gents::pack::decode_pack_config(
+        value,
+        None,
+        &|name| std::env::var(name).ok(),
+        &|collection, id, reference| {
+            let directory = if compact.exists() {
+                root.to_path_buf()
             } else {
-                format!("reading {} failed: {error}", path.display())
-            });
-            return None;
-        }
-    };
-    let text = match String::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(_) => {
-            errors.push(format!("{} is not valid UTF-8", path.display()));
-            return None;
-        }
-    };
-    match super::interpolate::interpolate(&text) {
-        Ok(expanded) => Some(expanded.into_bytes()),
-        Err(missing) => {
-            errors.push(format!(
-                "{} references unset environment variable(s): {}. Set them, or give each a \
-                 default with ${{NAME:-value}}.",
-                path.display(),
-                missing.join(", ")
-            ));
-            None
-        }
+                let handle = super::document_handle(id);
+                let (_, index, _) = handles
+                    .iter()
+                    .find(|(candidate, _, stored)| *candidate == collection && stored == &handle)
+                    .context("sidecar document has a noncanonical filesystem handle")?;
+                locations
+                    .get(&(collection, *index))
+                    .context("sidecar document location missing")?
+                    .clone()
+            };
+            let mut value = Some(reference.to_owned());
+            hydrate_sidecar(&mut value, &directory).map_err(anyhow::Error::msg)?;
+            value.context("sidecar contents missing")
+        },
+    )?;
+    let plan = gents::config_client::DesiredStateApplyPlan::from_pack_config(&config)?;
+    let bundle = serde_json::to_value(&config)?;
+    for (collection, index, handle) in handles {
+        let row = &bundle[collection.dir_name().expect("directory collection")][index];
+        let id = row[collection.unique_field()]
+            .as_str()
+            .context("document identity missing")?;
+        anyhow::ensure!(
+            super::document_handle(id) == handle,
+            "directory name '{handle}' does not match {} '{id}'",
+            collection.unique_field()
+        );
     }
+    // Offline validation checks canonical shape, duplicate IDs and owner scope.
+    // Existence closure belongs to the transaction over retained + authored docs.
+    gents::document_config::ConfigReferences::from_documents(
+        &config.agent_principal.agent_did,
+        plan.documents()
+            .iter()
+            .map(|doc| (doc.collection, doc.add.clone())),
+    )?;
+    Ok(config)
 }
 
-fn per_doc_dir(root: &Path, collection: Collection, handle: &str) -> std::path::PathBuf {
-    let dir_name = collection
-        .dir_name()
-        .expect("per_doc_dir called with non-directory collection");
-    root.join(dir_name).join(super::document_handle(handle))
-}
-
-pub(crate) fn load_per_doc_collection<T>(
-    root: &Path,
-    collection: Collection,
-    errors: &mut Vec<String>,
-) -> Vec<T>
-where
-    T: for<'de> Deserialize<'de> + HasUniqueId,
-{
-    let dir_name = collection
-        .dir_name()
-        .expect("load_per_doc_collection called with a non-directory collection");
-    load_per_doc_dir(root, dir_name, collection.unique_field(), errors)
-}
-
-pub(crate) fn load_per_doc_dir<T>(
-    root: &Path,
-    dir_name: &str,
-    unique_field: &str,
-    errors: &mut Vec<String>,
-) -> Vec<T>
-where
-    T: for<'de> Deserialize<'de> + HasUniqueId,
-{
-    let collection_path = root.join(dir_name);
-    if !collection_path.exists() {
-        return Vec::new();
-    }
-    if !collection_path.is_dir() {
-        errors.push(format!(
-            "manifest collection path is not a directory: {}",
-            collection_path.display()
-        ));
-        return Vec::new();
-    }
-
-    let entries = match fs::read_dir(&collection_path) {
-        Ok(iter) => iter,
-        Err(error) => {
-            errors.push(format!(
-                "reading {} failed: {error}",
-                collection_path.display()
-            ));
-            return Vec::new();
-        }
-    };
-
-    let mut subdirs: Vec<(String, std::path::PathBuf)> = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                errors.push(format!(
-                    "reading {} failed: {error}",
-                    collection_path.display()
-                ));
-                continue;
-            }
-        };
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
-            continue;
-        };
-        if name.starts_with('.') {
-            continue;
-        }
-        subdirs.push((name.to_string(), path));
-    }
-    subdirs.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut docs: Vec<T> = Vec::with_capacity(subdirs.len());
-    let mut id_to_handle: std::collections::BTreeMap<String, String> =
-        std::collections::BTreeMap::new();
-
-    for (handle, subdir_path) in subdirs {
-        let object_path = subdir_path.join("object.json");
-        if !object_path.exists() {
-            errors.push(format!(
-                "per-doc dir is missing object.json: {}",
-                subdir_path.display()
-            ));
-            continue;
-        }
-        let Some(bytes) = read_document_json(&object_path, errors) else {
-            continue;
-        };
-        let parsed: T = match serde_json::from_slice(&bytes) {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                errors.push(format!("invalid {}: {error}", object_path.display()));
-                continue;
-            }
-        };
-
-        if let Some(prior) = id_to_handle.get(parsed.unique_id()) {
-            errors.push(format!(
-                "duplicate {} '{}' across {}/ and {}/",
-                unique_field,
-                parsed.unique_id(),
-                prior,
-                handle
-            ));
-            continue;
-        }
-        id_to_handle.insert(parsed.unique_id().to_string(), handle.clone());
-
-        if super::document_handle(parsed.unique_id()) != handle {
-            errors.push(format!(
-                "directory name '{handle}' does not match {} '{}' (expected canonical handle '{}') in {}",
-                unique_field,
-                parsed.unique_id(),
-                super::document_handle(parsed.unique_id()),
-                object_path.display()
-            ));
-            continue;
-        }
-
-        docs.push(parsed);
-    }
-    docs
+fn read_json(path: &Path) -> Result<Value> {
+    let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice(&bytes).with_context(|| format!("invalid JSON in {}", path.display()))
 }
 
 pub(crate) fn hydrate_sidecar(value: &mut Option<String>, json_dir: &Path) -> Result<(), String> {
-    use std::path::Component;
-
-    let Some(current) = value.as_deref() else {
+    let Some(reference) = value.as_deref().filter(|value| value.starts_with("./")) else {
         return Ok(());
     };
-    if !current.starts_with("./") {
-        return Ok(());
+    let relative = PathBuf::from(&reference[2..]);
+    if relative
+        .components()
+        .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "sidecar path escapes document directory or is not canonical: {reference}"
+        ));
     }
-    let rel = &current[2..];
-
-    let rel_path = std::path::Path::new(rel);
-    for comp in rel_path.components() {
-        match comp {
-            Component::ParentDir => {
-                return Err(format!(
-                    "sidecar path escapes document directory: {current} (referenced from {})",
-                    json_dir.display()
-                ));
-            }
-            Component::RootDir | Component::Prefix(_) => {
-                return Err(format!(
-                    "sidecar path must be relative: {current} (referenced from {})",
-                    json_dir.display()
-                ));
-            }
-            _ => {}
-        }
+    let root = fs::canonicalize(json_dir).map_err(|error| error.to_string())?;
+    let path = fs::canonicalize(root.join(relative))
+        .map_err(|error| format!("sidecar path does not resolve: {reference}: {error}"))?;
+    if !path.starts_with(&root) {
+        return Err(format!(
+            "sidecar path escapes document directory: {reference}"
+        ));
     }
-
-    let sidecar_path = json_dir.join(rel);
-    let bytes = fs::read(&sidecar_path).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            format!(
-                "sidecar path does not resolve: {} (referenced from {})",
-                sidecar_path.display(),
-                json_dir.display()
-            )
-        } else {
-            format!("reading {} failed: {error}", sidecar_path.display())
-        }
-    })?;
-    let body = String::from_utf8(bytes)
-        .map_err(|_| format!("sidecar is not valid UTF-8: {}", sidecar_path.display()))?;
-    *value = Some(body);
+    *value = Some(
+        fs::read_to_string(&path)
+            .map_err(|error| format!("reading sidecar {}: {error}", path.display()))?,
+    );
     Ok(())
+}
+
+#[cfg(test)]
+mod filesystem_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn config() -> DesiredStateManifest {
+        gents::pack::decode_pack_config(json!({
+            "agent_principal":{"agent_did":"owner"},
+            "contexts":[{"context_id":"context","system_prompt":"  literal ${NOT_EXPANDED} {{node.did}}\n"}],
+            "inference_backends":[{"backend_id":"backend","name":"backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agent_behaviors":[{"behavior_id":"behavior","context_id":"context","inference_profile_id":"profile"}],
+            "tasks":[{"task_id":"task","behavior_id":"behavior","prompt_template":"  {{args.name}}\n"}]
+        }),None,&|name|(name=="NOT_EXPANDED").then(||"${NOT_EXPANDED}".into()),&|_,_,_|unreachable!()).unwrap()
+    }
+
+    #[test]
+    fn compact_export_roundtrips_literal_sidecars_and_rejects_mixed_roots() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected = config();
+        super::super::write::write_manifest_root(dir.path(), &expected, false).unwrap();
+        assert!(dir.path().join("pack_config.json").is_file());
+        let (actual, report) = load_manifest_root(dir.path());
+        assert!(report.ok, "{:?}", report.errors);
+        assert_eq!(
+            serde_json::to_value(actual.unwrap()).unwrap(),
+            serde_json::to_value(expected).unwrap()
+        );
+        fs::write(dir.path().join("agent_principal.json"), "{}").unwrap();
+        assert!(!load_manifest_root(dir.path()).1.ok);
+    }
+
+    #[test]
+    fn per_document_roots_use_canonical_defaults_and_reject_foreign_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("agent_principal.json"),
+            r#"{"agent_did":"owner"}"#,
+        )
+        .unwrap();
+        let context_dir = dir.path().join("contexts/context");
+        fs::create_dir_all(&context_dir).unwrap();
+        fs::write(
+            context_dir.join("object.json"),
+            r#"{"context_id":"context","system_prompt":"./prompt.md"}"#,
+        )
+        .unwrap();
+        fs::write(
+            context_dir.join("prompt.md"),
+            "  {{node.did}} ${UNSET_LITERAL}\n",
+        )
+        .unwrap();
+        let (loaded, report) = load_manifest_root(dir.path());
+        assert!(report.ok, "{:?}", report.errors);
+        let context = &loaded.unwrap().contexts[0];
+        assert_eq!(context.agent_did, "owner");
+        assert_eq!(
+            context.system_prompt.as_deref(),
+            Some("  {{node.did}} ${UNSET_LITERAL}\n")
+        );
+        fs::write(
+            context_dir.join("object.json"),
+            r#"{"agent_did":"foreign","context_id":"context"}"#,
+        )
+        .unwrap();
+        assert!(!load_manifest_root(dir.path()).1.ok);
+    }
+
+    #[test]
+    fn malformed_unknown_and_escaping_sidecar_authoring_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        for text in [
+            "{broken",
+            r#"{"agent_principal":{"agent_did":"owner"},"unknown":true}"#,
+            r#"{"agent_principal":{"agent_did":"owner"},"contexts":[{"context_id":"context","system_prompt":"./../outside.md"}]}"#,
+        ] {
+            fs::write(dir.path().join("pack_config.json"), text).unwrap();
+            assert!(!load_manifest_root(dir.path()).1.ok, "{text}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecars_cannot_escape_through_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::NamedTempFile::new().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("linked.md")).unwrap();
+        assert!(hydrate_sidecar(&mut Some("./linked.md".into()), dir.path()).is_err());
+    }
+
+    #[test]
+    fn invalid_export_does_not_destroy_existing_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config();
+        super::super::write::write_manifest_root(dir.path(), &config, false).unwrap();
+        let path = dir.path().join("pack_config.json");
+        let before = fs::read(&path).unwrap();
+        config.agent_behaviors[0].agent_did = "foreign".into();
+        assert!(super::super::write::write_manifest_root(dir.path(), &config, true).is_err());
+        assert_eq!(fs::read(path).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod filesystem_boundary_tests {
+    use super::*;
+
+    fn root() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join("agent_principal.json"),
+            r#"{"agent_did":"owner"}"#,
+        )
+        .unwrap();
+        dir
+    }
+    #[test]
+    fn missing_document_and_collection_shape_errors_are_visible() {
+        let empty = tempfile::tempdir().unwrap();
+        assert!(!load_manifest_root(empty.path()).1.ok);
+        let dir = root();
+        fs::write(dir.path().join("contexts"), "not a directory").unwrap();
+        assert!(!load_manifest_root(dir.path()).1.ok);
+        fs::remove_file(dir.path().join("contexts")).unwrap();
+        fs::create_dir_all(dir.path().join("contexts/context")).unwrap();
+        assert!(!load_manifest_root(dir.path()).1.ok);
+    }
+    #[test]
+    fn canonical_handles_duplicates_and_unknown_collections_are_checked() {
+        for (directory, ids) in [
+            ("contexts", vec![("wrong", "context")]),
+            ("contexts", vec![("one", "same"), ("two", "same")]),
+            ("tool_selections", vec![("old", "old")]),
+        ] {
+            let dir = root();
+            for (handle, id) in ids {
+                let path = dir.path().join(directory).join(handle);
+                fs::create_dir_all(&path).unwrap();
+                fs::write(
+                    path.join("object.json"),
+                    serde_json::to_vec(&serde_json::json!({"context_id":id})).unwrap(),
+                )
+                .unwrap();
+            }
+            assert!(!load_manifest_root(dir.path()).1.ok, "{directory}");
+        }
+        let dir = root();
+        fs::create_dir_all(dir.path().join("contexts/.hidden")).unwrap();
+        fs::write(dir.path().join("contexts/notes.md"), "ignored sibling").unwrap();
+        assert!(load_manifest_root(dir.path()).1.ok);
+    }
+    #[test]
+    fn sidecar_literal_none_missing_and_utf8_semantics() {
+        let dir = root();
+        for value in [
+            None,
+            Some("literal".into()),
+            Some("/absolute-is-literal".into()),
+            Some("../parent-is-literal".into()),
+        ] {
+            let mut actual = value.clone();
+            hydrate_sidecar(&mut actual, dir.path()).unwrap();
+            assert_eq!(actual, value);
+        }
+        for path in [
+            "./missing.md",
+            "./../outside.md",
+            "./nested/../../outside.md",
+        ] {
+            assert!(hydrate_sidecar(&mut Some(path.into()), dir.path()).is_err());
+        }
+        fs::write(dir.path().join("bad.md"), [0xff, 0xfe]).unwrap();
+        assert!(hydrate_sidecar(&mut Some("./bad.md".into()), dir.path()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod interpolation_tests {
+    use super::*;
+    #[test]
+    fn shared_decoder_interpolates_values_after_json_parse_and_enforces_owner() {
+        let value = serde_json::json!({"agent_principal":{"agent_did":"owner"},"contexts":[{"context_id":"context","description":"${DESCRIPTION}"}]});
+        let config = gents::pack::decode_pack_config(
+            value.clone(),
+            None,
+            &|name| (name == "DESCRIPTION").then(|| "quoted \"value\"\nnext".into()),
+            &|_, _, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(
+            config.contexts[0].description.as_deref(),
+            Some("quoted \"value\"\nnext")
+        );
+        assert!(
+            gents::pack::decode_pack_config(value, None, &|_| None, &|_, _, _| unreachable!())
+                .is_err()
+        );
+        let config = gents::pack::decode_pack_config(
+            serde_json::json!({"agent_principal":{"agent_did":"${GENTS_PACK_AGENT_DID}"}}),
+            Some(&gents::pack::PackInstallOptions {
+                agent_did: "selected-owner".into(),
+            }),
+            &|_| Some("spoofed-owner".into()),
+            &|_, _, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(config.agent_principal.agent_did, "selected-owner");
+    }
+}
+
+#[cfg(test)]
+mod retained_reference_tests {
+    use super::*;
+    #[test]
+    fn offline_load_and_export_allow_references_to_retained_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("pack_config.json"),r#"{"agent_principal":{"agent_did":"owner"},"agent_behaviors":[{"behavior_id":"behavior","inference_profile_id":"retained-profile"}]}"#).unwrap();
+        let (config, report) = load_manifest_root(dir.path());
+        assert!(report.ok, "{:?}", report.errors);
+        let config = config.unwrap();
+        assert!(config.inference_profiles.is_empty());
+        assert_eq!(
+            config.agent_behaviors[0].inference_profile_id,
+            "retained-profile"
+        );
+        let exported = tempfile::tempdir().unwrap();
+        super::super::write::write_manifest_root(exported.path(), &config, false).unwrap();
+        assert!(load_manifest_root(exported.path()).1.ok);
+    }
 }

@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
     read_workspace_json(&format!(
@@ -123,9 +123,11 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         failed.get("failure_class").and_then(Value::as_str),
         Some("toolReturnedError")
     );
-    assert!(failed
-        .get("request_failure_class")
-        .is_some_and(Value::is_null));
+    assert!(
+        failed
+            .get("request_failure_class")
+            .is_some_and(Value::is_null)
+    );
     assert_eq!(
         failed.get("request_id").and_then(Value::as_str),
         Some("req-1")
@@ -138,9 +140,11 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         failed.get("model_name").and_then(Value::as_str),
         Some("baa-ai/GLM-5.1-RAM-420GB-MLX")
     );
-    assert_eq!(
-        failed.get("inference_profile_id").and_then(Value::as_str),
-        Some("amy")
+    assert!(
+        failed
+            .get("inference_profile_id")
+            .is_some_and(Value::is_null),
+        "historical inference profile is not recorded by the capture"
     );
     assert_eq!(
         failed
@@ -189,14 +193,18 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
             .and_then(Value::as_str),
         Some("serviceUnavailable")
     );
-    assert!(missing_tool
-        .get("tool_error")
-        .and_then(|value| value.get("available_tools"))
-        .is_none());
-    assert!(missing_tool
-        .get("tool_error")
-        .and_then(|value| value.get("requested_tool_name"))
-        .is_none());
+    assert!(
+        missing_tool
+            .get("tool_error")
+            .and_then(|value| value.get("available_tools"))
+            .is_none()
+    );
+    assert!(
+        missing_tool
+            .get("tool_error")
+            .and_then(|value| value.get("requested_tool_name"))
+            .is_none()
+    );
 
     assert_eq!(
         succeeded.get("tool_call_id").and_then(Value::as_str),
@@ -210,9 +218,11 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         succeeded.get("tool_result_ok").and_then(Value::as_bool),
         Some(true)
     );
-    assert!(succeeded
-        .get("tool_failure_class")
-        .is_some_and(Value::is_null));
+    assert!(
+        succeeded
+            .get("tool_failure_class")
+            .is_some_and(Value::is_null)
+    );
     assert!(succeeded.get("failure_class").is_some_and(Value::is_null));
     assert_eq!(
         succeeded.get("run_id").and_then(Value::as_str),
@@ -235,9 +245,11 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         deadline.get("tool_result_ok").and_then(Value::as_bool),
         Some(true)
     );
-    assert!(deadline
-        .get("tool_failure_class")
-        .is_some_and(Value::is_null));
+    assert!(
+        deadline
+            .get("tool_failure_class")
+            .is_some_and(Value::is_null)
+    );
     assert_eq!(
         deadline
             .get("request_failure_class")
@@ -978,10 +990,7 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     assert!(
         langgraph_eval_jsonl.iter().any(|record| {
             record.get("sample_kind").and_then(Value::as_str) == Some("state_transition")
-                && record
-                    .pointer("/metadata/kind")
-                    .and_then(Value::as_str)
-                    == Some("child_request")
+                && record.pointer("/metadata/kind").and_then(Value::as_str) == Some("child_request")
         }),
         "langgraph eval JSONL projection missing child transition sample: {langgraph_eval_jsonl:#?}"
     );
@@ -1315,11 +1324,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
                 behavior_id: "amy",
                 agent_did: "did:test:amy",
                 display_name: "Amy",
-                system_prompt: "baseline",
-                backend_id: "studios-cluster",
-                model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX",
-                tool_selection_id: "default-tools",
-                inference_profile_id: "amy",
                 enabled: true,
                 created_at: "2026-05-04T12:00:00Z"
             }) { _docID }
@@ -1359,6 +1363,30 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
     )
     .await?;
+    let observed = gents::graphql::escape_graphql_string(&root_request_doc_id);
+    let commit_response = node
+        .execute(&format!(
+            r#"{{ _commits(docID: "{observed}") {{cid fieldName}} }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !commit_response.has_errors(),
+        "{:?}",
+        commit_response.errors
+    );
+    let commit = commit_response
+        .data
+        .as_ref()
+        .and_then(|data| data["_commits"].as_array())
+        .and_then(|rows| rows.iter().find(|row| row["fieldName"] == "_C"))
+        .and_then(|row| row["cid"].as_str())
+        .context("trace root has no composite commit")?;
+    let commit = escape_graphql_string(commit);
+    let rendered_body = escape_graphql_string(&json!({"model":"baa-ai/GLM-5.1-RAM-420GB-MLX", "messages":[{"role":"user","content":"Inspect the repo and show README.md"}]}).to_string());
+    exec(node, &format!(r#"mutation {{
+        create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", agent_did: "did:test:amy", behavior_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+        create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", agent_did: "did:test:amy", behavior_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
+    }}"#)).await?;
     exec(
         node,
         &format!(
@@ -1958,8 +1986,6 @@ async fn projection_graphql_mock(
         json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
     } else if query.contains("AgentToolCall(") {
         json!({ "data": { "AgentToolCall": projection_mock_tool_calls() } })
-    } else if query.contains("AgentToolApproval(") {
-        json!({ "data": { "AgentToolApproval": [] } })
     } else if query.contains("Goal(") {
         json!({ "data": { "Goal": [] } })
     } else if query.contains("AgentResponse(") {

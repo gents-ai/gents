@@ -1,660 +1,30 @@
-use std::collections::BTreeMap;
-
 use anyhow::Result;
-use gents::graphql::escape_graphql_string;
 use gents::Collection;
+use gents::config_client::{
+    DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    read_desired_state_record_in_txn,
+};
 use serde_json::Value;
 
-use crate::config_bundle::{sanitize_import_document, select_apply_collection_docs};
+use crate::config_bundle::select_apply_collection_docs;
 #[cfg(test)]
 use crate::config_writes::ConfigAccess;
-use crate::config_writes::{
-    write_event_trigger_document, write_schedule_document, write_task_document, ConfigApplyTxn,
-    ExistingDocumentRef,
-};
-use crate::desired_state;
-use crate::desired_state::DesiredApplyBundle;
+use crate::config_writes::ConfigApplyTxn;
+use crate::desired_state::{self, DesiredApplyBundle};
 use crate::shared::{ConfigApplyCounts, ConfigExportBundle};
-use crate::{extract_mutation_doc_id, graphql_input_literal, graphql_string_list_literal};
-
-const CONFIG_IMPORT_BATCH_SIZE: usize = 50;
-
-const CONFIG_APPLY_ORDER: [Collection; 14] = gents::DESIRED_STATE_APPLY_ORDER;
-
-/// Reverses a fixed-size `Collection` array at compile time. Pulled out so
-/// `CONFIG_PRUNE_ORDER` derives from `CONFIG_APPLY_ORDER` instead of
-/// maintaining its own hand-reversed literal.
-const fn reversed<const N: usize>(order: [Collection; N]) -> [Collection; N] {
-    let mut reversed = order;
-    let mut i = 0;
-    while i < reversed.len() / 2 {
-        let j = reversed.len() - 1 - i;
-        let tmp = reversed[i];
-        reversed[i] = reversed[j];
-        reversed[j] = tmp;
-        i += 1;
-    }
-    reversed
-}
-
-/// Delete order must undo create order: children before the parents they
-/// reference. Derived from `CONFIG_APPLY_ORDER` reversed rather than a
-/// second hand-maintained literal (#1339).
-const CONFIG_PRUNE_ORDER: [Collection; CONFIG_APPLY_ORDER.len()] = reversed(CONFIG_APPLY_ORDER);
-
-#[cfg(test)]
-pub(crate) const CONFIG_APPLY_ORDER_FOR_TESTS: &[Collection] = &CONFIG_APPLY_ORDER;
-#[cfg(test)]
-pub(crate) const CONFIG_PRUNE_ORDER_FOR_TESTS: &[Collection] = &CONFIG_PRUNE_ORDER;
-
-#[derive(Debug, Clone)]
-struct PreparedImportDocument {
-    unique_value: String,
-    add_doc: Value,
-    update_doc: Option<Value>,
-}
-
-#[derive(Debug, Clone)]
-struct AliasedMutationField {
-    alias: String,
-    field: String,
-}
-
-pub(crate) async fn apply_import_collection(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    docs: &[Value],
-    override_existing: bool,
-) -> Result<usize> {
-    let prepared =
-        prepare_import_documents(collection_name, unique_field, docs, override_existing)?;
-    if prepared.is_empty() {
-        return Ok(0);
-    }
-
-    if override_existing && uses_custom_apply_writer(collection_name) {
-        apply_custom_override_collection_batched(txn, collection_name, unique_field, &prepared)
-            .await?;
-    } else {
-        apply_generic_import_collection_batched(
-            txn,
-            collection_name,
-            unique_field,
-            &prepared,
-            override_existing,
-        )
-        .await?;
-    }
-
-    Ok(docs.len())
-}
 
 pub(crate) async fn apply_delete_collection(
     txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
+    collection: Collection,
+    agent_did: &str,
     ids: &[String],
 ) -> Result<usize> {
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
-    let fields = ids
-        .iter()
-        .enumerate()
-        .map(|(index, id)| delete_mutation_field(index, collection_name, unique_field, id))
-        .collect::<Vec<_>>();
-    execute_aliased_mutation_batches(txn, collection_name, &fields).await?;
-    Ok(ids.len())
-}
-
-fn prepare_import_documents(
-    collection_name: &str,
-    unique_field: &str,
-    docs: &[Value],
-    override_existing: bool,
-) -> Result<Vec<PreparedImportDocument>> {
-    docs.iter()
-        .map(|doc| {
-            let unique_value = doc
-                .get(unique_field)
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{} import document is missing {}: {}",
-                        collection_name,
-                        unique_field,
-                        doc
-                    )
-                })?
-                .to_string();
-            let add_doc = sanitize_import_document(collection_name, doc, false)?;
-            let update_doc = if override_existing {
-                Some(sanitize_import_document(collection_name, doc, true)?)
-            } else {
-                None
-            };
-            Ok(PreparedImportDocument {
-                unique_value,
-                add_doc,
-                update_doc,
-            })
-        })
-        .collect()
-}
-
-fn uses_custom_apply_writer(collection_name: &str) -> bool {
-    matches!(collection_name, "Task" | "Schedule" | "EventTrigger")
-}
-
-async fn apply_generic_import_collection_batched(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    docs: &[PreparedImportDocument],
-    override_existing: bool,
-) -> Result<()> {
-    let fields = docs
-        .iter()
-        .enumerate()
-        .map(|(index, doc)| {
-            generic_import_mutation_field(
-                index,
-                collection_name,
-                unique_field,
-                doc,
-                override_existing,
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    match execute_aliased_mutation_batches(txn, collection_name, &fields).await {
-        Ok(()) => Ok(()),
-        Err(_) if override_existing => {
-            for doc in docs {
-                apply_generic_import_document(
-                    txn,
-                    collection_name,
-                    unique_field,
-                    doc,
-                    override_existing,
-                )
-                .await?;
-            }
-            Ok(())
-        }
-        Err(error) => Err(anyhow::anyhow!(
-            "importing {collection_name} batch failed: {error}\nNext:\n  1. If a document already exists, rerun with `gents config import --override`\n  2. Or remove the existing document and retry"
-        )),
-    }
-}
-
-fn generic_import_mutation_field(
-    index: usize,
-    collection_name: &str,
-    unique_field: &str,
-    doc: &PreparedImportDocument,
-    override_existing: bool,
-) -> Result<AliasedMutationField> {
-    let alias = format!("doc_{index}");
-    let add_doc = if override_existing {
-        crate::config_writes::mint_recreate_identity(&doc.add_doc)
-    } else {
-        doc.add_doc.clone()
-    };
-    let add_literal = graphql_input_literal(&add_doc)?;
-    let field = if override_existing {
-        let update_literal =
-            graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing update document for {collection_name}")
-            })?)?;
-        format!(
-            r#"{alias}: upsert_{collection_name}(
-                filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
-                add: {add_literal},
-                update: {update_literal}
-            ) {{ _docID }}"#,
-            unique_value = escape_graphql_string(&doc.unique_value),
-        )
-    } else {
-        format!(r#"{alias}: create_{collection_name}(input: {add_literal}) {{ _docID }}"#)
-    };
-    Ok(AliasedMutationField { alias, field })
-}
-
-fn delete_mutation_field(
-    index: usize,
-    collection_name: &str,
-    unique_field: &str,
-    unique_value: &str,
-) -> AliasedMutationField {
-    let alias = format!("doc_{index}");
-    let field = format!(
-        r#"{alias}: delete_{collection_name}(
-            filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }}
-        ) {{ _docID }}"#,
-        unique_value = escape_graphql_string(unique_value),
-    );
-    AliasedMutationField { alias, field }
-}
-
-async fn apply_generic_import_document(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    doc: &PreparedImportDocument,
-    override_existing: bool,
-) -> Result<()> {
-    let add_doc = if override_existing {
-        crate::config_writes::mint_recreate_identity(&doc.add_doc)
-    } else {
-        doc.add_doc.clone()
-    };
-    let add_literal = graphql_input_literal(&add_doc)?;
-    let mutation = if override_existing {
-        let update_literal =
-            graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing update document for {collection_name}")
-            })?)?;
-        format!(
-            r#"mutation {{
-                upsert_{collection_name}(
-                    filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
-                    add: {add_literal},
-                    update: {update_literal}
-                ) {{ _docID }}
-            }}"#,
-            unique_value = escape_graphql_string(&doc.unique_value),
-        )
-    } else {
-        format!(r#"mutation {{ create_{collection_name}(input: {add_literal}) {{ _docID }} }}"#)
-    };
-    let response = txn.execute(&mutation).await.map_err(|error| {
-        if override_existing {
-            anyhow::anyhow!(
-                "importing {collection_name} {} failed: {error}",
-                doc.unique_value
-            )
-        } else {
-            anyhow::anyhow!(
-                "importing {collection_name} {} failed: {error}\nNext:\n  1. If the document already exists, rerun with `gents config import --override`\n  2. Or remove the existing document and retry",
-                doc.unique_value
-            )
-        }
-    })?;
-    let _ = extract_mutation_doc_id(&response, collection_name)?;
-    Ok(())
-}
-
-async fn apply_custom_override_collection_batched(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    docs: &[PreparedImportDocument],
-) -> Result<()> {
-    if has_duplicate_unique_values(docs) {
-        return apply_custom_override_documents_individually(txn, collection_name, docs).await;
-    }
-
-    let existing_by_unique =
-        match query_existing_documents_by_unique_values(txn, collection_name, unique_field, docs)
-            .await
-        {
-            Ok(existing_by_unique) => existing_by_unique,
-            Err(_) => {
-                return apply_custom_override_documents_individually(txn, collection_name, docs)
-                    .await;
-            }
-        };
-    let fields = docs
-        .iter()
-        .enumerate()
-        .map(|(index, doc)| {
-            custom_override_mutation_field(
-                index,
-                collection_name,
-                unique_field,
-                doc,
-                existing_by_unique
-                    .get(&doc.unique_value)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]),
-            )
-        })
-        .collect::<Result<Vec<_>>>()?;
-
-    match execute_aliased_mutation_batches(txn, collection_name, &fields).await {
-        Ok(()) => Ok(()),
-        Err(_) => apply_custom_override_documents_individually(txn, collection_name, docs).await,
-    }
-}
-
-fn has_duplicate_unique_values(docs: &[PreparedImportDocument]) -> bool {
-    let mut seen = std::collections::BTreeSet::new();
-    docs.iter()
-        .any(|doc| !seen.insert(doc.unique_value.as_str()))
-}
-
-async fn query_existing_documents_by_unique_values(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    docs: &[PreparedImportDocument],
-) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
-    let unique_values = docs
-        .iter()
-        .map(|doc| doc.unique_value.clone())
-        .collect::<Vec<_>>();
-    let mut by_unique = query_document_refs_by_unique_values(
-        txn,
-        collection_name,
-        unique_field,
-        &unique_values,
-        false,
-    )
-    .await?;
-
-    let without_live = unique_values
-        .into_iter()
-        .filter(|unique_value| !by_unique.contains_key(unique_value))
-        .collect::<Vec<_>>();
-    let tombstones = query_one_historical_document_per_unique_value(
-        txn,
-        collection_name,
-        unique_field,
-        &without_live,
-    )
-    .await?;
-    for (unique_value, rows) in tombstones {
-        by_unique.entry(unique_value).or_default().extend(rows);
-    }
-    Ok(by_unique)
-}
-
-async fn query_one_historical_document_per_unique_value(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    unique_values: &[String],
-) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
-    let mut by_unique = BTreeMap::new();
-    for chunk in unique_values.chunks(CONFIG_IMPORT_BATCH_SIZE) {
-        let fields = chunk
-            .iter()
-            .enumerate()
-            .map(|(index, unique_value)| {
-                format!(
-                    r#"lookup_{index}: {collection_name}(
-                        showDeleted: true,
-                        filter: {{ {unique_field}: {{ _eq: "{unique_value}" }} }},
-                        limit: 1
-                    ) {{
-                        _docID
-                        _deleted
-                    }}"#,
-                    unique_value = escape_graphql_string(unique_value),
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        let response = txn.execute(&format!("{{\n{fields}\n}}")).await?;
-        for (index, unique_value) in chunk.iter().enumerate() {
-            let rows = response
-                .pointer(&format!("/data/lookup_{index}"))
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            for row in rows {
-                let doc_ref = ExistingDocumentRef {
-                    doc_id: row
-                        .get("_docID")
-                        .and_then(Value::as_str)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "{collection_name} history row missing _docID for {unique_field}={unique_value}: {row}"
-                            )
-                        })?
-                        .to_string(),
-                    deleted: row
-                        .get("_deleted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false),
-                };
-                by_unique
-                    .entry(unique_value.clone())
-                    .or_insert_with(Vec::new)
-                    .push(doc_ref);
-            }
-        }
-    }
-    Ok(by_unique)
-}
-
-async fn query_document_refs_by_unique_values(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    unique_field: &str,
-    unique_values: &[String],
-    show_deleted: bool,
-) -> Result<BTreeMap<String, Vec<ExistingDocumentRef>>> {
-    if unique_values.is_empty() {
-        return Ok(BTreeMap::new());
-    }
-
-    let show_deleted_arg = if show_deleted {
-        "showDeleted: true,"
-    } else {
-        ""
-    };
-    let unique_values_literal = graphql_string_list_literal(unique_values);
-    let limit = if show_deleted {
-        unique_values.len().saturating_mul(16).max(16)
-    } else {
-        unique_values.len().saturating_mul(2).max(2)
-    };
-    let query = format!(
-        r#"{{
-            {collection_name}(
-                {show_deleted_arg}
-                filter: {{ {unique_field}: {{ _in: {unique_values_literal} }} }},
-                limit: {limit}
-            ) {{
-                _docID
-                _deleted
-                {unique_field}
-            }}
-        }}"#,
-    );
-    let response = txn.execute(&query).await?;
-    let rows = response
-        .get("data")
-        .and_then(|data| data.get(collection_name))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-
-    let mut by_unique: BTreeMap<String, Vec<ExistingDocumentRef>> = BTreeMap::new();
-    for row in rows {
-        let unique_value = row
-            .get(unique_field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                anyhow::anyhow!("{collection_name} lookup row missing {unique_field}: {row}")
-            })?
-            .to_string();
-        let doc_ref = ExistingDocumentRef {
-            doc_id: row
-                .get("_docID")
-                .and_then(Value::as_str)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "{collection_name} lookup row missing _docID for {unique_field}={unique_value}: {row}"
-                    )
-                })?
-                .to_string(),
-            deleted: row
-                .get("_deleted")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        };
-        by_unique.entry(unique_value).or_default().push(doc_ref);
-    }
-
-    Ok(by_unique)
-}
-
-fn custom_override_mutation_field(
-    index: usize,
-    collection_name: &str,
-    unique_field: &str,
-    doc: &PreparedImportDocument,
-    existing_rows: &[ExistingDocumentRef],
-) -> Result<AliasedMutationField> {
-    let alias = format!("doc_{index}");
-    let existing = select_existing_import_document(
-        collection_name,
-        unique_field,
-        &doc.unique_value,
-        existing_rows,
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(
+        ids.iter()
+            .map(|id| (collection, agent_did.to_owned(), id.clone()))
+            .collect(),
     )?;
-    let field = if existing.as_ref().is_some_and(|existing| !existing.deleted) {
-        let update_literal =
-            graphql_input_literal(doc.update_doc.as_ref().ok_or_else(|| {
-                anyhow::anyhow!("missing update document for {collection_name}")
-            })?)?;
-        let doc_id = existing
-            .as_ref()
-            .expect("existing checked above")
-            .doc_id
-            .as_str();
-        format!(
-            r#"{alias}: update_{collection_name}(docID: "{doc_id}", input: {update_literal}) {{ _docID }}"#,
-            doc_id = escape_graphql_string(doc_id),
-        )
-    } else {
-        let add_doc = if existing.is_some() {
-            crate::config_writes::mint_recreate_identity(&doc.add_doc)
-        } else {
-            doc.add_doc.clone()
-        };
-        let add_literal = graphql_input_literal(&add_doc)?;
-        format!(r#"{alias}: create_{collection_name}(input: {add_literal}) {{ _docID }}"#)
-    };
-
-    Ok(AliasedMutationField { alias, field })
-}
-
-fn select_existing_import_document(
-    collection_name: &str,
-    unique_field: &str,
-    unique_value: &str,
-    rows: &[ExistingDocumentRef],
-) -> Result<Option<ExistingDocumentRef>> {
-    let live_rows = rows.iter().filter(|row| !row.deleted).collect::<Vec<_>>();
-    if live_rows.len() > 1 {
-        anyhow::bail!(
-            "multiple live {collection_name} documents share {unique_field}={unique_value}"
-        );
-    }
-    if let Some(row) = live_rows.first() {
-        return Ok(Some((*row).clone()));
-    }
-
-    Ok(rows.iter().find(|row| row.deleted).cloned())
-}
-
-async fn apply_custom_override_documents_individually(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    docs: &[PreparedImportDocument],
-) -> Result<()> {
-    for doc in docs {
-        let update_doc = doc
-            .update_doc
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing update document for {collection_name}"))?;
-        let doc_id = match collection_name {
-            "Task" => write_task_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await,
-            "Schedule" => {
-                write_schedule_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await
-            }
-            "EventTrigger" => {
-                write_event_trigger_document(txn, &doc.unique_value, &doc.add_doc, update_doc).await
-            }
-            _ => unreachable!("custom apply writer only supports selected collections"),
-        }
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "importing {collection_name} {} failed: {error}",
-                doc.unique_value
-            )
-        })?;
-        if doc_id.trim().is_empty() {
-            anyhow::bail!(
-                "importing {collection_name} {} returned an empty _docID",
-                doc.unique_value
-            );
-        }
-    }
-
-    Ok(())
-}
-
-async fn execute_aliased_mutation_batches(
-    txn: &ConfigApplyTxn<'_>,
-    collection_name: &str,
-    fields: &[AliasedMutationField],
-) -> Result<()> {
-    for chunk in fields.chunks(CONFIG_IMPORT_BATCH_SIZE) {
-        let mutation = build_aliased_mutation(chunk);
-        let response = txn.execute(&mutation).await?;
-        for field in chunk {
-            let _ = extract_aliased_mutation_doc_id(&response, &field.alias, collection_name)?;
-        }
-    }
-
-    Ok(())
-}
-
-fn build_aliased_mutation(fields: &[AliasedMutationField]) -> String {
-    let body = fields
-        .iter()
-        .map(|field| field.field.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("mutation {{\n{body}\n}}")
-}
-
-fn extract_aliased_mutation_doc_id(
-    response: &Value,
-    alias: &str,
-    collection_name: &str,
-) -> Result<String> {
-    let data = response
-        .get("data")
-        .ok_or_else(|| anyhow::anyhow!("graphql response missing data: {response}"))?;
-    if let Some(doc_id) = data
-        .get(alias)
-        .and_then(|value| value.get("_docID"))
-        .and_then(Value::as_str)
-    {
-        return Ok(doc_id.to_string());
-    }
-    if let Some(doc_id) = data
-        .get(alias)
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("_docID"))
-        .and_then(Value::as_str)
-    {
-        return Ok(doc_id.to_string());
-    }
-    anyhow::bail!(
-        "graphql mutation alias {alias} returned no _docID for {collection_name}: {response}"
-    );
+    Ok(apply_selected_plan(txn, &plan).await?.get(collection))
 }
 
 pub(crate) fn diff_has_pending_apply(
@@ -667,84 +37,65 @@ pub(crate) fn config_apply_counts_changed(counts: &ConfigApplyCounts) -> bool {
     counts.changed()
 }
 
-pub(crate) fn select_apply_principal_docs(
-    doc: Option<&Value>,
-    diff: &desired_state::DesiredStateCollectionDiff,
-) -> Result<Vec<Value>> {
-    if diff.create.is_empty() && diff.update.is_empty() {
-        return Ok(Vec::new());
-    }
-    let doc =
-        doc.ok_or_else(|| anyhow::anyhow!("desired-state apply is missing AgentPrincipal"))?;
-    Ok(vec![doc.clone()])
-}
-
 pub(crate) async fn apply_desired_state_changes(
     txn: &ConfigApplyTxn<'_>,
     desired_bundle: &DesiredApplyBundle,
     planned: &desired_state::DesiredStateDiffReport,
 ) -> Result<ConfigApplyCounts> {
-    let desired_bundle = desired_bundle.as_bundle();
-    let mut counts = ConfigApplyCounts::default();
-
-    let per_collection_sleep = std::env::var("GENTS_CONFIG_APPLY_SLEEP_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(std::time::Duration::from_millis);
-
-    for collection in CONFIG_APPLY_ORDER {
-        let docs = select_apply_docs_for_collection(desired_bundle, planned, collection)?;
-        let applied = if uses_custom_apply_writer(collection.graphql_type()) {
-            // These custom writers retain the existing batched/tombstone-aware
-            // CLI behavior; the runtime API routes package calls through the
-            // same dedicated writers.
-            apply_import_collection(
-                txn,
-                collection.graphql_type(),
-                collection.unique_field(),
-                &docs,
-                true,
-            )
-            .await?
-        } else {
-            let documents = docs
-                .iter()
-                .map(|doc| {
-                    Ok(gents::config_client::DesiredStateApplyDocument {
-                        collection,
-                        add: sanitize_import_document(collection.graphql_type(), doc, false)?,
-                        update: sanitize_import_document(collection.graphql_type(), doc, true)?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let plan = gents::config_client::DesiredStateApplyPlan::new(documents)?;
-            gents::config_client::apply_desired_state_plan(txn, &plan)
-                .await?
+    let bundle = desired_bundle.as_bundle();
+    // Validate the complete input's owner, including unselected authoring roots.
+    desired_state::manifest_from_export_bundle(bundle)?;
+    anyhow::ensure!(
+        planned.agent_did == bundle.agent_did,
+        "apply plan owner differs from desired configuration"
+    );
+    anyhow::ensure!(
+        planned.live_validation_errors.is_empty(),
+        "cannot apply invalid configuration diff: {:?}",
+        planned.live_validation_errors
+    );
+    let mut documents = Vec::new();
+    let mut removals = Vec::new();
+    for collection in Collection::ALL {
+        for document in select_apply_docs_for_collection(bundle, planned, collection)? {
+            documents.push(DesiredStateApplyDocument {
+                collection,
+                add: document.clone(),
+                update: document,
+            });
+        }
+        removals.extend(
+            planned
+                .collections
                 .get(collection)
-        };
-        counts.set(collection, applied);
+                .delete
+                .iter()
+                .map(|id| (collection, bundle.agent_did.clone(), id.clone())),
+        );
+    }
+    let plan = DesiredStateApplyPlan::new(documents)?.with_removals(removals)?;
+    apply_selected_plan(txn, &plan).await
+}
 
-        if let Some(sleep) = per_collection_sleep {
-            tokio::time::sleep(sleep).await;
+async fn apply_selected_plan(
+    txn: &ConfigApplyTxn<'_>,
+    plan: &DesiredStateApplyPlan,
+) -> Result<ConfigApplyCounts> {
+    let mut counts = ConfigApplyCounts::default();
+    for (collection, owner, id) in plan.removals() {
+        if read_desired_state_record_in_txn(txn, *collection, owner, id)
+            .await?
+            .is_some()
+        {
+            counts.add(*collection, 1);
         }
     }
-
-    for collection in CONFIG_PRUNE_ORDER {
-        let diff = planned.collections.get(collection);
-        let deleted = apply_delete_collection(
-            txn,
-            collection.graphql_type(),
-            collection.unique_field(),
-            &diff.delete,
-        )
-        .await?;
-        counts.add(collection, deleted);
-
-        if let Some(sleep) = per_collection_sleep {
-            tokio::time::sleep(sleep).await;
-        }
+    // One retained-candidate validation and publication for the complete change.
+    // Enumeration order is deterministic; it does not establish reference safety.
+    let applied = apply_desired_state_plan(txn, plan).await?;
+    for collection in Collection::ALL {
+        counts.add(collection, applied.get(collection));
     }
-
     Ok(counts)
 }
 
@@ -754,15 +105,10 @@ fn select_apply_docs_for_collection(
     collection: Collection,
 ) -> Result<Vec<Value>> {
     let diff = planned.collections.get(collection);
-    if collection == Collection::AgentPrincipal {
-        return select_apply_principal_docs(desired_bundle.agent_principal.as_ref(), diff);
-    }
+    let docs = desired_bundle.docs_for_collection(collection)?;
 
-    let docs = desired_bundle
-        .docs_for_collection(collection)
-        .expect("non-principal desired-state collection has document slice");
     select_apply_collection_docs(
-        docs,
+        &docs,
         collection.unique_field(),
         collection.graphql_type(),
         diff,

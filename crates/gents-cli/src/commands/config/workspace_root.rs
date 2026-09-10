@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
@@ -10,14 +10,55 @@ use crate::config_writes::ConfigAccess;
 use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
-// WorkspaceRoot is local-only, operator-managed config (see
-// crates/gents-schemas/schemas/agent/workspace_root.graphql): it has no
-// agent_did and nothing else references it, so it does not participate in
-// the per-agent desired-state manifest / apply / prune machinery that backs
-// `crud::config_rm`. list/show reuse the generic crud.rs query path (which
-// has no such dependency); set/rm write and delete directly through
-// `ConfigAccess::execute`, the same shared write path `behavior_set` drives
-// via `write_agent_behavior_document`.
+// Operator-local allowed-root ceiling used by persona enrollment. This is not
+// pack configuration: HostTools.cwd selects a path but does not grant authority.
+
+pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let mut rows = crate::graphql_rows(
+        &access,
+        "WorkspaceRoot",
+        "{ WorkspaceRoot { _docID root_path display_name enabled updated_at } }",
+    )
+    .await?;
+    rows.sort_by(|a, b| a["root_path"].as_str().cmp(&b["root_path"].as_str()));
+    match args.output.ensure_supported(
+        "config workspace-root list",
+        &[OutputFormat::Table, OutputFormat::Json],
+    )? {
+        OutputFormat::Json => {
+            print_json(&json!({"collection":"WorkspaceRoot","count":rows.len(),"items":rows}))
+        }
+        OutputFormat::Table => {
+            super::crud::print_document_table("root_path", &rows);
+            Ok(())
+        }
+        _ => unreachable!("validated output"),
+    }
+}
+
+pub(super) async fn workspace_root_show(args: ConfigShowArgs) -> Result<()> {
+    let id = resolve_dual_id(
+        "workspace root",
+        "--id",
+        args.id.as_deref(),
+        args.id_flag.as_deref(),
+    )?;
+    args.output
+        .ensure_supported("config workspace-root show", &[OutputFormat::Json])?;
+    let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    let query = format!(
+        r#"{{ WorkspaceRoot(filter: {{ root_path: {{ _eq: "{}" }} }}) {{ _docID root_path display_name enabled updated_at }} }}"#,
+        escape_graphql_string(&id)
+    );
+    let mut rows = crate::graphql_rows(&access, "WorkspaceRoot", &query).await?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "expected one WorkspaceRoot for {id:?}, found {}",
+        rows.len()
+    );
+    print_json(&rows.remove(0))
+}
 
 /// Reject relative paths and lexically normalize `.`/`..` components without
 /// touching the filesystem. The operator may pre-register a root before it

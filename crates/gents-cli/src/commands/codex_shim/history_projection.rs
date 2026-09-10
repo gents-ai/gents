@@ -15,7 +15,6 @@ use super::command_projection::{
     file_change_item, tool_projection_status_with_settled, ToolProjectionStatus,
 };
 use super::compaction_projection::context_compaction_item;
-use super::continuation_stream::is_background_completion_metadata;
 use super::progress::{
     codex_turn_status, decode_gents_tool_call_progress, gents_tool_item, terminal_error_message,
     GentsToolCallProgress,
@@ -91,27 +90,36 @@ pub(super) async fn load_thread_turns(
     state: &ShimState,
     record: &CodexThreadRecord,
 ) -> Result<Vec<codex::Turn>> {
-    let escaped_session_id = escape_graphql_string(&record.session_id);
+    let (owner, requester) = record
+        .subagent
+        .as_ref()
+        .map(|link| (link.agent_did.as_str(), link.requester_did.as_deref()))
+        .unwrap_or((state.agent_did.as_ref(), Some(state.local_requester_did())));
+    let session_scope = gents::session::session_scope_filter(owner, &record.session_id, requester);
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {session_scope} }},
                 order: {{ created_at: ASC }}
             ) {{
+                _docID
                 request_id
                 content
                 lifecycle_state
                 failure_reason
                 created_at
                 terminalized_at
-                metadata
+                input
                 execution_origin
             }}
             AgentResponse(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {session_scope} }},
                 order: {{ created_at: ASC }}
             ) {{
                 request_id
+                request_doc_id
+                agent_did
+                requester_did
                 session_id
                 content
                 reasoning
@@ -123,10 +131,11 @@ pub(super) async fn load_thread_turns(
                 interrupted_at
             }}
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {session_scope} }},
                 order: {{ started_at: ASC }}
             ) {{
                 tool_call_key
+                request_doc_id
                 request_id
                 session_id
                 message_sequence
@@ -147,7 +156,7 @@ pub(super) async fn load_thread_turns(
                 latency_ms
             }}
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {session_scope} }},
                 order: {{ sequence: ASC }}
             ) {{
                 sequence
@@ -161,6 +170,44 @@ pub(super) async fn load_thread_turns(
 
     let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest")
         .context("decoding AgentRequest history rows")?;
+    let mut request_docs = BTreeMap::new();
+    for request in &requests {
+        anyhow::ensure!(
+            request_docs
+                .insert(
+                    request.request_id.as_str(),
+                    request
+                        .doc_id
+                        .as_deref()
+                        .context("history request missing physical identity")?
+                )
+                .is_none(),
+            "duplicate scoped request label in history"
+        );
+    }
+    for collection in ["AgentResponse", "AgentToolCall"] {
+        for row in raw_rows(&response, collection) {
+            if collection == "AgentToolCall"
+                && row.get("request_id").is_none_or(Value::is_null)
+                && row.get("request_doc_id").is_none_or(Value::is_null)
+            {
+                // Forked transcript tool facts intentionally have no executable request edge.
+                continue;
+            }
+            let logical = row
+                .get("request_id")
+                .and_then(Value::as_str)
+                .context("history dependent row missing request label")?;
+            let physical = row
+                .get("request_doc_id")
+                .and_then(Value::as_str)
+                .context("history dependent row missing physical request")?;
+            anyhow::ensure!(
+                request_docs.get(logical).copied() == Some(physical),
+                "history dependent row crosses physical request identity"
+            );
+        }
+    }
     let responses = decode_response_rows(state, &response).await?;
     let mut tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
     let root_session_id = record
@@ -178,7 +225,12 @@ pub(super) async fn load_thread_turns(
 
     let mut responses_by_request = BTreeMap::<String, ResponseRow>::new();
     for response in responses {
-        responses_by_request.insert(response.request_id.clone(), response);
+        anyhow::ensure!(
+            responses_by_request
+                .insert(response.request_id.clone(), response)
+                .is_none(),
+            "duplicate response for physical request"
+        );
     }
 
     let mut tools_by_request = BTreeMap::<String, Vec<ToolRow>>::new();
@@ -229,9 +281,13 @@ async fn load_completed_compactions(
 ) -> Result<Vec<CompactionRow>> {
     let request_ids = requests
         .iter()
-        .map(|request| request.request_id.trim())
-        .filter(|request_id| !request_id.is_empty())
-        .collect::<BTreeSet<_>>();
+        .map(|request| {
+            request
+                .doc_id
+                .as_deref()
+                .context("history request lacks physical identity")
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
     if request_ids.is_empty() {
         return Ok(Vec::new());
     }
@@ -244,7 +300,7 @@ async fn load_completed_compactions(
         r#"{{
             InferenceCall(
                 filter: {{
-                    request_id: {{ _in: [{id_list}] }},
+                    request_doc_id: {{ _in: [{id_list}] }},
                     call_kind: {{ _eq: "compaction" }},
                     call_state: {{ _eq: "completed" }}
                 }},
@@ -392,37 +448,24 @@ fn steering_root_id(
 }
 
 fn steering_parent_id(request: &AgentRequestRow) -> Option<String> {
-    let metadata = request.metadata.as_deref()?.trim();
-    if metadata.is_empty() {
-        return None;
-    }
-    let value = serde_json::from_str::<Value>(metadata).ok()?;
-    let queue = value.get("queue")?;
-    let source = queue.get("source").and_then(Value::as_str)?;
-    if source != "steering" {
-        return None;
-    }
-    queue
-        .get("queued_after_request_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|request_id| !request_id.is_empty())
-        .map(ToOwned::to_owned)
+    let queue = request.input.as_ref()?.queue.as_ref()?;
+    (queue.source == gents_protocol::request_input::QueueSource::Steering)
+        .then(|| queue.queued_after_request_id.clone())
+        .flatten()
+}
+
+fn is_background_completion(request: &AgentRequestRow) -> bool {
+    request
+        .input
+        .as_ref()
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| {
+            queue.source == gents_protocol::request_input::QueueSource::BackgroundCompletion
+        })
 }
 
 fn is_codex_visible_request(request: &AgentRequestRow) -> bool {
-    let metadata = request.metadata.as_deref().unwrap_or_default();
-    request
-        .metadata
-        .as_deref()
-        .is_some_and(|value| value.contains("\"codex_shim\""))
-        || is_background_completion_metadata(Some(metadata))
-        || request
-            .execution_origin
-            .as_deref()
-            .unwrap_or_default()
-            .trim()
-            .eq_ignore_ascii_case("interactive")
+    is_background_completion(request) || request.execution_origin.as_deref() == Some("interactive")
 }
 
 pub(super) fn thread_turns_list_response(
@@ -469,26 +512,23 @@ pub(super) fn thread_turn_items_list_response(
 }
 
 pub(super) fn conversation_summary_json(state: &ShimState, record: &CodexThreadRecord) -> Value {
-    let conversation = record.conversation.as_ref();
-    let preview = conversation
-        .and_then(|conversation| {
-            let preview = conversation.preview_text.trim();
-            (!preview.is_empty()).then_some(preview)
-        })
+    let session = record.session.as_ref();
+    let preview = session
+        .and_then(|session| session.observation.as_ref())
+        .and_then(|observation| observation.preview.as_deref())
         .or_else(|| {
-            conversation.and_then(|conversation| {
-                let title = conversation.title.trim();
-                (!title.is_empty()).then_some(title)
-            })
+            session
+                .and_then(|session| session.title.as_ref())
+                .map(|title| title.text.as_str())
         })
-        .unwrap_or("");
+        .unwrap_or_default();
     json!({
         "summary": {
             "conversationId": record.session_id,
             "path": absolute_path(&state.codex_home.join("gents-backed").join(&record.session_id)),
             "preview": preview,
-            "timestamp": conversation.and_then(|conversation| conversation.created_at.clone()),
-            "updatedAt": conversation.and_then(|conversation| conversation.updated_at.clone()),
+            "timestamp": session.map(|session| session.created_at.clone()).or_else(||record.projection_started.clone()),
+            "updatedAt": session.map(|session|session.observation.as_ref().map(|observation|observation.last_activity_at.clone()).unwrap_or_else(||session.created_at.clone())).or_else(||record.projection_started.clone()),
             "modelProvider": "gents",
             "cwd": absolute_path(&record.cwd),
             "cliVersion": env!("CARGO_PKG_VERSION"),
@@ -595,10 +635,7 @@ fn append_request_items(
     });
 
     let request_content = request.content.as_deref().unwrap_or_default();
-    let request_metadata = request.metadata.as_deref().unwrap_or_default();
-    if !request_content.trim().is_empty()
-        && !is_background_completion_metadata(Some(request_metadata))
-    {
+    if !request_content.trim().is_empty() && !is_background_completion(request) {
         items.push(codex::ThreadItem::UserMessage {
             id: format!("gents-user-{}", request.request_id),
             content: vec![codex::UserInput::Text {
@@ -918,7 +955,7 @@ mod tests {
                     "status": null,
                     "lifecycle_state": null,
                     "failure_reason": null,
-                    "metadata": null,
+                    "input": null,
                     "execution_origin": null
                 }],
                 "AgentResponse": [{
@@ -951,7 +988,8 @@ mod tests {
             "request_id": "request-1",
             "content": "Inspect the repo",
             "lifecycle_state": "completed",
-            "metadata": r#"{"codex_shim":{}}"#,
+            "input": null,
+            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
         let response = ResponseRow {
@@ -984,14 +1022,15 @@ mod tests {
             settings_json: "{}".to_string(),
             git_info: None,
             projection_started: None,
-            conversation: None,
+            session: None,
+            latest_request: None,
             subagent: None,
         };
         let request = request_row(json!({
             "request_id": "wake-1",
             "content": gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
             "lifecycle_state": "completed",
-            "metadata": r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"},"background_completion_wake_version":1}"#,
+            "input": {"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:thread-1"}},
             "execution_origin": "scheduled"
         }));
 
@@ -1022,7 +1061,8 @@ mod tests {
             "lifecycle_state": "completed",
             "created_at": "2026-07-15T10:00:00Z",
             "terminalized_at": "2026-07-15T10:00:05Z",
-            "metadata": r#"{"codex_shim":{}}"#,
+            "input": null,
+            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
         let mut response = ResponseRow {
@@ -1065,14 +1105,16 @@ mod tests {
             settings_json: "{}".to_string(),
             git_info: None,
             projection_started: None,
-            conversation: None,
+            session: None,
+            latest_request: None,
             subagent: None,
         };
         let request = request_row(json!({
             "request_id": "request-1",
             "content": "Inspect the repo",
             "lifecycle_state": "completed",
-            "metadata": r#"{"codex_shim":{}}"#,
+            "input": null,
+            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
         let response = ResponseRow {
@@ -1201,14 +1243,16 @@ mod tests {
             settings_json: String::new(),
             git_info: None,
             projection_started: None,
-            conversation: None,
+            session: None,
+            latest_request: None,
             subagent: None,
         };
         let request = request_row(json!({
             "request_id": "request-1",
             "content": "Continue",
             "lifecycle_state": "completed",
-            "metadata": r#"{"codex_shim":{}}"#,
+            "input": null,
+            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
         let compactions = vec![CompactionRow {

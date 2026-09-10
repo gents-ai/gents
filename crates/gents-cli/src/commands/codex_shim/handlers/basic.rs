@@ -79,10 +79,13 @@ pub(super) async fn handle_basic_request(
             .await
         }
         codex::ClientRequest::ConfigRead { request_id, .. } => {
-            let model_id =
-                load_bound_model_selection_id_for_state(state.node.as_ref(), &state.behavior_id)
-                    .await
-                    .context("resolving current model selection for ConfigRead")?;
+            let model_id = load_bound_model_selection_id_for_state(
+                state.node.as_ref(),
+                &state.agent_did,
+                &state.behavior_id,
+            )
+            .await
+            .context("resolving current model selection for ConfigRead")?;
             send_typed_json_result::<codex::ConfigReadResponse>(
                 outbound,
                 request_id,

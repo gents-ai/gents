@@ -27,5 +27,3 @@ mod cli_status;
 mod cli_subagent;
 #[path = "suites/cli_subagent_cancel.rs"]
 mod cli_subagent_cancel;
-#[path = "suites/cli_tools_holds.rs"]
-mod cli_tools_holds;

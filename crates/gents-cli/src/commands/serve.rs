@@ -943,7 +943,7 @@ pub(crate) async fn serve_with_control(
             .build()
             .context("building post-apply backend probe client")?;
         let probe_outcome = gents::run_backend_probe_cycle(
-            node.as_ref(),
+            node.clone(),
             &probe_client,
             &backend_health,
             &probe_options,

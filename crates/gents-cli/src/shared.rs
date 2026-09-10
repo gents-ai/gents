@@ -4,23 +4,12 @@ use serde_json::Value;
 
 use crate::desired_state;
 
-use crate::cli::args::BackendPresetArg;
 use crate::cli::args::{ToolCeilingArg, ToolPackageArg};
 
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedBackendConfig {
     pub(crate) provider_kind: BackendProviderKind,
     pub(crate) openai_wire_api: Option<OpenAiWireApi>,
-    pub(crate) endpoint: String,
-    pub(crate) api_key: Option<String>,
-    pub(crate) api_key_env_var: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct DiscoveredBackendTarget {
-    pub(crate) backend_id: Option<String>,
-    pub(crate) preset: Option<BackendPresetArg>,
-    pub(crate) provider_kind: BackendProviderKind,
     pub(crate) endpoint: String,
     pub(crate) api_key: Option<String>,
     pub(crate) api_key_env_var: Option<String>,
@@ -256,64 +245,26 @@ pub(crate) struct P2pSyncVersionsRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ConfigExportBundle {
     pub(crate) format: String,
     pub(crate) agent_did: String,
     pub(crate) exported_at: String,
     pub(crate) access_mode: String,
-    pub(crate) agent_principal: Option<Value>,
-    #[serde(default)]
-    pub(crate) agent_behaviors: Vec<Value>,
-    #[serde(default)]
-    pub(crate) skills: Vec<Value>,
-    #[serde(default)]
-    pub(crate) datastore_tool_surfaces: Vec<Value>,
-    #[serde(default)]
-    pub(crate) chain_key_bindings: Vec<Value>,
-    #[serde(default)]
-    pub(crate) eth_tools: Vec<Value>,
-    // WorkspaceRoot is registered (schema layer, #714-adjacent persona
-    // catalog work) but not yet part of the desired-state CRUD surface
-    // (CONFIG_APPLY_ORDER/DesiredStateManifest); this stays empty until a
-    // follow-up task wires the real live-query + apply/prune flow.
-    #[serde(default)]
-    pub(crate) workspace_roots: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tool_selections: Vec<Value>,
-    #[serde(default)]
-    pub(crate) inference_backends: Vec<Value>,
-    #[serde(default)]
-    pub(crate) inference_profiles: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tool_service_registries: Vec<Value>,
-    #[serde(default)]
-    pub(crate) projection_acp_bindings: Vec<Value>,
-    #[serde(default)]
-    pub(crate) tasks: Vec<Value>,
-    #[serde(default)]
-    pub(crate) schedules: Vec<Value>,
-    #[serde(default)]
-    pub(crate) event_triggers: Vec<Value>,
+    #[serde(flatten)]
+    pub(crate) config: gents::document_config::PackConfig,
 }
 
 impl ConfigExportBundle {
-    pub(crate) fn docs_for_collection(&self, collection: Collection) -> Option<&[Value]> {
-        match collection {
-            Collection::AgentPrincipal => None,
-            Collection::AgentBehavior => Some(&self.agent_behaviors),
-            Collection::Skill => Some(&self.skills),
-            Collection::DatastoreToolSurface => Some(&self.datastore_tool_surfaces),
-            Collection::ChainKeyBinding => Some(&self.chain_key_bindings),
-            Collection::EthTool => Some(&self.eth_tools),
-            Collection::WorkspaceRoot => Some(&self.workspace_roots),
-            Collection::ToolSelection => Some(&self.tool_selections),
-            Collection::InferenceBackend => Some(&self.inference_backends),
-            Collection::InferenceProfile => Some(&self.inference_profiles),
-            Collection::ToolServiceRegistry => Some(&self.tool_service_registries),
-            Collection::ProjectionAcpBinding => Some(&self.projection_acp_bindings),
-            Collection::Task => Some(&self.tasks),
-            Collection::Schedule => Some(&self.schedules),
-            Collection::EventTrigger => Some(&self.event_triggers),
+    pub(crate) fn docs_for_collection(&self, collection: Collection) -> anyhow::Result<Vec<Value>> {
+        let config = serde_json::to_value(&self.config)?;
+        match collection.dir_name() {
+            None => Ok(vec![config["agent_principal"].clone()]),
+            Some(key) => match config.get(key) {
+                None | Some(Value::Null) => Ok(Vec::new()),
+                Some(Value::Array(rows)) => Ok(rows.clone()),
+                Some(_) => anyhow::bail!("canonical configuration {key} is not a document array"),
+            },
         }
     }
 }
@@ -336,6 +287,19 @@ impl Serialize for ConfigApplyCounts {
 }
 
 impl ConfigApplyCounts {
+    pub(crate) fn from_config(config: &gents::document_config::PackConfig) -> anyhow::Result<Self> {
+        let value = serde_json::to_value(config)?;
+        let mut counts = Self::default();
+        for collection in Collection::ALL {
+            let count = match collection.dir_name() {
+                Some(key) => value.get(key).and_then(Value::as_array).map_or(0, Vec::len),
+                None => 1,
+            };
+            counts.set(collection, count);
+        }
+        Ok(counts)
+    }
+
     pub(crate) fn get(&self, collection: Collection) -> usize {
         self.0.get(&collection).copied().unwrap_or_default()
     }

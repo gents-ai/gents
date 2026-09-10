@@ -1,16 +1,17 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
+use gents::session::session_scope_filter;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::cli::args::{SubagentCancelArgs, SubagentCommand, SubagentListArgs};
 use crate::cli::output_format::OutputFormat;
@@ -46,19 +47,23 @@ async fn subagent_cancel(args: SubagentCancelArgs) -> Result<()> {
     let wait_timeout = resolve_wait_timeout(args.wait, args.timeout.as_deref())?;
 
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
+    // Both routes cancel within an explicit principal scope: a duplicate
+    // logical request ID under a foreign owner must never be interrupted.
+    let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
+        .context("resolving agent_did for scoped subagent cancellation")?;
 
-    let snapshots = match access {
+    let snapshots = match &access {
         ConfigAccess::Graphql(graphql) => {
-            let affected = cancel_subagent_graphql(&graphql, &request_id, args.cascade).await?;
+            let affected =
+                cancel_subagent_graphql(&access, graphql, &agent_did, &request_id, args.cascade)
+                    .await?;
             if let Some(timeout) = wait_timeout {
-                wait_for_terminal_graphql(&graphql, &affected, timeout).await?
+                wait_for_terminal_graphql(graphql, &affected, timeout).await?
             } else {
-                snapshot_requests_graphql(&graphql, &affected).await?
+                snapshot_requests_graphql(graphql, &affected).await?
             }
         }
         ConfigAccess::Local(node) => {
-            let agent_did = resolve_agent_did(args.home.as_deref(), args.agent_did.as_deref())
-                .context("resolving local agent_did for cascade ownership checks")?;
             let affected =
                 cancel_subagent_local(node.clone(), &agent_did, &request_id, args.cascade, cause)
                     .await?;
@@ -105,76 +110,155 @@ fn resolve_wait_timeout(wait: bool, timeout: Option<&str>) -> Result<Option<Dura
 }
 
 async fn cancel_subagent_graphql(
+    access: &ConfigAccess,
     graphql: &str,
+    agent_did: &str,
     request_id: &str,
     cascade: bool,
-) -> Result<Vec<String>> {
+) -> Result<Vec<ScopedRequestRef>> {
+    // Resolve the root within its exact principal scope. Duplicate logical
+    // IDs under any owner are rejected here — never first-row picked.
+    let root = resolve_scoped_root_graphql(graphql, agent_did, request_id).await?;
     let mut affected = Vec::new();
     let mut seen = BTreeSet::new();
-    push_unique(&mut affected, &mut seen, request_id.to_string());
+    push_scoped_ref(&mut affected, &mut seen, root.clone());
 
     if cascade {
-        let target = fetch_request_row_graphql(graphql, request_id).await?;
-        if let Some(session_id) = target.session_id.as_deref() {
-            collect_descendant_request_ids_graphql(graphql, session_id, &mut affected, &mut seen)
-                .await?;
+        // Reuse the canonical descendant owner over the shared ConfigAccess
+        // seam: it corroborates each edge against the parent-authored bridge
+        // receipt and only exposes children with verified physical identity
+        // (`child_request_doc_id`), so the cascade never joins a logical label.
+        let mut after = None;
+        let mut cascade_parents = BTreeSet::from([root
+            .doc_id
+            .clone()
+            .context("cascade root missing physical identity")?]);
+        loop {
+            let page = gents::descendant_graph::resolve_descendant_graph_by_doc_id(
+                DescendantGraphAccess::Config(access),
+                &DescendantQuery {
+                    after: after.clone(),
+                    limit: MAX_DESCENDANT_PAGE_LIMIT,
+                    ..DescendantQuery::all(&root.request_id)
+                },
+                root.doc_id
+                    .as_deref()
+                    .context("cascade root missing physical identity")?,
+                root.agent_did
+                    .as_deref()
+                    .context("cascade root missing principal")?,
+                root.requester_did.as_deref(),
+            )
+            .await?;
+            for edge in &page.edges {
+                if !cascade_parents.contains(&edge.immediate_parent_request_doc_id)
+                    || edge.cancel_policy.as_deref() != Some("cascade")
+                {
+                    continue;
+                }
+                if let Some(child) = edge.child_request_doc_id.as_ref() {
+                    cascade_parents.insert(child.clone());
+                }
+
+                let (Some(child_doc_id), Some(child_agent_did)) = (
+                    edge.child_request_doc_id.as_deref(),
+                    edge.principal_did.as_deref(),
+                ) else {
+                    // Awaiting materialization or physically uncorroborated:
+                    // not interrupt-eligible, and not a cancel target.
+                    continue;
+                };
+                push_scoped_ref(
+                    &mut affected,
+                    &mut seen,
+                    ScopedRequestRef {
+                        request_id: edge.child_request_id.clone(),
+                        doc_id: Some(child_doc_id.to_string()),
+                        agent_did: Some(child_agent_did.to_string()),
+                        requester_did: edge.child_requester_did.clone(),
+                        session_id: edge.child_session_id.clone(),
+                    },
+                );
+            }
+            if !page.has_more {
+                break;
+            }
+            after = page.next_cursor;
         }
     }
 
-    for request_id in &affected {
-        interrupt_request_graphql(graphql, request_id).await?;
+    for target in &affected {
+        interrupt_request_graphql(graphql, target).await?;
     }
     Ok(affected)
 }
 
-async fn collect_descendant_request_ids_graphql(
+/// Resolve the unique AgentRequest for a logical ID under the caller's exact
+/// principal scope. A duplicate logical ID under any owner is a data error,
+/// never silently joined: the scoped query must return at most one row.
+async fn resolve_scoped_root_graphql(
     graphql: &str,
-    root_session_id: &str,
-    affected: &mut Vec<String>,
-    seen_requests: &mut BTreeSet<String>,
-) -> Result<()> {
-    let mut seen_sessions = BTreeSet::new();
-    let mut queue = VecDeque::from([root_session_id.to_string()]);
-    while let Some(session_id) = queue.pop_front() {
-        if !seen_sessions.insert(session_id.clone()) {
-            continue;
-        }
-        for bridge in running_subagent_bridges_graphql(graphql, &session_id).await? {
-            let Some(child_request_id) = bridge.child_request_id else {
-                continue;
-            };
-            push_unique(affected, seen_requests, child_request_id.clone());
-            if let Ok(child) = fetch_request_row_graphql(graphql, &child_request_id).await {
-                if let Some(child_session_id) = child.session_id {
-                    queue.push_back(child_session_id);
-                }
-            }
-        }
-    }
+    agent_did: &str,
+    request_id: &str,
+) -> Result<ScopedRequestRef> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }}
+                }},
+                limit: 2
+            ) {{
+                _docID
+                request_id
+                agent_did
+                requester_did
+                session_id
+            }}
+        }}"#
+    );
+    let response = post_graphql(graphql, &query).await?;
+    let mut rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    ensure_unique_scoped_root(agent_did, request_id, rows.len())?;
+    let row = rows
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found for agent {agent_did}"))?;
+    scoped_ref_from_row(&row, request_id)
+}
+
+/// Duplicate logical IDs within the requested principal scope are a data
+/// error, never a first-row pick: a shared logical label must never select
+/// which physical document gets interrupted.
+fn ensure_unique_scoped_root(agent_did: &str, request_id: &str, row_count: usize) -> Result<()> {
+    anyhow::ensure!(
+        row_count <= 1,
+        "request {request_id} is ambiguous for agent {agent_did}; refusing to interrupt a shared logical ID"
+    );
     Ok(())
 }
 
-async fn interrupt_request_graphql(graphql: &str, request_id: &str) -> Result<()> {
-    let row = fetch_request_row_graphql(graphql, request_id).await?;
-    if row.interrupt_requested_at.is_some() {
-        return Ok(());
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                input: {{ interrupt_requested_at: "{now}" }}
-            ) {{ _docID }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-        now = escape_graphql_string(&now),
-    );
-    ConfigAccess::Graphql(graphql.to_string())
-        .write("cli.subagent.interrupt", &mutation)
-        .await?;
-    Ok(())
+/// Reuse the shared physical interrupt owner over HTTP transaction access.
+async fn interrupt_request_graphql(graphql: &str, target: &ScopedRequestRef) -> Result<()> {
+    gents::interrupt::interrupt_request_by_doc_id_with_access(
+        &ConfigAccess::Graphql(graphql.to_owned()),
+        target
+            .doc_id
+            .as_deref()
+            .context("interrupt target missing physical identity")?,
+        target
+            .agent_did
+            .as_deref()
+            .context("interrupt target missing principal")?,
+        target.requester_did.as_deref(),
+    )
+    .await
 }
 
 async fn cancel_subagent_local(
@@ -183,28 +267,35 @@ async fn cancel_subagent_local(
     request_id: &str,
     cascade: bool,
     cause: CancelCause,
-) -> Result<Vec<String>> {
-    let target = fetch_request_row_local(node.as_ref(), request_id).await?;
+) -> Result<Vec<ScopedRequestRef>> {
+    // Resolve the unique root with the caller's exact principal scope before
+    // any interrupt or cascade decision. Duplicate logical IDs under a foreign
+    // owner are rejected here, never silently joined.
+    let target = fetch_request_row_local_scoped(node.as_ref(), agent_did, request_id).await?;
+    let target_ref = scoped_ref_from_agent_row(&target, request_id)?;
     let mut affected = Vec::new();
     let mut seen_requests = BTreeSet::new();
 
     if cascade {
         cancel_parent_bridge_local(node.clone(), cause, agent_did, &target).await?;
     }
-    interrupt_request_local(node.as_ref(), &mut affected, &mut seen_requests, request_id).await?;
+    interrupt_request_local(
+        node.as_ref(),
+        &mut affected,
+        &mut seen_requests,
+        &target_ref,
+    )
+    .await?;
 
     if cascade {
-        if let Some(session_id) = target.session_id.as_deref() {
-            cancel_descendant_bridges_local(
-                node.clone(),
-                cause,
-                agent_did,
-                session_id,
-                &mut affected,
-                &mut seen_requests,
-            )
-            .await?;
-        }
+        cancel_descendant_bridges_local(
+            node.clone(),
+            cause,
+            &target_ref,
+            &mut affected,
+            &mut seen_requests,
+        )
+        .await?;
     }
 
     Ok(affected)
@@ -213,7 +304,7 @@ async fn cancel_subagent_local(
 async fn cancel_parent_bridge_local(
     node: Arc<EmbeddedNode>,
     cause: CancelCause,
-    agent_did: &str,
+    _agent_did: &str,
     target: &AgentRequestRow,
 ) -> Result<()> {
     let Some(parent_request_id) = target.caused_by_parent_request_id.as_deref() else {
@@ -222,82 +313,173 @@ async fn cancel_parent_bridge_local(
     let Some(parent_tool_call_id) = target.caused_by_parent_tool_call_id.as_deref() else {
         return Ok(());
     };
-    let parent = fetch_request_row_local(node.as_ref(), parent_request_id).await?;
-    let Some(parent_session_id) = parent.session_id.as_deref() else {
-        return Ok(());
-    };
-    cancel_bridge_local(
+    let parent_doc_id = target
+        .caused_by_parent_request_doc_id
+        .as_deref()
+        .context("parent bridge lacks physical request identity")?;
+    let bridge_doc_id = target
+        .caused_by_parent_tool_call_doc_id
+        .as_deref()
+        .context("parent bridge lacks physical tool identity")?;
+    let verified = gents::descendant_graph::resolve_physical_bridge_child(
+        DescendantGraphAccess::Local(node.as_ref()),
+        parent_doc_id,
+        bridge_doc_id,
+    )
+    .await?
+    .context("parent bridge does not corroborate child")?;
+    anyhow::ensure!(
+        verified.doc_id == target.doc_id
+            && verified.agent_did == target.agent_did
+            && verified.requester_did == target.requester_did
+            && verified.session_id == target.session_id,
+        "parent bridge selects a different physical child or scope"
+    );
+    let physical = escape_graphql_string(parent_doc_id);
+    let response = execute_node_json(node.as_ref(), &format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#)).await?;
+    let parent = request_row_from_response(&response, parent_request_id)?;
+    anyhow::ensure!(
+        parent.request_id == parent_request_id && parent.doc_id.as_deref() == Some(parent_doc_id),
+        "parent physical and logical identities disagree"
+    );
+    let parent_session_id = parent
+        .session_id
+        .as_deref()
+        .context("parent request missing session")?;
+    let parent_owner = parent
+        .agent_did
+        .as_deref()
+        .context("parent request missing principal")?;
+    cancel_bridge_local_by_doc_id(
         node,
         cause,
-        agent_did,
+        parent_owner,
         parent_session_id,
+        parent.requester_did.as_deref(),
         parent_tool_call_id,
+        bridge_doc_id,
         BridgeKind::Parent,
     )
-    .await?;
-    Ok(())
+    .await
+    .map(|_| ())
 }
 
 async fn cancel_descendant_bridges_local(
     node: Arc<EmbeddedNode>,
     cause: CancelCause,
-    agent_did: &str,
-    root_session_id: &str,
-    affected: &mut Vec<String>,
+    root: &ScopedRequestRef,
+    affected: &mut Vec<ScopedRequestRef>,
     seen_requests: &mut BTreeSet<String>,
 ) -> Result<()> {
-    let mut seen_sessions = BTreeSet::new();
-    let mut queue = VecDeque::from([root_session_id.to_string()]);
-    while let Some(session_id) = queue.pop_front() {
-        if !seen_sessions.insert(session_id.clone()) {
-            continue;
-        }
-        for bridge in running_subagent_bridges_local(node.as_ref(), &session_id).await? {
-            let dispatch = cancel_bridge_local(
+    let mut after = None;
+    let mut cascade_parents = BTreeSet::from([root
+        .doc_id
+        .clone()
+        .context("cascade root missing physical identity")?]);
+    loop {
+        let page = gents::descendant_graph::resolve_descendant_graph_by_doc_id(
+            DescendantGraphAccess::Local(node.as_ref()),
+            &DescendantQuery {
+                after: after.clone(),
+                limit: MAX_DESCENDANT_PAGE_LIMIT,
+                ..DescendantQuery::all(&root.request_id)
+            },
+            root.doc_id
+                .as_deref()
+                .context("cascade root missing physical identity")?,
+            root.agent_did
+                .as_deref()
+                .context("cascade root missing principal")?,
+            root.requester_did.as_deref(),
+        )
+        .await?;
+        for edge in &page.edges {
+            if !cascade_parents.contains(&edge.immediate_parent_request_doc_id)
+                || edge.cancel_policy.as_deref() != Some("cascade")
+            {
+                continue;
+            }
+            if let Some(child) = edge.child_request_doc_id.as_ref() {
+                cascade_parents.insert(child.clone());
+            }
+            let dispatch = cancel_bridge_local_by_doc_id(
                 node.clone(),
                 cause,
-                agent_did,
-                &session_id,
-                &bridge.tool_call_id,
+                &edge.immediate_parent_agent_did,
+                &edge.immediate_parent_session_id,
+                edge.immediate_parent_requester_did.as_deref(),
+                &edge.immediate_parent_tool_call_id,
+                &edge.immediate_parent_tool_call_doc_id,
                 BridgeKind::Descendant,
             )
             .await?;
-            let Some(child_request_id) = dispatch else {
-                continue;
-            };
-            interrupt_request_local(node.as_ref(), affected, seen_requests, &child_request_id)
-                .await?;
-            if let Ok(child) = fetch_request_row_local(node.as_ref(), &child_request_id).await {
-                if let Some(child_session_id) = child.session_id {
-                    queue.push_back(child_session_id);
-                }
+            if let Some(child) = dispatch {
+                interrupt_request_local(node.as_ref(), affected, seen_requests, &child).await?;
             }
         }
+        if !page.has_more {
+            break;
+        }
+        after = page.next_cursor;
     }
     Ok(())
 }
 
-async fn cancel_bridge_local(
+async fn cancel_bridge_local_by_doc_id(
     node: Arc<EmbeddedNode>,
+    cause: CancelCause,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    tool_call_id: &str,
+    bridge_doc_id: &str,
+    bridge_kind: BridgeKind,
+) -> Result<Option<ScopedRequestRef>> {
+    if tool_lifecycle_state_local(
+        node.as_ref(),
+        bridge_doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await?
+    .as_deref()
+        != Some("running")
+    {
+        return Ok(None);
+    }
+    // Load by physical docID within the exact session scope; a logical tool ID
+    // collision can never substitute a different bridge for cancellation.
+    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        bridge_doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    cancel_loaded_bridge(
+        lifecycle,
+        cause,
+        agent_did,
+        session_id,
+        tool_call_id,
+        bridge_kind,
+    )
+    .await
+}
+
+async fn cancel_loaded_bridge(
+    mut lifecycle: ToolCallLifecycle,
     cause: CancelCause,
     agent_did: &str,
     session_id: &str,
     tool_call_id: &str,
     bridge_kind: BridgeKind,
-) -> Result<Option<String>> {
-    if tool_lifecycle_state_local(node.as_ref(), session_id, tool_call_id)
-        .await?
-        .as_deref()
-        != Some("running")
-    {
-        return Ok(None);
-    }
-
-    let Some(mut lifecycle) =
-        ToolCallLifecycle::load(node.clone(), session_id, tool_call_id).await?
-    else {
-        return Ok(None);
-    };
+) -> Result<Option<ScopedRequestRef>> {
     let dispatch = lifecycle
         .cancel_during_run_with_cascade_dispatch(cause, agent_did)
         .await
@@ -308,36 +490,178 @@ async fn cancel_bridge_local(
             )
         })?;
     Ok(match dispatch {
-        Some(CascadeDispatch::Local(intent)) => Some(intent.child_request_id),
+        // Carry the verified physical child (docID + owner + requester) so the
+        // cascade interrupts the exact corroborated row, not a logical label.
+        Some(CascadeDispatch::Local { intent, child }) => {
+            Some(scoped_ref_from_agent_row(&child, &intent.child_request_id)?)
+        }
         Some(CascadeDispatch::RemoteIntentWritten) | None => None,
     })
 }
 
 async fn interrupt_request_local(
     node: &EmbeddedNode,
-    affected: &mut Vec<String>,
+    affected: &mut Vec<ScopedRequestRef>,
     seen_requests: &mut BTreeSet<String>,
-    request_id: &str,
+    target: &ScopedRequestRef,
 ) -> Result<()> {
-    gents::interrupt_request(node, request_id).await?;
-    push_unique(affected, seen_requests, request_id.to_string());
+    // Reuse the existing scoped interrupt owner: it latches by physical docID
+    // within the exact principal/requester scope (absent requester encodes
+    // `_eq: null`, never a wildcard) and ambiguity-rejects duplicates.
+    gents::interrupt::interrupt_request_by_doc_id(
+        node,
+        target.doc_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "interrupt target {} has no verified physical identity",
+                target.request_id
+            )
+        })?,
+        target.agent_did.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "interrupt target {} has no verified principal",
+                target.request_id
+            )
+        })?,
+        target.requester_did.as_deref(),
+    )
+    .await?;
+    push_scoped_ref(affected, seen_requests, target.clone());
     Ok(())
 }
 
-fn push_unique(values: &mut Vec<String>, seen: &mut BTreeSet<String>, value: String) {
-    if seen.insert(value.clone()) {
+fn push_scoped_ref(
+    values: &mut Vec<ScopedRequestRef>,
+    seen: &mut BTreeSet<String>,
+    value: ScopedRequestRef,
+) {
+    if seen.insert(value.request_id.clone()) {
         values.push(value);
     }
 }
 
+/// Physical-identity cancel/wait/snapshot target: the verified docID plus the
+/// exact owner and requester scope it was resolved under. Absent requester is
+/// exact None (anonymous scope), never a wildcard.
+#[derive(Debug, Clone)]
+struct ScopedRequestRef {
+    request_id: String,
+    doc_id: Option<String>,
+    agent_did: Option<String>,
+    requester_did: Option<String>,
+    session_id: Option<String>,
+}
+
+fn scoped_ref_from_row(row: &Value, request_id: &str) -> Result<ScopedRequestRef> {
+    let doc_id = string_field(row, "_docID");
+    let agent_did = string_field(row, "agent_did");
+    anyhow::ensure!(
+        doc_id.is_some() && agent_did.is_some(),
+        "request {request_id} resolved without physical identity or principal; refusing scoped interrupt"
+    );
+    Ok(ScopedRequestRef {
+        request_id: request_id.to_string(),
+        doc_id,
+        agent_did,
+        requester_did: raw_requester_field(row, "requester_did"),
+        session_id: string_field(row, "session_id"),
+    })
+}
+
+/// Build a scoped ref from the canonical typed row. `_docID` is
+/// `skip_serializing`, so the physical identity must come from the raw query
+/// envelope carried on `doc_id` by the scoped local fetch.
+fn scoped_ref_from_agent_row(row: &AgentRequestRow, request_id: &str) -> Result<ScopedRequestRef> {
+    let doc_id = row.doc_id.clone().filter(|value| !value.trim().is_empty());
+    let agent_did = row
+        .agent_did
+        .clone()
+        .filter(|value| !value.trim().is_empty());
+    anyhow::ensure!(
+        doc_id.is_some() && agent_did.is_some(),
+        "request {request_id} lacks physical identity or principal; refusing scoped cancel"
+    );
+    Ok(ScopedRequestRef {
+        request_id: request_id.to_string(),
+        doc_id,
+        agent_did,
+        requester_did: row.requester_did.clone(),
+        session_id: row.session_id.clone(),
+    })
+}
+
+fn raw_requester_field(row: &Value, field: &str) -> Option<String> {
+    row.get(field)
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+/// Fetch the unique local root inside the exact principal scope, retaining the
+/// physical `_docID` on the typed row for scoped interrupt/cascade routing.
+async fn fetch_request_row_local_scoped(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    request_id: &str,
+) -> Result<AgentRequestRow> {
+    let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{
+                    request_id: {{ _eq: "{escaped_request_id}" }},
+                    agent_did: {{ _eq: "{escaped_agent_did}" }}
+                }},
+                limit: 2
+            ) {{
+                _docID
+                request_id
+                agent_did
+                requester_did
+                session_id
+                lifecycle_state
+                interrupt_requested_at
+                caused_by_parent_request_id
+                caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
+            }}
+        }}"#
+    );
+    let response = execute_node_json(node, &query).await?;
+    let mut rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "request {request_id} is ambiguous for agent {agent_did}; refusing to cancel a shared logical ID"
+    );
+    let row = rows
+        .pop()
+        .ok_or_else(|| anyhow::anyhow!("request {request_id} not found for agent {agent_did}"))?;
+    let mut typed: AgentRequestRow = serde_json::from_value(row.clone())
+        .with_context(|| format!("decoding AgentRequest {request_id}"))?;
+    typed.doc_id = row
+        .get("_docID")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    anyhow::ensure!(
+        typed.doc_id.is_some(),
+        "request {request_id} resolved without physical identity; refusing scoped cancel"
+    );
+    Ok(typed)
+}
+
 async fn wait_for_terminal_graphql(
     graphql: &str,
-    request_ids: &[String],
+    affected: &[ScopedRequestRef],
     timeout: Duration,
 ) -> Result<Vec<RequestCancelSnapshot>> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let snapshots = snapshot_requests_graphql(graphql, request_ids).await?;
+        let snapshots = snapshot_requests_graphql(graphql, affected).await?;
         if snapshots.iter().all(|row| {
             row.lifecycle_state
                 .is_some_and(RequestLifecycleState::is_terminal)
@@ -357,12 +681,12 @@ async fn wait_for_terminal_graphql(
 
 async fn wait_for_terminal_local(
     node: &EmbeddedNode,
-    request_ids: &[String],
+    affected: &[ScopedRequestRef],
     timeout: Duration,
 ) -> Result<Vec<RequestCancelSnapshot>> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let snapshots = snapshot_requests_local(node, request_ids).await?;
+        let snapshots = snapshot_requests_local(node, affected).await?;
         if snapshots.iter().all(|row| {
             row.lifecycle_state
                 .is_some_and(RequestLifecycleState::is_terminal)
@@ -382,11 +706,11 @@ async fn wait_for_terminal_local(
 
 async fn snapshot_requests_graphql(
     graphql: &str,
-    request_ids: &[String],
+    affected: &[ScopedRequestRef],
 ) -> Result<Vec<RequestCancelSnapshot>> {
-    let mut rows = Vec::with_capacity(request_ids.len());
-    for request_id in request_ids {
-        let row = fetch_request_row_graphql(graphql, request_id).await?;
+    let mut rows = Vec::with_capacity(affected.len());
+    for target in affected {
+        let row = scoped_fetch_row_graphql(graphql, target).await?;
         rows.push(request_cancel_snapshot(row));
     }
     Ok(rows)
@@ -394,14 +718,106 @@ async fn snapshot_requests_graphql(
 
 async fn snapshot_requests_local(
     node: &EmbeddedNode,
-    request_ids: &[String],
+    affected: &[ScopedRequestRef],
 ) -> Result<Vec<RequestCancelSnapshot>> {
-    let mut rows = Vec::with_capacity(request_ids.len());
-    for request_id in request_ids {
-        let row = fetch_request_row_local(node, request_id).await?;
+    let mut rows = Vec::with_capacity(affected.len());
+    for target in affected {
+        let row = scoped_fetch_row_local(node, target).await?;
         rows.push(request_cancel_snapshot(row));
     }
     Ok(rows)
+}
+
+/// Read one snapshot row through its verified physical identity. A duplicate
+/// logical ID under a foreign owner can never be joined here: the scoped
+/// lookup matches the exact `_docID` resolved at cancel time, ambiguity-rejects,
+/// and surfaces failure clearly instead of swallowing a decode error.
+async fn scoped_fetch_row_graphql(
+    graphql: &str,
+    target: &ScopedRequestRef,
+) -> Result<AgentRequestRow> {
+    let escaped_doc_id = escape_graphql_string(target.doc_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "snapshot target {} has no verified physical identity",
+            target.request_id
+        )
+    })?);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 2
+            ) {{
+                _docID
+                request_id
+                agent_did
+                session_id
+                requester_did
+                lifecycle_state
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let response = post_graphql(graphql, &query).await?;
+    request_row_from_scoped_response(&response, target)
+}
+
+async fn scoped_fetch_row_local(
+    node: &EmbeddedNode,
+    target: &ScopedRequestRef,
+) -> Result<AgentRequestRow> {
+    let escaped_doc_id = escape_graphql_string(target.doc_id.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "snapshot target {} has no verified physical identity",
+            target.request_id
+        )
+    })?);
+    let query = format!(
+        r#"{{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
+                limit: 2
+            ) {{
+                _docID
+                request_id
+                agent_did
+                session_id
+                requester_did
+                lifecycle_state
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let response = execute_node_json(node, &query).await?;
+    request_row_from_scoped_response(&response, target)
+}
+
+fn request_row_from_scoped_response(
+    response: &Value,
+    target: &ScopedRequestRef,
+) -> Result<AgentRequestRow> {
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("scoped snapshot query omitted rows"))?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "snapshot for request {} is ambiguous across physical documents",
+        target.request_id
+    );
+    let row = rows
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("request {} not found", target.request_id))?;
+    anyhow::ensure!(
+        row["_docID"].as_str() == target.doc_id.as_deref()
+            && row["request_id"].as_str() == Some(target.request_id.as_str())
+            && row["agent_did"].as_str() == target.agent_did.as_deref()
+            && row["requester_did"].as_str() == target.requester_did.as_deref()
+            && row["session_id"].as_str() == target.session_id.as_deref(),
+        "request snapshot no longer matches selected physical identity and scope"
+    );
+    serde_json::from_value(row.clone())
+        .with_context(|| format!("decoding AgentRequest {}", target.request_id))
 }
 
 fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
@@ -420,12 +836,6 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
         .join(", ")
 }
 
-async fn fetch_request_row_graphql(graphql: &str, request_id: &str) -> Result<AgentRequestRow> {
-    let query = request_row_query(request_id);
-    let response = post_graphql(graphql, &query).await?;
-    request_row_from_response(&response, request_id)
-}
-
 async fn fetch_request_row_local(node: &EmbeddedNode, request_id: &str) -> Result<AgentRequestRow> {
     let query = request_row_query(request_id);
     let response = execute_node_json(node, &query).await?;
@@ -437,15 +847,18 @@ fn request_row_query(request_id: &str) -> String {
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 1
+                limit: 2
             ) {{
                 request_id
                 agent_did
+                requester_did
                 session_id
                 lifecycle_state
                 interrupt_requested_at
                 caused_by_parent_request_id
+                caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
+                caused_by_parent_tool_call_doc_id
             }}
         }}"#,
         request_id = escape_graphql_string(request_id),
@@ -453,48 +866,19 @@ fn request_row_query(request_id: &str) -> String {
 }
 
 fn request_row_from_response(response: &Value, request_id: &str) -> Result<AgentRequestRow> {
-    let row = response
+    let rows = response
         .pointer("/data/AgentRequest")
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
+        .ok_or_else(|| anyhow::anyhow!("request row query omitted rows"))?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "request {request_id} is ambiguous across physical AgentRequest documents"
+    );
+    let row = rows
+        .first()
         .ok_or_else(|| anyhow::anyhow!("request {request_id} not found"))?;
     serde_json::from_value(row.clone())
         .with_context(|| format!("decoding AgentRequest {request_id}"))
-}
-
-async fn running_subagent_bridges_graphql(
-    graphql: &str,
-    session_id: &str,
-) -> Result<Vec<BridgeRow>> {
-    let response = post_graphql(graphql, &running_subagent_bridges_query(session_id)).await?;
-    bridge_rows_from_response(&response)
-}
-
-async fn running_subagent_bridges_local(
-    node: &EmbeddedNode,
-    session_id: &str,
-) -> Result<Vec<BridgeRow>> {
-    let response = execute_node_json(node, &running_subagent_bridges_query(session_id)).await?;
-    bridge_rows_from_response(&response)
-}
-
-fn running_subagent_bridges_query(session_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    lifecycle_state: {{ _eq: "running" }},
-                    cancel_policy: {{ _eq: "cascade" }}
-                }},
-                order: [{{ started_at: ASC }}, {{ tool_call_id: ASC }}]
-            ) {{
-                tool_call_id
-                child_request_id
-            }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-    )
 }
 
 fn bridge_rows_from_response(response: &Value) -> Result<Vec<BridgeRow>> {
@@ -508,7 +892,9 @@ fn bridge_rows_from_response(response: &Value) -> Result<Vec<BridgeRow>> {
         .filter_map(|row| {
             let tool_call_id = string_field(row, "tool_call_id")?;
             let child_request_id = string_field(row, "child_request_id");
+            let doc_id = string_field(row, "_docID");
             Some(BridgeRow {
+                doc_id,
                 tool_call_id,
                 child_request_id,
             })
@@ -518,30 +904,22 @@ fn bridge_rows_from_response(response: &Value) -> Result<Vec<BridgeRow>> {
 
 async fn tool_lifecycle_state_local(
     node: &EmbeddedNode,
+    doc_id: &str,
+    owner: &str,
     session_id: &str,
-    tool_call_id: &str,
+    requester: Option<&str>,
 ) -> Result<Option<String>> {
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    tool_call_id: {{ _eq: "{tool_call_id}" }}
-                }},
-                limit: 1
-            ) {{
-                lifecycle_state
-            }}
-        }}"#,
-        session_id = escape_graphql_string(session_id),
-        tool_call_id = escape_graphql_string(tool_call_id),
-    );
-    let response = execute_node_json(node, &query).await?;
-    Ok(response
-        .pointer("/data/AgentToolCall")
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| string_field(row, "lifecycle_state")))
+    let physical = escape_graphql_string(doc_id);
+    let scope = session_scope_filter(owner, session_id, requester);
+    let response = execute_node_json(node, &format!(r#"{{AgentToolCall(filter: {{{scope},_docID: {{_eq: "{physical}"}}}},limit:2){{_docID lifecycle_state}}}}"#)).await?;
+    let rows = response["data"]["AgentToolCall"]
+        .as_array()
+        .context("bridge state query omitted rows")?;
+    anyhow::ensure!(rows.len() <= 1, "physical bridge identity is ambiguous");
+    Ok(rows
+        .first()
+        .and_then(|row| row["lifecycle_state"].as_str())
+        .map(str::to_owned))
 }
 
 async fn execute_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
@@ -557,8 +935,7 @@ async fn execute_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
 fn string_field(row: &Value, field: &str) -> Option<String> {
     row.get(field)
         .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
 }
 
@@ -593,6 +970,7 @@ fn request_cancel_snapshot(row: AgentRequestRow) -> RequestCancelSnapshot {
 
 #[derive(Debug, Clone)]
 struct BridgeRow {
+    doc_id: Option<String>,
     tool_call_id: String,
     child_request_id: Option<String>,
 }
@@ -733,6 +1111,14 @@ async fn load_lineage_forest(
 
     for row in all_rows {
         let request_id = row.request_id.clone();
+        // A duplicate logical ID across owners is a data error: silently
+        // overwriting one row in the map would join a foreign-owned physical
+        // document into another lineage's tree.
+        if rows_by_id.contains_key(&request_id) {
+            anyhow::bail!(
+                "request {request_id} is ambiguous across physical AgentRequest documents; refusing to render a shared logical ID"
+            );
+        }
         if let Some(parent_request_id) = request_parent_id(&row) {
             included_ids.insert(parent_request_id.clone());
             included_ids.insert(request_id.clone());
@@ -844,14 +1230,21 @@ async fn load_request_by_id(
         r#"{{
             AgentRequest(
                 filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
+                limit: 2
             ) {{
                 {AGENT_REQUEST_FIELDS}
             }}
         }}"#
     );
-    let mut rows = load_request_rows(access, &query).await?;
-    Ok(rows.pop())
+    let rows = load_request_rows(access, &query).await?;
+    // A duplicate logical ID is a data error, never a silent first-row pick:
+    // the rooted list must not join a foreign-owned row sharing the label.
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "request {request_id} is ambiguous across {} AgentRequest documents; refusing to render a shared logical ID",
+        rows.len()
+    );
+    Ok(rows.into_iter().next())
 }
 
 async fn load_all_requests(access: &ConfigAccess) -> Result<Vec<AgentRequestRow>> {
@@ -1168,5 +1561,127 @@ mod tests {
         assert!(rendered.contains("parent"));
         assert!(rendered.contains("  child"));
         assert!(rendered.contains("parent"));
+    }
+
+    fn scoped_row(
+        request_id: &str,
+        doc_id: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+        session_id: Option<&str>,
+    ) -> Value {
+        json!({
+            "_docID": doc_id,
+            "request_id": request_id,
+            "agent_did": agent_did,
+            "requester_did": requester_did,
+            "session_id": session_id,
+        })
+    }
+
+    #[test]
+    fn scoped_ref_preserves_exact_none_requester_not_wildcard() {
+        // Absent requester must resolve to None exactly, so the scoped
+        // interrupt owner encodes `requester_did: {_eq: null}` — a request
+        // with any requester DID is a different scope, never matched.
+        let own = scoped_ref_from_row(
+            &scoped_row("r1", "doc-own-1", "did:key:zOwner", None, Some("session-1")),
+            "r1",
+        )
+        .expect("own scope ref");
+        assert_eq!(own.requester_did, None);
+        assert_eq!(own.doc_id.as_deref(), Some("doc-own-1"));
+        assert_eq!(own.agent_did.as_deref(), Some("did:key:zOwner"));
+
+        let foreign_requester = scoped_ref_from_row(
+            &scoped_row(
+                "r1",
+                "doc-foreign-1",
+                "did:key:zOwner",
+                Some("did:key:zRequester"),
+                Some("session-1"),
+            ),
+            "r1",
+        )
+        .expect("requester-scoped ref");
+        assert_eq!(
+            foreign_requester.requester_did.as_deref(),
+            Some("did:key:zRequester"),
+            "requester presence must be carried, never collapsed into the anonymous scope"
+        );
+    }
+
+    #[test]
+    fn scoped_ref_rejects_missing_physical_identity_or_principal() {
+        // `string_field` trims empties, so an empty _docID is "missing".
+        let missing_doc = json!({
+            "_docID": "",
+            "request_id": "r1",
+            "agent_did": "did:key:zOwner",
+        });
+        assert!(scoped_ref_from_row(&missing_doc, "r1").is_err());
+
+        let missing_principal = json!({
+            "_docID": "doc-1",
+            "request_id": "r1",
+        });
+        assert!(scoped_ref_from_row(&missing_principal, "r1").is_err());
+    }
+
+    #[test]
+    fn session_scope_filter_encodes_exact_none_requester() {
+        let anonymous = session_scope_filter("did:key:zOwner", "session-1", None);
+        assert!(
+            anonymous.contains("requester_did: { _eq: null }"),
+            "absent requester must be the exact anonymous scope, not a wildcard: {anonymous}"
+        );
+        let scoped =
+            session_scope_filter("did:key:zOwner", "session-1", Some("did:key:zRequester"));
+        assert!(
+            scoped.contains("requester_did: { _eq: \"did:key:zRequester\" }"),
+            "present requester must match exactly: {scoped}"
+        );
+        assert_ne!(anonymous, scoped);
+    }
+
+    #[test]
+    fn bridge_rows_carry_physical_doc_id_for_scoped_cancellation() {
+        let response = json!({
+            "data": {
+                "AgentToolCall": [
+                    {"_docID": "bridge-doc-1", "tool_call_id": "tc-1", "child_request_id": "child-1"},
+                    {"tool_call_id": "tc-2"}
+                ]
+            }
+        });
+        let rows = bridge_rows_from_response(&response).expect("bridge rows");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].doc_id.as_deref(),
+            Some("bridge-doc-1"),
+            "physical bridge identity must survive row decoding for docID-scoped lifecycle loads"
+        );
+        assert_eq!(rows[0].tool_call_id, "tc-1");
+        assert_eq!(rows[0].child_request_id.as_deref(), Some("child-1"));
+        assert!(
+            rows[1].doc_id.is_none(),
+            "a row without _docID must not fabricate physical identity"
+        );
+    }
+
+    #[test]
+    fn scoped_root_resolution_rejects_duplicate_logical_ids_in_scope() {
+        // Two physical documents sharing one logical ID within the requested
+        // principal scope are ambiguous: interrupt must be refused, never
+        // first-row picked.
+        assert!(ensure_unique_scoped_root("did:key:zOwner", "r1", 1).is_ok());
+        let error = ensure_unique_scoped_root("did:key:zOwner", "r1", 2)
+            .expect_err("duplicate scoped root must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to interrupt a shared logical ID"),
+            "rejection must name the shared-logical-ID hazard: {error}"
+        );
     }
 }

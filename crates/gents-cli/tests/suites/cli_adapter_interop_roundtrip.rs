@@ -1,17 +1,19 @@
 use crate::support::*;
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gents::adapter_projection::{
+    adapter_projection_eval_jsonl_records, adapter_projection_jsonl_records,
+    build_external_adapter_projection,
+};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
     import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
-    AdapterProjectionEnvelope, AdapterProjectionKind, ExternalAdapterCapture,
-    ProjectionRedactionMode, RunTimelineRows, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineToolCallRow,
+    AdapterProjectionEnvelope, AdapterProjectionKind, ExternalAdapterCapture, ProjectionContext,
+    ProjectionRedactionMode, RunTimelineRows,
 };
 use serde_json::{json, Value};
 
@@ -21,7 +23,7 @@ const EXPORT_ROOT_ENV: &str = "GENTS_ADAPTER_INTEROP_EXPORTS";
 
 #[tokio::test]
 #[ignore = "external interop: set GENTS_ADAPTER_INTEROP_ROUNDTRIP_FIXTURES and pass --ignored"]
-async fn external_adapter_native_captures_roundtrip_through_gents_binary() -> Result<()> {
+async fn external_adapter_native_captures_project_to_export_formats() -> Result<()> {
     let Some(root) = fixture_root() else {
         eprintln!(
             "{FIXTURE_ROOT_ENV} or {LEGACY_FIXTURE_ROOT_ENV} is not set; skipping external adapter roundtrip"
@@ -74,69 +76,27 @@ async fn external_adapter_native_captures_roundtrip_through_gents_binary() -> Re
         };
         imported_count += 1;
 
-        let tempdir = tempfile::tempdir().context("creating tempdir")?;
-        let agent_home = tempdir.path().join("agent-home");
-        let data_dir = agent_home.join("data");
-        {
-            let node = EmbeddedNode::builder()
-                .data_path(&data_dir)
-                .with_storage_backend(StorageBackend::Regolith)
-                .build()
-                .await
-                .context("opening embedded node")?;
-            ensure_runtime_schemas(&node).await?;
-            persist_run_timeline_rows(&node, &import.rows).await?;
-        }
-
-        let projection_arg = projection_cli_arg(import.projection);
-        let redaction_arg = redaction_cli_arg(&capture);
-        let actor_did = import
-            .actor_did
-            .as_deref()
-            .unwrap_or("did:test:external-interop-reader");
-        let home = agent_home.to_str().context("agent home utf8")?;
-        let json_output = trace_project(
-            tempdir.path(),
-            home,
-            &import.rows.request.request_id,
-            projection_arg,
-            "json",
-            redaction_arg,
-            actor_did,
-        )?;
-        let projection = serde_json::from_str::<Value>(&json_output)
-            .with_context(|| format!("parsing JSON projection for {}", path.display()))?;
-        validate_cli_exports(&projection, "", "", &path, false)?;
+        // External framework state stays in the original capture. Persisted Gents
+        // requests deliberately do not carry a parallel framework metadata model.
+        let context = ProjectionContext {
+            actor_did: import.actor_did.clone(),
+            redaction_mode: capture
+                .envelope
+                .as_ref()
+                .map(|envelope| envelope.redaction_mode)
+                .unwrap_or(ProjectionRedactionMode::Full),
+        };
+        let envelope = build_external_adapter_projection(&capture, &context)?;
+        let json_output = serde_json::to_string_pretty(&envelope)?;
+        let projection = serde_json::to_value(&envelope)?;
         assert_projection_matches_import(&projection, &capture, &import.rows)
             .with_context(|| format!("validating imported projection for {}", path.display()))?;
-
-        let jsonl_output = trace_project(
-            tempdir.path(),
-            home,
-            &import.rows.request.request_id,
-            projection_arg,
-            "jsonl",
-            redaction_arg,
-            actor_did,
-        )?;
-        anyhow::ensure!(
-            !jsonl_output.trim().is_empty(),
-            "{} produced empty JSONL export",
-            path.display()
-        );
-        let eval_jsonl_output = trace_project(
-            tempdir.path(),
-            home,
-            &import.rows.request.request_id,
-            projection_arg,
-            "eval-jsonl",
-            redaction_arg,
-            actor_did,
-        )?;
+        let jsonl_output = serialize_jsonl(adapter_projection_jsonl_records(&envelope))?;
+        let eval_jsonl_output = serialize_jsonl(adapter_projection_eval_jsonl_records(&envelope))?;
+        anyhow::ensure!(!jsonl_output.trim().is_empty(), "empty JSONL export");
         anyhow::ensure!(
             !eval_jsonl_output.trim().is_empty(),
-            "{} produced empty eval JSONL export",
-            path.display()
+            "empty eval JSONL export"
         );
         validate_cli_exports(&projection, &jsonl_output, &eval_jsonl_output, &path, true)?;
 
@@ -165,6 +125,91 @@ async fn external_adapter_native_captures_roundtrip_through_gents_binary() -> Re
         "no external adapter captures with supported Gents import mappings were found in {}",
         root.display()
     );
+    Ok(())
+}
+
+#[test]
+fn external_projection_preserves_mapped_children_without_forging_native_provenance() -> Result<()> {
+    let capture: ExternalAdapterCapture =
+        serde_json::from_value(valid_multi_agent_capture_value())?;
+    let imported = import_external_adapter_capture_to_timeline_rows(&capture)?;
+    assert!(imported.rows.requests.iter().all(
+        |request| request.doc_id.is_none() && request.caused_by_parent_request_doc_id.is_none()
+    ));
+    let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
+    validate_adapter_projection_contract(&envelope)?;
+    let projection = serde_json::to_value(&envelope)?;
+    assert_projection_matches_import(&projection, &capture, &imported.rows)?;
+    assert_eq!(
+        projection
+            .pointer("/output/projection/messages")
+            .and_then(Value::as_array)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        projection.pointer("/output/projection/delegations/0/parent_tool_call_id"),
+        Some(&json!("tool-delegate"))
+    );
+    for mode in [
+        ProjectionRedactionMode::TrainingSafe,
+        ProjectionRedactionMode::Public,
+    ] {
+        let envelope = build_external_adapter_projection(
+            &capture,
+            &ProjectionContext {
+                actor_did: None,
+                redaction_mode: mode,
+            },
+        )?;
+        validate_adapter_projection_contract(&envelope)?;
+        let rendered = serde_json::to_string(&envelope.output)?;
+        assert!(!rendered.contains("Research complete."));
+        assert!(!rendered.contains("did:test:researcher"));
+    }
+    Ok(())
+}
+
+#[test]
+fn external_langgraph_projection_preserves_history_graph_tasks_and_redacts_values() -> Result<()> {
+    let mut value = langgraph_capture_without_history();
+    value["native"]["graph"] = json!({
+        "nodes": ["provider_model", "research_subgraph"],
+        "edges": [{"from":"langgraph:start","to":"langgraph:node:provider_model","kind":"flow"}],
+        "subgraphs": {"research_subgraph": {"nodes": ["search"]}}
+    });
+    value["native"]["history"] = json!([
+        {"config":{"configurable":{"checkpoint_id":"checkpoint-current"}},
+         "values":{"topic":"private-topic", "status":"completed", "child_request_id":"req-child"}},
+        {"values":{"topic":"prior-topic"}}
+    ]);
+    let capture: ExternalAdapterCapture = serde_json::from_value(value)?;
+    let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
+    validate_adapter_projection_contract(&envelope)?;
+    let gents::adapter_projection::AdapterProjection::LangGraphStateHistory(projection) =
+        &envelope.output
+    else {
+        panic!("expected LangGraph projection")
+    };
+    assert_eq!(projection.checkpoint_id, "checkpoint-current");
+    assert_eq!(projection.values["history_checkpoint_count"], json!(2));
+    assert_eq!(projection.values["topic"], json!("private-topic"));
+    assert!(projection
+        .nodes
+        .iter()
+        .any(|node| node.id == "langgraph:subgraph:research:search"));
+    assert_eq!(projection.edges.len(), 1);
+    assert!(projection.tasks.iter().any(|task| task.name == "search"));
+    let public = build_external_adapter_projection(
+        &capture,
+        &ProjectionContext {
+            actor_did: None,
+            redaction_mode: ProjectionRedactionMode::Public,
+        },
+    )?;
+    validate_adapter_projection_contract(&public)?;
+    assert!(!serde_json::to_string(&public)?.contains("private-topic"));
     Ok(())
 }
 
@@ -455,238 +500,13 @@ async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-async fn persist_run_timeline_rows(node: &EmbeddedNode, rows: &RunTimelineRows) -> Result<()> {
-    if let Some(session) = rows.session.as_ref() {
-        create_session(node, session).await?;
+fn serialize_jsonl(records: Vec<impl serde::Serialize>) -> Result<String> {
+    let mut output = String::new();
+    for record in records {
+        output.push_str(&serde_json::to_string(&record)?);
+        output.push('\n');
     }
-
-    let mut seen_requests = BTreeSet::new();
-    for request in &rows.requests {
-        if seen_requests.insert(request.request_id.clone()) {
-            create_request(node, request).await?;
-        }
-    }
-    if seen_requests.insert(rows.request.request_id.clone()) {
-        create_request(node, &rows.request).await?;
-    }
-
-    for message in &rows.messages {
-        create_message(node, message).await?;
-    }
-    for tool_call in &rows.tool_calls {
-        create_tool_call(node, tool_call).await?;
-    }
-    for response in &rows.responses {
-        create_response(node, response).await?;
-    }
-    Ok(())
-}
-
-async fn create_session(node: &EmbeddedNode, row: &impl serde::Serialize) -> Result<()> {
-    // Import/export must carry the canonical session document, not a second
-    // projection which this fixture would have to reconstruct or merge.
-    let session: gents_protocol::session::AgentSession =
-        serde_json::from_value(serde_json::to_value(row)?)
-            .context("adapter importer must emit a canonical AgentSession")?;
-    let input = gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session)?)?;
-    exec(
-        node,
-        &format!("mutation {{ create_AgentSession(input: {input}) {{ _docID }} }}"),
-    )
-    .await
-}
-
-async fn create_request(node: &EmbeddedNode, row: &TimelineRequestRow) -> Result<()> {
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentRequest(input: {{
-                    request_id: "{}",
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.request_id),
-            string_field("agent_did", row.agent_did.as_deref()),
-            string_field("behavior_id", row.behavior_id.as_deref()),
-            string_field("session_id", row.session_id.as_deref()),
-            string_field("content", row.content.as_deref()),
-            match serde_json::to_value(row)?
-                .get("input")
-                .filter(|value| !value.is_null())
-            {
-                Some(input) => format!(
-                    "input: {},",
-                    gents_protocol::graphql::graphql_input_literal(input)?
-                ),
-                None => String::new(),
-            },
-            string_field(
-                "lifecycle_state",
-                row.lifecycle_state.map(|state| state.as_str()),
-            ),
-            string_field("backend_id", row.backend_id.as_deref()),
-            string_field("failure_reason", row.failure_reason.as_deref()),
-            string_field("created_at", row.created_at.as_deref()),
-            i64_field("retry_count", row.retry_count),
-            string_field(
-                "caused_by_parent_request_id",
-                row.caused_by_parent_request_id.as_deref()
-            ),
-            string_field(
-                "caused_by_parent_tool_call_id",
-                row.caused_by_parent_tool_call_id.as_deref()
-            ),
-        ),
-    )
-    .await
-}
-
-async fn create_message(node: &EmbeddedNode, row: &TimelineMessageRow) -> Result<()> {
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "{}:{}",
-                    session_id: "{}",
-                    {}
-                    sequence: {},
-                    role: "{}",
-                    content: "{}",
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.session_id),
-            row.sequence,
-            esc(&row.session_id),
-            string_field("request_id", row.request_id.as_deref()),
-            row.sequence,
-            esc(&row.role),
-            esc(&row.content),
-            string_field("timestamp", row.timestamp.as_deref()),
-        ),
-    )
-    .await
-}
-
-async fn create_tool_call(node: &EmbeddedNode, row: &TimelineToolCallRow) -> Result<()> {
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{}:{}",
-                    session_id: "{}",
-                    tool_name: "{}",
-                    tool_call_id: "{}",
-                    args: "{}",
-                    result: "{}",
-                    status: "{}",
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.session_id),
-            esc(&row.tool_call_id),
-            esc(&row.session_id),
-            esc(&row.tool_name),
-            esc(&row.tool_call_id),
-            esc(&row.args),
-            esc(&row.result),
-            esc(&row.status),
-            string_field("request_id", row.request_id.as_deref()),
-            i64_field("message_sequence", row.message_sequence),
-            string_field("started_at", row.started_at.as_deref()),
-            string_field("completed_at", row.completed_at.as_deref()),
-            string_field("child_request_id", row.child_request_id.as_deref()),
-        ),
-    )
-    .await
-}
-
-async fn create_response(node: &EmbeddedNode, row: &TimelineResponseRow) -> Result<()> {
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentResponse(input: {{
-                    response_key: "{}",
-                    request_id: "{}",
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                    {}
-                }}) {{ _docID }}
-            }}"#,
-            esc(&row.request_id),
-            esc(&row.request_id),
-            string_field("agent_did", row.agent_did.as_deref()),
-            string_field("behavior_id", row.behavior_id.as_deref()),
-            string_field("session_id", row.session_id.as_deref()),
-            string_field("content", row.content.as_deref()),
-            string_field("reasoning", row.reasoning.as_deref()),
-            string_field("status", row.status.as_deref()),
-            string_field("error_message", row.error_message.as_deref()),
-            i64_field(
-                "materialized_message_sequence",
-                row.materialized_message_sequence
-            ),
-            string_field("created_at", row.created_at.as_deref()),
-            string_field("completed_at", row.completed_at.as_deref()),
-        ),
-    )
-    .await
-}
-
-fn trace_project(
-    cwd: &Path,
-    home: &str,
-    request_id: &str,
-    projection: &str,
-    format: &str,
-    redaction: &str,
-    actor_did: &str,
-) -> Result<String> {
-    run_cli_text(
-        cwd,
-        &[
-            "trace",
-            "project",
-            "--home",
-            home,
-            "--request-id",
-            request_id,
-            "--projection",
-            projection,
-            "--format",
-            format,
-            "--redaction",
-            redaction,
-            "--actor-did",
-            actor_did,
-        ],
-    )
+    Ok(output)
 }
 
 fn validate_cli_exports(
@@ -832,44 +652,6 @@ fn native_message_contents(capture: &ExternalAdapterCapture) -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     }
-}
-
-fn projection_cli_arg(projection: AdapterProjectionKind) -> &'static str {
-    match projection {
-        AdapterProjectionKind::AtifTrajectory => "atif",
-        AdapterProjectionKind::OpenAiCodexRunTrace => "openai-codex",
-        AdapterProjectionKind::LangGraphStateHistory => "langgraph",
-        AdapterProjectionKind::MultiAgentTask => "multi-agent",
-    }
-}
-
-fn redaction_cli_arg(capture: &ExternalAdapterCapture) -> &'static str {
-    match capture
-        .envelope
-        .as_ref()
-        .map(|envelope| envelope.redaction_mode)
-        .unwrap_or(ProjectionRedactionMode::Full)
-    {
-        ProjectionRedactionMode::Full => "full",
-        ProjectionRedactionMode::TrainingSafe => "training-safe",
-        ProjectionRedactionMode::Public => "public",
-    }
-}
-
-fn string_field(name: &str, value: Option<&str>) -> String {
-    value
-        .map(|value| format!("{name}: \"{}\",", esc(value)))
-        .unwrap_or_default()
-}
-
-fn i64_field(name: &str, value: Option<i64>) -> String {
-    value
-        .map(|value| format!("{name}: {value},"))
-        .unwrap_or_default()
-}
-
-fn esc(value: &str) -> String {
-    escape_graphql_string(value)
 }
 
 fn value_to_text(value: &Value) -> String {

@@ -15,8 +15,8 @@ use crate::{
 pub(super) async fn config_apply(args: ConfigApplyArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
 
-    // Pack-local schemas first (if `<root>/schemas/` exists) so EventTrigger
-    // sources and DatastoreToolSurface collections are on the node before
+    // Pack-local schemas first (if `<root>/schemas/` exists) so EventSource
+    // collections and DatastoreToolSurface collections are on the node before
     // live validate and config writes. Ordinary agent-config roots without
     // schemas/ are unchanged.
     let schemas = crate::commands::schema::apply_pack_schemas_if_present(&access, &args.root)
@@ -61,16 +61,14 @@ pub(crate) async fn apply_bound_desired_manifest(
 ) -> Result<ConfigApplyReport> {
     let desired_manifest = &bound.manifest;
 
-    // Apply-time live validation complements the static desired-state
-    // validation. It checks pairing ownership and probes the live node's
-    // GraphQL schema for EventTrigger filter syntax and `doc.*` field
-    // resolution. Apply rejects every error before opening a transaction;
-    // config diff reports only pairing ownership collisions alongside drift.
+    // Probe authored event sources and their bound task templates against the
+    // node schema. The shared apply transaction validates references across the
+    // retained and authored configuration before publishing any document.
     let live_errs =
         desired_state::validate::validate_manifest_against_live(desired_manifest, &access).await?;
     if !live_errs.is_empty() {
         for e in &live_errs {
-            eprintln!("error: {e}");
+            tracing::error!(error = %e, "live config validation failed");
         }
         anyhow::bail!("{} live validation error(s)", live_errs.len());
     }
@@ -90,6 +88,8 @@ pub(crate) async fn apply_bound_desired_manifest(
         prune,
     );
 
+    anyhow::ensure!(planned.live_validation_errors.is_empty(),
+        "cannot apply invalid config diff: {}", planned.live_validation_errors.join("; "));
     let desired_bundle_ref = &desired_bundle;
     let planned_ref = &planned;
     let (applied, pruned) = access
@@ -102,9 +102,6 @@ pub(crate) async fn apply_bound_desired_manifest(
         })
         .await
         .context("config apply transaction")?;
-
-    let provisioning =
-        desired_state::apply_workspace_provisioning(access, desired_manifest).await?;
 
     let remaining_bundle = build_desired_state_live_bundle(&access, desired_manifest).await?;
     let (remaining_principal, remaining_manifest) =
@@ -119,9 +116,7 @@ pub(crate) async fn apply_bound_desired_manifest(
     );
 
     let changed = config_apply_counts_changed(&applied)
-        || config_apply_counts_changed(&pruned)
-        || provisioning.callback_bindings > 0
-        || provisioning.repository_placements > 0;
+        || config_apply_counts_changed(&pruned);
     let report = ConfigApplyReport {
         status: if changed { "applied" } else { "noop" },
         ok: !diff_has_pending_apply(&remaining.counts),
