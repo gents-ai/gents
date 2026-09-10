@@ -714,11 +714,16 @@ mod tests {
     fn snapshot_overlays_event_trigger_workspace_authority() {
         let source = serde_json::json!({
             "workspace_id": "ws-1",
+            "workspace_owner_agent_did": "did:key:workspace-owner",
             "seal_hash": "tree-1"
         });
         let mut fields = std::collections::BTreeMap::new();
         snapshot_workspace_lineage_source_fields(&source, &mut fields, Some("readOnly"));
         assert_eq!(fields.get("workspace_id").map(String::as_str), Some("ws-1"));
+        assert_eq!(
+            fields.get("workspace_owner_agent_did").map(String::as_str),
+            Some("did:key:workspace-owner")
+        );
         assert_eq!(
             fields.get("workspace_authority").map(String::as_str),
             Some("readOnly")
@@ -781,6 +786,7 @@ mod tests {
                 .unwrap(),
         );
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        crate::test_support::install_test_behavior(node.as_ref(), "did:test:test", "default").await;
         let mut lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
             node.clone(),
             "default",

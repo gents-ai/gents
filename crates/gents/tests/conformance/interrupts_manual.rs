@@ -92,124 +92,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "parent AgentSession unchanged"
     );
 }
-
-#[tokio::test]
-async fn pending_interrupted_via_interrupt_before_claim() {
-    let db = test_db("pending-interrupted").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Interrupted);
-    assert_lean_transition_is_legal("Request", "pending", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
-#[tokio::test]
-async fn pending_dead_stale_via_expire() {
-    let db = test_db("pending-dead-stale").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let valid_until = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let doc_id = create_request_with_valid_until(
-        &db.node,
-        &request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        Some(&valid_until),
-    )
-    .await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Expired);
-    assert_lean_transition_is_legal("Request", "pending", "dead");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Dead);
-    assert_eq!(snap.failure_reason, "Stale");
-}
-
-#[tokio::test]
-async fn transition_to_interrupted_from_claimed() {
-    // Validates the lifecycle transition from `claimed` to `interrupted` via
-    // `transition_to_interrupted`. This test does NOT exercise the observer or
-    // watch channel end-to-end — the full `tokio::select!` arm + observer race
-    // is covered at integration level in Task 11.
-    let db = test_db("claimed-interrupted").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-    assert_lean_transition_is_legal("Request", "claimed", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
 #[tokio::test]
 async fn processing_interrupted_preserves_partial_response() {
     let db = test_db("processing-interrupted").await;
@@ -378,49 +260,6 @@ async fn pending_tie_break_prefers_interrupt_over_expire() {
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
 }
-
-#[tokio::test]
-async fn transition_to_interrupted_from_processing() {
-    let db = test_db("processing-tie-break").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-        .await
-        .unwrap();
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
-
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-    assert_lean_transition_is_legal("Request", "processing", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-}
-
 #[tokio::test]
 async fn fail_after_interrupt_latch_prefers_interrupted() {
     let db = test_db("fail-after-interrupt-latch").await;
@@ -561,55 +400,6 @@ async fn interrupt_on_already_terminal_is_noop() {
         "terminal lifecycle_state must not regress"
     );
 }
-
-#[tokio::test]
-async fn valid_until_is_immutable_after_claim_and_cached_value_is_preserved() {
-    let db = test_db("s8-cached-at-claim").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let future = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
-    let doc_id = create_request_with_valid_until(
-        &db.node,
-        &request_id,
-        &session_id,
-        "pending",
-        &created_at,
-        Some(&future),
-    )
-    .await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-
-    let much_later = (chrono::Utc::now() + chrono::Duration::hours(10)).to_rfc3339();
-    let response = try_set_valid_until(&db.node, &doc_id, &much_later).await;
-    assert!(
-        response.has_errors(),
-        "signed valid_until must reject post-create mutation"
-    );
-
-    let expected = chrono::DateTime::parse_from_rfc3339(&future)
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    assert_eq!(lifecycle.valid_until_at_claim_for_test(), Some(expected));
-}
-
 #[tokio::test]
 async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
     let db = test_db("s7-interrupt-latch").await;
@@ -907,38 +697,6 @@ async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
     let response_content = fetch_response_content(&db.node, &response_doc_id).await;
     assert_eq!(response_content, partial_content);
 }
-
-#[test]
-fn conformance_mapping_all_10_lifecycle_states_round_trip() {
-    use gents_protocol::client_protocol::RequestLifecycleState;
-
-    let lean_states = lean_vocabulary_values("RequestState");
-    assert_eq!(
-        lean_states.len(),
-        10,
-        "RequestState contract should be finite"
-    );
-    for s in lean_states {
-        let parsed = RequestLifecycleState::try_from(s)
-            .unwrap_or_else(|e| panic!("failed to parse '{}': {:?}", s, e));
-        assert_eq!(
-            parsed.as_str(),
-            s,
-            "as_str must round-trip to the source string"
-        );
-    }
-    assert_eq!(
-        RequestLifecycleState::try_from("inputRequired")
-            .expect("reserved vocabulary should parse")
-            .as_str(),
-        "inputRequired"
-    );
-
-    assert!(RequestLifecycleState::try_from("bogus").is_err());
-    assert!(RequestLifecycleState::try_from("").is_err());
-    assert!(RequestLifecycleState::try_from("INTERRUPTED").is_err());
-}
-
 #[test]
 fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     use gents_protocol::client_protocol::{

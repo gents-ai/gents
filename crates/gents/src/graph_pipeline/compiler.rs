@@ -209,7 +209,7 @@ fn validate_capability_ports(
 
 /// Compile an untrusted intent without performing I/O.
 ///
-/// Capabilities must come from the caller-visible, operator-approved catalog.
+/// Capabilities must come from the caller-visible configured catalog.
 /// Empty `allowed_callers` lists deny access. Every diagnostic is stable-sorted
 /// so a model can repair a proposal deterministically.
 pub fn compile_graph(

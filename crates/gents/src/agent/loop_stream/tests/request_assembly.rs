@@ -46,36 +46,6 @@ async fn loop_entry_sanitizes_a_recovered_checkpoint_as_one_projection() {
     ));
 }
 
-#[tokio::test]
-async fn context_message_is_sent_before_prompt() {
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("ok".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
-    let mut cfg = config(0);
-    cfg.context_message = Some(Message::user(
-        "<context>\nnow=2026-06-15T00:00:00Z\n</context>",
-    ));
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None,
-        Message::user("actual prompt"),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        cfg,
-    );
-    futures::pin_mut!(stream);
-    while stream.next().await.is_some() {}
-
-    let histories = model.seen_histories().await;
-    assert_eq!(histories.len(), 1);
-    assert!(matches!(
-        &histories[0][0],
-        Message::User { content }
-            if matches!(first_content(content), UserContent::Text(text) if text.text.starts_with("<context>"))
-    ));
-}
 /// Provider-request invariants: what every completion request the loop emits
 /// must satisfy, independent of the scenario that produced it. Mirrors the
 /// provider-side contract that `sanitize_history_for_provider` enforces for
@@ -663,12 +633,12 @@ fn classify_slot(message: &Message, is_last: bool, conversation_index: &mut usiz
 }
 
 /// Fences the fixed layer order of the assembled request against Lean
-/// `PromptAssembly.Template.assembleWithContext`, whose `assembleWithContext_tail`
-/// theorem pins the tail as `[contextPreamble, prompt]`.
+/// `PromptAssembly.assemble`, whose layer-order theorems pin the task prompt
+/// last and deliberately omit runtime-only workspace context.
 ///
 /// The summary/conversation layers come from the production
 /// `LayeredPromptBuilder::build`, and the tail from the production
-/// `assemble_new_messages`. The skill-reminder prepend is *mirrored* from
+/// `assemble_new_messages` with no runtime context. The skill-reminder prepend is *mirrored* from
 /// `agent/daemon/request.rs` rather than driven, because it happens inline in
 /// that function's async request flow; the reminders themselves are built by the
 /// production `LayeredPromptBuilder::system_reminder`.
@@ -710,7 +680,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
         let mut assembled = skill_reminders;
         assembled.extend(built.messages);
         assembled.extend(super::assemble_new_messages(
-            Some(Message::user("<context>\nnow: t\n</context>")),
+            None,
             Message::user("prompt"),
         ));
 

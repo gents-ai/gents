@@ -564,11 +564,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "WorkspacePathAliasCases",
             &snapshot.workspace_path_alias_cases,
         ),
-        (
-            "workspace_capability_migration_cases",
-            "WorkspaceCapabilityMigrationCases",
-            &snapshot.workspace_capability_migration_cases,
-        ),
     ] {
         if !cases.is_empty() {
             emitted.insert((category.to_owned(), domain.to_owned()));

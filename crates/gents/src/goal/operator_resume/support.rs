@@ -23,6 +23,7 @@ pub(super) struct ResumeCase {
 
 pub(super) const SESSION: &str = "contract-session";
 pub(super) const PARENT: &str = "contract-parent";
+
 pub(super) struct Fixture {
     pub node: Arc<EmbeddedNode>,
     pub identity: Arc<KeyIdentity>,
@@ -37,6 +38,12 @@ impl Fixture {
             Arc::new(KeyIdentity::load_or_create(temp.path().join("target.key"), None).unwrap());
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::schema::ensure_runtime_schemas(&node).await.unwrap();
+        crate::test_support::install_test_behavior(
+            node.as_ref(),
+            identity.did(),
+            "contract-behavior",
+        )
+        .await;
         let goal = set_goal(
             &node,
             identity.did(),
@@ -61,10 +68,6 @@ impl Fixture {
         create.caused_by_correlation = Some("graph-correlation".into());
         create.caused_by_source_doc_id = Some("source".into());
         create.caused_by_trigger_context = Some(r#"{"contract":"context"}"#.into());
-        create.workspace_id = Some("contract-workspace".into());
-        create.workspace_authority = Some("readOnly".into());
-        create.workspace_owner_agent_did = Some("did:key:workspace-owner".into());
-        create.workspace_seal_hash = Some("contract-seal".into());
         crate::sign_agent_request_create(identity.as_ref(), &mut create)
             .await
             .unwrap();
@@ -187,13 +190,6 @@ impl Fixture {
                 child.caused_by_trigger_context.as_deref(),
                 Some(r#"{"contract":"context"}"#)
             );
-            assert_eq!(child.workspace_id.as_deref(), Some("contract-workspace"));
-            assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-            assert_eq!(
-                child.workspace_owner_agent_did.as_deref(),
-                Some("did:key:workspace-owner")
-            );
-            assert_eq!(child.workspace_seal_hash.as_deref(), Some("contract-seal"));
             let wrapup = self.goal.parsed_status() == Some(GoalStatus::BudgetLimited);
             assert_eq!(continuation.wrapup, wrapup);
             assert_eq!(

@@ -469,37 +469,10 @@ async fn validate_parent_tool_call(
 mod tests {
     use super::*;
 
-    // The depth and coherence checks fire BEFORE any DB I/O, so we can
-    // exercise them without a real EmbeddedNode by leveraging the early
-    // return semantics. The DB-touching happy path is deferred to Bucket
-    // 3 / Task 26, which has the test_db fixture set up.
-    //
-    // We can't easily fabricate an `EmbeddedNode` for unit tests (it's a
-    // real type with a real constructor that boots a node). So the unit
-    // tests below use `unsafe { std::mem::zeroed() }` only conceptually
-    // — that's UB in Rust. Instead, we inline-construct the precondition
-    // checks directly in #[test] blocks that don't call the function.
-    //
-    // The function-level error paths (depth + coherence) ARE tested by
-    // Task 26's end-to-end fixtures, where a real node is available.
-
     #[test]
     fn max_subagent_depth_matches_lean_spec() {
         // Lean: Subagent.State.lean defines `maxSubagentDepth : Nat := 3`.
         assert_eq!(MAX_SUBAGENT_DEPTH, 3);
-    }
-
-    #[test]
-    fn depth_precondition_arithmetic() {
-        // parent_subagent_depth + 1 must be <= MAX_SUBAGENT_DEPTH.
-        // Allowed parent depths: 0, 1, 2 (resulting children: 1, 2, 3).
-        // Rejected parent depths: 3 and above.
-        for parent_depth in 0..=2 {
-            assert!(parent_depth < MAX_SUBAGENT_DEPTH);
-        }
-        for parent_depth in 3..=10 {
-            assert!(parent_depth >= MAX_SUBAGENT_DEPTH);
-        }
     }
 
     #[test]

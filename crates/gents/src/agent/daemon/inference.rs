@@ -911,9 +911,16 @@ mod tests {
     }
 
     #[test]
-    fn render_request_context_message_uses_frozen_agents_not_live_tree() {
+    fn assemble_request_context_message_maps_body_and_none() {
+        // Frozen/live selection semantics are owned — and pinned — by
+        // workspace/instructions.rs tests; this only fences the wrapper's
+        // Some(body) → Message::user("<context>…") and None → None mapping.
         let (_tmp, root, nested) = live_instruction_tree();
-        std::fs::write(root.join("AGENTS.md"), "live-writer-instructions\n").unwrap();
+        assert!(
+            assemble_request_context_message(Some("{}"), Some(&nested), Some(&root)).is_none(),
+            "an empty bound manifest must produce no context message"
+        );
+
         let manifest = crate::workspace::InstructionManifest::new(
             "abc",
             vec![crate::workspace::InstructionFile::from_bytes(
@@ -926,62 +933,10 @@ mod tests {
             Some(&nested),
             Some(&root),
         )
-        .expect("context");
+        .expect("a populated manifest must produce a context message");
         let encoded = serde_json::to_string(&message).expect("serialize");
-        assert!(encoded.contains("frozen-base-instructions"));
-        assert!(!encoded.contains("live-writer-instructions"));
-        assert!(!encoded.contains("nested-live-instructions"));
         assert!(encoded.contains("<context>"));
-    }
-
-    #[test]
-    fn bound_empty_manifest_does_not_include_live_agents_md() {
-        let (_tmp, root, nested) = live_instruction_tree();
-        assert!(assemble_request_context_message(Some("{}"), Some(&nested), Some(&root)).is_none());
-        assert!(assemble_request_context_message(Some(""), Some(&nested), Some(&root)).is_none());
-        let live = assemble_request_context_message(None, Some(&nested), Some(&root))
-            .expect("unbound live");
-        let encoded = serde_json::to_string(&live).expect("serialize");
-        assert!(encoded.contains("nested-live-instructions"));
-    }
-
-    #[test]
-    fn unbound_request_includes_live_agents_md() {
-        let (_tmp, root, nested) = live_instruction_tree();
-        let message =
-            assemble_request_context_message(None, Some(&nested), Some(&root)).expect("context");
-        let encoded = serde_json::to_string(&message).expect("serialize");
-        assert!(encoded.contains("root-live-instructions"));
-        assert!(encoded.contains("nested-live-instructions"));
-        assert!(encoded.contains("<context>"));
-        assert!(!encoded.contains("frozen-base-instructions"));
-        let root_at = encoded.find("root-live-instructions").unwrap();
-        let nested_at = encoded.find("nested-live-instructions").unwrap();
-        assert!(root_at < nested_at);
-    }
-
-    #[test]
-    fn bound_request_keeps_frozen_manifest_when_live_file_changed() {
-        let (_tmp, root, nested) = live_instruction_tree();
-        std::fs::write(nested.join("AGENTS.md"), "live-writer-instructions\n").unwrap();
-        let manifest = crate::workspace::InstructionManifest::new(
-            "abc",
-            vec![crate::workspace::InstructionFile::from_bytes(
-                "AGENTS.md",
-                b"frozen-base-instructions\n",
-            )],
-        );
-        let message = assemble_request_context_message(
-            Some(&manifest.to_json_string()),
-            Some(&nested),
-            Some(&root),
-        )
-        .expect("context");
-        let encoded = serde_json::to_string(&message).expect("serialize");
         assert!(encoded.contains("frozen-base-instructions"));
-        assert!(!encoded.contains("live-writer-instructions"));
-        assert!(!encoded.contains("nested-live-instructions"));
-        assert!(!encoded.contains("root-live-instructions"));
     }
 
     #[test]

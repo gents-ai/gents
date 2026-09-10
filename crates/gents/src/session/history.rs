@@ -1,6 +1,6 @@
-use super::retry::execute_query_timed;
 use super::rows::AgentMessageRow;
 use super::*;
+use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
 use gents_protocol::transcript::decode_persisted_message;
 use serde_json::Value;

@@ -68,11 +68,6 @@ impl ToolCallState {
             Self::Completed | Self::Failed | Self::TimedOut | Self::Cancelled
         )
     }
-
-    #[cfg(test)]
-    pub(crate) const fn is_cancellable(self) -> bool {
-        matches!(self, Self::Pending | Self::Running)
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -591,13 +586,6 @@ mod tests {
     }
 
     #[test]
-    fn cancellable_iff_non_terminal() {
-        for state in ToolCallState::ALL {
-            assert_eq!(state.is_cancellable(), !state.is_terminal());
-        }
-    }
-
-    #[test]
     fn failure_class_round_trip_persisted_vocabulary() {
         for fc in FailureClass::ALL {
             assert_eq!(FailureClass::from_persisted(fc.as_str()), Some(fc));
@@ -761,15 +749,6 @@ mod subagent_vocabulary {
         for &mode in AwaitMode::ALL {
             assert_eq!(AwaitMode::from_persisted(mode.as_str()), Some(mode));
         }
-    }
-
-    #[test]
-    fn await_mode_all_has_two_variants() {
-        assert_eq!(AwaitMode::ALL.len(), 2);
-    }
-
-    #[test]
-    fn await_mode_from_persisted_unknown_returns_none() {
         assert_eq!(AwaitMode::from_persisted("unknown"), None);
     }
 
@@ -778,15 +757,6 @@ mod subagent_vocabulary {
         for &policy in CancelPolicy::ALL {
             assert_eq!(CancelPolicy::from_persisted(policy.as_str()), Some(policy));
         }
-    }
-
-    #[test]
-    fn cancel_policy_all_has_two_variants() {
-        assert_eq!(CancelPolicy::ALL.len(), 2);
-    }
-
-    #[test]
-    fn cancel_policy_from_persisted_unknown_returns_none() {
         assert_eq!(CancelPolicy::from_persisted("unknown"), None);
     }
 
@@ -795,19 +765,7 @@ mod subagent_vocabulary {
         for &cause in CancelCause::ALL {
             assert_eq!(CancelCause::from_persisted(cause.as_str()), Some(cause));
         }
-    }
-
-    #[test]
-    fn cancel_cause_from_persisted_unknown_returns_none() {
         assert_eq!(CancelCause::from_persisted("unknown"), None);
-    }
-
-    #[test]
-    fn child_terminal_all_kind_has_four_variants() {
-        assert_eq!(
-            ChildTerminal::ALL_KIND,
-            &["failed", "dead", "interrupted", "superseded"]
-        );
     }
 
     #[test]

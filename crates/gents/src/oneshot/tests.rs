@@ -104,6 +104,12 @@ async fn oneshot_honors_short_semantic_lease_and_recovers_partial_empty_stream_b
             .unwrap();
     let mut behavior = crate::agent::PendingAgentBehavior::new("oneshot-lease")
         .build_with_identity_for_test(identity);
+    crate::test_support::install_test_behavior(
+        node.as_ref(),
+        behavior.agent_did(),
+        &behavior.behavior_id,
+    )
+    .await;
     behavior.model_name = "scripted".to_owned();
     behavior.stream_liveness_timeout = Duration::from_secs(1);
     behavior.deadline_duration = Duration::from_secs(60);
@@ -287,6 +293,12 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
                 .unwrap();
         let mut behavior = crate::agent::PendingAgentBehavior::new("oneshot-output")
             .build_with_identity_for_test(identity);
+        crate::test_support::install_test_behavior(
+            node.as_ref(),
+            behavior.agent_did(),
+            &behavior.behavior_id,
+        )
+        .await;
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
         behavior.deadline_duration = Duration::from_secs(120);

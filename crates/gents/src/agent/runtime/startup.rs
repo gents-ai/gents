@@ -1316,30 +1316,19 @@ mod degraded_reason_tests {
     use gents_protocol::row::BehaviorReadinessUnavailableReason as Reason;
 
     #[test]
-    fn unprobed_backend_is_degraded() {
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BackendTemporarilyUnavailable
-        ));
-    }
-
-    #[test]
-    fn disabled_behavior_is_degraded() {
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BehaviorDisabled
-        ));
-    }
-
-    #[test]
-    fn no_backend_binding_is_degraded() {
-        // A backendless behavior (e.g. the seeded bootstrap default before a
-        // backend is configured) must not be fatal at startup.
-        assert!(is_degraded_startup_unavailable_reason(
-            Reason::BackendNotConfigured
-        ));
-    }
-
-    #[test]
-    fn unknown_structural_reason_is_blocking() {
+    fn startup_unavailability_classification_is_complete() {
+        for reason in [
+            Reason::BehaviorDisabled,
+            Reason::BackendNotConfigured,
+            Reason::BackendDisabled,
+            Reason::BackendTemporarilyUnavailable,
+            Reason::CredentialsRequired,
+        ] {
+            assert!(
+                is_degraded_startup_unavailable_reason(reason),
+                "{reason:?} must allow degraded startup"
+            );
+        }
         assert!(!is_degraded_startup_unavailable_reason(
             Reason::ToolConfigurationInvalid
         ));
@@ -1510,120 +1499,6 @@ mod startup_slot_failure_policy_tests {
         );
 
         status_owner.close().await.unwrap();
-        node.shutdown().await;
-    }
-}
-
-#[cfg(test)]
-mod run_agent_teardown_tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-    use std::time::Duration;
-
-    use tokio::sync::mpsc;
-
-    use crate::behavior_readiness_publisher::BehaviorReadinessWriter;
-
-    use super::*;
-
-    // This is a deadlock guard, not a teardown latency SLO. The full test
-    // suite runs many embedded DefraDB nodes concurrently on shared runners.
-    const DEADLOCK_GUARD: Duration = Duration::from_secs(30);
-
-    struct StuckAfterInitializeWriter {
-        attempts: mpsc::UnboundedSender<()>,
-        writes: AtomicUsize,
-    }
-
-    #[async_trait::async_trait]
-    impl BehaviorReadinessWriter for StuckAfterInitializeWriter {
-        async fn upsert(
-            &self,
-            _agent_did: &str,
-            _snapshot: &gents_protocol::row::BehaviorReadinessSnapshot,
-            _updated_at: &str,
-        ) -> Result<()> {
-            if self.writes.fetch_add(1, Ordering::SeqCst) == 0 {
-                return Ok(());
-            }
-            let _ = self.attempts.send(());
-            std::future::pending().await
-        }
-    }
-
-    #[tokio::test]
-    async fn saturated_stuck_publisher_cannot_wedge_run_agent_teardown() {
-        let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
-        crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
-        let (attempts_tx, mut attempts_rx) = mpsc::unbounded_channel();
-        let (owner, runtime_status) = RuntimeStatusHandle::start_with_readiness_writer(
-            node.clone(),
-            "did:test:run-agent-teardown",
-            Arc::new(StuckAfterInitializeWriter {
-                attempts: attempts_tx,
-                writes: AtomicUsize::new(0),
-            }),
-            Duration::from_millis(1),
-        );
-        runtime_status.initialize_startup("general").await.unwrap();
-
-        let blocked = {
-            let runtime_status = runtime_status.clone();
-            tokio::spawn(async move {
-                runtime_status
-                    .set_process_state_durable(ProcessLifecycleState::Ready)
-                    .await
-            })
-        };
-        attempts_rx.recv().await.expect("Ready write must be stuck");
-        let queued = (0..64)
-            .map(|generation| {
-                let runtime_status = runtime_status.clone();
-                tokio::spawn(async move {
-                    runtime_status
-                        .readiness()
-                        .set_router_generation(generation)
-                        .await
-                })
-            })
-            .collect::<Vec<_>>();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while runtime_status.readiness().command_capacity_for_test() != 0 {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("test must saturate the runtime publisher queue");
-
-        let admission_gate = super::super::router::RuntimeAdmissionGate::closed();
-        admission_gate.open().await;
-        admission_gate.close().await;
-        assert!(!admission_gate.is_open().await);
-
-        let error = tokio::time::timeout(
-            DEADLOCK_GUARD,
-            finish_run_agent(
-                Err(anyhow::anyhow!("sentinel runtime body failure")),
-                owner,
-                runtime_status,
-                None,
-            ),
-        )
-        .await
-        .expect("run_agent teardown must return boundedly")
-        .expect_err("runtime body failure must be preserved");
-        assert_eq!(error.to_string(), "sentinel runtime body failure");
-        assert!(blocked.await.unwrap().is_err());
-        let mut rejected = 0;
-        for queued in queued {
-            if queued.await.unwrap().is_err() {
-                rejected += 1;
-            }
-        }
-        assert!(
-            rejected > 0,
-            "publisher cancellation must reject queued work"
-        );
         node.shutdown().await;
     }
 }

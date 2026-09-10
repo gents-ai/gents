@@ -135,6 +135,12 @@ async fn generated_rendered_capture_cases_fence_persist_before_send() {
 /// * `AssemblyBuildPath` must flip to `Repair` exactly on the attempt that the
 ///   `PreStreamDirective::Repair` branch rebuilt with `build_request`. The
 ///   final dispatch boundary still recounts and clamps that repaired request.
+///
+/// Both repair injection branches run in this test. One reaches `Repair`
+/// through `model.stream` returning `Err` (`ScriptedCall::FailStream`); the
+/// other reaches it through the first poll of the returned stream failing
+/// (`TurnWithMidStreamError(vec![], …)`). The repair budget is request-wide,
+/// so the branches use independent loop invocations.
 #[tokio::test(start_paused = true)]
 async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     let poison = format!("bad{}value", '\u{0007}');
@@ -221,7 +227,7 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     // re-derives this text from `AgentToolCall.result` through a different
     // truncation mode and limit set, so the trace is the only place the bytes
     // the model actually saw survive.
-    let repaired_trace = &captures.last().expect("a repaired capture").3;
+    let repaired_trace = &captures[3].3;
     let threaded = repaired_trace
         .threaded_tool_results
         .iter()
@@ -246,6 +252,46 @@ async fn capture_seam_reports_distinct_attempts_and_the_repair_build_path() {
     assert!(
         first_turn_trace.effective_messages.is_none(),
         "a turn before any repair must not duplicate the full transcript"
+    );
+    drop(captures);
+
+    let poll_model = ScriptedModel::new_calls(vec![
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("poll-branch")),
+        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("poll-branch")),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("poll branch repaired".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+    let poll_captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath)>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let poll_captures_for_sink = poll_captures.clone();
+    let mut poll_config = config(0);
+    poll_config.on_rendered_request = Some(Arc::new(move |turn, attempt, _, trace| {
+        let captures = poll_captures_for_sink.clone();
+        Box::pin(async move {
+            captures.lock().await.push((turn, attempt, trace.build_path));
+            Ok(())
+        })
+    }));
+    let poll_result = collect_scripted_stream(run_loop_stream(
+        poll_model,
+        None,
+        Message::user("repair the first poll"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        poll_config,
+    ))
+    .await;
+    assert_eq!(poll_result.error, None);
+    assert_eq!(poll_result.final_text.as_deref(), Some("poll branch repaired"));
+    assert_eq!(
+        poll_captures.lock().await.as_slice(),
+        &[
+            (0, 0, AssemblyBuildPath::Budgeted),
+            (0, 1, AssemblyBuildPath::Budgeted),
+            (0, 2, AssemblyBuildPath::Repair),
+        ]
     );
 }
 
@@ -378,69 +424,17 @@ async fn capture_trace_retains_ephemeral_request_context() {
     assert!(effective.iter().any(is_request_context_message));
 }
 
-/// `PreStreamDirective::Repair` is handled in two places: once where
-/// `model.stream` itself returns `Err`, and once where the first poll of the
-/// returned stream fails. Both rebuild with `build_request` and both must
-/// report `Repair`. `ScriptedCall::FailStream` only reaches the first;
-/// `TurnWithMidStreamError(vec![], …)` reaches the second.
-#[tokio::test(start_paused = true)]
-async fn capture_seam_reports_the_repair_build_path_from_the_first_poll_branch() {
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
-        ScriptedCall::TurnWithMidStreamError(Vec::new(), parse_400_error("same")),
-        ScriptedCall::Turn(vec![
-            RawStreamingChoice::Message("repaired".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ]),
-    ]);
-
-    let captures: Arc<Mutex<Vec<(usize, u32, AssemblyBuildPath)>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let captures_for_sink = captures.clone();
-    let mut loop_config = config(0);
-    loop_config.on_rendered_request =
-        Some(Arc::new(move |turn_index, attempt, _request, trace| {
-            let captures = captures_for_sink.clone();
-            Box::pin(async move {
-                captures
-                    .lock()
-                    .await
-                    .push((turn_index, attempt, trace.build_path));
-                Ok(())
-            })
-        }));
-
-    let stream = run_loop_stream(
-        model.clone(),
-        None,
-        Message::user("hi"),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        loop_config,
-    );
-    let collected = collect_scripted_stream(stream).await;
-    assert_eq!(collected.error, None);
-    assert_eq!(collected.final_text.as_deref(), Some("repaired"));
-
-    assert_eq!(
-        captures.lock().await.as_slice(),
-        &[
-            (0, 0, AssemblyBuildPath::Budgeted),
-            (0, 1, AssemblyBuildPath::Budgeted),
-            (0, 2, AssemblyBuildPath::Repair),
-        ]
-    );
-}
-
 /// The mis-wired-transport backstop, which nothing else exercises.
 ///
 /// The transport is what claims an armed capture and writes the row. A provider
 /// stack assembled without `RenderedRequestCapturingHttpClient` — a new
 /// `BackendProviderKind`, a wrapper inserted below the capture seam, a builder
 /// that forgets it — still streams perfectly well; the only observable trace is
-/// that the arm is still pending when the first stream item arrives. Deleting
-/// the check at that point would otherwise pass the entire suite while every
-/// turn on that backend went uncaptured.
+/// that the arm is still pending when the first stream item arrives (or at EOF
+/// when the provider yields no item, so the item-level check is never reached
+/// and the loop cannot misclassify an uncaptured send as an ordinary empty
+/// completion). Deleting the check at that point would otherwise pass the
+/// entire suite while every turn on that backend went uncaptured.
 ///
 /// `ScriptedModel` stands in for exactly that mis-wiring: it answers the loop
 /// without ever claiming the pending capture.
@@ -449,103 +443,67 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
     use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
     use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
 
-    let model = ScriptedModel::new(vec![
-        RawStreamingChoice::Message("uncaptured".to_string()),
-        RawStreamingChoice::FinalResponse(()),
-    ]);
+    for (request_id, session_id, choices) in [
+        (
+            "req-1",
+            "session-1",
+            vec![
+                RawStreamingChoice::Message("uncaptured".to_string()),
+                RawStreamingChoice::FinalResponse(()),
+            ],
+        ),
+        // The same backstop must fire at EOF without any item; otherwise the
+        // item-level check is never reached and the loop can misclassify an
+        // uncaptured send as an ordinary empty completion.
+        ("req-empty", "session-empty", Vec::new()),
+    ] {
+        let model = ScriptedModel::new(choices);
+        let context = RenderedRequestContext {
+            request_doc_id: format!("doc-{request_id}"),
+            request_commit_cid: "bafy-request-commit".to_string(),
+            request_id: request_id.to_string(),
+            agent_did: "did:key:agent".to_string(),
+            requester_did: String::new(),
+            behavior_id: "general".to_string(),
+            session_id: session_id.to_string(),
+            model_name: "model".to_string(),
+        };
+        let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let scope = test_scope(context, sink);
 
-    let context = RenderedRequestContext {
-        request_doc_id: "doc-1".to_string(),
-        request_commit_cid: "bafy-request-commit".to_string(),
-        request_id: "req-1".to_string(),
-        agent_did: "did:key:agent".to_string(),
-        requester_did: String::new(),
-        behavior_id: "general".to_string(),
-        session_id: "session-1".to_string(),
-        model_name: "model".to_string(),
-    };
-    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let scope = test_scope(context, sink);
-
-    let mut loop_config = config(0);
-    // The production arming sink: it arms the ambient scope and leaves the
-    // write to the transport, which in this stack does not exist.
-    loop_config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
-        CaptureScopeKind::Inference,
-    ));
-
-    let collected = scope_request(scope, async {
-        let stream = run_loop_stream(
-            model.clone(),
-            None,
-            Message::user("hi"),
-            Vec::new(),
-            Arc::new(Vec::new()),
-            loop_config,
+        let mut loop_config = config(0);
+        // The production arming sink: it arms the ambient scope and leaves the
+        // write to the transport, which in this stack does not exist.
+        loop_config.on_rendered_request = Some(
+            crate::rendered_request::scope::ambient_arming_sink(CaptureScopeKind::Inference),
         );
-        collect_scripted_stream(stream).await
-    })
-    .await;
 
-    let error = collected
-        .error
-        .as_deref()
-        .expect("a response with no durable capture must terminate the turn");
-    assert!(
-        error.contains("missing its capturing transport"),
-        "the failure must name the mis-wired stack: {error}"
-    );
-    assert_eq!(
-        collected.final_text, None,
-        "no turn may complete on a provider response nothing captured"
-    );
-}
+        let collected = scope_request(scope, async {
+            let stream = run_loop_stream(
+                model.clone(),
+                None,
+                Message::user("hi"),
+                Vec::new(),
+                Arc::new(Vec::new()),
+                loop_config.clone(),
+            );
+            collect_scripted_stream(stream).await
+        })
+        .await;
 
-/// The same backstop must fire when the provider returns EOF without yielding
-/// an item; otherwise the item-level check is never reached and the loop can
-/// misclassify an uncaptured send as an ordinary empty completion.
-#[tokio::test(start_paused = true)]
-async fn an_empty_provider_stream_with_the_capture_still_armed_fails_the_turn() {
-    use crate::rendered_request::scope::{scope_request, test_scope, CaptureScopeKind};
-    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
-
-    let model = ScriptedModel::new(Vec::new());
-    let context = RenderedRequestContext {
-        request_doc_id: "doc-empty".to_string(),
-        request_commit_cid: "bafy-request-commit".to_string(),
-        request_id: "req-empty".to_string(),
-        agent_did: "did:key:agent".to_string(),
-        requester_did: String::new(),
-        behavior_id: "general".to_string(),
-        session_id: "session-empty".to_string(),
-        model_name: "model".to_string(),
-    };
-    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
-    let scope = test_scope(context, sink);
-    let mut loop_config = config(0);
-    loop_config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
-        CaptureScopeKind::Inference,
-    ));
-
-    let collected = scope_request(scope, async {
-        collect_scripted_stream(run_loop_stream(
-            model,
-            None,
-            Message::user("hi"),
-            Vec::new(),
-            Arc::new(Vec::new()),
-            loop_config,
-        ))
-        .await
-    })
-    .await;
-
-    let error = collected
-        .error
-        .as_deref()
-        .expect("an empty uncaptured response must terminate the turn");
-    assert!(error.contains("missing its capturing transport"), "{error}");
-    assert_eq!(collected.final_text, None);
+        let error = collected
+            .error
+            .as_deref()
+            .expect("an uncaptured provider response must terminate the turn");
+        assert!(
+            error.contains("missing its capturing transport"),
+            "the failure must name the mis-wired stack: {error}"
+        );
+        assert_eq!(
+            collected.final_text, None,
+            "no turn may complete on a provider response nothing captured"
+        );
+    }
 }
 
 // Exercise fresh, idempotent, and conflicting captures at the durable sink.

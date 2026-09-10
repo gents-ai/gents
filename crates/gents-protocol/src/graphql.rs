@@ -1380,43 +1380,42 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_transaction_conflict_errors() {
+    async fn public_transports_reject_mutations_before_network_io() {
+        for result in [
+            execute_graphql_async(
+                "http://127.0.0.1:1/api/v0/graphql",
+                "mutation { create_X(input: {}) { _docID } }",
+                GraphqlRequestOptions::default(),
+            )
+            .await
+            .map_err(|error| error.to_string()),
+            execute_graphql_blocking(
+                "http://127.0.0.1:1/api/v0/graphql",
+                "mutation { create_X(input: {}) { _docID } }",
+                GraphqlRequestOptions::default(),
+            )
+            .map_err(|error| error.to_string()),
+        ] {
+            let error = result.expect_err("public transport is query-only");
+            assert!(
+                error.contains("GraphQL read transport requires a query document"),
+                "unexpected error: {error}"
+            );
+        }
+    }
+
+    // One transport-level retry proof: a wrapped retryable error text triggers a
+    // second attempt. Both store-conflict strings ("transaction conflict",
+    // "database is locked") are pinned as retryable by
+    // `retryable_graphql_error_text_matches_store_conflict_variants`; the
+    // wrapped-cause-chain walk is pinned by
+    // `retryable_graphql_error_walks_wrapped_cause_chain_case_insensitively`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_graphql_async_retries_retryable_store_conflict_errors() {
         assert_execute_graphql_async_retries_error(
             "commit error: datastore error: storage error: transaction conflict. Please retry",
         )
         .await;
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn execute_graphql_async_retries_database_locked_errors() {
-        assert_execute_graphql_async_retries_error("database is locked").await;
-    }
-
-    #[tokio::test]
-    async fn public_async_transport_rejects_mutations_before_network_io() {
-        let error = execute_graphql_async(
-            "http://127.0.0.1:1/api/v0/graphql",
-            "mutation { create_X(input: {}) { _docID } }",
-            GraphqlRequestOptions::default(),
-        )
-        .await
-        .expect_err("public transport is query-only");
-        assert!(error
-            .to_string()
-            .contains("GraphQL read transport requires a query document"));
-    }
-
-    #[test]
-    fn public_blocking_transport_rejects_mutations_before_network_io() {
-        let error = execute_graphql_blocking(
-            "http://127.0.0.1:1/api/v0/graphql",
-            "mutation { create_X(input: {}) { _docID } }",
-            GraphqlRequestOptions::default(),
-        )
-        .expect_err("public transport is query-only");
-        assert!(error
-            .to_string()
-            .contains("GraphQL read transport requires a query document"));
     }
 
     #[test]

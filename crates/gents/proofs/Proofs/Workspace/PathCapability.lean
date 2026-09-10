@@ -37,11 +37,6 @@ def deltaAuthorized (cap : WorkspacePathCapability) (delta : List Change) : Bool
   | .unrestrictedCompatibility => true
   | .exactPaths paths => delta.all (fun c => c.canonical && c.kind == .regular && paths.contains c.path)
 
-/-- Source-version classification is supplied by migration, never model input. -/
-def migrateCapability (legacySource : Bool) (stored : Option WorkspacePathCapability) :
-    Option WorkspacePathCapability :=
-  if legacySource then some .unrestrictedCompatibility else stored
-
 def freshAdmitted (cap : WorkspacePathCapability) (canonical : Bool) : Bool :=
   match cap with | .exactPaths _ => canonical | .unrestrictedCompatibility => false
 
@@ -107,16 +102,6 @@ def execute (s : Snapshot) (op : Operation) (e : Evidence) : Snapshot × Disposi
 
 theorem fresh_legacy_never_admitted (canonical : Bool) :
     freshAdmitted .unrestrictedCompatibility canonical = false := rfl
-
-theorem missing_new_capability_not_migrated : migrateCapability false none = none := rfl
-
-theorem legacy_migration_explicit :
-    migrateCapability true none = some .unrestrictedCompatibility := rfl
-
-/-- The predecessor schema has no capability field; injected values cannot
-be mistaken for an admitted exact grant during migration. -/
-theorem legacy_injected_capability_overwritten (injected : WorkspacePathCapability) :
-    migrateCapability true (some injected) = some .unrestrictedCompatibility := rfl
 
 theorem empty_exact_denies_changed_regular_path (path : String) :
     deltaAuthorized (.exactPaths []) [⟨path,.regular,true⟩] = false := by

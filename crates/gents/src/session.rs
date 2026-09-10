@@ -10,7 +10,6 @@ mod fork;
 mod history;
 mod observations;
 mod query;
-mod retry;
 mod rows;
 mod sessions;
 #[cfg(test)]
@@ -48,7 +47,6 @@ pub(crate) use query::{
     load_session_behavior_id, require_session, session_has_live_response,
     session_has_other_live_response,
 };
-pub use retry::count_active_sessions;
 pub use rows::SessionOwnerRow;
 pub use sessions::close_session;
 pub use sessions::load_agent_session_row_in_txn;

@@ -9,18 +9,18 @@ use tempfile::TempDir;
 
 use crate::ensure_runtime_schemas;
 use crate::workspace::{
-    action_journal_prefix_legal, action_plan_canonical_json, emit_create_workspace_plan,
-    execute_create_workspace_plan, parse_action_plan_json, ActionJournalEntry, ActionJournalState,
-    CreateWorkspaceAction, CreationPolicy, HostAction, HostExecutorContext,
-    MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceAdapterKind, WorkspaceDocuments,
-    CAP_CLONE_ARTIFACTS, CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
+    action_plan_canonical_json, emit_create_workspace_plan, execute_create_workspace_plan,
+    parse_action_plan_json, ActionJournalEntry, ActionJournalState, CreateWorkspaceAction,
+    CreationPolicy, HostAction, HostExecutorContext, MemoryWorkspaceDocuments,
+    RepositoryPlacementRef, WorkspaceAdapterKind, WorkspaceDocuments, CAP_CLONE_ARTIFACTS,
+    CAP_CREATE_WORKSPACE, CAP_OBSERVE_DIRTY_BASE,
 };
 
 use super::claim::invocation_is_claimable;
 use super::documents::{
     strip_secret_fields, succeeded_missing_result, succeeded_repair_cutoff,
     validate_callback_binding, CallbackBindingDoc, CallbackInvocationDoc, CallbackModuleDoc,
-    CallbackResultInvocationRow, SUCCEEDED_REPAIR_LIMIT, SUCCEEDED_REPAIR_WINDOW,
+    CallbackResultInvocationRow,
 };
 use super::run::{
     apply_planner_deny, can_emit_callback_result, can_start_executing, emit_plan_from_source,
@@ -43,19 +43,17 @@ fn callback() -> crate::document_config::Callback {
 }
 
 #[test]
-fn journal_prefix_blocks_action_n_plus_one_until_result_docs_written() {
+fn executing_action_waits_for_prior_result_docs() {
     let illegal = vec![
         ActionJournalEntry::new(0, ActionJournalState::Validated),
         ActionJournalEntry::new(1, ActionJournalState::Executing),
     ];
-    assert!(!action_journal_prefix_legal(&illegal));
     assert!(!can_start_executing(&illegal, 1));
 
     let legal = vec![
         ActionJournalEntry::new(0, ActionJournalState::ResultDocsWritten),
         ActionJournalEntry::new(1, ActionJournalState::Executing),
     ];
-    assert!(action_journal_prefix_legal(&legal));
     assert!(can_start_executing(&legal, 1));
     assert!(can_start_executing(&[], 0));
 }
@@ -186,11 +184,6 @@ fn apply_rejects_secret_bearing_filter_fields() {
 
 #[test]
 fn succeeded_without_result_repair_is_windowed_and_batched() {
-    assert_eq!(SUCCEEDED_REPAIR_LIMIT, 256);
-    assert_eq!(
-        SUCCEEDED_REPAIR_WINDOW,
-        std::time::Duration::from_secs(24 * 60 * 60)
-    );
     let now = chrono::DateTime::parse_from_rfc3339("2026-08-21T12:00:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
@@ -227,17 +220,15 @@ fn succeeded_without_result_repair_is_windowed_and_batched() {
             .collect::<Vec<_>>(),
         vec!["inv-gap"]
     );
-}
 
-#[test]
-fn callback_result_recovery_decodes_its_narrow_batch_projection() {
-    let rows: Vec<CallbackResultInvocationRow> = serde_json::from_value(json!([
+    let projected: Vec<CallbackResultInvocationRow> = serde_json::from_value(json!([
         { "invocation_id": "inv-ok" },
         { "invocation_id": "inv-gap" }
     ]))
     .expect("narrow CallbackResult projection should decode without provenance fields");
     assert_eq!(
-        rows.iter()
+        projected
+            .iter()
             .map(|row| row.invocation_id.as_str())
             .collect::<Vec<_>>(),
         vec!["inv-ok", "inv-gap"]
@@ -802,20 +793,6 @@ fn signer_policy_fail_closes_when_missing_or_untrusted() {
 
     module.signer_did = Some("did:key:zTrusted".into());
     validate_callback_module(&module, &trusted("did:key:zTrusted")).expect("trusted signer");
-}
-
-#[test]
-fn installer_signer_need_not_match_binding_principal() {
-    let wasm = wasm_bytes_for_id();
-    let module = module_doc(&wasm, &json!({}), "did:key:zInstaller");
-    validate_callback_module(&module, &trusted("did:key:zInstaller")).unwrap();
-    let mut wasm_binding = callback();
-    wasm_binding.handler = crate::document_config::CallbackHandler::Module {
-        module_id: module.module_id.clone(),
-    };
-    wasm_binding.agent_did = "did:key:zWriter".into();
-    assert_ne!(wasm_binding.agent_did, "did:key:zInstaller");
-    assert_eq!(module.agent_did, wasm_binding.agent_did);
 }
 
 #[test]

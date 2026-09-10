@@ -143,58 +143,35 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
 }
 
 #[tokio::test]
-async fn runtime_reconcile_applies_changes_and_restarts_crashed_slots() {
+async fn operator_write_changes_snapshot_fingerprint() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    assert!(operator_write_changes_snapshot_fingerprint(node.as_ref()).await);
-    assert!(reconcile_install_applies_added_behavior(node.as_ref()).await);
-    assert!(reconcile_teardown_applies_removed_behavior(node.as_ref()).await);
-    assert!(slot_panic_restarts_behavior(node.as_ref()).await);
+    let mut initial_behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
+    initial_behavior.system_prompt = "before operator write".to_string();
+    let mut updated_behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
+    updated_behavior.system_prompt = "after operator write".to_string();
+    let current_resolved =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(initial_behavior)]).await;
+    let proposed =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(updated_behavior)]).await;
+    let current = current_resolved.activate(1, HashMap::new());
+    let diff = diff_counts(&current, &proposed);
+
+    assert_ne!(
+        current.configuration_fingerprint(),
+        proposed.configuration_fingerprint(),
+        "an operator write must change the configuration fingerprint"
+    );
+    assert_eq!(diff.updated, 1);
+    assert_eq!(diff.added, 0);
+    assert_eq!(diff.removed, 0);
 }
 
 #[tokio::test]
 async fn pairing_desired_read_failure_applies_no_operations() {
     assert!(read_failure_is_noop_self_loop(test_node().await).await);
-}
-
-#[test]
-fn pairing_diff_installs_and_removes_owned_replicators() {
-    assert!(pairing_replicator_install_diff_matches());
-    assert!(pairing_replicator_teardown_diff_matches());
-}
-
-fn pairing_replicator_install_diff_matches() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let actual = PairingActual::default();
-    let applied = PairingApplied::default();
-    compute_owned_pairing_diff(&desired, &actual, &applied)
-        == vec![DiffOp::InstallReplicator("addr1".into())]
-}
-
-fn pairing_replicator_teardown_diff_matches() -> bool {
-    use crate::agent::p2p_reconcile::{
-        compute_owned_pairing_diff, DiffOp, PairingActual, PairingApplied, PairingDesired,
-    };
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        collections: BTreeSet::new(),
-        replicator_addresses: BTreeSet::from(["addr1".to_string()]),
-        ..Default::default()
-    };
-    compute_owned_pairing_diff(&desired, &actual, &applied)
-        == vec![DiffOp::TeardownReplicator("addr1".into())]
 }
 
 /// Probe for the `readFailure` transition: a failed `load_desired` read makes a
@@ -236,26 +213,10 @@ async fn read_failure_is_noop_self_loop(node: Arc<defra_node::EmbeddedNode>) -> 
     }
 }
 
-async fn operator_write_changes_snapshot_fingerprint(node: &defra_node::EmbeddedNode) -> bool {
-    let mut initial_behavior = PendingAgentBehavior::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-initial"));
-    initial_behavior.system_prompt = "before operator write".to_string();
-    let mut updated_behavior = PendingAgentBehavior::new("general")
-        .build_with_identity_for_test(test_identity("pairing-contract-updated"));
-    updated_behavior.system_prompt = "after operator write".to_string();
-    let current_resolved =
-        snapshot_for_behaviors(node, "general", vec![Arc::new(initial_behavior)]).await;
-    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(updated_behavior)]).await;
-    let current = current_resolved.activate(1, HashMap::new());
-    let diff = diff_counts(&current, &proposed);
-
-    current.configuration_fingerprint() != proposed.configuration_fingerprint()
-        && diff.updated == 1
-        && diff.added == 0
-        && diff.removed == 0
-}
-
-async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn reconcile_install_applies_added_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-install"));
     let current_resolved = ResolvedRuntimeSnapshot::from_parts(
@@ -265,24 +226,28 @@ async fn reconcile_install_applies_added_behavior(node: &defra_node::EmbeddedNod
         HashMap::new(),
     )
     .with_principal(stub_principal());
-    let proposed = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let proposed = snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(behavior)]).await;
     let current = current_resolved.activate(1, HashMap::new());
     let diff = diff_counts(&current, &proposed);
     let applied = proposed.clone().activate(2, HashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
-    diff.added == 1
-        && diff.updated == 0
-        && diff.removed == 0
-        && rediff.added == 0
-        && rediff.updated == 0
-        && rediff.removed == 0
+    assert_eq!(diff.added, 1, "install registers one added behavior");
+    assert_eq!(diff.updated, 0);
+    assert_eq!(diff.removed, 0);
+    assert_eq!(rediff.added, 0, "applying the added behavior converges");
+    assert_eq!(rediff.updated, 0);
+    assert_eq!(rediff.removed, 0);
 }
 
-async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn reconcile_teardown_applies_removed_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("pairing-contract-teardown"));
-    let current_resolved = snapshot_for_behaviors(node, "general", vec![Arc::new(behavior)]).await;
+    let current_resolved =
+        snapshot_for_behaviors(node.as_ref(), "general", vec![Arc::new(behavior)]).await;
     let proposed = ResolvedRuntimeSnapshot::from_parts(
         "general".to_string(),
         Vec::new(),
@@ -295,15 +260,18 @@ async fn reconcile_teardown_applies_removed_behavior(node: &defra_node::Embedded
     let applied = proposed.clone().activate(2, HashMap::new());
     let rediff = diff_counts(&applied, &proposed);
 
-    diff.removed == 1
-        && diff.added == 0
-        && diff.updated == 0
-        && rediff.added == 0
-        && rediff.updated == 0
-        && rediff.removed == 0
+    assert_eq!(diff.removed, 1, "teardown registers one removed behavior");
+    assert_eq!(diff.added, 0);
+    assert_eq!(diff.updated, 0);
+    assert_eq!(rediff.added, 0, "applying the removal converges");
+    assert_eq!(rediff.updated, 0);
+    assert_eq!(rediff.removed, 0);
 }
 
-async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
+#[tokio::test]
+async fn slot_panic_restarts_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let behavior = Arc::new(
         PendingAgentBehavior::new("general")
             .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
@@ -311,7 +279,7 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     let tool_surface = Arc::new(
         behavior
             .tools
-            .resolve(node, behavior.agent_did())
+            .resolve(node.as_ref(), behavior.agent_did())
             .await
             .unwrap(),
     );
@@ -370,7 +338,10 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     .is_ok_and(|result| result.is_ok());
     let _ = shutdown_tx.send(true);
     retire_slot(slot);
-    restarted
+    assert!(
+        restarted,
+        "a panicked slot must restart the behavior on its retry policy"
+    );
 }
 
 #[tokio::test]

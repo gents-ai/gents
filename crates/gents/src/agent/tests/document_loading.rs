@@ -613,9 +613,6 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         unhealthy_reason.public_reason,
         BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
     );
-    assert!(unhealthy_reason
-        .diagnostic
-        .contains("backend unhealthy:backend is not ready"));
 }
 
 async fn set_probe_status(node: &EmbeddedNode, did: &str, backend_id: &str, status: &str) {

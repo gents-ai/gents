@@ -134,6 +134,26 @@ fn graph_delivery_uses_the_same_grouping_and_concurrency_types() {
         json!({"expected_count":2,"timeout_secs":30})
     );
     assert_eq!(serde_json::to_value(concurrency).unwrap(), json!("serial"));
+    for (wire, expected) in [
+        ("parallel", ConcurrencyMode::Parallel),
+        ("serial", ConcurrencyMode::Serial),
+        ("latest_only", ConcurrencyMode::LatestOnly),
+    ] {
+        assert_eq!(
+            serde_json::from_value::<ConcurrencyMode>(json!(wire)).unwrap(),
+            expected
+        );
+    }
+    for rejected in [
+        "Parallel",
+        "SERIAL",
+        "latest-only",
+        "latestOnly",
+        " parallel ",
+        "",
+    ] {
+        assert!(serde_json::from_value::<ConcurrencyMode>(json!(rejected)).is_err());
+    }
 }
 
 #[test]

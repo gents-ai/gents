@@ -435,9 +435,8 @@ mod tests {
     use axum::routing::{get, post};
     use axum::Router;
     use gents::default_behavior_id_for_agent;
-    use gents::graphql::escape_graphql_string;
     use gents_desktop_core::client::ClientCore;
-    use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
+    use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentRequestRow};
     use serde_json::Value;
     use tokio::sync::oneshot;
 
@@ -480,7 +479,6 @@ mod tests {
 
     async fn skill_create_delete_case(fixture: &LiveBridgeFixture) -> Result<()> {
         let agent_did = fixture.agent_did().to_string();
-        let behavior_id = default_behavior_id_for_agent(&agent_did);
         let skill_id = "desktop-crud-skill";
         let skill_body = "CRUD skill body should replicate to the agent node.";
 
@@ -590,11 +588,12 @@ mod tests {
 
         let request =
             wait_for_remote_request(fixture.remote_core().as_ref(), &submitted.request_id).await?;
-        assert_eq!(request.get("content").and_then(Value::as_str), Some(task));
-        assert_eq!(
-            selected_skill_ids_from_metadata(request.get("metadata").and_then(Value::as_str)),
-            vec![skill_id.to_string()]
-        );
+        assert_eq!(request.content.as_deref(), Some(task));
+        let input = request
+            .input
+            .as_ref()
+            .context("replicated request is missing canonical input")?;
+        assert_eq!(input.selected_skill_ids, vec![skill_id.to_string()]);
 
         let captured = wait_for_captured_chat_request(mock, skill_body).await?;
         assert!(
@@ -707,6 +706,180 @@ mod tests {
         }
     }
 
+    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<()> {
+        wait_for_condition("remote Skill create", Duration::from_secs(60), || async {
+            core.refresh_store().await?;
+            Ok(core
+                .store()
+                .snapshot()
+                .skills
+                .iter()
+                .any(|skill| skill.skill_id == skill_id))
+        })
+        .await
+    }
+
+    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
+        wait_for_condition("remote Skill delete", Duration::from_secs(60), || async {
+            core.refresh_store().await?;
+            Ok(!core
+                .store()
+                .snapshot()
+                .skills
+                .iter()
+                .any(|skill| skill.skill_id == skill_id))
+        })
+        .await
+    }
+
+    async fn wait_for_remote_request(
+        core: &ClientCore,
+        request_id: &str,
+    ) -> Result<AgentRequestRow> {
+        wait_for_row("remote AgentRequest", Duration::from_secs(60), || async {
+            core.refresh_store().await?;
+            Ok(core
+                .store()
+                .snapshot()
+                .requests
+                .iter()
+                .find(|request| request.request_id == request_id)
+                .cloned())
+        })
+        .await
+    }
+
+    struct RemoteRuntimeObservation {
+        active_generation: u64,
+        reconcile_phase: Option<String>,
+        last_reconcile_result: Option<String>,
+        last_reconcile_error: Option<String>,
+    }
+
+    async fn query_runtime_observation(
+        core: &ClientCore,
+        agent_did: &str,
+    ) -> Result<Option<RemoteRuntimeObservation>> {
+        core.refresh_store().await?;
+        let store = core.store().snapshot();
+        let Some(readiness_row) = store.behavior_readiness(agent_did) else {
+            return Ok(None);
+        };
+        let readiness = decode_behavior_readiness_snapshot(readiness_row, agent_did)
+            .map_err(|reason| anyhow::anyhow!("invalid behavior readiness: {reason:?}"))?;
+        let Some(runtime) = store.latest_runtime(agent_did) else {
+            return Ok(None);
+        };
+        Ok(Some(RemoteRuntimeObservation {
+            active_generation: readiness.active_generation,
+            reconcile_phase: runtime.reconcile_phase.clone(),
+            last_reconcile_result: runtime.last_reconcile_result.clone(),
+            last_reconcile_error: runtime.last_reconcile_error.clone(),
+        }))
+    }
+
+    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<u64> {
+        wait_for_row(
+            "remote authoritative runtime generation",
+            Duration::from_secs(60),
+            || async { query_runtime_observation(core, agent_did).await },
+        )
+        .await
+        .map(|observation| observation.active_generation)
+    }
+
+    async fn wait_for_remote_runtime_generation_after(
+        core: &ClientCore,
+        agent_did: &str,
+        previous_generation: u64,
+    ) -> Result<()> {
+        wait_for_condition(
+            "remote authoritative runtime generation advance",
+            Duration::from_secs(90),
+            || async {
+                let Some(observation) = query_runtime_observation(core, agent_did).await? else {
+                    return Ok(false);
+                };
+                if observation.last_reconcile_result.as_deref() == Some("error") {
+                    bail!(
+                        "runtime reconcile failed while waiting for skill binding: {}",
+                        observation
+                            .last_reconcile_error
+                            .as_deref()
+                            .unwrap_or("unknown error")
+                    );
+                }
+                Ok(observation.active_generation > previous_generation
+                    && observation.reconcile_phase.as_deref() == Some("idle"))
+            },
+        )
+        .await
+    }
+
+    async fn wait_for_captured_chat_request(
+        mock: &MockChatEndpoint,
+        needle: &str,
+    ) -> Result<Value> {
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let captured = mock.captured_chat_requests();
+            if let Some(request) = captured
+                .iter()
+                .find(|request| request.to_string().contains(needle))
+            {
+                return Ok(request.clone());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "timed out waiting for mock chat request containing {needle:?}; captured={captured:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_row<T, F, Fut>(
+        label: &'static str,
+        timeout: Duration,
+        mut check: F,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<Option<T>>>,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(row) = check().await? {
+                return Ok(row);
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for {label}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn wait_for_condition<F, Fut>(
+        label: &'static str,
+        timeout: Duration,
+        mut check: F,
+    ) -> Result<()>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<bool>>,
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if check().await? {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!("timed out waiting for {label}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     fn skill_save_request(agent_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
         SkillSaveRequest {
             document: serde_json::from_value(serde_json::json!({
@@ -716,30 +889,6 @@ mod tests {
             }))
             .expect("canonical fixture skill"),
         }
-    }
-
-    fn string_list(value: Option<&Value>) -> Vec<String> {
-        match value {
-            Some(Value::Array(items)) => items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect(),
-            Some(Value::String(value)) if !value.trim().is_empty() => {
-                vec![value.trim().to_string()]
-            }
-            _ => Vec::new(),
-        }
-    }
-
-    fn selected_skill_ids_from_metadata(metadata: Option<&str>) -> Vec<String> {
-        let Some(metadata) = metadata else {
-            return Vec::new();
-        };
-        let Ok(value) = serde_json::from_str::<Value>(metadata) else {
-            return Vec::new();
-        };
-        string_list(value.get("selected_skill_ids"))
     }
 
     #[derive(Clone)]

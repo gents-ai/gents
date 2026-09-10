@@ -23,11 +23,9 @@
 //!      (`fire_count`, `last_status`, `last_fired_source_doc_id`) were
 //!      written through by the EventSource `on_result` callback (Task 22).
 //!
-//! Mirrors `tests/trigger_engine_e2e.rs` (the schedule-side PR 1 e2e) but
-//! exercises the event-driven source end-to-end: a real control-plane
-//! document write drives a real source-doc event, which drives a real fire
-//! through the TriggerEngine, through the ProductionMaterializer, and onto
-//! a persisted AgentRequest row.
+//! A real control-plane document write drives a real source-doc event, which
+//! drives a real fire through the TriggerEngine and ProductionMaterializer
+//! onto a persisted AgentRequest row.
 
 use std::sync::Arc;
 use std::time::Duration;

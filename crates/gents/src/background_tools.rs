@@ -1211,7 +1211,7 @@ pub(crate) async fn append_steering_request(
 ) -> Result<SteerSubagentResponse> {
     // Load the child request first so the steering message is stamped with the
     // child session's owning agent_did (the message belongs to the child agent's
-    // conversation slice, not the steering caller's).
+    // session slice, not the steering caller's).
     let mut child_request =
         crate::request_binding::load_agent_request(node, &edge.child_request_id)
             .await?
@@ -1816,15 +1816,11 @@ mod cross_deployment_timeout_tests {
     }
 
     #[test]
-    fn override_takes_precedence() {
+    fn effective_timeout_resolves_override_then_default() {
         assert_eq!(
             effective_cross_deployment_spawn_timeout_seconds(&auth(Some(120))),
             120
         );
-    }
-
-    #[test]
-    fn default_when_none() {
         assert_eq!(
             effective_cross_deployment_spawn_timeout_seconds(&auth(None)),
             DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS
@@ -2528,29 +2524,6 @@ mod tests {
         assert_eq!(
             project_child_terminal(&row(RequestLifecycleState::Completed, None)),
             None
-        );
-    }
-
-    #[test]
-    fn render_assistant_message_text_uses_persisted_assistant_message() {
-        let message = Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::Text(Text {
-                text: "child final answer".to_string(),
-            })],
-        };
-        let content = serde_json::to_string(&message).unwrap();
-        assert_eq!(
-            render_assistant_message_text(&content).unwrap(),
-            "child final answer"
-        );
-    }
-
-    #[test]
-    fn render_assistant_message_text_uses_plain_text_assistant_content() {
-        assert_eq!(
-            render_assistant_message_text("plain child final answer").unwrap(),
-            "plain child final answer"
         );
     }
 

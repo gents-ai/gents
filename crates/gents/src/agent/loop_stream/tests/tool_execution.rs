@@ -315,16 +315,6 @@ fn value_to_json_string_passes_strings_through_unquoted() {
     );
 }
 
-#[test]
-fn deadline_remaining_is_zero_when_past() {
-    let past = chrono::Utc::now() - chrono::Duration::seconds(5);
-    assert_eq!(
-        super::deadline_remaining(Some(past)),
-        Some(std::time::Duration::ZERO)
-    );
-    assert_eq!(super::deadline_remaining(None), None);
-}
-
 #[tokio::test]
 async fn dispatch_tool_calls_known_tool_and_reports_unknown() {
     // No tool runtime scope is active in this unit test, so dispatch_tool takes

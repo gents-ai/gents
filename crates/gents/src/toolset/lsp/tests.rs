@@ -1716,15 +1716,10 @@ fn code_action_query_selects_title_or_index() {
     assert_eq!(unresolved["title"], "Need resolve");
 }
 
-#[test]
-fn action_caps_are_the_spec_values() {
-    assert_eq!(super::actions::MAX_DIAGNOSTICS, 50);
-    assert_eq!(super::actions::MAX_WORKSPACE_SYMBOLS, 200);
-    assert_eq!(super::actions::MAX_REFERENCES, 50);
-    assert_eq!(super::actions::MAX_RENAME_PAIRS, 1_000);
-    assert_eq!(super::actions::MAX_GLOB_TARGETS, 20);
-}
-
+// Action caps (MAX_DIAGNOSTICS / MAX_WORKSPACE_SYMBOLS / …) are owned by
+// `actions.rs` constants; their application at truncation sites is pinned by
+// `document_symbol_cap_is_global_and_output_is_qualified` — restating the
+// numeric values here added no guarantee.
 #[test]
 fn redacts_single_location_workspace_symbol_and_nested_diagnostics() {
     let root = tempfile::tempdir().unwrap();

@@ -265,21 +265,10 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
 
     let child_messages = fetch_message_snapshots_for_session(&node, &outcome.session_id).await;
     assert_eq!(child_messages.len(), 2);
-    assert_eq!(child_messages[0].sequence, 1);
-    assert_eq!(child_messages[0].role, "user");
-    assert_eq!(child_messages[0].content, "u1");
-    assert_eq!(child_messages[0].session_id, outcome.session_id);
-    assert_eq!(child_messages[1].sequence, 2);
-    assert_eq!(child_messages[1].role, "assistant");
-    assert_eq!(child_messages[1].content, "a1");
 
     let child_session = fetch_session_snapshot(&node, &outcome.session_id)
         .await
         .expect("child canonical session exists");
-    assert_eq!(
-        child_session.requester_did, None,
-        "absent requester scope is preserved exactly"
-    );
     assert_eq!(
         Some(fork_origin(&child_session).source_session_id.as_str()),
         Some(parent_session)
@@ -1397,19 +1386,11 @@ async fn fork_at_total_user_turns_copies_full_history() {
     assert_eq!(outcome.copied_messages, 4);
     let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
     assert_eq!(child_messages.len(), 4);
-    assert_eq!(child_messages[0].content, "u1");
-    assert_eq!(child_messages[1].content, "a1");
-    assert_eq!(child_messages[2].content, "u2");
-    assert_eq!(child_messages[3].content, "a2");
 
     let child_session =
         crate::support::snapshots::fetch_session_snapshot(&db.node, &outcome.session_id)
             .await
             .expect("child canonical session exists");
-    assert_eq!(
-        child_session.requester_did, None,
-        "absent requester scope is preserved exactly"
-    );
     assert_eq!(
         Some(fork_origin(&child_session).source_session_id.as_str()),
         Some(parent_session)

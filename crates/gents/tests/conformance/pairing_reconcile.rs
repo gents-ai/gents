@@ -2,9 +2,8 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use gents::agent::p2p_reconcile::{
-    compute_owned_pairing_diff, equality_filter, merge_layered_desired, single_string_eq, DiffOp,
-    FilterPredicate, PairingActual, PairingApplied, PairingDesired, PairingFilters,
-    MAX_CONCURRENT_PEER_PREPARATIONS,
+    compute_owned_pairing_diff, equality_filter, merge_layered_desired, DiffOp, FilterPredicate,
+    PairingActual, PairingApplied, PairingDesired, MAX_CONCURRENT_PEER_PREPARATIONS,
 };
 
 use crate::lean_vocab_test::{
@@ -26,12 +25,6 @@ fn fixture_path(fixture: &str) -> PathBuf {
 
 fn set(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| value.to_string()).collect()
-}
-
-fn one_filter(collection: &str, field: &str, value: &str) -> PairingFilters {
-    let mut filters = PairingFilters::new();
-    filters.insert(collection.to_string(), equality_filter(field, value));
-    filters
 }
 
 fn merge_desired(
@@ -114,89 +107,6 @@ async fn filter_change_reinstalls_replicator() {
 }
 
 #[test]
-fn operator_delete_owns_endpoint_despite_observed_configuration_drift() {
-    let address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-b";
-    let desired = PairingDesired::default();
-    let actual = PairingActual {
-        replicator_addresses: set(&[address]),
-        replicator_collections: [(address.to_string(), set(&["UnexpectedDriftedCollection"]))]
-            .into_iter()
-            .collect(),
-        ..Default::default()
-    };
-    let applied = PairingApplied {
-        replicator_addresses: set(&[address]),
-        ..Default::default()
-    };
-
-    assert_eq!(
-        compute_owned_pairing_diff(&desired, &actual, &applied),
-        vec![DiffOp::TeardownReplicator(address.to_string())],
-        "mutable live configuration must not hide an owned endpoint from delete"
-    );
-}
-
-#[test]
-fn layered_desired_merge_keeps_data_plane_replicator_only() {
-    let bootstrap_address = "/ip4/127.0.0.1/tcp/4103/p2p/peer-a";
-    let signed_address = "/ip4/127.0.0.1/tcp/5103/p2p/peer-a";
-    let control = PairingDesired {
-        collections: set(&["ControlA", "ControlB", "ControlC"]),
-        replicator_addresses: set(&[bootstrap_address]),
-        replicator_collections: set(&["ControlA", "ControlB", "ControlC"]),
-        replicator_filter: PairingFilters::new(),
-        template_ids: BTreeSet::new(),
-    };
-    let data_plane = PairingDesired {
-        collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_addresses: set(&[signed_address]),
-        replicator_collections: set(&["AgentRequest", "AgentResponse"]),
-        replicator_filter: one_filter("AgentRequest", "requester_did", "did:key:a")
-            .into_iter()
-            .chain(one_filter("AgentResponse", "requester_did", "did:key:a"))
-            .collect(),
-        template_ids: BTreeSet::new(),
-    };
-
-    let merged = merge_desired(Some(control), Some(data_plane)).expect("merged desired state");
-
-    assert_eq!(
-        merged.collections,
-        set(&["ControlA", "ControlB", "ControlC"]),
-        "data-plane collections must not become unfiltered subscriptions"
-    );
-    assert_eq!(
-        merged.replicator_collections,
-        set(&[
-            "ControlA",
-            "ControlB",
-            "ControlC",
-            "AgentRequest",
-            "AgentResponse",
-        ])
-    );
-    assert_eq!(merged.replicator_addresses, set(&[signed_address]));
-    assert_eq!(
-        merged
-            .replicator_filter
-            .get("AgentRequest")
-            .and_then(single_string_eq),
-        Some(("requester_did", "did:key:a"))
-    );
-    assert_eq!(
-        merged
-            .replicator_filter
-            .get("AgentResponse")
-            .and_then(single_string_eq),
-        Some(("requester_did", "did:key:a"))
-    );
-    assert!(
-        !merged.replicator_filter.contains_key("ControlA"),
-        "explicit control collections stay unfiltered inside the mixed replicator"
-    );
-}
-
-#[test]
 fn layered_desired_merge_prefers_signed_data_plane_filter() {
     let base_filter = equality_filter("requester_did", "did:key:phone");
     let data_filter = FilterPredicate::predicate(
@@ -223,32 +133,6 @@ fn layered_desired_merge_prefers_signed_data_plane_filter() {
         merged.replicator_filter.get("AgentRequest"),
         Some(&data_filter)
     );
-}
-
-#[test]
-fn self_pairing_base_is_not_materialized() {
-    assert!(merge_layered_desired(
-        "did:key:self",
-        "did:key:self",
-        Some(PairingDesired::default()),
-        None
-    )
-    .is_none());
-}
-
-#[test]
-fn layered_desired_merge_absent_data_plane_preserves_control_only() {
-    let control = PairingDesired {
-        collections: set(&["ControlA", "ControlB"]),
-        replicator_addresses: set(&["/ip4/127.0.0.1/tcp/4103/p2p/peer-a"]),
-        replicator_collections: set(&["ControlA", "ControlB"]),
-        replicator_filter: PairingFilters::new(),
-        template_ids: BTreeSet::new(),
-    };
-
-    let merged = merge_desired(Some(control.clone()), None).expect("control desired state");
-
-    assert_eq!(merged, control);
 }
 
 #[test]

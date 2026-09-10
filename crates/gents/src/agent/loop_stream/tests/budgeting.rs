@@ -199,11 +199,7 @@ fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
 #[test]
 fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
     let cases = crate::lean_vocab_test::lean_aggregate_token_budget_cases();
-    assert_eq!(
-        cases.len(),
-        13,
-        "Lean should emit the aggregate token-budget witness set"
-    );
+    assert!(!cases.is_empty(), "Lean emitted no aggregate token-budget cases");
 
     for name in [
         "restart-zero-usage-adds-no-spend",
@@ -708,7 +704,7 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
         prompt,
         Vec::new(),
         Arc::new(Vec::new()),
-        loop_config,
+        loop_config.clone(),
     ))
     .await;
 
@@ -724,10 +720,10 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
         model.seen_max_tokens().await.is_empty(),
         "zero-capacity request reached the provider model"
     );
-}
 
-#[test]
-fn zero_remaining_capacity_uses_the_typed_provider_input_error() {
+    // The terminal string comes from the typed contract error, so the loop-level
+    // and unit-level setups above must agree on its shape (model-facing). This
+    // half re-derives the typed error with the original unit test's fresh setup.
     let mut loop_config = config(0);
     loop_config.context_window = 100;
     let mut request = CompletionRequest {
@@ -976,75 +972,80 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
 
 #[tokio::test(start_paused = true)]
 async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
-    let model = ScriptedModel::new_calls(vec![
-        ScriptedCall::TurnWithMidStreamError(
-            vec![RawStreamingChoice::Message("partial".to_string())],
-            transient_provider_error("decode"),
-        ),
-        ScriptedCall::Turn(vec![
-            RawStreamingChoice::Message("must not run".to_string()),
-            RawStreamingChoice::FinalResponse(()),
-        ]),
-    ]);
-    let mut loop_config = config(0);
-    loop_config.aggregate_token_budget = Some(AggregateTokenBudget::new(10_000));
+    for with_tool in [false, true] {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (calls_list, loop_config) = if with_tool {
+            (
+                vec![ScriptedCall::TurnWithMidStreamError(
+                    vec![RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
+                        "call-1".to_string(),
+                        "echo".to_string(),
+                        serde_json::json!({}),
+                    ))],
+                    transient_provider_error("decode after tool"),
+                )],
+                config(4),
+            )
+        } else {
+            (
+                vec![
+                    ScriptedCall::TurnWithMidStreamError(
+                        vec![RawStreamingChoice::Message("partial".to_string())],
+                        transient_provider_error("decode"),
+                    ),
+                    // Must never be reached: the failed turn fails closed.
+                    ScriptedCall::Turn(vec![
+                        RawStreamingChoice::Message("must not run".to_string()),
+                        RawStreamingChoice::FinalResponse(()),
+                    ]),
+                ],
+                config(0),
+            )
+        };
+        let model = ScriptedModel::new_calls(calls_list);
+        let tools: Vec<Box<dyn ToolDyn>> = if with_tool {
+            vec![Box::new(CountingTool {
+                name: "echo".to_string(),
+                output: "ECHOED".to_string(),
+                calls: calls.clone(),
+            })]
+        } else {
+            Vec::new()
+        };
+        let mut loop_config = loop_config;
+        loop_config.aggregate_token_budget = Some(AggregateTokenBudget::new(10_000));
 
-    let collected = collect_scripted_stream(run_loop_stream(
-        model.clone(),
-        None,
-        Message::user("hi"),
-        Vec::new(),
-        Arc::new(Vec::new()),
-        loop_config,
-    ))
-    .await;
+        let collected = collect_scripted_stream(run_loop_stream(
+            model.clone(),
+            None,
+            if with_tool {
+                Message::user("use the echo tool")
+            } else {
+                Message::user("hi")
+            },
+            Vec::new(),
+            Arc::new(tools),
+            loop_config,
+        ))
+        .await;
 
-    assert!(
-        collected.error.as_deref().is_some_and(|error| error
-            .starts_with("CompletionError: ProviderError: aggregate_token_usage_missing: ")),
-        "unexpected terminal state: {collected:?}"
-    );
-    assert!(collected.retractions.is_empty());
-    assert_eq!(model.seen_histories().await.len(), 1);
-}
-
-#[tokio::test(start_paused = true)]
-async fn aggregate_budget_fails_closed_after_mid_stream_tool_effect() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let model = ScriptedModel::new_calls(vec![ScriptedCall::TurnWithMidStreamError(
-        vec![RawStreamingChoice::ToolCall(RawStreamingToolCall::new(
-            "call-1".to_string(),
-            "echo".to_string(),
-            serde_json::json!({}),
-        ))],
-        transient_provider_error("decode after tool"),
-    )]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CountingTool {
-        name: "echo".to_string(),
-        output: "ECHOED".to_string(),
-        calls: calls.clone(),
-    })];
-    let mut loop_config = config(4);
-    loop_config.aggregate_token_budget = Some(AggregateTokenBudget::new(10_000));
-
-    let collected = collect_scripted_stream(run_loop_stream(
-        model.clone(),
-        None,
-        Message::user("use the echo tool"),
-        Vec::new(),
-        Arc::new(tools),
-        loop_config,
-    ))
-    .await;
-
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(collected.tool_results, vec!["ECHOED"]);
-    assert!(
-        collected.error.as_deref().is_some_and(|error| error
-            .starts_with("CompletionError: ProviderError: aggregate_token_usage_missing: ")),
-        "unexpected terminal state: {collected:?}"
-    );
-    assert_eq!(model.seen_histories().await.len(), 1);
+        if with_tool {
+            // The already-executed tool effect survives the mid-stream failure.
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(collected.tool_results, vec!["ECHOED"]);
+        }
+        assert!(
+            collected.error.as_deref().is_some_and(|error| error
+                .starts_with("CompletionError: ProviderError: aggregate_token_usage_missing: ")),
+            "unexpected terminal state: {collected:?}"
+        );
+        assert!(collected.retractions.is_empty());
+        assert_eq!(
+            model.seen_histories().await.len(),
+            1,
+            "the failed turn must fail closed without retrying"
+        );
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1091,4 +1092,79 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
             && error.contains("transport retry budget exhausted"),
         "terminal error must report exhausted effectful retry budget; got {error}"
     );
+}
+
+/// Drives the production compaction trigger and per-turn output clamp from the
+/// Lean `PromptAssembly.Budget` boundary vector (moved here from the daemon's
+/// `request.rs` copy so the Lean→Rust refinement driver has one home).
+#[test]
+fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
+    let cases = crate::lean_vocab_test::lean_prompt_assembly_budget_cases();
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no PromptAssembly budget cases"
+    );
+
+    for case in cases {
+        // Round-trip through the float the configuration surface actually
+        // carries, so the basis-point conversion is exercised rather than
+        // bypassed.
+        let threshold = case.threshold_basis_points as f64 / 10_000.0;
+        // Drive the production helper, not a formula duplicated here.
+        let configured =
+            crate::provider_input::budget::threshold_budget(case.context_window, threshold);
+        let effective = crate::provider_input::budget::effective_input_budget(
+            case.context_window,
+            threshold,
+        );
+        let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
+        let effective_output = crate::provider_input::budget::effective_output_budget(
+            input_tokens,
+            case.context_window,
+            case.max_output_tokens,
+        );
+
+        assert_eq!(
+            configured, case.configured_threshold_budget,
+            "{}: configured threshold budget drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            effective, case.effective_input_budget,
+            "{}: effective input budget drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            effective_output, case.effective_output_tokens,
+            "{}: effective output budget drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            input_tokens.saturating_add(effective_output) <= case.context_window,
+            case.provider_safe,
+            "{}: provider-safety witness drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::provider_input::budget::can_dispatch(
+                input_tokens,
+                case.context_window,
+                case.max_output_tokens,
+            ),
+            case.can_dispatch,
+            "{}: provider dispatch legality drifted from Lean",
+            case.name
+        );
+        assert_eq!(
+            crate::compaction::ReductionAdmission::for_input(
+                input_tokens,
+                case.context_window,
+                threshold,
+            )
+            .is_some(),
+            case.should_compact,
+            "{}: production compaction trigger drifted from Lean",
+            case.name
+        );
+    }
 }

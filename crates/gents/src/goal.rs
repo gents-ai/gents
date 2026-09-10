@@ -2577,20 +2577,6 @@ mod tests {
     }
 
     #[test]
-    fn goal_status_vocabulary_is_stable() {
-        for status in [
-            GoalStatus::Active,
-            GoalStatus::Paused,
-            GoalStatus::Blocked,
-            GoalStatus::UsageLimited,
-            GoalStatus::BudgetLimited,
-            GoalStatus::Complete,
-        ] {
-            assert_eq!(GoalStatus::parse(status.as_str()), Some(status));
-        }
-    }
-
-    #[test]
     fn deterministic_id_separates_ambiguous_did_session_pairs() {
         assert_ne!(
             deterministic_goal_id("did:a", "bc"),

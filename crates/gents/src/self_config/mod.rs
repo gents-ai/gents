@@ -787,16 +787,6 @@ struct PersonaRequestRowOut {
     processed_at: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
-/// Preserve exact owner-scoped document IDs; no hidden rewriting.
-fn resolve_persona_ref(_agent_did: &str, value: &str) -> String {
-    value.to_owned()
-}
-
-fn resolve_profile_id(_agent_did: &str, value: &str) -> String {
-    value.to_owned()
-}
-
 async fn load_persona_request_row(
     node: &Arc<EmbeddedNode>,
     request_key: &str,
@@ -901,14 +891,8 @@ async fn persona_mutate(
     identity: &dyn AgentIdentity,
     args: &ConfigurePersonaParams,
 ) -> Result<String> {
-    let resolved_behavior_id = args
-        .behavior_id
-        .as_deref()
-        .map(|value| resolve_persona_ref(agent_did, value));
-    let resolved_profile_id = args
-        .profile_id
-        .as_deref()
-        .map(|value| resolve_profile_id(agent_did, value));
+    let resolved_behavior_id = args.behavior_id.as_deref().map(str::to_owned);
+    let resolved_profile_id = args.profile_id.as_deref().map(str::to_owned);
 
     let required_behavior_id = |action: &str| -> Result<()> {
         if resolved_behavior_id
@@ -941,7 +925,7 @@ async fn persona_mutate(
                 let clone_from = args
                     .clone_from
                     .as_deref()
-                    .map(|value| resolve_persona_ref(agent_did, value))
+                    .map(str::to_owned)
                     .filter(|value| !value.is_empty())
                     .ok_or_else(|| {
                         anyhow!(

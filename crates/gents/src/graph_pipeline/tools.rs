@@ -81,7 +81,7 @@ impl Tool for CompileGraphTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_owned(),
-            description: "Compile a bounded document DAG from operator-approved existing Task capabilities and publish its EventTriggers atomically. The model cannot author prompts, behaviors, tools, models, executable plans, or arbitrary collections. Invalid graphs return stable repair diagnostics without writes. Execution starts separately through existing bounded document-write tools after normal runtime reconciliation. Configure this tool in approval_required_tools when publication needs human approval.".to_owned(),
+            description: "Compile a bounded document DAG from configured existing Task capabilities and publish its EventTriggers atomically. The model cannot author prompts, behaviors, tools, models, executable plans, or arbitrary collections. Invalid graphs return stable repair diagnostics without writes. Execution starts separately through existing bounded document-write tools after normal runtime reconciliation.".to_owned(),
             parameters: schemars::schema_for!(CompileGraphArgs).to_value(),
         }
     }

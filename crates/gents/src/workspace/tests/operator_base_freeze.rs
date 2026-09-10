@@ -105,7 +105,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                     "existing-writer",
                     "existing-writer-doc",
                     crate::toolset::WorkspaceAuthority::ReadWrite,
-                    "deploy-1",
+                    "did:key:zWorkspaceOwner",
                     None,
                 ))
                 .unwrap();
@@ -142,7 +142,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
             case["expected_binding"]["workspace_id"],
             action.workspace_id
         );
-        assert_eq!(case["expected_binding"]["owner"], "host-1"); // abstract host-1 -> Fixture deploy-1
+        assert_eq!(case["expected_binding"]["owner"], "host-1"); // abstract owner -> fixture principal
         assert_eq!(case["expected_binding"]["tree"], "base-tree"); // abstract base-tree -> actual Git tree
         assert_eq!(case["expected_binding"]["capability"], case["capability"]);
         assert_eq!(
@@ -381,10 +381,10 @@ fn freeze_fault_context<'a>(
     docs: &'a mut dyn WorkspaceDocuments,
 ) -> HostExecutorContext<'a> {
     HostExecutorContext {
-        owner_agent_did: "deploy-1".into(),
+        owner_agent_did: "did:key:zWorkspaceOwner".into(),
         repository: RepositoryPlacementRef {
             repository_id: "repo-1".into(),
-            owner_agent_did: "deploy-1".into(),
+            owner_agent_did: "did:key:zWorkspaceOwner".into(),
             host_path: fx.repo.clone(),
             enabled: true,
         },

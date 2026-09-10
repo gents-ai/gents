@@ -129,6 +129,7 @@ async fn test_db(name: &str) -> TestDb {
     crate::schema::ensure_runtime_schemas(&node)
         .await
         .expect("runtime schemas");
+    crate::test_support::install_test_behavior(&node, identity.did(), TEST_BEHAVIOR_ID).await;
     TestDb {
         node,
         identity,

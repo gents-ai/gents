@@ -27,43 +27,36 @@ fn rejects_noncanonical_queue_source_on_decode() {
 }
 
 #[test]
-fn decodes_all_supported_string_values() {
-    let cases = [
+fn queue_source_and_policy_vocabulary_round_trips_canonically() {
+    for (source_name, source) in [
         ("user", QueueSource::User),
         ("background_completion", QueueSource::BackgroundCompletion),
         ("steering", QueueSource::Steering),
         ("goal", QueueSource::Goal),
-    ];
-
-    for (source, expected_source) in cases {
-        let input: RequestInput = serde_json::from_value(serde_json::json!({
-            "queue": {
-                "source": source,
-                "policy": "append"
-            }
-        }))
-        .unwrap();
-        assert_eq!(
-            input.queue,
-            Some(RequestQueue {
-                source: expected_source,
-                policy: QueuePolicy::Append,
+    ] {
+        for (policy_name, policy) in [
+            ("append", QueuePolicy::Append),
+            ("coalesce", QueuePolicy::Coalesce),
+        ] {
+            let queue = RequestQueue {
+                source,
+                policy,
                 key: None,
                 queued_after_request_id: None,
                 interrupted_request_id: None,
                 background_completion_wake_version: None,
-            })
-        );
+            };
+            let encoded = serde_json::to_value(queue_input(queue.clone())).unwrap();
+            assert_eq!(encoded["queue"]["source"], source_name);
+            assert_eq!(encoded["queue"]["policy"], policy_name);
+            assert_eq!(
+                serde_json::from_value::<RequestInput>(encoded)
+                    .unwrap()
+                    .queue,
+                Some(queue)
+            );
+        }
     }
-
-    let input: RequestInput = serde_json::from_value(serde_json::json!({
-        "queue": {"source": "user", "policy": "coalesce"}
-    }))
-    .unwrap();
-    assert_eq!(
-        input.queue.map(|queue| queue.policy),
-        Some(QueuePolicy::Coalesce)
-    );
 }
 
 #[test]
@@ -79,30 +72,6 @@ fn rejects_invalid_queue_json_and_unknown_keys() {
     )
     .is_err());
 }
-
-#[test]
-fn serializes_canonical_queue_input() {
-    let value = serde_json::to_value(queue_input(RequestQueue {
-        source: QueueSource::Steering,
-        policy: QueuePolicy::Coalesce,
-        key: Some("agent:did:key:z123".to_string()),
-        queued_after_request_id: None,
-        interrupted_request_id: None,
-        background_completion_wake_version: None,
-    }))
-    .unwrap();
-    assert_eq!(
-        value,
-        serde_json::json!({
-            "queue": {
-                "source": "steering",
-                "policy": "coalesce",
-                "key": "agent:did:key:z123"
-            }
-        })
-    );
-}
-
 #[test]
 fn automated_wakeup_is_true_only_for_keyed_background_completion_coalesce() {
     assert!(!is_automated_wakeup(&RequestInput::default()));

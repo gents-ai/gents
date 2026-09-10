@@ -20,6 +20,10 @@ pub const SESSION_HISTORY_TOOL_NAME: &str = "sessions";
 const DEFAULT_LIMIT: usize = 10;
 const MAX_LIMIT: usize = 1000;
 const REQUEST_SCAN_LIMIT: usize = 5000;
+const _: () = assert!(
+    REQUEST_SCAN_LIMIT >= MAX_LIMIT,
+    "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
+);
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SessionHistoryParams {
@@ -1411,25 +1415,6 @@ mod tests {
         assert_eq!(inference_turns(&[]).unwrap(), Some(0));
     }
 
-    #[test]
-    fn clamp_limit_honors_large_requests_up_to_the_backstop() {
-        // Unset → default.
-        assert_eq!(clamp_limit(None), DEFAULT_LIMIT);
-        // Floor: a zero/garbage request is raised to 1, never 0.
-        assert_eq!(clamp_limit(Some(0)), 1);
-        // SP3 de-cap: a large requested count is honored (was clamped at 50).
-        assert_eq!(clamp_limit(Some(750)), 750);
-        // Only the backstop caps it.
-        assert_eq!(clamp_limit(Some(MAX_LIMIT + 5_000)), MAX_LIMIT);
-        // The scan budget must be able to surface MAX_LIMIT distinct sessions.
-        const {
-            assert!(
-                REQUEST_SCAN_LIMIT >= MAX_LIMIT,
-                "REQUEST_SCAN_LIMIT must stay >= MAX_LIMIT or the cap is unreachable"
-            );
-        }
-    }
-
     async fn seeded_node() -> Arc<EmbeddedNode> {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -1732,10 +1717,19 @@ mod tests {
     #[tokio::test]
     async fn session_history_snapshot_reports_recent_agent_sessions() {
         let node = seeded_node().await;
+        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
 
-        let snapshot = load_session_history_snapshot(&node, "did:key:z-sessions", Some(2))
-            .await
-            .unwrap();
+        let output = Tool::call(
+            &tool,
+            SessionHistoryParams {
+                action: Some("list".to_string()),
+                limit: Some(2),
+                session_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let snapshot: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
 
         assert_eq!(snapshot.agent_did, "did:key:z-sessions");
         assert_eq!(snapshot.limit, 2);
@@ -1784,33 +1778,17 @@ mod tests {
             session_a.last_compacted_at.as_deref(),
             Some("2026-06-03T10:07:00Z")
         );
-    }
-
-    #[tokio::test]
-    async fn sessions_tool_serializes_limited_history() {
-        let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
-
-        let output = Tool::call(
+        let error = Tool::call(
             &tool,
             SessionHistoryParams {
-                action: Some("list".to_string()),
-                limit: Some(1),
+                action: Some("read".to_string()),
+                limit: None,
                 session_id: None,
             },
         )
         .await
-        .unwrap();
-        let parsed: SessionHistorySnapshot = serde_json::from_str(&output).unwrap();
-
-        assert_eq!(parsed.limit, 1);
-        assert_eq!(parsed.sessions.len(), 1);
-        assert_eq!(parsed.sessions[0].session_id, "session-b");
-
-        let row = serde_json::to_value(&parsed.sessions[0]).unwrap();
-        assert_eq!(row["closed_at"], "2026-06-03T11:01:00Z");
-        assert_eq!(row["latest_request_lifecycle_state"], "completed");
-        assert!(row.get("session_status").is_none());
+        .unwrap_err();
+        assert!(error.to_string().contains("unsupported sessions action"));
     }
 
     #[tokio::test]
@@ -2155,24 +2133,5 @@ mod tests {
         assert_eq!(snapshot.token_usage.model_calls, 1);
         assert_eq!(snapshot.token_usage.input_tokens, Some(100));
         assert_eq!(snapshot.token_usage.charged_tokens, Some(120));
-    }
-
-    #[tokio::test]
-    async fn sessions_tool_rejects_unsupported_action() {
-        let node = seeded_node().await;
-        let tool = SessionHistoryTool::new(node, "did:key:z-sessions");
-
-        let error = Tool::call(
-            &tool,
-            SessionHistoryParams {
-                action: Some("read".to_string()),
-                limit: None,
-                session_id: None,
-            },
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.to_string().contains("unsupported sessions action"));
     }
 }

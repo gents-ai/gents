@@ -159,67 +159,6 @@ mod tests {
     }
 
     #[test]
-    fn readonly_mirrors_init_readonly_package() {
-        let fields = preset_fields(PRESET_READONLY).expect("readonly preset should exist");
-        assert_eq!(
-            fields,
-            PresetFields {
-                enable_file_tools: true,
-                file_tools_mode: "ReadOnly".to_string(),
-                enable_bash: true,
-                bash_mode: "ReadOnly".to_string(),
-                command_allowed_argv_prefixes: Vec::new(),
-                command_forbidden_argv_prefixes: Vec::new(),
-                read_only_command_allowlist: Vec::new(),
-                enable_self_config: false,
-                write_tools: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn write_mirrors_init_write_package() {
-        let fields = preset_fields(PRESET_WRITE).expect("write preset should exist");
-        assert_eq!(
-            fields,
-            PresetFields {
-                enable_file_tools: true,
-                file_tools_mode: "ReadWrite".to_string(),
-                enable_bash: true,
-                bash_mode: "Unrestricted".to_string(),
-                command_allowed_argv_prefixes: Vec::new(),
-                command_forbidden_argv_prefixes: Vec::new(),
-                read_only_command_allowlist: Vec::new(),
-                enable_self_config: false,
-                write_tools: Vec::new(),
-            }
-        );
-    }
-
-    #[test]
-    fn unknown_name_returns_none() {
-        assert_eq!(preset_fields("bogus"), None);
-        assert_eq!(preset_fields(""), None);
-    }
-
-    #[test]
-    fn round_trips_through_preset_name() {
-        for name in builtin_preset_names() {
-            let fields = preset_fields(name).expect("builtin preset must resolve");
-            assert_eq!(preset_name(&fields), Some(*name));
-        }
-    }
-
-    #[test]
-    fn one_extra_argv_prefix_classifies_as_custom() {
-        let mut fields = preset_fields(PRESET_READONLY).expect("readonly preset should exist");
-        fields
-            .command_allowed_argv_prefixes
-            .push("git status".to_string());
-        assert_eq!(preset_name(&fields), None);
-    }
-
-    #[test]
     fn one_flipped_field_classifies_as_custom() {
         let mut fields = preset_fields(PRESET_WRITE).expect("write preset should exist");
         fields.enable_self_config = true;

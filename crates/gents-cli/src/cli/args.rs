@@ -2300,7 +2300,7 @@ pub(crate) struct P2pNetworkRegisterArgs {
     /// Scope template this node offers (repeatable). A node advertises the
     /// templates it is willing to replicate; a discovering peer materializes a
     /// scoped pairing from one of them. Defaults to `conversation` (filtered
-    /// push of the peer's conversation slice) when none are given.
+    /// push of the peer's session slice) when none are given.
     #[arg(long = "template", value_name = "TEMPLATE")]
     pub(crate) templates: Vec<String>,
     /// Network / fleet id. Defaults to "default".

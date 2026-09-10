@@ -122,28 +122,6 @@ private def caseJson (c : Case) :=
   ",\"expected\":" ++ snapshotJson c.expected ++ ",\"disposition\":" ++ jsonString (disposition c.disposition) ++ "}"
 def casesJson := jsonArray (cases.map caseJson)
 
-structure MigrationCase where
-  name : String
-  legacySource : Bool
-  stored : Option WorkspacePathCapability
-  expected : Option WorkspacePathCapability
-  deriving DecidableEq, Repr
-
-def migrationCases : List MigrationCase :=
-  [ ⟨"legacy_missing_explicitly_migrates",true,none,some .unrestrictedCompatibility⟩
-  , ⟨"new_missing_stays_missing",false,none,none⟩
-  , ⟨"legacy_injected_exact_overwritten",true,some cap,some .unrestrictedCompatibility⟩
-  , ⟨"exact_capability_preserved",false,some cap,some cap⟩
-  , ⟨"explicit_legacy_value_preserved",false,some .unrestrictedCompatibility,some .unrestrictedCompatibility⟩ ]
-theorem migration_cases_replay : ∀ c ∈ migrationCases,
-    migrateCapability c.legacySource c.stored = c.expected := by decide
-private def optionalCapJson : Option WorkspacePathCapability → String
-  | none => "null" | some cap => capJson cap
-private def migrationCaseJson (c : MigrationCase) :=
-  "{\"name\":" ++ jsonString c.name ++ ",\"legacy_source\":" ++ boolString c.legacySource ++
-  ",\"stored\":" ++ optionalCapJson c.stored ++ ",\"expected\":" ++ optionalCapJson c.expected ++ "}"
-def migrationCasesJson := jsonArray (migrationCases.map migrationCaseJson)
-
 structure AliasCase where
   name : String
   changedPaths : List String

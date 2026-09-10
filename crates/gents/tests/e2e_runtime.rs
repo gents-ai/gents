@@ -8,12 +8,8 @@ mod completion_retry_tape;
 mod defradb_time_travel;
 #[path = "e2e_runtime/document_config_bootstrap.rs"]
 mod document_config_bootstrap;
-#[path = "e2e_runtime/event_source_subscription_factory_smoke.rs"]
-mod event_source_subscription_factory_smoke;
 #[path = "e2e_runtime/fork_invariants.rs"]
 mod fork_invariants;
-#[path = "e2e_runtime/peer_pairing_desired_query.rs"]
-mod peer_pairing_desired_query;
 #[path = "e2e_runtime/projection_acp_policy_lifecycle.rs"]
 mod projection_acp_policy_lifecycle;
 #[path = "e2e_runtime/provider_fixture_redaction.rs"]

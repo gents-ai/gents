@@ -4,7 +4,7 @@ use super::*;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 
 #[tokio::test]
-async fn explicit_user_rename_and_clear_preserve_session_and_request_observation() {
+async fn title_transitions_preserve_session_and_request_observation() {
     let node = EmbeddedNode::builder().build().await.unwrap();
     node.add_schema(gents_protocol::schemas::AGENT_SESSION)
         .await
@@ -107,6 +107,56 @@ async fn explicit_user_rename_and_clear_preserve_session_and_request_observation
             .unwrap(),
         expected
     );
+
+    let response = node.execute(r#"mutation { create_AgentSession(input: {
+            session_id: "generated-title-session", agent_did: "owner", behavior_id: "behavior",
+            created_at: "2026-01-01T00:00:00Z", closed_at: "2026-01-02T00:00:00Z",
+            title: {text: "New session", source: "placeholder"}, tags: ["important"],
+            provenance: {task_id: "task"},
+            observation: {last_activity_at: "2026-01-03T00:00:00Z", preview: "keep this preview",
+                latest_request: {request_doc_id: "physical-request", request_id: "request", lifecycle_state: "completed"}}
+        }) {_docID} }"#).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let placeholder = load_agent_session(&node, "owner", "generated-title-session", None)
+        .await
+        .unwrap()
+        .unwrap();
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.generated_title",
+        |txn| {
+            Box::pin(async move {
+                apply_title_in_txn(
+                    txn,
+                    "owner",
+                    None,
+                    "generated-title-session",
+                    Some("generated title"),
+                    SessionTitleSource::Generated,
+                    "2026-01-04T00:00:00Z",
+                )
+                .await
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let generated = load_agent_session(&node, "owner", "generated-title-session", None)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut expected_generated = placeholder;
+    expected_generated.title = Some(SessionTitle {
+        text: "generated title".into(),
+        source: SessionTitleSource::Generated,
+    });
+    expected_generated
+        .observation
+        .as_mut()
+        .unwrap()
+        .last_activity_at = "2026-01-04T00:00:00Z".into();
+    assert_eq!(generated, expected_generated);
     node.shutdown().await;
 }
 

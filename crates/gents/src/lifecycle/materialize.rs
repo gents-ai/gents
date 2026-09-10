@@ -902,7 +902,6 @@ mod pin_tests {
     //! has no node dependency; see the per-site comment at each test.
 
     use super::*;
-    use crate::identity::AgentIdentity;
     use crate::lifecycle::test_support::{pin_fixed_signing_identity, PIN_FIXED_DID};
 
     /// Replace the internally generated `created_at` and `admission_signature`
@@ -1010,55 +1009,6 @@ mod pin_tests {
         assert_eq!(
             normalized,
             "request_id: \"req-materialize-pending-event\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
-        );
-    }
-
-    // --- Site 2: materialize.rs `RequestLifecycle::materialize_claimed_with_execution_binding` ---
-    // This associate function claims the request against a live node in the
-    // same call, so it cannot be driven directly in a field-stamping test.
-    // Driven through `build_signed_request` with the equivalent `RequestSpec`
-    // and `RequestSigner::Identity` (matching the production function's
-    // `sign_agent_request_create(identity.as_ref(), ...)`), asserting against
-    // the output pinned by reproducing the production statements directly.
-
-    #[tokio::test]
-    async fn pin_materialize_claimed_with_execution_binding() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let identity = pin_fixed_signing_identity(tempdir.path());
-
-        let agent_did = identity.did().to_string();
-        let trigger_lineage = TriggerLineage {
-            trigger_id: Some("trigger-1".to_string()),
-            trigger_kind: Some("event".to_string()),
-            source_doc_id: Some("source-doc-1".to_string()),
-            correlation: Some("corr-1".to_string()),
-            trigger_context: Some(r#"{"k":"v"}"#.to_string()),
-        };
-
-        let request_identity = RequestIdentity {
-            requester_did: None,
-            request_id: "req-materialize-claimed".to_string(),
-            agent_did: agent_did.clone(),
-            behavior_id: "agent-name-1".to_string(),
-            session_id: "sess-materialize-claimed".to_string(),
-            content: "resume the run".to_string(),
-            execution_origin: ExecutionOrigin::Scheduled,
-            created_at: "2030-01-01T00:00:00Z".to_string(),
-        };
-        let admission =
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
-        let spec = RequestSpec {
-            trigger_lineage,
-            ..RequestSpec::new(request_identity, admission)
-        };
-        let create = build_signed_request(spec, RequestSigner::Identity(&identity))
-            .await
-            .expect("sign claimed request");
-
-        let fields = create.graphql_input_fields().expect("graphql_input_fields");
-        assert_eq!(
-            fields,
-            "request_id: \"req-materialize-claimed\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"agent-name-1\", session_id: \"sess-materialize-claimed\", retry_root_request: \"req-materialize-claimed\", content: \"resume the run\", backend_id: \"backend-1\", execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"4DPGJDS77o4K6koAPWqJP5iQU55UV919NvMny273iJRN5uQYZZh3Tr76Jwh7FKQ2GDTirX8wWw5sZbHr9gd8QiqY\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

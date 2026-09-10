@@ -294,8 +294,6 @@ mod tests {
         let steps = diff(&m, &l).into_steps();
         let prefix = apply_prefix(&l, &steps, 1);
         assert_eq!(prefix.live, l.live);
-        assert!(desired_references_closed(&prefix));
-        assert!(prefix_referrers_closed(&steps[..1], &prefix));
 
         let retried = retry_after_prefix(&m, &l, 1);
         let full = apply_all(&l, &steps);

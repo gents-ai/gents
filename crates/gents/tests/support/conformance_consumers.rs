@@ -728,13 +728,6 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_process_transition_cases_match_runtime_status_policy",
         },
         ConformanceConsumer::RustTest {
-            id: "runtime_status::tests::rust_process_state_transitions_match_lean_contract",
-            package: "gents",
-            source_path: "crates/gents/src/runtime_status/tests.rs",
-            module_path: "runtime_status::tests",
-            function: "rust_process_state_transitions_match_lean_contract",
-        },
-        ConformanceConsumer::RustTest {
             id: "runtime_status::tests::rust_process_state_vocabulary_matches_lean_model",
             package: "gents",
             source_path: "crates/gents/src/runtime_status/tests.rs",
@@ -924,10 +917,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_sanitize_cases_drive_the_production_sanitizer",
         },
         ConformanceConsumer::RustTest {
-            id: "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_dynamic_output_compaction_trigger",
+            id: "agent::loop_stream::tests::generated_budget_cases_drive_dynamic_output_compaction_trigger",
             package: "gents",
-            source_path: "crates/gents/src/agent/daemon/request.rs",
-            module_path: "agent::daemon::request::budget_contract_tests",
+            source_path: "crates/gents/src/agent/loop_stream/tests/budgeting.rs",
+            module_path: "agent::loop_stream::tests",
             function: "generated_budget_cases_drive_dynamic_output_compaction_trigger",
         },
         ConformanceConsumer::RustTest {

@@ -299,8 +299,6 @@ def snapshotJson : String :=
       ++ Conformance.WorkspacePathCapabilityContracts.casesJson ++ ","
     ++ "\"workspace_path_alias_cases\":"
       ++ Conformance.WorkspacePathCapabilityContracts.aliasCasesJson ++ ","
-    ++ "\"workspace_capability_migration_cases\":"
-      ++ Conformance.WorkspacePathCapabilityContracts.migrationCasesJson ++ ","
     ++ "\"workspace_cases\":"
       ++ workspaceCasesJson ++ ","
     ++ "\"workspace_binding_cases\":"

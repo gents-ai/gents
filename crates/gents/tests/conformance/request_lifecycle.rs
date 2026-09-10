@@ -1383,6 +1383,13 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 #[tokio::test]
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
+    crate::support::fixtures::bind_default_behavior_backend(
+        db.node.as_ref(),
+        AGENT_DID,
+        BACKEND_ID,
+        "http://127.0.0.1:1/v1",
+    )
+    .await;
     let lineage = TriggerLineage {
         trigger_id: Some("sched-1".into()),
         trigger_kind: Some("schedule".into()),
@@ -1393,7 +1400,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
 
     let lifecycle = RequestLifecycle::materialize_claimed_with_execution_binding(
         db.node.clone(),
-        AGENT_NAME,
+        "default",
         materialization_identity(),
         "scheduled prompt body with lineage",
         DEADLINE_SECS,
@@ -1419,6 +1426,21 @@ async fn scheduled_materialization_persists_trigger_lineage() {
             caused_by_trigger_kind: Some("schedule".into()),
         })
     );
+
+    let response = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ admission_kind admission_signer_did admission_signature }} }}"#,
+            escape_graphql_string(&lifecycle.request().doc_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(row["admission_kind"], "local-self");
+    assert_eq!(row["admission_signer_did"], AGENT_DID);
+    assert!(row["admission_signature"]
+        .as_str()
+        .is_some_and(|signature| !signature.is_empty()));
 }
 
 use gents::background_completion::{

@@ -75,8 +75,8 @@ use support::{
     build_request, create_agent_session, create_request, create_request_with_signed_fields,
     create_request_with_valid_until, create_response_with_content_and_status,
     create_response_with_status, first_optional_row, first_row, materialization_identity,
-    set_interrupt_requested_at, set_request_lifecycle_state, test_db, try_set_valid_until,
-    AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_DID, AGENT_NAME,
+    BACKEND_ID, DEADLINE_SECS,
 };
 
 #[path = "conformance/backend_health.rs"]
@@ -528,8 +528,6 @@ mod prompt_assembly;
 mod r5_scenarios;
 #[path = "conformance/rendered_capture.rs"]
 mod rendered_capture;
-#[path = "conformance/scheduling.rs"]
-mod scheduling;
 #[path = "conformance/scope_templates.rs"]
 mod scope_templates;
 #[path = "conformance/self_config.rs"]

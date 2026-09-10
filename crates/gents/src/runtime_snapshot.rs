@@ -5,8 +5,6 @@ use anyhow::Result;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Serialize;
 use tokio::sync::mpsc;
-#[cfg(test)]
-use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::config::ResolvedBehavior;
@@ -452,13 +450,6 @@ impl ActiveRuntimeSnapshot {
         self.tool_surfaces.get(behavior_id)
     }
 
-    #[cfg(test)]
-    pub(crate) fn unavailable_diagnostic(&self, behavior_id: &str) -> Option<&str> {
-        self.unavailable_behaviors
-            .get(behavior_id)
-            .map(|unavailable| unavailable.diagnostic.as_str())
-    }
-
     pub(crate) fn unavailable_public_message(&self, behavior_id: &str) -> Option<&'static str> {
         self.unavailable_behaviors
             .get(behavior_id)
@@ -519,20 +510,6 @@ impl ActiveRuntimeSnapshot {
             &self.unavailable_event_triggers,
             &self.active_tasks,
         )
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn refresh_active_snapshot(
-    active_snapshot: &mut Arc<ActiveRuntimeSnapshot>,
-    active_snapshot_rx: &mut watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-) -> bool {
-    match active_snapshot_rx.has_changed() {
-        Ok(true) => {
-            *active_snapshot = active_snapshot_rx.borrow_and_update().clone();
-            true
-        }
-        Ok(false) | Err(_) => false,
     }
 }
 

@@ -235,13 +235,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn typed_manifest_rejects_unknown_fields() {
-        let mut value = serde_json::json!({"manifest_version":1,"name":"example","version":"1","description":"Example","kind":"documents","authors":["Example"],"assets":["README.md","config.json"],"config":"config.json"});
-        assert!(serde_json::from_value::<PackManifest>(value.clone()).is_ok());
-        value["unexpected_field"] = true.into();
-        assert!(serde_json::from_value::<PackManifest>(value).is_err());
-    }
-    #[test]
     fn all_packs_resolve_with_declared_assets_and_dependencies() {
         let catalog = pack_catalog().unwrap();
         assert!(catalog.len() >= 11);

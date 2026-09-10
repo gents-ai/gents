@@ -1,7 +1,7 @@
 //! Compiler and publication adapter for model-proposed document graphs.
 //!
 //! Inputs to this module are untrusted proposals. Compilation resolves only
-//! operator-approved wrappers around existing Tasks. Publication creates only
+//! configured wrappers around existing Tasks. Publication creates only
 //! ordinary EventTriggers; the existing runtime remains the sole executor.
 
 mod compiler;

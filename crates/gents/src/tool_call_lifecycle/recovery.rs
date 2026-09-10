@@ -606,12 +606,15 @@ mod tests {
                 ))
                 .await;
             assert!(!result.has_errors(), "{collection}: {:?}", result.errors);
-            result.data.as_ref().unwrap()[format!("create_{collection}")][0]["_docID"]
-                .as_str()
+            crate::graphql::single_mutation_document(&result, &format!("create_{collection}"))
+                .expect("normalize create response")
                 .expect("created document")
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .expect("created document ID")
                 .to_string()
         }
-        let parent_doc = create(&node, "AgentRequest", r#"request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", lifecycle_state: "running""#).await;
+        let parent_doc = create(&node, "AgentRequest", r#"request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", content: "Parent request", created_at: "2026-09-01T00:00:00Z", lifecycle_state: "running""#).await;
         let bridge_doc = create(
             &node,
             "AgentToolCall",
@@ -628,6 +631,7 @@ mod tests {
         .await;
         let child_doc = create(&node, "AgentRequest", &format!(r#"
             request_id: "child", agent_did: "did:test:child", behavior_id: "child", session_id: "child-session",
+            content: "Child request", created_at: "2026-09-01T00:00:01Z", subagent_depth: 1,
             lifecycle_state: "completed", caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{}",
             caused_by_parent_tool_call_id: "bridge", caused_by_parent_tool_call_doc_id: "{}"
         "#, escape_graphql_string(&parent_doc), escape_graphql_string(&bridge_doc))).await;

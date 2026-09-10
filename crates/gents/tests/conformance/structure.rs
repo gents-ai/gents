@@ -103,7 +103,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             WorkspaceTest("crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs"),
         ),
         ("RuntimeReconcile", Module("conformance/client_runtime.rs")),
-        ("Scheduling", Module("conformance/scheduling.rs")),
+        (
+            "Scheduling",
+            WorkspaceTest("crates/gents/src/trigger_engine/tests/schedule_source.rs"),
+        ),
         ("ScopeTemplates", Module("conformance/scope_templates.rs")),
         ("SelfConfig", Module("conformance/self_config.rs")),
         (
@@ -134,7 +137,10 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Lsp", Module("conformance/lsp.rs")),
         ("Transcript", Module("conformance/transcript.rs")),
-        ("Triggers", Module("conformance/triggers.rs")),
+        (
+            "Triggers",
+            WorkspaceTest("crates/gents/src/trigger_engine/tests/dispatch_contract.rs"),
+        ),
         ("Workspace", Gap("Canonical binding/admission fixtures await the workspace runtime owner; the removed test-local predicate mirror was not implementation coverage.")),
         (
             "ReversePairingHandlers",

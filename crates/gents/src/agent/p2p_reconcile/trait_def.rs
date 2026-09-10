@@ -105,26 +105,4 @@ mod tests {
     use super::*;
 
     fn _assert_trait_object_safe(_: &dyn RemoteP2pAdmin) {}
-
-    #[test]
-    fn error_classes_are_distinct() {
-        use RemoteP2pAdminError::*;
-        let errors = [
-            RpcTimeout,
-            RpcError("x".into()),
-            RemoteNotFound("c".into()),
-            RemoteUnauthorized,
-            LocalError("y".into()),
-        ];
-
-        for e in &errors {
-            match e {
-                RpcTimeout => {}
-                RpcError(_) => {}
-                RemoteNotFound(_) => {}
-                RemoteUnauthorized => {}
-                LocalError(_) => {}
-            }
-        }
-    }
 }

@@ -1,6 +1,6 @@
-use super::retry::execute_query_timed;
 use super::rows::{dedupe_paths, CompactionEntryRow};
 use super::*;
+use crate::graphql::graphql_response_with_transaction_retry as execute_query_timed;
 use anyhow::Context;
 
 #[derive(Deserialize)]

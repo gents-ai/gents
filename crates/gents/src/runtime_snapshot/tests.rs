@@ -1,55 +1,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch};
-
 use super::*;
-use crate::identity::{AgentIdentity as _, KeyIdentity, RuntimePrincipal};
 use crate::tool_surface::{
     BehaviorToolConfig, FileToolMode, ResolvedToolSelection, RuntimeToolAvailability,
     SubagentToolConfig, ToolCeiling,
 };
-
-/// Build a minimal `Arc<RuntimePrincipal>` for tests that call `.activate()`.
-/// Does not exercise signing — only satisfies the principal invariant so that
-/// the `debug_assert!` in `activate()` does not fire.
-fn stub_principal() -> Arc<RuntimePrincipal> {
-    let identity = Arc::new(
-        KeyIdentity::load_or_create(
-            std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
-            None,
-        )
-        .unwrap(),
-    );
-    Arc::new(RuntimePrincipal {
-        agent_did: identity.did().to_string(),
-        identity,
-        default_behavior_id: String::new(),
-        display_name: None,
-        enabled: true,
-    })
-}
-
-fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnapshot> {
-    Arc::new(ActiveRuntimeSnapshot {
-        generation,
-        principal: None,
-        local_did: String::new(),
-        default_behavior_id: default_behavior_id.to_string(),
-        behaviors: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::new(),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
-        dispatchers: HashMap::new(),
-        behavior_executor_capacities: HashMap::new(),
-        behavior_executor_queue_capacities: HashMap::new(),
-    })
-}
 
 fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
     let enable_lsp = lsp_config.is_some();
@@ -76,42 +32,6 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
             SubagentToolConfig::default(),
         ),
     )
-}
-
-#[test]
-fn resolved_snapshot_activate_preserves_generation_and_dispatchers() {
-    let resolved = ResolvedRuntimeSnapshot {
-        principal: None,
-        local_did: "did:local".to_string(),
-        default_behavior_id: "general".to_string(),
-        behaviors: HashMap::new(),
-        tool_surfaces: HashMap::new(),
-        backend_admission_configs: HashMap::new(),
-        unavailable_behaviors: HashMap::from([(
-            "code".to_string(),
-            UnavailableBehavior::new(
-                BehaviorReadinessUnavailableReason::BackendNotConfigured,
-                "missing backend",
-            ),
-        )]),
-        active_schedules: HashMap::new(),
-        unavailable_schedules: HashSet::new(),
-        active_event_triggers: HashMap::new(),
-        unavailable_event_triggers: HashSet::new(),
-        active_tasks: HashMap::new(),
-    }
-    .with_principal(stub_principal());
-    let (general_tx, _general_rx) = mpsc::channel(1);
-    let active = resolved.activate(1, HashMap::from([("general".to_string(), general_tx)]));
-
-    assert_eq!(active.generation, 1);
-    assert_eq!(active.default_behavior_id, "general");
-    assert_eq!(active.local_did, "did:local");
-    assert!(active.dispatchers.contains_key("general"));
-    assert_eq!(
-        active.unavailable_diagnostic("code"),
-        Some("missing backend")
-    );
 }
 
 #[test]
@@ -143,50 +63,6 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
 
     resolved.default_behavior_id = "general".to_string();
     assert!(resolved.validate_behavior_readiness_source().is_ok());
-}
-
-#[test]
-fn concurrency_mode_deserialization_accepts_exact_known_values() {
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("parallel")).ok(),
-        Some(ConcurrencyMode::Parallel)
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("serial")).ok(),
-        Some(ConcurrencyMode::Serial)
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latest_only")).ok(),
-        Some(ConcurrencyMode::LatestOnly)
-    );
-}
-
-#[test]
-fn concurrency_mode_deserialization_is_strict() {
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("Parallel")).ok(),
-        None
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("SERIAL")).ok(),
-        None
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latest-only")).ok(),
-        None
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latestOnly")).ok(),
-        None
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!(" parallel ")).ok(),
-        None
-    );
-    assert_eq!(
-        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("")).ok(),
-        None
-    );
 }
 
 #[test]
@@ -268,29 +144,4 @@ fn configuration_fingerprint_reflects_lsp_configuration() {
         fingerprint_tool_surface(Some(r#"{"format_on_write":true}"#.to_string())),
     );
     assert_ne!(baseline, lsp_changed.configuration_fingerprint());
-}
-
-#[test]
-fn refresh_active_snapshot_updates_to_new_generation() {
-    let initial = snapshot(1, "general");
-    let updated = snapshot(2, "code");
-    let (tx, mut rx) = watch::channel(initial.clone());
-    let mut current = initial;
-
-    tx.send(updated.clone()).unwrap();
-
-    assert!(refresh_active_snapshot(&mut current, &mut rx));
-    assert!(Arc::ptr_eq(&current, &updated));
-    assert_eq!(current.generation, 2);
-    assert_eq!(current.default_behavior_id, "code");
-}
-
-#[test]
-fn refresh_active_snapshot_is_noop_when_unchanged() {
-    let initial = snapshot(1, "general");
-    let (_tx, mut rx) = watch::channel(initial.clone());
-    let mut current = initial.clone();
-
-    assert!(!refresh_active_snapshot(&mut current, &mut rx));
-    assert!(Arc::ptr_eq(&current, &initial));
 }

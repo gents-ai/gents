@@ -15,12 +15,12 @@ fn document(value: Value) -> DesiredStateApplyDocument {
     }
 }
 async fn register_config_schemas(node: &EmbeddedNode) -> Result<()> {
-    register_config_schemas_with_legacy_duplicates(node, &[]).await
+    register_config_schemas_dropping_unique_indexes(node, &[]).await
 }
 
 // Simulate a pre-index/replicated malformed identity set in duplicate rejection
 // tests. Ordinary publication tests retain the production unique indexes.
-async fn register_config_schemas_with_legacy_duplicates(
+async fn register_config_schemas_dropping_unique_indexes(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
@@ -56,11 +56,18 @@ async fn register_config_schemas_with_legacy_duplicates(
 }
 
 async fn apply(access: &ConfigAccess, docs: Vec<DesiredStateApplyDocument>) -> Result<()> {
+    apply_with_counts(access, docs).await.map(|_| ())
+}
+
+async fn apply_with_counts(
+    access: &ConfigAccess,
+    docs: Vec<DesiredStateApplyDocument>,
+) -> Result<DesiredStateApplyCounts> {
     let plan = DesiredStateApplyPlan::new(docs)?;
     access
         .transact("test.desired.apply", |txn| {
             let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
         })
         .await
 }
@@ -184,7 +191,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
 #[tokio::test]
 async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas_with_legacy_duplicates(&node, &[Collection::InferenceBackend]).await?;
+    register_config_schemas_dropping_unique_indexes(&node, &[Collection::InferenceBackend]).await?;
     let access = ConfigAccess::Local(node.clone());
     apply(
         &access,
@@ -263,9 +270,62 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
     let owner = "did:key:owner";
     let mut documents = cyclic_configuration(owner);
     documents.extend(cyclic_configuration("did:key:foreign"));
-    apply(&access, documents).await?;
+    let seeded = apply_with_counts(&access, documents).await?;
+    // DesiredStateApplyCounts ownership: one document per collection per
+    // owner cycles through as a staged write.
+    for collection in cyclic_configuration(owner).iter().map(|doc| doc.collection) {
+        assert_eq!(seeded.get(collection), 2, "{collection:?}");
+    }
     access.write("test.observe", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"}},input:{probe_status:"healthy"}){_docID} }"#).await?;
     let before = node.execute("{InferenceBackend{_docID agent_did name probe_status} AgentContext{_docID agent_did context_id}}").await.data;
+
+    // The read-only preflight (`validate_desired_state_plan`) rejects the
+    // same broken replacement the publication path rejects, on this fixture.
+    let mut drifted_replacement = cyclic_configuration(owner)
+        .into_iter()
+        .find(|doc| doc.collection == Collection::AgentBehavior)
+        .unwrap();
+    drifted_replacement.update["context_id"] = "absent".into();
+    let preview_plan = DesiredStateApplyPlan::new(vec![drifted_replacement])?;
+    assert!(access
+        .transact("test.preview.replacement", |txn| {
+            let plan = &preview_plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .is_err());
+    // ... and rejects a removal that would break a live inbound reference.
+    let preview_removal = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::AgentContext,
+        owner.into(),
+        "context".into(),
+    )])?;
+    assert!(access
+        .transact("test.preview.removal", |txn| {
+            let plan = &preview_removal;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .is_err());
+    // ... while an addition validates AND commits zero writes.
+    let preview_addition =
+        DesiredStateApplyPlan::new(vec![document(backend(owner, "preview-only"))])?;
+    access
+        .transact("test.preview.addition", |txn| {
+            let plan = &preview_addition;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+    let previewed = node.execute("{InferenceBackend{backend_id}}").await;
+    assert!(!previewed.has_errors(), "{:?}", previewed.errors);
+    assert!(
+        !previewed.data.unwrap()["InferenceBackend"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["backend_id"] == "preview-only"),
+        "validate_desired_state_plan must be read-only"
+    );
 
     // The unchanged behavior still references context. The foreign same-label
     // context must not satisfy that link, and a staged backend edit rolls back.
@@ -328,7 +388,7 @@ async fn retained_inbound_references_and_cycles_share_atomic_publication() -> Re
 #[tokio::test]
 async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Result<()> {
     let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas_with_legacy_duplicates(&node, &[Collection::AgentContext]).await?;
+    register_config_schemas_dropping_unique_indexes(&node, &[Collection::AgentContext]).await?;
     let access = ConfigAccess::Local(node.clone());
     let owner = "did:key:owner";
     apply(&access, cyclic_configuration(owner)).await?;
@@ -361,6 +421,41 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
     Ok(())
 }
 
+#[tokio::test]
+async fn verify_existing_desired_state_plan_rejects_drifted_live_rows() -> Result<()> {
+    // Gap test: `verify_existing_desired_state_plan` guards graph-package
+    // re-install against out-of-band mutation of live package documents.
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:owner";
+    apply(&access, vec![document(backend(owner, "packaged"))]).await?;
+
+    // The matching plan (authored digest == live projection) verifies clean.
+    let matching = DesiredStateApplyPlan::new(vec![document(backend(owner, "packaged"))])?;
+    access
+        .transact("test.verify.matching", |txn| {
+            let plan = &matching;
+            Box::pin(async move { verify_existing_desired_state_plan(txn, plan).await })
+        })
+        .await?;
+
+    // Mutate a non-committed live field out of band; the same plan now drifts.
+    access.write("test.drift", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"},backend_id:{_eq:"packaged"}},input:{name:"out-of-band"}){_docID} }"#).await?;
+    let error = access
+        .transact("test.verify.drifted", |txn| {
+            let plan = &matching;
+            Box::pin(async move { verify_existing_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("drifted"),
+        "drifted live row must be rejected: {error:#}"
+    );
+    Ok(())
+}
+
 #[test]
 fn removals_require_unique_scoped_identities() {
     assert!(DesiredStateApplyPlan::new(Vec::new())
@@ -384,58 +479,6 @@ fn removals_require_unique_scoped_identities() {
             (Collection::Tools, "owner".into(), "tools".into())
         ])
         .is_err());
-}
-
-#[tokio::test]
-async fn read_only_preflight_uses_actual_replacements_and_retained_inbound_links() -> Result<()> {
-    let node = Arc::new(EmbeddedNode::builder().build().await?);
-    register_config_schemas(&node).await?;
-    let access = ConfigAccess::Local(node.clone());
-    let owner = "did:key:owner";
-    apply(&access, cyclic_configuration(owner)).await?;
-    let mut replacement = cyclic_configuration(owner)
-        .into_iter()
-        .find(|document| document.collection == Collection::AgentBehavior)
-        .unwrap();
-    replacement.update["context_id"] = "absent".into();
-    let plan = DesiredStateApplyPlan::new(vec![replacement])?;
-    assert!(access
-        .transact("test.preview.replacement", |txn| {
-            let plan = &plan;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
-        })
-        .await
-        .is_err());
-    let removal = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
-        Collection::AgentContext,
-        owner.into(),
-        "context".into(),
-    )])?;
-    assert!(access
-        .transact("test.preview.removal", |txn| {
-            let plan = &removal;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
-        })
-        .await
-        .is_err());
-    let addition = DesiredStateApplyPlan::new(vec![document(backend(owner, "preview-only"))])?;
-    access
-        .transact("test.preview.addition", |txn| {
-            let plan = &addition;
-            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
-        })
-        .await?;
-    let state = node.execute("{ AgentBehavior { context_id } AgentContext { context_id } InferenceBackend { backend_id } }").await;
-    assert!(!state.has_errors(), "{:?}", state.errors);
-    let data = state.data.unwrap();
-    assert_eq!(data["AgentBehavior"][0]["context_id"], "context");
-    assert_eq!(data["AgentContext"].as_array().unwrap().len(), 1);
-    assert!(!data["InferenceBackend"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|row| row["backend_id"] == "preview-only"));
-    Ok(())
 }
 
 #[tokio::test]

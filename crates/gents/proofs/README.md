@@ -1260,9 +1260,9 @@ separately cover typed resume, automatic continuation and fresh Goal opening.
 `Workspace/PathCapability.lean` refines the existing host executor and receipt
 operations. The existing workspace identity now includes an immutable capability;
 its lifecycle transitions preserve that field. Fresh provision accepts only an
-explicit canonical exact-path set (empty means no changes). Compatibility is
-authored only by explicit predecessor-version migration and can recover an
-identical existing workspace binding, never provision a fresh unrestricted tree.
+explicit canonical exact-path set (empty means no changes). Compatibility state
+can recover an identical existing workspace binding, never provision a fresh
+unrestricted tree.
 
 Seal and integration require the actual captured immutable-base delta to obey
 the admitted capability and apply that same snapshot. Receipt replay checks the
@@ -1276,8 +1276,6 @@ are observed host predicates, not claimed filesystem or hash proofs.
 
 Twenty-four explicit operation cases are consumed by the real Git/executor
 umbrella test `generated_workspace_path_capability_cases_drive_real_git_executor`.
-Five migration cases are consumed by
-`gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows`.
 Operation cases cover legacy fresh denial, identity recovery, empty exact sets, both rename endpoints,
 symlink/gitlink denial, immutable-base/snapshot mismatch, denied receipt repair,
 authorized integration, absent-checkout receipt recovery and capability tampering.
@@ -1287,19 +1285,6 @@ need valid grant syntax; unrelated historical spellings do not become grants.
 Changed component spellings are checked against both full trees, including valid
 ancestor prefixes of opaque filenames. Case/Unicode aliases involving a changed
 path still fail closed.
-
-Migration always stamps predecessor-schema rows with explicit compatibility,
-even if untrusted input injects an exact capability field absent from that source
-schema. Current-schema values are preserved. This is a source-version migration
-rule, not new-request permission to provision compatibility workspaces.
-
-The migration consumer executes the production source-version lens for legacy
-inputs, including injected fields impossible in the predecessor schema, and
-uses actual current database creation/readback for current-source cases. The
-separate old-row WASM migration test verifies migration transport. The generated
-case count does not imply that every injected old-schema value was persisted
-through the old schema: those inputs deliberately test the lens boundary.
-
 
 ### Artifact-only command authority (#1358)
 

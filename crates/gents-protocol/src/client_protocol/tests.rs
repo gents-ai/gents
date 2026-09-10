@@ -264,43 +264,45 @@ fn claimed_with_streaming_response_trusts_response() {
 // ── deriveTurn: retry chain ─────────────────────────────────────
 
 #[test]
-fn derive_turn_empty() {
-    assert_eq!(derive_turn(&[]), None);
-}
-
-#[test]
-fn derive_turn_single() {
-    let chain = vec![attempt(
-        "req-1",
-        None,
-        "processing",
-        resp(ResponseStatus::Streaming),
-    )];
-    assert_eq!(derive_turn(&chain), Some(ClientTurnState::Streaming));
-}
-
-#[test]
-fn derive_turn_uses_tip() {
-    let chain = vec![
-        attempt("req-1", None, "failed", None),
-        attempt("req-2", Some("req-1"), "pending", None),
-    ];
-    assert_eq!(derive_turn(&chain), Some(ClientTurnState::WaitingForClaim));
-}
-
-#[test]
-fn derive_turn_three_attempt_chain() {
-    let chain = vec![
-        attempt("req-1", None, "failed", None),
-        attempt("req-2", Some("req-1"), "failed", None),
-        attempt(
-            "req-3",
-            Some("req-2"),
-            "processing",
-            resp(ResponseStatus::Streaming),
+fn derive_turn_projects_the_chain_tip() {
+    let cases: &[(&str, Vec<AttemptView>, Option<ClientTurnState>)] = &[
+        ("empty", vec![], None),
+        (
+            "single streaming attempt",
+            vec![attempt(
+                "req-1",
+                None,
+                "processing",
+                resp(ResponseStatus::Streaming),
+            )],
+            Some(ClientTurnState::Streaming),
+        ),
+        (
+            "two-attempt chain uses the tip",
+            vec![
+                attempt("req-1", None, "failed", None),
+                attempt("req-2", Some("req-1"), "pending", None),
+            ],
+            Some(ClientTurnState::WaitingForClaim),
+        ),
+        (
+            "three-attempt chain uses the tip",
+            vec![
+                attempt("req-1", None, "failed", None),
+                attempt("req-2", Some("req-1"), "failed", None),
+                attempt(
+                    "req-3",
+                    Some("req-2"),
+                    "processing",
+                    resp(ResponseStatus::Streaming),
+                ),
+            ],
+            Some(ClientTurnState::Streaming),
         ),
     ];
-    assert_eq!(derive_turn(&chain), Some(ClientTurnState::Streaming));
+    for (label, chain, expected) in cases {
+        assert_eq!(derive_turn(chain), *expected, "derive_turn case: {label}");
+    }
 }
 
 #[test]

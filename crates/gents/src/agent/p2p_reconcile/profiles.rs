@@ -231,19 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn fleet_profiles_replicate_diagnostics_and_authoritative_readiness() {
-        for profile in [
-            P2pCollectionProfile::Runtime,
-            P2pCollectionProfile::Agent,
-            P2pCollectionProfile::Discovery,
-        ] {
-            assert!(profile.collection_names().contains(&"AgentRuntime"));
-            assert!(profile
-                .collection_names()
-                .contains(&"AgentBehaviorReadiness"));
-        }
-    }
-    #[test]
     fn profiles_select_canonical_documents_without_implicit_client_credentials() {
         for profile in [
             P2pCollectionProfile::Runtime,

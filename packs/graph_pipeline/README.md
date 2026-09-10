@@ -9,7 +9,7 @@ compiler examples below describe how to use the fixtures programmatically.
 This is an evaluation pack for a small adapter over the existing Gents
 automation runtime. It does not introduce another graph engine.
 
-`compile_graph` accepts topology over operator-approved capability revisions.
+`compile_graph` accepts topology over configured capability revisions.
 Each capability points at an existing Task document and declares its typed
 ports. The model cannot author Task prompts, behaviors, tools, models, or
 physical collections. The tool performs pure whole-graph validation first and,
@@ -17,8 +17,8 @@ only on success, writes the entry and edge EventTriggers in one transaction.
 
 Execution remains separate. After normal runtime reconciliation, an existing
 bounded write tool creates an entry document and the ordinary trigger/task
-engine runs the graph. Configure `compile_graph` in
-`approval_required_tools` when publication requires human approval.
+engine runs the graph. Selecting `compile_graph` in a behavior's tools grants
+that behavior the publication capability.
 
 ```rust,ignore
 let tool = CompileGraphTool::new(

@@ -424,7 +424,7 @@ def stateMachineCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "state_machine"
       "Process"
-      "runtime_status::tests::rust_process_state_transitions_match_lean_contract")
+      "runtime_status::tests::generated_process_transition_cases_match_runtime_status_policy")
       "process-lifecycle" [Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "state_machine"
@@ -917,11 +917,6 @@ def caseCoverage : List CoverageEntry :=
       "workspace::tests::generated_workspace_path_capability_cases_drive_real_git_executor")
       "isolated-workspaces" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "workspace_capability_migration_cases"
-      "WorkspaceCapabilityMigrationCases"
-      "gents_migration::workspace_path_capability::generated_workspace_capability_migrations_drive_real_lens_and_current_rows")
-      "isolated-workspaces" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "invalid_tool_progress_cases"
       "InvalidToolProgressCases"
       "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop")
@@ -1220,7 +1215,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblyBudgetCases"
-      "agent::daemon::request::budget_contract_tests::generated_budget_cases_drive_dynamic_output_compaction_trigger")
+      "agent::loop_stream::tests::generated_budget_cases_drive_dynamic_output_compaction_trigger")
       "prompt-assembly" [Surface.agentFacing]
   , tagged (consumerCoverage
       "prompt_assembly_cases"

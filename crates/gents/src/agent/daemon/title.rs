@@ -312,26 +312,29 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_generated_title_normalizes_output() {
-        assert_eq!(
-            sanitize_generated_title("\"Agent Desktop Debugging Redux\"", "fallback text"),
-            "agent-desktop-debugging-redux"
-        );
-    }
-
-    #[test]
-    fn sanitize_generated_title_falls_back_when_empty() {
-        assert_eq!(
-            sanitize_generated_title("", "please inspect p2p request model"),
-            "inspect-p2p-request"
-        );
-    }
-
-    #[test]
-    fn sanitize_generated_title_filters_contraction_noise() {
-        assert_eq!(
-            sanitize_generated_title("", "document-based request model that's used by this agent"),
-            "document-based-request"
-        );
+    fn sanitize_generated_title_cases() {
+        for (raw_title, fallback_source, expected) in [
+            (
+                "\"Agent Desktop Debugging Redux\"",
+                "fallback text",
+                "agent-desktop-debugging-redux",
+            ),
+            (
+                "",
+                "please inspect p2p request model",
+                "inspect-p2p-request",
+            ),
+            (
+                "",
+                "document-based request model that's used by this agent",
+                "document-based-request",
+            ),
+        ] {
+            assert_eq!(
+                sanitize_generated_title(raw_title, fallback_source),
+                expected,
+                "unexpected title for raw {raw_title:?} with fallback {fallback_source:?}"
+            );
+        }
     }
 }

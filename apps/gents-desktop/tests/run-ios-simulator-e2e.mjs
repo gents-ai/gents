@@ -395,7 +395,7 @@ const serverAddress = enrollmentServerAddress();
         process.env.GENTS_E2E_PROMPT?.trim() || defaultPrompt,
       SIMCTL_CHILD_GENTS_E2E_EXPECTED_RESPONSE:
         process.env.GENTS_E2E_EXPECTED_RESPONSE?.trim() || defaultExpected,
-      SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_CONVERSATIONS:
+      SIMCTL_CHILD_GENTS_E2E_EXPECT_EMPTY_SESSIONS:
         index === 1 && !keepData ? "1" : "0",
       SIMCTL_CHILD_GENTS_E2E_CORRELATION_ID: `ios-${gitRevision().slice(0, 12)}-${index}`,
       SIMCTL_CHILD_GENTS_MOBILE_PERFORMANCE: measurePerformance ? "1" : "0",

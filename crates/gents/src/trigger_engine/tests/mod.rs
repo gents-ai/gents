@@ -125,11 +125,6 @@ struct MaterializeGate {
 /// Lean contract tests can opt into adding successful materializations as new
 /// non-terminal requests, which mirrors production persistence without
 /// changing the default spy behavior expected by local unit tests.
-///
-/// `materialize_delay` optionally pauses inside `materialize` before recording
-/// the call. Used by the `LatestOnly` serialization tests to widen the window
-/// during which the per-trigger lock is held so parallel fires can be observed
-/// to queue.
 struct SpyMaterializer {
     materialize_calls: Arc<Mutex<Vec<MaterializeCall>>>,
     materialize_goal_objectives: Arc<Mutex<Vec<Option<String>>>>,
@@ -143,7 +138,6 @@ struct SpyMaterializer {
     supersede_dids: Arc<Mutex<Vec<String>>>,
     supersede_calls: Arc<Mutex<Vec<SupersedeCall>>>,
     superseded_request_ids: Arc<Mutex<Vec<String>>>,
-    materialize_delay: Mutex<Option<Duration>>,
     materialize_gate: Mutex<Option<MaterializeGate>>,
     group_markers: Arc<Mutex<HashSet<(String, String, String)>>>,
     persist_group_markers_for_did: Mutex<Option<String>>,
@@ -163,7 +157,6 @@ impl SpyMaterializer {
             supersede_dids: Arc::new(Mutex::new(Vec::new())),
             supersede_calls: Arc::new(Mutex::new(Vec::new())),
             superseded_request_ids: Arc::new(Mutex::new(Vec::new())),
-            materialize_delay: Mutex::new(None),
             materialize_gate: Mutex::new(None),
             group_markers: Arc::new(Mutex::new(HashSet::new())),
             persist_group_markers_for_did: Mutex::new(None),
@@ -241,13 +234,6 @@ impl SpyMaterializer {
             .store(true, Ordering::SeqCst);
     }
 
-    /// Install a delay that `materialize` will sleep for before recording its
-    /// call. Used to widen the critical section so parallel `LatestOnly`
-    /// dispatches can be observed to serialize on the per-trigger lock.
-    fn set_materialize_delay(&self, delay: Duration) {
-        *self.materialize_delay.lock().unwrap() = Some(delay);
-    }
-
     /// Block materialization until `release` is notified, sending one message
     /// on `entered_tx` each time a materialize call reaches the gate.
     fn set_materialize_gate(&self, entered_tx: mpsc::UnboundedSender<()>, release: Arc<Notify>) {
@@ -313,7 +299,6 @@ impl MaterializerHandle for SpyMaterializer {
                 .request_id
             })
             .unwrap_or_else(|| format!("req-{id}"));
-        let delay = *self.materialize_delay.lock().unwrap();
         let gate = self.materialize_gate.lock().unwrap().clone();
         let marker_did = self.persist_group_markers_for_did.lock().unwrap().clone();
         let group_markers = self.group_markers.clone();
@@ -323,9 +308,6 @@ impl MaterializerHandle for SpyMaterializer {
             if let Some(gate) = gate {
                 let _ = gate.entered_tx.send(());
                 gate.release.notified().await;
-            }
-            if let Some(d) = delay {
-                tokio::time::sleep(d).await;
             }
             calls.lock().unwrap().push(entry);
             materialized_request_ids

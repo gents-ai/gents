@@ -1198,7 +1198,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signing_rejects_same_owner_duplicate_documents() {
+    async fn signing_identity_is_unique_per_owner() {
         for collection in ["ChainKeyBinding", "EthTool"] {
             let (node, binding, resolved, store) = signing_fixture().await;
             let mut value = if collection == "ChainKeyBinding" {
@@ -1206,7 +1206,8 @@ mod tests {
             } else {
                 json!({"tool_id":"payments","agent_did":binding.agent_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
             };
-            // Different tag forces a distinct physical doc with the same logical key.
+            // Tags do not create a second logical identity. The schema owns this
+            // invariant, so an impossible duplicate never reaches signing.
             value["tags"] = json!(["duplicate"]);
             let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
             let response = node
@@ -1214,12 +1215,13 @@ mod tests {
                     "mutation {{ create_{collection}(input: {input}) {{_docID}} }}"
                 ))
                 .await;
-            assert!(!response.has_errors(), "{:?}", response.errors);
-            assert!(load_signing_key_with_store(&node, &resolved, &store)
+            assert!(
+                response.has_errors(),
+                "{collection}: duplicate identity was accepted"
+            );
+            load_signing_key_with_store(&node, &resolved, &store)
                 .await
-                .unwrap_err()
-                .to_string()
-                .contains("multiple live"));
+                .expect("the original unique signing identity remains usable");
         }
     }
 

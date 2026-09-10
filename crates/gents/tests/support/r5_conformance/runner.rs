@@ -367,6 +367,11 @@ async fn write_pairing(
         .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
         .collect::<Vec<_>>()
         .join(", ");
+    let collections = if collections.is_empty() {
+        "null".to_string()
+    } else {
+        format!("[{collections}]")
+    };
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -375,15 +380,15 @@ async fn write_pairing(
                 add: {{
                     peer_id: "{peer_id}",
                     agent_did: "{peer_did}",
-                    collections: [{collections}],
-                    replicator_addresses: [],
+                    collections: {collections},
+                    replicator_addresses: null,
                     created_at: "{now}",
                     updated_at: "{now}"
                 }},
                 update: {{
                     agent_did: "{peer_did}",
-                    collections: [{collections}],
-                    replicator_addresses: [],
+                    collections: {collections},
+                    replicator_addresses: null,
                     updated_at: "{now}"
                 }}
             ) {{ _docID }}
@@ -601,9 +606,11 @@ async fn export_doc(
             "tool_call_key request_id session_id agent_did message_sequence tool_name tool_call_id args result status lifecycle_state started_at deadline_at completed_at tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network cancel_cause latency_ms await_mode cancel_policy child_request_id unclaimed_deadline_at cancel_cascade_intent_at cancel_pending_remote_ack stuck_since"
         }
         "AgentResponse" => {
-            "response_key request_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
+            "response_key request_id request_doc_id agent_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at"
         }
-        "AgentMessage" => "message_key session_id sequence role content timestamp",
+        "AgentMessage" => {
+            "message_key request_id request_doc_id agent_did session_id sequence role content timestamp"
+        }
         _ => unreachable!(),
     };
     let query = format!(
@@ -745,42 +752,19 @@ async fn import_response(node: &HarnessNode, row: &serde_json::Value) -> Result<
 }
 
 async fn import_message(node: &HarnessNode, row: &serde_json::Value) -> Result<()> {
-    let message_key = str_field(row, "message_key")?;
-    let session_id = str_field(row, "session_id")?;
-    let sequence = row.get("sequence").and_then(|v| v.as_i64()).unwrap_or(1);
-    let role = opt_str_field(row, "role").unwrap_or("assistant");
-    let content = opt_str_field(row, "content").unwrap_or("");
-    let timestamp = opt_str_field(row, "timestamp")
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{}" }} }},
-                add: {{
-                    message_key: "{}",
-                    session_id: "{}",
-                    sequence: {sequence},
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }},
-                update: {{
-                    role: "{}",
-                    content: "{}",
-                    timestamp: "{timestamp}"
-                }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(message_key),
-        escape_graphql_string(message_key),
-        escape_graphql_string(session_id),
-        escape_graphql_string(role),
-        escape_graphql_string(content),
-        escape_graphql_string(role),
-        escape_graphql_string(content),
+    let child = load_request(node, str_field(row, "request_id")?).await?;
+    anyhow::ensure!(
+        child.agent_did == str_field(row, "agent_did")?
+            && child.session_id == str_field(row, "session_id")?,
+        "replicated AgentMessage scope differs from its child request"
     );
-    exec(node, &mutation, "import AgentMessage").await
+    anyhow::ensure!(
+        row.get("sequence").and_then(|value| value.as_i64()) == Some(1)
+            && opt_str_field(row, "role") == Some("assistant"),
+        "R5 fixture only imports the materialized final assistant message"
+    );
+    let content = opt_str_field(row, "content").unwrap_or("");
+    create_agent_message(node, &child, content).await
 }
 
 /// Install the R5 behavior chain in one canonical configuration transaction.
@@ -994,7 +978,7 @@ async fn terminalize_child_on_b(
     exec(node, &mutation, "terminalize child").await?;
     if let Some(final_response) = final_response {
         let child = load_request(node, request_id).await?;
-        create_agent_message(node, &child.session_id, final_response).await?;
+        create_agent_message(node, &child, final_response).await?;
         create_agent_response(
             node,
             request_id,
@@ -1059,9 +1043,17 @@ async fn parent_request_for_tool(node: &HarnessNode, tool_call_id: &str) -> Resu
 
 async fn run_background_completion_on_a(node: &HarnessNode) -> Result<()> {
     for request_id in terminal_child_request_ids(node).await? {
-        let _ =
+        let outcome =
             project_background_subagent_completion(node.db.node.clone(), &request_id, node.did())
                 .await?;
+        anyhow::ensure!(
+            matches!(
+                outcome,
+                gents::background_completion::BackgroundCompletionOutcome::Projected { .. }
+                    | gents::background_completion::BackgroundCompletionOutcome::AlreadyProjected
+            ),
+            "background projection for child {request_id} did not converge: {outcome:?}"
+        );
     }
     Ok(())
 }
@@ -1409,7 +1401,11 @@ async fn set_child_interrupt(node: &HarnessNode, request_id: &str, when: &str) -
     exec(node, &mutation, "set child interrupt").await
 }
 
-async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &str) -> Result<()> {
+async fn create_agent_message(
+    node: &HarnessNode,
+    child: &HarnessRequest,
+    content: &str,
+) -> Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1417,6 +1413,9 @@ async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &st
                 filter: {{ message_key: {{ _eq: "{}:1" }} }},
                 add: {{
                     message_key: "{}:1",
+                    request_id: "{}",
+                    request_doc_id: "{}",
+                    agent_did: "{}",
                     session_id: "{}",
                     sequence: 1,
                     role: "assistant",
@@ -1426,9 +1425,12 @@ async fn create_agent_message(node: &HarnessNode, session_id: &str, content: &st
                 update: {{ content: "{}", timestamp: "{now}" }}
             ) {{ _docID }}
         }}"#,
-        escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
-        escape_graphql_string(session_id),
+        escape_graphql_string(&child.session_id),
+        escape_graphql_string(&child.session_id),
+        escape_graphql_string(&child.request_id),
+        escape_graphql_string(&child.doc_id),
+        escape_graphql_string(&child.agent_did),
+        escape_graphql_string(&child.session_id),
         escape_graphql_string(content),
         escape_graphql_string(content)
     );
@@ -1443,6 +1445,7 @@ async fn create_agent_response(
     session_id: &str,
     content: &str,
 ) -> Result<()> {
+    let request_doc_id = load_request(node, request_id).await?.doc_id;
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
         r#"mutation {{
@@ -1451,6 +1454,7 @@ async fn create_agent_response(
                 add: {{
                     response_key: "{}",
                     request_id: "{}",
+                    request_doc_id: "{}",
                     agent_did: "{}",
                     behavior_id: "{}",
                     session_id: "{}",
@@ -1471,6 +1475,7 @@ async fn create_agent_response(
         escape_graphql_string(request_id),
         escape_graphql_string(request_id),
         escape_graphql_string(request_id),
+        escape_graphql_string(&request_doc_id),
         escape_graphql_string(agent_did),
         escape_graphql_string(behavior_id),
         escape_graphql_string(session_id),

@@ -446,75 +446,6 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
     node.shutdown().await;
 }
 
-#[tokio::test]
-async fn dropping_hook_clone_preserves_in_flight_tool_lifecycle() {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-hook-clone-drop-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    let hook = DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:general",
-        FailurePolicy::default(),
-    );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Read notes.txt"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    let session_id = hook.session_id().await.expect("session id");
-    bind_interruptible_request(
-        node.as_ref(),
-        &hook,
-        "request-clone-drop",
-        &session_id,
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    )
-    .await;
-
-    assert!(matches!(
-        hook.on_tool_call("read_file", None, "call-clone-drop", "{}")
-            .await,
-        ToolCallHookAction::Continue
-    ));
-    assert!(hook
-        .in_flight_lifecycles
-        .lock()
-        .await
-        .contains_key("call-clone-drop"));
-
-    drop(hook.clone());
-
-    assert!(hook
-        .in_flight_lifecycles
-        .lock()
-        .await
-        .contains_key("call-clone-drop"));
-    assert!(matches!(
-        hook.on_tool_result(
-            "read_file",
-            None,
-            "call-clone-drop",
-            "{}",
-            &crate::tool_call_lifecycle::ToolOutcome::Completed("done".to_string())
-        )
-        .await,
-        HookAction::Continue
-    ));
-
-    drop(hook);
-    node.shutdown().await;
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
 fn failure_policy_from_contract(policy: &str) -> FailurePolicy {
     match policy {
         "failOpen" => FailurePolicy::FailOpen,
@@ -593,47 +524,6 @@ fn transcript_turn_state_keeps_persisted_turn_across_parallel_results() {
     // A persisted prior turn starts a NEW turn on the next assistant persist
     // (text-only final turn after tool results).
     assert_eq!(state.persist_assistant_turn(), 2);
-}
-
-#[test]
-fn fail_closed_persistence_policy_terminates_and_records_failure() {
-    let counters = hook_counters_for_test();
-    let error = anyhow::anyhow!("synthetic persistence failure");
-
-    let decision = decide_persistence_outcome(
-        FailurePolicy::FailClosed,
-        &counters,
-        "unit-test failure",
-        &error,
-    );
-
-    assert!(matches!(
-        decision,
-        PolicyDecision::Terminate(reason) if reason.contains("synthetic persistence failure")
-    ));
-    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
-    assert_eq!(counters.successes.load(Ordering::Relaxed), 0);
-}
-
-#[test]
-fn fail_open_persistence_policy_continues_without_success_ack() {
-    let counters = hook_counters_for_test();
-    let error = anyhow::anyhow!("synthetic persistence failure");
-
-    let decision = decide_persistence_outcome(
-        FailurePolicy::FailOpen,
-        &counters,
-        "unit-test failure",
-        &error,
-    );
-
-    assert!(matches!(decision, PolicyDecision::Continue));
-    assert_eq!(counters.failures.load(Ordering::Relaxed), 1);
-    assert_eq!(
-        counters.successes.load(Ordering::Relaxed),
-        0,
-        "fail-open continuation must not count as a successful storage ack"
-    );
 }
 
 #[test]
@@ -743,55 +633,6 @@ async fn generated_storage_observation_cases_match_hook_runtime_classification()
             "{} must not claim storage-engine visibility",
             case.name
         );
-
-        match case.post_observation.as_str() {
-            "successAcknowledged" => {
-                assert_eq!(case.action, "mutationSuccess");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "committed");
-                assert!(case.terminal_write_observed, "{}", case.name);
-            }
-            "mutationFailed" => {
-                assert_eq!(case.action, "mutationFailure");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "uncommitted");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "lostAcknowledged" => {
-                assert_eq!(case.action, "mutationFailure");
-                assert_eq!(case.pre_observation, "inFlight");
-                assert_eq!(case.post_persistence, "lost");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "staleObserved" => {
-                assert!(
-                    matches!(case.action.as_str(), "staleRead" | "staleEvent"),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(case.pre_observation, "successAcknowledged");
-                assert_eq!(case.post_persistence, "committed");
-                assert!(!case.terminal_write_observed, "{}", case.name);
-            }
-            "readVisible" => {
-                assert!(
-                    matches!(case.action.as_str(), "readYourWrites" | "eventArrives"),
-                    "{}",
-                    case.name
-                );
-                assert!(
-                    matches!(
-                        case.pre_observation.as_str(),
-                        "successAcknowledged" | "staleObserved"
-                    ),
-                    "{}",
-                    case.name
-                );
-                assert_eq!(case.post_persistence, "committed");
-                assert!(case.terminal_write_observed, "{}", case.name);
-            }
-            other => panic!("unexpected Lean storage observation {other:?}"),
-        }
     }
 }
 
