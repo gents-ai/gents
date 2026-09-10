@@ -413,6 +413,47 @@ fn a_ruby_source_plugin_is_refused_at_admission_not_silently_run() {
     assert!(message.contains("wall-clock"), "{message}");
 }
 
+/// A default budget is raised to what the artifact needs to start at all.
+///
+/// This is the other half of admitting Python. Admission says the bounds
+/// are enforceable; this says the default ones are survivable. Handing a
+/// Pyodide-backed plugin `PluginBudget::default()` fails twice over before
+/// its first line: CPython's linear memory will not instantiate under 64
+/// MiB, and booting it costs orders of magnitude more than 100 million
+/// instructions. Both were observed against a real compiled bundle, in
+/// that order, as a trap and then as an exhausted fuel budget.
+#[test]
+fn a_default_budget_is_raised_to_what_the_artifact_needs_to_start() {
+    let wasi = source_only_afb("rs_plugin", "rust", "source/main.rs", b"fn main() {}");
+    let wasi = afterburner_afb::Afb::from_bytes(&wasi).expect("readable .afb");
+    assert_eq!(
+        PluginBudget::for_artifact(&wasi).memory_bytes,
+        PluginBudget::default().memory_bytes,
+        "an ordinary WASI command needs no floor, so its budget is the default"
+    );
+
+    let python = source_only_afb("py_plugin", "python", "source/main.py", b"print(1)");
+    let python = afterburner_afb::Afb::from_bytes(&python).expect("readable .afb");
+    let budget = PluginBudget::for_artifact(&python);
+    let floor = afterburner::afb_run::startup_floor(&python).expect("python declares a floor");
+    assert!(
+        budget.memory_bytes >= floor.memory_bytes,
+        "a budget that cannot instantiate the runtime bounds nothing: {} < {}",
+        budget.memory_bytes,
+        floor.memory_bytes
+    );
+    assert!(
+        budget.fuel > floor.fuel,
+        "the plugin needs fuel of its own after the runtime has booted: {} <= {}",
+        budget.fuel,
+        floor.fuel
+    );
+    assert!(
+        budget.wall_clock > PluginBudget::default().wall_clock,
+        "a wall clock that cannot cover the boot reports Timeout on every call"
+    );
+}
+
 /// The same gate, the other way round: Python is admitted, because its
 /// dispatch path really does enforce every axis a call asks for.
 ///

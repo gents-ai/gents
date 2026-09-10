@@ -103,6 +103,49 @@ pub struct PluginBudget {
     pub wall_clock: std::time::Duration,
 }
 
+impl PluginBudget {
+    /// [`Self::default`], raised where it could not host `afb` at all.
+    ///
+    /// A bound below what a guest spends before its own code runs is not a
+    /// bound: the run fails during startup, the plugin never executes a
+    /// line, and the ceiling never bounds the thing it was meant to bound.
+    /// A Pyodide-backed plugin carries CPython, which needs more memory to
+    /// instantiate than [`Self::default`] allows and spends orders of
+    /// magnitude more fuel booting than it allows for a whole call, so
+    /// admitting one and then handing it the default budget would admit a
+    /// language that can never answer. The floor comes from
+    /// [`afterburner::afb_run::startup_floor`], which is where the dispatch
+    /// shape is known, rather than from a copy of that knowledge here.
+    ///
+    /// The wall clock is raised with it, for the same reason and no other:
+    /// booting an interpreter is work the caller waits through before the
+    /// plugin's own code starts, and a budget that cannot cover the boot
+    /// reports `Timeout` on every call.
+    pub fn for_artifact(afb: &afterburner_afb::Afb) -> Self {
+        let default = Self::default();
+        match afterburner::afb_run::startup_floor(afb) {
+            Some(floor) => Self {
+                memory_bytes: default.memory_bytes.max(floor.memory_bytes),
+                // The startup cost plus the default's own allowance, so a
+                // plugin still gets its own budget to work in after the
+                // runtime has finished booting.
+                fuel: floor.fuel.saturating_add(default.fuel),
+                wall_clock: default.wall_clock.max(INTERPRETER_BOOT_ALLOWANCE),
+                ..default
+            },
+            None => default,
+        }
+    }
+}
+
+/// What a plugin that has to boot an interpreter before its own code runs
+/// is allowed for the whole call, when the caller does not say otherwise.
+///
+/// Booting CPython is a second or two warm and more cold, all of it inside
+/// the wall clock the caller asked for, so [`PluginBudget::default`]'s five
+/// seconds would time out before the plugin's first line.
+const INTERPRETER_BOOT_ALLOWANCE: std::time::Duration = std::time::Duration::from_secs(60);
+
 impl Default for PluginBudget {
     /// `fuel` mirrors `afterburner_wasi::embedder_vm`'s own default
     /// instruction budget (100 million, "generous enough for unit

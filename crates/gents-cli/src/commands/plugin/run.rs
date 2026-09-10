@@ -88,8 +88,12 @@ fn run_plugin(
     let coordinate = format!("{}/{}", record.namespace, record.name);
     let runner = PluginRunner::compile(bytes, &plugin)
         .with_context(|| format!("admitting plugin {coordinate}"))?;
+    // The default budget for *this* artifact, not the generic one: a
+    // plugin that has to boot an interpreter needs a memory ceiling its
+    // runtime can instantiate under and a wall clock that covers the boot,
+    // or it is admitted and then fails every call.
     let outcome = runner
-        .call(input, &PluginBudget::default())
+        .call(input, &PluginBudget::for_artifact(&afb))
         .with_context(|| format!("calling plugin {coordinate}"))?;
 
     match outcome.verdict {
