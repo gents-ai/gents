@@ -99,6 +99,57 @@ pub enum HydrationVerdict {
     Reject(&'static str),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HydrationDeliveryResult {
+    Delivered,
+    Exhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HydrationTerminalWriteResult {
+    Committed,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HydrationApplyOutcome {
+    Served(BTreeSet<HydrationDocument>),
+    Rejected(&'static str),
+    PendingAfterTerminalWriteFailure(BTreeSet<HydrationDocument>),
+}
+
+pub const HYDRATION_DELIVERY_EXHAUSTED_DETAIL: &str =
+    "hydration delivery exhausted its bounded retry budget";
+
+/// Project admission, bounded delivery, and terminal persistence as three
+/// separate effects. A failed terminal write leaves the durable request
+/// pending; already delivered documents remain a set-valued, replay-safe side
+/// effect for the next sweep.
+pub fn apply_hydration_delivery(
+    verdict: HydrationVerdict,
+    delivery: HydrationDeliveryResult,
+    terminal_write: HydrationTerminalWriteResult,
+) -> HydrationApplyOutcome {
+    let desired = match (verdict, delivery) {
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Delivered) => {
+            HydrationApplyOutcome::Served(documents)
+        }
+        (HydrationVerdict::Admit(_), HydrationDeliveryResult::Exhausted) => {
+            HydrationApplyOutcome::Rejected(HYDRATION_DELIVERY_EXHAUSTED_DETAIL)
+        }
+        (HydrationVerdict::Reject(detail), _) => HydrationApplyOutcome::Rejected(detail),
+    };
+    if terminal_write == HydrationTerminalWriteResult::Committed {
+        return desired;
+    }
+    let delivered = match desired {
+        HydrationApplyOutcome::Served(documents) => documents,
+        HydrationApplyOutcome::Rejected(_) => BTreeSet::new(),
+        HydrationApplyOutcome::PendingAfterTerminalWriteFailure(_) => unreachable!(),
+    };
+    HydrationApplyOutcome::PendingAfterTerminalWriteFailure(delivered)
+}
+
 pub fn decide_hydration(
     request: &HydrationRequest,
     catalog: &HydrationCatalog,
