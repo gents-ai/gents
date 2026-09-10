@@ -252,6 +252,26 @@ pub(crate) enum PackCommand {
     Search(PackSearchArgs),
     /// Publish a built `.afb` to the pack registry.
     Publish(PackPublishArgs),
+    /// Download a pack's `.afb` from the registry without installing it.
+    Fetch(PackFetchArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackFetchArgs {
+    #[arg(help = "Pack to download, as `name` or `namespace/name`")]
+    pub(crate) package: String,
+    #[arg(long, help = "Version to download; defaults to the latest published")]
+    pub(crate) version: Option<String>,
+    #[arg(
+        long,
+        help = "Where to write the .afb; defaults to <name>-<version>.afb here"
+    )]
+    pub(crate) out: Option<std::path::PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]

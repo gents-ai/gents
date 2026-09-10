@@ -42,6 +42,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Build(args) => build::dispatch(args),
         PackCommand::Search(args) => registry::search(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
+        PackCommand::Fetch(args) => registry::fetch(args).await,
     }
 }
 

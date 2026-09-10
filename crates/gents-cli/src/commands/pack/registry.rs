@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 use gents::pack_archive::PackAfb;
 use serde_json::Value;
 
-use crate::cli::args::{PackPublishArgs, PackSearchArgs};
+use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
 
 /// The registry every pack this project publishes lives on, and the
 /// fallback used when neither `--registry` nor `GENTS_REGISTRY` names one.
@@ -62,6 +62,23 @@ impl RegistryClient {
         }
     }
 
+    /// The command to run by hand when this client could not reach the
+    /// registry at all.
+    ///
+    /// A request can fail for reasons that have nothing to do with the
+    /// registry or the pack: a proxy, a certificate store, an air gap, a
+    /// machine that is simply offline. Naming the exact equivalent turns
+    /// "it did not work" into something the person reading it can run,
+    /// and lets them hand the bytes back to `gents pack install <file>`.
+    fn curl_equivalent(url: &str, authenticated: bool) -> String {
+        let auth = if authenticated {
+            " -H \"Authorization: Bearer $GENTS_REGISTRY_TOKEN\""
+        } else {
+            ""
+        };
+        format!("curl -fsSL{auth} {url}")
+    }
+
     fn api(&self, path: &str) -> String {
         format!("{}/api/v1{path}", self.base_url)
     }
@@ -83,12 +100,13 @@ impl RegistryClient {
 
     async fn get_json(&self, path: &str) -> Result<Value> {
         let url = self.api(path);
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("requesting {url}"))?;
+        let response = self.http.get(&url).send().await.with_context(|| {
+            format!(
+                "requesting {url}; if this machine cannot reach the registry, the same \
+                     request by hand is: {}",
+                Self::curl_equivalent(&url, false)
+            )
+        })?;
         Self::json_or_error(response, &url).await
     }
 
@@ -115,7 +133,13 @@ impl RegistryClient {
             .query(&[("q", query)])
             .send()
             .await
-            .with_context(|| format!("requesting {url}"))?;
+            .with_context(|| {
+                format!(
+                    "requesting {url}; if this machine cannot reach the registry, the same \
+                     request by hand is: {}",
+                    Self::curl_equivalent(&url, false)
+                )
+            })?;
         Self::json_or_error(response, &url).await
     }
 
@@ -126,12 +150,13 @@ impl RegistryClient {
         version: &str,
     ) -> Result<Vec<u8>> {
         let url = self.api(&format!("/packages/{namespace}/{name}/{version}/download"));
-        let response = self
-            .http
-            .get(&url)
-            .send()
-            .await
-            .with_context(|| format!("downloading {url}"))?;
+        let response = self.http.get(&url).send().await.with_context(|| {
+            format!(
+                "downloading {url}; if this machine cannot reach the registry, fetch it by \
+                     hand with `{} -o {name}-{version}.afb` and install that file",
+                Self::curl_equivalent(&url, false)
+            )
+        })?;
         let status = response.status();
         anyhow::ensure!(
             status.is_success(),
@@ -282,6 +307,68 @@ fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
         Err(error) => Err(error.error)
             .with_context(|| format!("saving the downloaded pack to {}", dest.display())),
     }
+}
+
+/// `gents pack fetch`: the artifact itself, verified, without installing
+/// it.
+///
+/// Downloading a pack is the client's job, not something to hand off to
+/// another tool. Publishing, installing and searching already go through
+/// here; this closes the last case, so getting the bytes for an air-gapped
+/// machine, a mirror, or a look inside never needs anything but `gents`.
+///
+/// The digest is checked against what the registry advertised before the
+/// file is written, so what lands on disk is the pack that was asked for
+/// or nothing at all.
+pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
+    let (namespace, name) = crate::commands::pack::split_namespace(&args.package);
+    let base_url = resolve_registry_url(args.registry.as_deref());
+    let client = RegistryClient::new(base_url.clone());
+
+    let version = match args.version {
+        Some(version) => version,
+        None => {
+            let package = client
+                .package(namespace, name)
+                .await
+                .with_context(|| format!("looking up {namespace}/{name} on {base_url}"))?;
+            package
+                .get("latest")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("{namespace}/{name} has no published version yet"))?
+                .to_owned()
+        }
+    };
+
+    let version_info = client.version(namespace, name, &version).await?;
+    let advertised = version_info
+        .get("digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "the registry did not advertise a digest for {namespace}/{name}@{version}"
+            )
+        })?
+        .to_owned();
+
+    let coordinate = format!("{namespace}/{name}@{version}");
+    let bytes = client.download(namespace, name, &version).await?;
+    verify_digest(&bytes, &advertised, &coordinate)?;
+
+    let out = args
+        .out
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{name}-{version}.afb")));
+    std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
+
+    crate::print_json(&serde_json::json!({
+        "pack": name,
+        "namespace": namespace,
+        "version": version,
+        "digest": advertised,
+        "size_bytes": bytes.len(),
+        "out": out.display().to_string(),
+    }))
 }
 
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
