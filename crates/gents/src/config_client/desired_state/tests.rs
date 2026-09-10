@@ -161,7 +161,7 @@ async fn replacement_resets_defaults_and_preserves_backend_observations() -> Res
         ],
     )
     .await?;
-    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:[{agent_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}){_docID} }"#).await?;
+    access.write("test.desired.observe", r#"mutation { update_InferenceBackend(filter:{agent_did:{_eq:"did:key:owner"},backend_id:{_eq:"local"}},input:{probe_status:"healthy",catalogs:{entries:[{agent_did:null,observed_at:"2026-01-01T00:00:00Z",models:null}]}}){_docID} }"#).await?;
     let before = node
         .execute("{InferenceBackend{_docID agent_did catalogs probe_status}}")
         .await;

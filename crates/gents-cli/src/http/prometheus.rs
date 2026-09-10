@@ -69,6 +69,7 @@ pub(crate) struct MetricsBackendRow {
 struct InferenceMetricsQueryData {
     principals: Vec<InferencePrincipalRow>,
     behaviors: Vec<InferenceBehaviorRow>,
+    profiles: Vec<InferenceProfileRow>,
     calls: Vec<InferenceCallMetricRow>,
     window_seconds: i64,
 }
@@ -79,6 +80,8 @@ struct InferenceMetricsPageData {
     principals: Vec<InferencePrincipalRow>,
     #[serde(rename = "AgentBehavior", default)]
     behaviors: Vec<InferenceBehaviorRow>,
+    #[serde(rename = "InferenceProfile", default)]
+    profiles: Vec<InferenceProfileRow>,
     #[serde(rename = "InferenceCall", default)]
     calls: Vec<InferenceCallMetricRow>,
 }
@@ -99,6 +102,16 @@ struct InferenceBehaviorRow {
     agent_did: String,
     #[serde(default)]
     display_name: String,
+    #[serde(default)]
+    inference_profile_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InferenceProfileRow {
+    #[serde(default)]
+    profile_id: String,
+    #[serde(default)]
+    agent_did: String,
     #[serde(default)]
     backend_id: String,
     #[serde(default)]
@@ -937,6 +950,7 @@ async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMet
     let mut result = InferenceMetricsQueryData {
         principals: Vec::new(),
         behaviors: Vec::new(),
+        profiles: Vec::new(),
         calls: Vec::new(),
         window_seconds: INFERENCE_METRICS_WINDOW_SECS,
     };
@@ -952,6 +966,7 @@ async fn load_inference_metrics_query_data(graphql: &str) -> Result<InferenceMet
         if offset == 0 {
             result.principals = page.principals;
             result.behaviors = page.behaviors;
+            result.profiles = page.profiles;
         }
 
         let page_len = page.calls.len();
@@ -991,6 +1006,11 @@ fn inference_metrics_query(limit: usize, offset: usize, include_metadata: bool) 
             behavior_id
             agent_did
             display_name
+            inference_profile_id
+        }
+        InferenceProfile {
+            profile_id
+            agent_did
             backend_id
             model_name
         }
@@ -1126,25 +1146,29 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             Some((agent_did, clean_metric_label(&principal.display_name)))
         })
         .collect::<BTreeMap<_, _>>();
-    let behaviors = data
-        .behaviors
-        .iter()
-        .filter_map(|behavior| {
-            let behavior_id = clean_metric_label(&behavior.behavior_id)?;
-            Some((behavior_id, behavior))
-        })
-        .collect::<BTreeMap<_, _>>();
-
     let mut families = InferenceMetricFamilies::default();
     for call in &data.calls {
         if !is_terminal_inference_status(&call.call_state) {
             continue;
         }
 
-        let behavior = clean_metric_label(&call.behavior_id)
-            .as_deref()
-            .and_then(|behavior_id| behaviors.get(behavior_id).copied());
-        let agent_did = clean_metric_label(&call.agent_did)
+        let behavior_id = clean_metric_label(&call.behavior_id);
+        let call_agent_did = clean_metric_label(&call.agent_did);
+        let behavior = behavior_id.as_deref().and_then(|behavior_id| {
+            data.behaviors.iter().find(|behavior| {
+                clean_metric_label(&behavior.behavior_id).as_deref() == Some(behavior_id)
+                    && call_agent_did
+                        .as_deref()
+                        .is_none_or(|agent_did| behavior.agent_did == agent_did)
+            })
+        });
+        let profile = behavior.and_then(|behavior| {
+            data.profiles.iter().find(|profile| {
+                profile.agent_did == behavior.agent_did
+                    && profile.profile_id == behavior.inference_profile_id
+            })
+        });
+        let agent_did = call_agent_did
             .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.agent_did)))
             .unwrap_or_else(|| "unknown".to_string());
         let agent = principals
@@ -1154,10 +1178,10 @@ fn build_inference_metric_families(data: &InferenceMetricsQueryData) -> Inferenc
             .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.display_name)))
             .unwrap_or_else(|| agent_did.clone());
         let backend_id = clean_metric_label(&call.backend_id)
-            .or_else(|| behavior.and_then(|behavior| clean_metric_label(&behavior.backend_id)))
+            .or_else(|| profile.and_then(|profile| clean_metric_label(&profile.backend_id)))
             .unwrap_or_else(|| "unknown".to_string());
-        let model = behavior
-            .and_then(|behavior| clean_metric_label(&behavior.model_name))
+        let model = profile
+            .and_then(|profile| clean_metric_label(&profile.model_name))
             .unwrap_or_else(|| "unknown".to_string());
         let status = clean_metric_label(&call.call_state).unwrap_or_else(|| "unknown".to_string());
 
@@ -1869,7 +1893,12 @@ mod tests {
                 behavior_id: "behavior-1".to_string(),
                 agent_did: "did:key:zAgent".to_string(),
                 display_name: "fallback-behavior-name".to_string(),
-                backend_id: "backend-from-behavior".to_string(),
+                inference_profile_id: "profile-1".to_string(),
+            }],
+            profiles: vec![InferenceProfileRow {
+                profile_id: "profile-1".to_string(),
+                agent_did: "did:key:zAgent".to_string(),
+                backend_id: "backend-from-profile".to_string(),
                 model_name: "d4f".to_string(),
             }],
             calls: vec![
@@ -1993,6 +2022,11 @@ mod tests {
                 behavior_id: "behavior-1".to_string(),
                 agent_did: "did:key:zAgent".to_string(),
                 display_name: "agent \"friendly\"".to_string(),
+                inference_profile_id: "profile-1".to_string(),
+            }],
+            profiles: vec![InferenceProfileRow {
+                profile_id: "profile-1".to_string(),
+                agent_did: "did:key:zAgent".to_string(),
                 backend_id: "backend-1".to_string(),
                 model_name: "model\none".to_string(),
             }],

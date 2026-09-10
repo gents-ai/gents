@@ -1587,15 +1587,15 @@ mod tests {
                 backend_id: "openai", agent_did: "did:key:with-runtime", name: "OpenAI",
                 provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000", auth: { kind: "unauthenticated" },
                 enabled: true,
-                catalogs: [
+                catalogs: { entries: [
                     {agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "gpt-5"}, {model_name: "gpt-5-mini"}]},
                     {agent_did: "did:key:foreign", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-private-model"}]}
-                ]
+                ] }
             }) { _docID }
             create_InferenceBackend(input: {
                 backend_id: "openai", agent_did: "did:key:foreign", name: "Foreign",
                 provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8001", auth: { kind: "unauthenticated" },
-                enabled: true, catalogs: [{agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-backend-model"}]}]
+                enabled: true, catalogs: { entries: [{agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-backend-model"}]}] }
             }) { _docID }
             create_InferenceProfile(input: {
                 profile_id: "fast-profile", agent_did: "did:key:with-runtime", display_name: "Fast Profile",
@@ -1762,11 +1762,11 @@ mod tests {
         );
         let scoped_catalog = r#"mutation { update_InferenceBackend(
             filter: { agent_did: { _eq: "did:key:with-runtime" }, backend_id: { _eq: "openai" } },
-            input: { catalogs: [
+            input: { catalogs: { entries: [
                 {agent_did: "did:key:with-runtime", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "gpt-5"}]},
                 {agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "shared-only-model"}]},
                 {agent_did: "did:key:foreign", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-private-model"}]}
-            ] }
+            ] } }
         ) { _docID } }"#;
         ensure_no_errors(
             &node.execute(scoped_catalog).await,

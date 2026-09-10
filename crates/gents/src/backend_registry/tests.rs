@@ -347,7 +347,7 @@ async fn scoped_backend_replacement_preserves_observations_and_resets_defaults()
         {"agent_did":null,"observed_at":"2026-01-01T00:00:00Z","models":[{"model_name":"shared","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]},
         {"agent_did":"did:key:invoker","observed_at":"2026-01-02T00:00:00Z","models":[{"model_name":"private","display_name":null,"context_window":null,"max_output_tokens":null,"reasoning_efforts":null}]}
     ]);
-    let observation = serde_json::json!({"catalogs":catalogs,"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
+    let observation = serde_json::json!({"catalogs":{"entries":catalogs.clone()},"probe_status":"healthy","last_probe":"2026-01-02T00:00:00Z"});
     access
         .write(
             "test.backend.observation",

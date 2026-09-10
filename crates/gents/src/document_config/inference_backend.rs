@@ -65,14 +65,31 @@ pub struct InferenceBackendObservation {
     /// Runtime-owned catalog observations exposed by the server. Entries are
     /// embedded advertisements, not independently addressable model documents.
     /// Discovery never creates profiles or changes their selected model/effort.
-    #[serde(
-        default,
-        deserialize_with = "super::serde_helpers::deserialize_default_on_null"
-    )]
+    #[serde(default, deserialize_with = "deserialize_backend_catalogs")]
     pub catalogs: Vec<BackendModelCatalog>,
     /// Runtime-owned observation; configuration apply must not overwrite it.
     pub probe_status: Option<String>,
     pub last_probe: Option<String>,
+}
+
+fn deserialize_backend_catalogs<'de, D>(
+    deserializer: D,
+) -> Result<Vec<BackendModelCatalog>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StoredCatalogs {
+        Legacy(Vec<BackendModelCatalog>),
+        Envelope { entries: Vec<BackendModelCatalog> },
+    }
+
+    Ok(match Option::<StoredCatalogs>::deserialize(deserializer)? {
+        None => Vec::new(),
+        Some(StoredCatalogs::Legacy(catalogs)) => catalogs,
+        Some(StoredCatalogs::Envelope { entries }) => entries,
+    })
 }
 
 /// Authentication selection on a backend, not a second credential store.

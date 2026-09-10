@@ -366,9 +366,13 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 .as_ref()
                 .and_then(|observation| normalize_optional(observation.preview.as_deref()))
         }),
-        status: session_row
-            .and_then(|row| row.closed_at.as_ref().map(|_| "closed".to_string()))
-            .or_else(|| turn_state_label.clone()),
+        status: session_row.map(|row| {
+            if row.closed_at.is_some() {
+                "closed".to_string()
+            } else {
+                "active".to_string()
+            }
+        }),
         goal,
         turn_state: turn_state_label,
         latest_request_id,

@@ -485,12 +485,9 @@ pub async fn record_model_catalog_in_txn(
             && current.auth == backend.auth,
         "backend connection changed during discovery"
     );
-    let mut catalogs: Vec<BackendModelCatalog> = match row.get("catalogs") {
-        None | Some(serde_json::Value::Null) => Vec::new(),
-        Some(value) => {
-            serde_json::from_value(value.clone()).context("decoding backend catalogs")?
-        }
-    };
+    let mut catalogs = serde_json::from_value::<InferenceBackendObservation>(row.clone())
+        .context("decoding backend catalogs")?
+        .catalogs;
     let matching: Vec<_> = catalogs
         .iter()
         .enumerate()
@@ -509,13 +506,21 @@ pub async fn record_model_catalog_in_txn(
     } else {
         catalogs.push(catalog);
     }
-    let input = serde_json::json!({"catalogs": catalogs});
+    // DefraDB represents a top-level JSON array as JsonArray, which is not a
+    // Scalar(Json). Keep the array inside a JSON object so the declared scalar
+    // kind and the stored value agree.
+    let catalogs = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::json!({ "entries": catalogs }),
+    )?;
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
         .context("backend catalog target has no physical identity")?;
-    txn.execute_with_variables(&format!("mutation($input:InferenceBackendMutationInputArg!) {{ update_InferenceBackend(docID: \"{}\", input: $input) {{ _docID }} }}",
-                    escape_graphql_string(doc_id)), &serde_json::json!({"input":input})).await?;
+    txn.execute(&format!(
+        "mutation {{ update_InferenceBackend(docID: \"{}\", input: {{ catalogs: {catalogs} }}) {{ _docID }} }}",
+        escape_graphql_string(doc_id)
+    ))
+    .await?;
     Ok(())
 }
 

@@ -788,6 +788,19 @@ async fn initialize_runtime_home(
             Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
         })
         .await?;
+    // Health and discovery are runtime-owned observations, so the desired
+    // config plan deliberately omits them. Preserve init's established
+    // bootstrap contract by publishing the selected endpoint as initially
+    // healthy after its canonical backend document exists; the health owner
+    // will replace this observation with measured state once the server runs.
+    gents::backend_registry::set_backend_probe_status_with_last_probe(
+        node,
+        agent_did,
+        &backend_id,
+        gents::HEALTHY_PROBE_STATUS,
+        chrono::Utc::now(),
+    )
+    .await?;
 
     Ok(InitSummary {
         backend_id,

@@ -313,7 +313,7 @@ fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() 
     let cases = lean_desktop_client_shell_cases();
     assert_eq!(
         cases.len(),
-        13,
+        12,
         "desktop ClientShell contract surface should include every selected-session case"
     );
 

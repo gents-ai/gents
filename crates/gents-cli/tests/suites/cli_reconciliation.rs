@@ -127,6 +127,9 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
     let agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let config_root = tempdir.path().join("config");
     run_cli_text(
         &home_dir,
@@ -140,9 +143,6 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         &home_dir,
         &["config", "apply", "--root", config_root.to_str().unwrap()],
     )?;
-    let mut serve = spawn_server(&home_dir, port)?;
-    wait_for_port(port, &mut serve)?;
-    wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
     let tools_doc_id = doc_id_for_tools(&graphql, &tools_id).await?;
     let config_rows = graphql_query(
         &graphql,
