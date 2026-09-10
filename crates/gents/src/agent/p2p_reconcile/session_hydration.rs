@@ -101,8 +101,8 @@ pub enum HydrationVerdict {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HydrationDeliveryResult {
-    Delivered,
-    Exhausted,
+    Confirmed,
+    Indeterminate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,40 +114,58 @@ pub enum HydrationTerminalWriteResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HydrationApplyOutcome {
     Served(BTreeSet<HydrationDocument>),
-    Rejected(&'static str),
-    PendingAfterTerminalWriteFailure(BTreeSet<HydrationDocument>),
+    Rejected {
+        detail: &'static str,
+        attempted_documents: BTreeSet<HydrationDocument>,
+    },
+    PendingAfterTerminalWriteFailure {
+        attempted_documents: BTreeSet<HydrationDocument>,
+        confirmed_documents: BTreeSet<HydrationDocument>,
+    },
 }
 
-pub const HYDRATION_DELIVERY_EXHAUSTED_DETAIL: &str =
-    "hydration delivery exhausted its bounded retry budget";
+pub const HYDRATION_DELIVERY_INDETERMINATE_DETAIL: &str =
+    "hydration delivery remained unconfirmed after its bounded retry budget";
 
 /// Project admission, bounded delivery, and terminal persistence as three
 /// separate effects. A failed terminal write leaves the durable request
-/// pending; already delivered documents remain a set-valued, replay-safe side
-/// effect for the next sweep.
+/// pending. Attempted documents and confirmed-complete delivery are distinct:
+/// a transport error or timeout can follow partial, replay-safe side effects.
 pub fn apply_hydration_delivery(
     verdict: HydrationVerdict,
     delivery: HydrationDeliveryResult,
     terminal_write: HydrationTerminalWriteResult,
 ) -> HydrationApplyOutcome {
     let desired = match (verdict, delivery) {
-        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Delivered) => {
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Confirmed) => {
             HydrationApplyOutcome::Served(documents)
         }
-        (HydrationVerdict::Admit(_), HydrationDeliveryResult::Exhausted) => {
-            HydrationApplyOutcome::Rejected(HYDRATION_DELIVERY_EXHAUSTED_DETAIL)
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Indeterminate) => {
+            HydrationApplyOutcome::Rejected {
+                detail: HYDRATION_DELIVERY_INDETERMINATE_DETAIL,
+                attempted_documents: documents,
+            }
         }
-        (HydrationVerdict::Reject(detail), _) => HydrationApplyOutcome::Rejected(detail),
+        (HydrationVerdict::Reject(detail), _) => HydrationApplyOutcome::Rejected {
+            detail,
+            attempted_documents: BTreeSet::new(),
+        },
     };
     if terminal_write == HydrationTerminalWriteResult::Committed {
         return desired;
     }
-    let delivered = match desired {
-        HydrationApplyOutcome::Served(documents) => documents,
-        HydrationApplyOutcome::Rejected(_) => BTreeSet::new(),
-        HydrationApplyOutcome::PendingAfterTerminalWriteFailure(_) => unreachable!(),
+    let (attempted_documents, confirmed_documents) = match desired {
+        HydrationApplyOutcome::Served(documents) => (documents.clone(), documents),
+        HydrationApplyOutcome::Rejected {
+            attempted_documents,
+            ..
+        } => (attempted_documents, BTreeSet::new()),
+        HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. } => unreachable!(),
     };
-    HydrationApplyOutcome::PendingAfterTerminalWriteFailure(delivered)
+    HydrationApplyOutcome::PendingAfterTerminalWriteFailure {
+        attempted_documents,
+        confirmed_documents,
+    }
 }
 
 pub fn decide_hydration(

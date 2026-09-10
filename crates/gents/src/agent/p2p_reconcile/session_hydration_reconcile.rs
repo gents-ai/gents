@@ -136,7 +136,7 @@ async fn process_one_request(
         .await
         .context("load hydration catalog")?;
 
-    let apply_outcome = match decide_hydration(&request, &loaded.catalog) {
+    let (verdict, delivery_result) = match decide_hydration(&request, &loaded.catalog) {
         HydrationVerdict::Admit(documents) => {
             if !store
                 .authorization_is_current(&request, &loaded.authorization)
@@ -150,7 +150,7 @@ async fn process_one_request(
                 return Ok(());
             }
             let delivery_result = deliver_with_bounded_retry(delivery, &request, &documents).await;
-            if delivery_result == HydrationDeliveryResult::Delivered {
+            if delivery_result == HydrationDeliveryResult::Confirmed {
                 if !store
                     .authorization_is_current(&request, &loaded.authorization)
                     .await
@@ -163,35 +163,51 @@ async fn process_one_request(
                     return Ok(());
                 }
             }
-            apply_hydration_delivery(
-                HydrationVerdict::Admit(documents),
-                delivery_result,
-                HydrationTerminalWriteResult::Committed,
-            )
+            (HydrationVerdict::Admit(documents), delivery_result)
         }
-        HydrationVerdict::Reject(detail) => apply_hydration_delivery(
+        HydrationVerdict::Reject(detail) => (
             HydrationVerdict::Reject(detail),
-            HydrationDeliveryResult::Delivered,
-            HydrationTerminalWriteResult::Committed,
+            HydrationDeliveryResult::Confirmed,
         ),
     };
 
+    let apply_outcome = apply_hydration_delivery(
+        verdict.clone(),
+        delivery_result,
+        HydrationTerminalWriteResult::Committed,
+    );
     match apply_outcome {
         HydrationApplyOutcome::Served(documents) => {
-            store
-                .mark_served(row, &documents)
-                .await
-                .context("mark session hydration served")?;
+            if let Err(error) = store.mark_served(row, &documents).await {
+                let failed = apply_hydration_delivery(
+                    verdict,
+                    delivery_result,
+                    HydrationTerminalWriteResult::Failed,
+                );
+                debug_assert!(matches!(
+                    failed,
+                    HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }
+                ));
+                return Err(error).context("mark session hydration served");
+            }
             outcome.served.insert(request.request_key);
         }
-        HydrationApplyOutcome::Rejected(detail) => {
-            store
-                .mark_rejected(row, detail)
-                .await
-                .context("mark session hydration rejected")?;
+        HydrationApplyOutcome::Rejected { detail, .. } => {
+            if let Err(error) = store.mark_rejected(row, detail).await {
+                let failed = apply_hydration_delivery(
+                    verdict,
+                    delivery_result,
+                    HydrationTerminalWriteResult::Failed,
+                );
+                debug_assert!(matches!(
+                    failed,
+                    HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }
+                ));
+                return Err(error).context("mark session hydration rejected");
+            }
             outcome.rejected.insert(request.request_key);
         }
-        HydrationApplyOutcome::PendingAfterTerminalWriteFailure(_) => {
+        HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. } => {
             unreachable!("the store write below determines terminal commit success")
         }
     }
@@ -208,7 +224,7 @@ async fn deliver_with_bounded_retry(
             .push_documents_to_peer(&request.peer_id, documents)
             .await
         {
-            Ok(()) => return HydrationDeliveryResult::Delivered,
+            Ok(()) => return HydrationDeliveryResult::Confirmed,
             Err(error) => {
                 tracing::warn!(
                     request_key = %request.request_key,
@@ -223,7 +239,7 @@ async fn deliver_with_bounded_retry(
             }
         }
     }
-    HydrationDeliveryResult::Exhausted
+    HydrationDeliveryResult::Indeterminate
 }
 
 pub async fn run_session_hydration_reconciler(
@@ -675,7 +691,7 @@ fn terminal_mutation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::p2p_reconcile::session_hydration::HYDRATION_DELIVERY_EXHAUSTED_DETAIL;
+    use crate::agent::p2p_reconcile::session_hydration::HYDRATION_DELIVERY_INDETERMINATE_DETAIL;
     use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
 
     struct MemoryStore {
@@ -705,6 +721,7 @@ mod tests {
 
     struct FailingDelivery {
         attempts: std::sync::atomic::AtomicUsize,
+        pushed: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
     }
 
     struct BlockingDelivery {
@@ -827,12 +844,16 @@ mod tests {
     impl HydrationDelivery for FailingDelivery {
         async fn push_documents_to_peer(
             &self,
-            _peer_id: &str,
-            _documents: &BTreeSet<HydrationDocument>,
+            peer_id: &str,
+            documents: &BTreeSet<HydrationDocument>,
         ) -> Result<()> {
             self.attempts
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            anyhow::bail!("transport unavailable")
+            self.pushed
+                .lock()
+                .expect("pushed lock")
+                .push((peer_id.to_string(), documents.clone()));
+            anyhow::bail!("transport outcome unknown after dispatch")
         }
     }
 
@@ -946,10 +967,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn exhausted_delivery_writes_a_terminal_rejection() {
+    async fn indeterminate_delivery_writes_a_terminal_rejection() {
         let store = admitted_store();
         let delivery = FailingDelivery {
             attempts: std::sync::atomic::AtomicUsize::new(0),
+            pushed: std::sync::Mutex::new(Vec::new()),
         };
 
         let outcome = reconcile_hydration_tick(&store, &delivery)
@@ -966,7 +988,16 @@ mod tests {
         );
         let rejected = store.rejected.lock().expect("rejected lock");
         assert_eq!(rejected.len(), 1);
-        assert_eq!(rejected[0].1, HYDRATION_DELIVERY_EXHAUSTED_DETAIL);
+        assert_eq!(rejected[0].1, HYDRATION_DELIVERY_INDETERMINATE_DETAIL);
+        let attempts = delivery.pushed.lock().expect("pushed lock");
+        assert_eq!(attempts.len(), HYDRATION_DELIVERY_MAX_ATTEMPTS);
+        assert!(attempts
+            .windows(2)
+            .all(|attempts| attempts[0] == attempts[1]));
+        assert_eq!(
+            attempts[0].1, store.catalog.documents,
+            "every ambiguous retry remains scoped to the selected content-addressed set"
+        );
     }
 
     #[tokio::test]

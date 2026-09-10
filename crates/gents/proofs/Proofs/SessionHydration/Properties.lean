@@ -7,11 +7,20 @@ theorem terminalFor_insert_self (st : State) (r : Request) (outcome : Outcome)
     terminalFor { st with terminals := insert (terminal r outcome documents) st.terminals } r.key := by
   exact ⟨terminal r outcome documents, Finset.mem_insert_self _ _, rfl⟩
 
-/-- A request that fails admission never delivers a document. -/
+/-- A request that fails admission never confirms a document. -/
 theorem hydration_request_grants_nothing (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
     (hnot : ¬ admits cat r) :
-    (applyStep cat st r delivery terminalWrite).delivered = st.delivered := by
+    (applyStep cat st r delivery terminalWrite).confirmedDelivered = st.confirmedDelivered := by
+  by_cases hterminal : terminalFor st r.key
+  · simp [applyStep, hterminal]
+  · cases terminalWrite <;> simp [applyStep, hterminal, hnot]
+
+/-- A request that fails admission never reaches the transport adapter. -/
+theorem rejected_hydration_attempts_nothing (cat : Catalog) (st : State) (r : Request)
+    (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
+    (hnot : ¬ admits cat r) :
+    (applyStep cat st r delivery terminalWrite).attempted = st.attempted := by
   by_cases hterminal : terminalFor st r.key
   · simp [applyStep, hterminal]
   · cases terminalWrite <;> simp [applyStep, hterminal, hnot]
@@ -39,7 +48,7 @@ theorem selected_collection_sound (cat : Catalog) (r : Request) (doc : Document)
 theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
     (howner : ownedSession r ∉ cat.sessions) :
-    (applyStep cat st r delivery terminalWrite).delivered = st.delivered := by
+    (applyStep cat st r delivery terminalWrite).confirmedDelivered = st.confirmedDelivered := by
   apply hydration_request_grants_nothing cat st r delivery terminalWrite
   intro hadmits
   exact howner hadmits.2.2
@@ -48,7 +57,7 @@ theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)
 theorem selected_network_membership_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
     (hmembership : verifiedMembership cat r ∉ cat.verifiedActiveMemberships) :
-    (applyStep cat st r delivery terminalWrite).delivered = st.delivered := by
+    (applyStep cat st r delivery terminalWrite).confirmedDelivered = st.confirmedDelivered := by
   apply hydration_request_grants_nothing cat st r delivery terminalWrite
   intro hadmits
   exact hmembership hadmits.2.1
@@ -57,7 +66,7 @@ theorem selected_network_membership_required (cat : Catalog) (st : State) (r : R
 theorem applied_pairing_route_required (cat : Catalog) (st : State) (r : Request)
     (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult)
     (hpairing : appliedPairingRoute r ∉ cat.appliedPairingRoutes) :
-    (applyStep cat st r delivery terminalWrite).delivered = st.delivered := by
+    (applyStep cat st r delivery terminalWrite).confirmedDelivered = st.confirmedDelivered := by
   apply hydration_request_grants_nothing cat st r delivery terminalWrite
   intro hadmits
   exact hpairing hadmits.1
@@ -75,11 +84,25 @@ theorem committed_pending_reaches_terminal (cat : Catalog) (st : State) (r : Req
   · cases delivery <;> apply terminalFor_insert_self
   · apply terminalFor_insert_self
 
-/-- Exhausted delivery cannot add transcript documents. -/
-theorem exhausted_delivery_grants_nothing (cat : Catalog) (st : State) (r : Request) :
-    (applyStep cat st r .exhausted .committed).delivered = st.delivered := by
-  unfold applyStep
-  split <;> simp_all
+/-- An indeterminate transport result cannot confirm transcript delivery. It
+may still have produced partial side effects, represented separately by
+`attempted`. -/
+theorem indeterminate_delivery_confirms_nothing (cat : Catalog) (st : State) (r : Request) :
+    (applyStep cat st r .indeterminate .committed).confirmedDelivered =
+      st.confirmedDelivered := by
+  by_cases hterminal : terminalFor st r.key
+  · simp [applyStep, hterminal]
+  · by_cases hadmits : admits cat r
+    · simp [applyStep, hterminal, hadmits]
+    · simp [applyStep, hterminal, hadmits]
+
+/-- Every admitted transport attempt is limited to the exact selected set,
+including when the transport returns an indeterminate result. -/
+theorem indeterminate_attempt_is_scope_bounded (cat : Catalog) (st : State) (r : Request)
+    (hpending : ¬ terminalFor st r.key) (hadmits : admits cat r) :
+    (applyStep cat st r .indeterminate .committed).attempted =
+      st.attempted ∪ selectedDocuments cat r := by
+  simp [applyStep, hpending, hadmits]
 
 /-- A failed terminal write cannot invent a terminal outcome. A successful
 delivery remains visible as a set-valued side effect and can be retried
@@ -113,32 +136,21 @@ theorem applyStep_idempotent (cat : Catalog) (st : State) (r : Request)
     exact terminal_request_is_noop cat (applyStep cat st r delivery .committed) r
       firstReplay .committed hafter
 
-/-- Repeating a delivered push after its terminal write failed has the same
+/-- Repeating a confirmed push after its terminal write failed has the same
 set-valued delivery and final terminal state as one successful attempt. -/
-theorem delivered_replay_is_idempotent (cat : Catalog) (st : State) (r : Request) :
-    applyStep cat (applyStep cat st r .delivered .failed) r .delivered .committed =
-      applyStep cat st r .delivered .committed := by
+theorem confirmed_replay_is_idempotent (cat : Catalog) (st : State) (r : Request) :
+    applyStep cat (applyStep cat st r .confirmed .failed) r .confirmed .committed =
+      applyStep cat st r .confirmed .committed := by
   by_cases hterminal : terminalFor st r.key
   · simp [applyStep, hterminal]
   · by_cases hadmits : admits cat r
     · let docs := selectedDocuments cat r
       have hpendingAfter :
-          ¬ terminalFor { st with delivered := st.delivered ∪ docs } r.key := by
+          ¬ terminalFor { st with
+            attempted := st.attempted ∪ docs
+            confirmedDelivered := st.confirmedDelivered ∪ docs } r.key := by
         simpa [terminalFor] using hterminal
       simp [applyStep, hterminal, hadmits, docs, hpendingAfter, Finset.union_assoc]
     · simp [applyStep, hterminal, hadmits]
 
-/-- Hydration is not a scope/template transition and cannot flap pairing. -/
-theorem pairing_noninterference (cat : Catalog) (st : State) (r : Request)
-    (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult) :
-    (applyStep cat st r delivery terminalWrite).pairingState = st.pairingState := by
-  unfold applyStep
-  by_cases hterminal : terminalFor st r.key
-  · rw [if_pos hterminal]
-  · rw [if_neg hterminal]
-    by_cases hadmits : admits cat r
-    · rw [if_pos hadmits]
-      cases delivery <;> cases terminalWrite <;> rfl
-    · rw [if_neg hadmits]
-      cases terminalWrite <;> rfl
 end SessionHydration

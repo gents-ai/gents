@@ -64,10 +64,12 @@ inductive Outcome where
   | rejected
   deriving DecidableEq, Repr
 
-/-- Result after the bounded delivery attempt budget is consumed. -/
+/-- Result after the bounded delivery attempt budget is consumed. An
+`indeterminate` result may follow partial transport side effects; it only says
+that delivery of the complete selected set was not confirmed. -/
 inductive DeliveryResult where
-  | delivered
-  | exhausted
+  | confirmed
+  | indeterminate
   deriving DecidableEq, Repr
 
 /-- Result of committing the signed terminal hydration receipt. Delivery and
@@ -84,7 +86,8 @@ structure Terminal where
   deriving DecidableEq
 
 structure State where
-  delivered : Finset Document
+  attempted : Finset Document
+  confirmedDelivered : Finset Document
   terminals : Finset Terminal
   deriving DecidableEq
 
@@ -136,19 +139,26 @@ def applyStep (cat : Catalog) (st : State) (r : Request)
   if terminalFor st r.key then st
   else if admits cat r then
     match delivery with
-    | .delivered =>
+    | .confirmed =>
       let docs := selectedDocuments cat r
       match terminalWrite with
       | .committed =>
         { st with
-          delivered := st.delivered ∪ docs
+          attempted := st.attempted ∪ docs
+          confirmedDelivered := st.confirmedDelivered ∪ docs
           terminals := insert (terminal r .served docs) st.terminals }
-      | .failed => { st with delivered := st.delivered ∪ docs }
-    | .exhausted =>
+      | .failed =>
+        { st with
+          attempted := st.attempted ∪ docs
+          confirmedDelivered := st.confirmedDelivered ∪ docs }
+    | .indeterminate =>
+      let docs := selectedDocuments cat r
       match terminalWrite with
       | .committed =>
-        { st with terminals := insert (terminal r .rejected ∅) st.terminals }
-      | .failed => st
+        { st with
+          attempted := st.attempted ∪ docs
+          terminals := insert (terminal r .rejected ∅) st.terminals }
+      | .failed => { st with attempted := st.attempted ∪ docs }
   else
     match terminalWrite with
     | .committed =>

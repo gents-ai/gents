@@ -559,11 +559,12 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
 pub(crate) struct LeanSessionHydrationApplyCase {
     pub(crate) name: String,
     pub(crate) admitted: bool,
-    pub(crate) delivered: bool,
+    pub(crate) delivery_confirmed: bool,
     pub(crate) terminal_write_committed: bool,
     pub(crate) expected_served: bool,
     pub(crate) expected_rejected: bool,
-    pub(crate) expected_delivered_count: usize,
+    pub(crate) expected_attempted_count: usize,
+    pub(crate) expected_confirmed_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
