@@ -323,7 +323,7 @@ jobs:
         if: matrix.suite == 'runtime' && github.event_name != 'pull_request'
         env:
           RUST_MIN_STACK: 16777216
-        run: cargo test --no-fail-fast -p gents --lib --tests
+        run: cargo test --no-fail-fast -p gents -p gents-loop --lib --tests
 
       - name: Run desktop Rust package tests
         if: matrix.suite == 'desktop'

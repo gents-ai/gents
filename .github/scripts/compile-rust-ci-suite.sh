@@ -13,7 +13,11 @@ separate_package=""
 
 case "${suite}" in
   runtime)
-    packages=(gents)
+    # gents-loop is the completion loop `gents` is built on, extracted so it
+    # also compiles for wasm32-wasip1. It belongs on this shard rather than
+    # support: its tests are the runtime's own, and the runtime step below
+    # runs them.
+    packages=(gents gents-loop)
     ;;
   cli)
     packages=(
