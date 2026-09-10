@@ -5,12 +5,12 @@
 //! A pack fetched from the registry has to become the same pack a bundled
 //! one is before it is trusted with anything: its raw bytes are checked
 //! against the digest the registry advertised before they are ever parsed,
-//! and only a match is cached and handed to [`gents::pack_archive::PackAfb`].
+//! and only a match is cached and handed to [`gents::pack_archive::PackArchive`].
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::pack_archive::PackAfb;
+use gents::pack_archive::PackArchive;
 use serde_json::Value;
 
 use crate::cli::args::{PackFetchArgs, PackPublishArgs, PackSearchArgs};
@@ -51,13 +51,47 @@ pub(crate) fn resolve_registry_token(explicit: Option<&str>) -> Option<String> {
 /// search, download, and publish.
 pub(crate) struct RegistryClient {
     base_url: String,
+    /// Which of the registry's two surfaces this client addresses.
+    kind: RegistryKind,
     http: reqwest::Client,
 }
 
+/// Which of the registry's two artifact surfaces a client talks to.
+///
+/// The registry serves the same shape twice, once per kind: a plugin lives
+/// under `/packages/...` and a pack under `/packs/...`. A client that
+/// guessed one for both would ask for a pack on the plugin route and be
+/// told, correctly, that there is nothing there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegistryKind {
+    Pack,
+    Plugin,
+}
+
+impl RegistryKind {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Pack => "packs",
+            Self::Plugin => "packages",
+        }
+    }
+}
+
 impl RegistryClient {
+    /// A client for the pack surface.
     pub(crate) fn new(base_url: String) -> Self {
+        Self::for_kind(base_url, RegistryKind::Pack)
+    }
+
+    /// A client for the plugin surface.
+    pub(crate) fn for_plugins(base_url: String) -> Self {
+        Self::for_kind(base_url, RegistryKind::Plugin)
+    }
+
+    fn for_kind(base_url: String, kind: RegistryKind) -> Self {
         Self {
             base_url,
+            kind,
             http: reqwest::Client::new(),
         }
     }
@@ -111,8 +145,8 @@ impl RegistryClient {
     }
 
     pub(crate) async fn package(&self, namespace: &str, name: &str) -> Result<Value> {
-        self.get_json(&format!("/packages/{namespace}/{name}"))
-            .await
+        let kind = self.kind.path();
+        self.get_json(&format!("/{kind}/{namespace}/{name}")).await
     }
 
     pub(crate) async fn version(
@@ -121,12 +155,13 @@ impl RegistryClient {
         name: &str,
         version: &str,
     ) -> Result<Value> {
-        self.get_json(&format!("/packages/{namespace}/{name}/{version}"))
+        let kind = self.kind.path();
+        self.get_json(&format!("/{kind}/{namespace}/{name}/{version}"))
             .await
     }
 
     pub(crate) async fn search(&self, query: &str) -> Result<Value> {
-        let url = self.api("/packages");
+        let url = self.api(&format!("/{}", self.kind.path()));
         let response = self
             .http
             .get(&url)
@@ -149,11 +184,14 @@ impl RegistryClient {
         name: &str,
         version: &str,
     ) -> Result<Vec<u8>> {
-        let url = self.api(&format!("/packages/{namespace}/{name}/{version}/download"));
+        let url = self.api(&format!(
+            "/{}/{namespace}/{name}/{version}/download",
+            self.kind.path()
+        ));
         let response = self.http.get(&url).send().await.with_context(|| {
             format!(
                 "downloading {url}; if this machine cannot reach the registry, fetch it by \
-                     hand with `{} -o {name}-{version}.afb` and install that file",
+                     hand with `{} -o {name}-{version}.tar.gz` and install that file",
                 Self::curl_equivalent(&url, false)
             )
         })?;
@@ -187,7 +225,7 @@ impl RegistryClient {
 /// same pack an install from this binary would use, wherever it came from.
 #[derive(Debug)]
 pub(crate) struct RegistryPack {
-    pub(crate) afb: PackAfb,
+    pub(crate) archive: PackArchive,
     pub(crate) digest: String,
     pub(crate) namespace: String,
     pub(crate) name: String,
@@ -204,7 +242,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// The one check every route to `bytes` has to pass, before the bytes are
 /// trusted with anything else: their own hash names both digests on a
 /// mismatch, and it is a refusal, never a warning.
-fn verify_digest(bytes: &[u8], advertised: &str, coordinate: &str) -> Result<()> {
+pub(crate) fn verify_digest(bytes: &[u8], advertised: &str, coordinate: &str) -> Result<()> {
     let computed = sha256_hex(bytes);
     anyhow::ensure!(
         computed == advertised,
@@ -255,7 +293,7 @@ pub(crate) async fn fetch_pack(
             cache_dir.display()
         )
     })?;
-    let cache_path = cache_dir.join(format!("{advertised}.afb"));
+    let cache_path = cache_dir.join(format!("{advertised}.tar.gz"));
     let coordinate = format!("{namespace}/{name}@{version}");
 
     let bytes = if cache_path.is_file() {
@@ -273,14 +311,14 @@ pub(crate) async fn fetch_pack(
         downloaded
     };
 
-    let afb = PackAfb::from_bytes(&bytes).with_context(|| {
+    let archive = PackArchive::from_bytes(&bytes).with_context(|| {
         format!("{namespace}/{name}@{version} from the registry is not a readable pack")
     })?;
-    let digest = afb.digest().with_context(|| {
+    let digest = archive.digest().with_context(|| {
         format!("{namespace}/{name}@{version} from the registry failed its own content check")
     })?;
     Ok(RegistryPack {
-        afb,
+        archive,
         digest,
         namespace: namespace.to_owned(),
         name: name.to_owned(),
@@ -293,7 +331,7 @@ pub(crate) async fn fetch_pack(
 /// is the content's own digest, so an existing file there is already the
 /// right bytes; a fresh write races safely against a concurrent install of
 /// the same pack.
-fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let mut staged = tempfile::NamedTempFile::new_in(dir)
         .with_context(|| format!("staging the download in {}", dir.display()))?;
@@ -358,7 +396,7 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 
     let out = args
         .out
-        .unwrap_or_else(|| std::path::PathBuf::from(format!("{name}-{version}.afb")));
+        .unwrap_or_else(|| std::path::PathBuf::from(format!("{name}-{version}.tar.gz")));
     std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
 
     crate::print_json(&serde_json::json!({
@@ -514,6 +552,20 @@ mod tests {
         state.bytes.clone()
     }
 
+    /// The two surfaces the registry actually serves, asserted by name.
+    ///
+    /// A client that asks the wrong one gets a correct 404 and an error
+    /// that says the registry has nothing there, which reads like a
+    /// missing package rather than a wrong route. That is what happened:
+    /// `gents pack install` asked the plugin surface for a pack. The route
+    /// segments are stated here, next to the fakes that must match them,
+    /// so swapping them fails a test instead of a customer's install.
+    #[test]
+    fn each_artifact_kind_addresses_its_own_registry_surface() {
+        assert_eq!(RegistryKind::Pack.path(), "packs");
+        assert_eq!(RegistryKind::Plugin.path(), "packages");
+    }
+
     /// Starts a fake registry serving one version of one pack, and returns
     /// its base URL plus the download-hit counter.
     async fn start_fake_registry(
@@ -526,11 +578,15 @@ mod tests {
             digest: advertised_digest,
             downloads: downloads.clone(),
         });
+        // `/packs/...`, the route the real registry serves a pack on.
+        // These routes had been the plugin ones (`/packages/...`), which is
+        // how a client that asked the wrong surface for a pack passed every
+        // test in this file while failing against a real server.
         let app = Router::new()
-            .route("/api/v1/packages/{ns}/{name}", get(fake_package))
-            .route("/api/v1/packages/{ns}/{name}/{version}", get(fake_version))
+            .route("/api/v1/packs/{ns}/{name}", get(fake_package))
+            .route("/api/v1/packs/{ns}/{name}/{version}", get(fake_version))
             .route(
-                "/api/v1/packages/{ns}/{name}/{version}/download",
+                "/api/v1/packs/{ns}/{name}/{version}/download",
                 get(fake_download),
             )
             .with_state(state);
@@ -544,9 +600,9 @@ mod tests {
         (format!("http://{addr}"), downloads)
     }
 
-    /// A tiny real `.afb`, built the same way `gents pack build` does, so
-    /// these tests exercise the real container rather than a stand-in.
-    fn sample_afb() -> (Vec<u8>, String) {
+    /// A tiny real `.tar.gz`, built the same way `gents pack build` does,
+    /// so these tests exercise the real container rather than a stand-in.
+    fn sample_pack() -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("plain_pack");
         std::fs::create_dir_all(&root).unwrap();
@@ -555,7 +611,7 @@ mod tests {
             "manifest_version": 1,
             "name": "plain_pack",
             "version": "1.0.0",
-            "description": "A plain pack with no tools",
+            "description": "A plain pack with no plugins",
             "authors": ["gents-ai contributors"],
             "tags": ["example"],
             "kind": "assets",
@@ -567,12 +623,12 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        gents::pack_archive::pack_dir(&root, &gents::pack_archive::PublishAs::default()).unwrap()
+        gents::pack_archive::pack_dir(&root).unwrap()
     }
 
     #[tokio::test]
     async fn fetch_pack_downloads_verifies_and_caches() {
-        let (bytes, digest) = sample_afb();
+        let (bytes, digest) = sample_pack();
         let (base_url, downloads) = start_fake_registry(bytes.clone(), digest.clone()).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();
@@ -588,7 +644,7 @@ mod tests {
             .path()
             .join("packs")
             .join("registry-cache")
-            .join(format!("{digest}.afb"))
+            .join(format!("{digest}.tar.gz"))
             .is_file());
 
         // A second fetch of the same pack reads the cache: no second download.
@@ -605,7 +661,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_digest_mismatch_is_refused_naming_both_digests() {
-        let (bytes, _real_digest) = sample_afb();
+        let (bytes, _real_digest) = sample_pack();
         let wrong_digest = "0".repeat(64);
         let (base_url, _downloads) = start_fake_registry(bytes, wrong_digest.clone()).await;
         let client = RegistryClient::new(base_url);
@@ -622,13 +678,13 @@ mod tests {
             .path()
             .join("packs")
             .join("registry-cache")
-            .join(format!("{wrong_digest}.afb"))
+            .join(format!("{wrong_digest}.tar.gz"))
             .exists());
     }
 
     #[tokio::test]
     async fn an_unknown_pack_is_a_clean_not_found_not_a_silent_success() {
-        let (bytes, digest) = sample_afb();
+        let (bytes, digest) = sample_pack();
         let (base_url, _downloads) = start_fake_registry(bytes, digest).await;
         let client = RegistryClient::new(base_url);
         let home = tempfile::tempdir().unwrap();

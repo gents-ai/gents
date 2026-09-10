@@ -137,10 +137,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: TaskCommand,
     },
-    #[command(about = "List, inspect, install and exercise document packs")]
+    #[command(about = "List, inspect, build, publish, install and exercise packs")]
     Pack {
         #[command(subcommand)]
         command: PackCommand,
+    },
+    #[command(about = "Build, publish, install, and run Afterburner plugins")]
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
     },
     #[command(about = "Run and observe installed graphs")]
     Graph {
@@ -246,13 +251,13 @@ pub(crate) enum PackCommand {
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
-    /// Compile a pack's tools and pack the whole pack into one `.afb`.
+    /// Compile a pack's plugins and pack the whole pack into one `.tar.gz`.
     Build(PackBuildArgs),
     /// Search the pack registry.
     Search(PackSearchArgs),
-    /// Publish a built `.afb` to the pack registry.
+    /// Publish a built `.tar.gz` to the pack registry.
     Publish(PackPublishArgs),
-    /// Download a pack's `.afb` from the registry without installing it.
+    /// Download a pack's `.tar.gz` from the registry without installing it.
     Fetch(PackFetchArgs),
 }
 
@@ -264,7 +269,7 @@ pub(crate) struct PackFetchArgs {
     pub(crate) version: Option<String>,
     #[arg(
         long,
-        help = "Where to write the .afb; defaults to <name>-<version>.afb here"
+        help = "Where to write the .tar.gz; defaults to <name>-<version>.tar.gz here"
     )]
     pub(crate) out: Option<std::path::PathBuf>,
     #[arg(
@@ -284,20 +289,14 @@ pub(crate) struct PackBuildArgs {
     #[arg(
         long,
         conflicts_with_all = ["dir", "out"],
-        help = "Build every pack under packs/ into a .afb beside it, instead of one directory"
+        help = "Build every pack under packs/ into a .tar.gz beside it, instead of one directory"
     )]
     pub(crate) all: bool,
     #[arg(
         long,
-        help = "Where to write the .afb; defaults to <dir>/../<name>-<version>.afb"
+        help = "Where to write the .tar.gz; defaults to <dir>/../<name>-<version>.tar.gz"
     )]
     pub(crate) out: Option<PathBuf>,
-    #[arg(
-        long,
-        default_value = "gents",
-        help = "Namespace this pack is published under"
-    )]
-    pub(crate) namespace: String,
 }
 
 #[derive(clap::Args)]
@@ -313,7 +312,7 @@ pub(crate) struct PackSearchArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackPublishArgs {
-    #[arg(help = "Path to the .afb file to publish")]
+    #[arg(help = "Path to the .tar.gz file to publish")]
     pub(crate) file: PathBuf,
     #[arg(
         long,
@@ -482,6 +481,94 @@ pub(crate) struct PackSeedArgs {
     pub(crate) http_port: u16,
     #[arg(long, help = "If set, print the talk-page URL with ?run=")]
     pub(crate) page_port: Option<u16>,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PluginCommand {
+    /// Compile one Afterburner package directory into a standalone `.afb`.
+    Build(PluginBuildArgs),
+    /// Publish a built `.afb` to the plugin registry.
+    Publish(PluginPublishArgs),
+    /// Download and install a plugin into the home so gents can run it.
+    Install(PluginInstallArgs),
+    /// List the plugins installed under a home.
+    List(PluginListArgs),
+    /// Remove an installed plugin from a home.
+    Remove(PluginRemoveArgs),
+    /// Run an installed plugin once and print what it returned.
+    Run(PluginRunArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginBuildArgs {
+    #[arg(help = "Directory of the Afterburner package to compile (its own afb.toml)")]
+    pub(crate) dir: PathBuf,
+    #[arg(
+        long,
+        help = "Where to write the .afb; defaults to <dir>/../<namespace>-<name>-<version>.afb"
+    )]
+    pub(crate) out: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginPublishArgs {
+    #[arg(help = "Path to the .afb file to publish")]
+    pub(crate) file: PathBuf,
+    #[arg(
+        long,
+        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+    )]
+    pub(crate) token: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginInstallArgs {
+    #[arg(help = "Plugin to install, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(long, help = "Version to install; defaults to the latest published")]
+    pub(crate) version: Option<String>,
+    #[arg(
+        long,
+        help = "Plugin registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home to install into; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginListArgs {
+    #[arg(
+        long,
+        help = "Home to list installed plugins from; defaults to ~/.gents"
+    )]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginRemoveArgs {
+    #[arg(help = "Installed plugin to remove, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(long, help = "Home to remove the plugin from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PluginRunArgs {
+    #[arg(help = "Installed plugin to run, as `name` or `namespace/name`")]
+    pub(crate) name: String,
+    #[arg(
+        long,
+        help = "Canonical JSON argument delivered to the plugin on stdin; defaults to null"
+    )]
+    pub(crate) input: Option<String>,
+    #[arg(long, help = "Home to run the plugin from; defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

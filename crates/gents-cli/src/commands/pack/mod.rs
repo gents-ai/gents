@@ -1,7 +1,7 @@
 //! One package-facing CLI; install writes stay with their existing owners.
 mod build;
 mod cli_process;
-mod registry;
+pub(crate) mod registry;
 mod scenario;
 mod secscan;
 mod server;
@@ -59,7 +59,7 @@ impl PackSource {
     fn manifest(&self) -> &PackManifest {
         match self {
             Self::Bundled(pack) => &pack.manifest,
-            Self::Registry(pack) => pack.afb.manifest(),
+            Self::Registry(pack) => pack.archive.manifest(),
         }
     }
 
@@ -75,7 +75,7 @@ impl PackSource {
     fn asset(&self, path: &str) -> Result<&[u8]> {
         match self {
             Self::Bundled(pack) => pack.asset(path),
-            Self::Registry(pack) => pack.afb.asset(path),
+            Self::Registry(pack) => pack.archive.asset(path),
         }
     }
 
@@ -105,7 +105,7 @@ impl PackSource {
 /// `{namespace}/{name}`, defaulting to the `gents` namespace when the given
 /// name carries none (every bundled pack name is bare, so this only matters
 /// for a registry lookup).
-fn split_namespace(name: &str) -> (&str, &str) {
+pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
     name.split_once('/').unwrap_or((DEFAULT_NAMESPACE, name))
 }
 
@@ -393,27 +393,45 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             }))
             .await
         }
-        // A tools pack carries no documents either, just files to
-        // materialize (its compiled modules), so it installs the same way
-        // an assets pack does: into the home's content-addressed cache,
-        // where the modules become admissible by digest.
-        PackKind::Assets | PackKind::Tools => {
+        // A plugins pack carries no documents either, just files to
+        // materialize (its compiled artifacts), so it installs the same
+        // way an assets pack does: into the home's content-addressed
+        // cache, where the artifacts become admissible by digest.
+        PackKind::Assets | PackKind::Plugins => {
             anyhow::ensure!(
                 args.bindings.is_none()
                     && args.scope.graphql.is_none()
                     && args.scope.agent_did.is_none()
                     && !args.force_rebind_concrete_did,
-                "asset and tools packs install locally with --home; identity and graph binding flags do not apply"
+                "asset and plugins packs install locally with --home; identity and graph binding flags do not apply"
             );
             let home = args
                 .scope
                 .home
-                .context("asset and tools packs require --home")?;
+                .context("asset and plugins packs require --home")?;
             let (root, _cache_lease) = materialize_cached_pack(&home, &pack)?;
+            // A pack's plugins travel inside it (pack_archive's own doc),
+            // so installing the pack installs each one into the same
+            // content-addressed plugin store `gents plugin install` uses:
+            // a plugin that arrived bundled in a pack is just as runnable
+            // by name (`gents plugin run <name>`) as one installed on its
+            // own.
+            let mut installed_plugins = Vec::new();
+            for plugin in &pack.manifest().metadata.plugins {
+                let artifact_bytes = pack.asset(&plugin.artifact)?;
+                installed_plugins.push(super::plugin::install_from_pack(
+                    &home,
+                    &pack.manifest().metadata.namespace,
+                    &pack.manifest().version,
+                    plugin,
+                    artifact_bytes,
+                )?);
+            }
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),
                 "installed_assets": root,
+                "installed_plugins": installed_plugins,
                 "source": pack.label(),
             }))
         }

@@ -1,26 +1,28 @@
-//! How a pack travels: as one `.afb`.
+//! How a pack travels: as a gzip-compressed tar.
 //!
 //! A pack used to exist only compiled into this binary, so `gents pack
 //! list` could show nothing that did not ship with the build. To publish a
 //! pack and install it somewhere else it has to become bytes, and those
 //! bytes have to be checkable by whoever receives them.
 //!
-//! The container is the one this ecosystem already has. An `.afb` is what
-//! every Afterburner tool is published and served as, so a pack that is
-//! also an `.afb` needs no second format anywhere: the registry that
-//! already stores, digests and serves tool packages stores, digests and
-//! serves packs, and a pack that carries compiled tools is one artifact
-//! rather than an archive plus a pile of modules.
-//!
-//! The layout inside is plain:
+//! The container is the plain one, not Afterburner's own `.afb`: a pack is
+//! a directory of documents, schemas, and prompts with a manifest on top,
+//! not a program with an entry point, so it needs nothing an `.afb`
+//! provides that a tar does not. A `.tar.gz` holds:
 //!
 //! ```text
-//! afb.toml                          the package identity the registry indexes
-//! manifold.json                     what this pack's tools may reach
-//! source/manifest.json              the pack manifest
-//! source/<asset>                    every asset the manifest declares,
-//!                                   including each tool's compiled module
+//! manifest.json                     the pack manifest
+//! <asset>                           every asset the manifest declares,
+//!                                   including each plugin's compiled
+//!                                   artifact under plugins/
 //! ```
+//!
+//! A plugin is different: it is a complete, first-class Afterburner `.afb`,
+//! publishable and installable on its own, and also carried inside a pack
+//! as one of its declared assets (see [`crate::plugin`] for how one runs).
+//! Nesting an `.afb` inside a `.tar.gz` costs nothing extra here, because
+//! this file never looks inside a plugin's bytes - it just carries them
+//! like any other declared asset.
 //!
 //! Two properties are the point.
 //!
@@ -30,99 +32,153 @@
 //! neither the route a pack took nor the compression it arrived under can
 //! change what it is.
 //!
-//! And a pack's tools travel inside it. A tool's compiled module is a
-//! declared asset, so the pack's own digest covers it: a module cannot be
-//! swapped underneath the name it was admitted under without changing the
-//! pack.
+//! And a pack's plugins travel inside it. A plugin's compiled artifact is a
+//! declared asset, so the pack's own digest covers it: an artifact cannot
+//! be swapped underneath the name it was admitted under without changing
+//! the pack.
 
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::Path;
 
-use afterburner_afb::{manifest, pack, Afb, Manifest};
-use afterburner_core::manifold::Manifold;
 use anyhow::{ensure, Context, Result};
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 
-use crate::pack::{declared_paths, validate_manifest, PackManifest, PackTool};
-
-/// Where a pack's own files sit inside the `.afb`. Under `source/`,
-/// because that is the member set the codec carries byte-exact and the one
-/// an Afterburner runtime already treats as the package's bundled assets.
-const SOURCE_PREFIX: &str = "source/";
+use crate::pack::{
+    declared_paths, is_distributable_asset_path, validate_manifest, PackManifest, PackPlugin,
+};
 
 /// The namespace a pack is published under when its manifest names none.
 pub const DEFAULT_NAMESPACE: &str = "gents";
 
-/// What `afb.toml` records as the language of a pack. Packs are not
-/// executed as a program by the Afterburner runner; the field is required
-/// by the format and this is the honest value for it.
-const PACK_LANGUAGE: &str = "gents-pack";
+/// Hard cap on a pack's compressed size. A bundled pack today tops out
+/// under a megabyte (the largest, `grok_tui_port`, carries 139 assets in
+/// under a megabyte); a plugin's compiled `.afb` is usually a WASI command
+/// module of a few hundred kilobytes, and at the top end a Python plugin's
+/// self-contained pyodide bundle runs to a few megabytes, so 64 MiB is
+/// generous headroom, not a tight fit, and is checked before a single byte
+/// is decompressed.
+pub const MAX_PACK_BYTES: usize = 64 * 1024 * 1024;
 
-/// A pack read out of an `.afb`.
+/// Hard cap on total decompressed bytes, enforced by counting bytes as they
+/// come out of the decoder rather than trusted from a header: gzip's own
+/// trailer records the uncompressed size mod 2^32, which a crafted stream
+/// can make lie, and a tar entry's declared size is just as easy to forge.
+/// Matches `afterburner_afb`'s own `MAX_DECOMPRESSED_BYTES` for the
+/// identical reason (zip-bomb defense at the same order of magnitude).
+pub const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Hard cap on the number of tar entries. A pack bundles a manifest, docs,
+/// schemas and plugin artifacts, not an operator's whole workspace; the
+/// largest bundled pack today carries 139. Four figures is headroom, not a
+/// design target, and it bounds the cost of the entry-count check itself.
+pub const MAX_ENTRIES: usize = 4096;
+
+/// A pack read out of a `.tar.gz`.
 ///
-/// Held in memory rather than streamed: a pack is small by the codec's own
-/// bounds, every consumer wants random access to declared assets, and the
-/// alternative is a temporary directory the caller has to clean up.
-pub struct PackAfb {
+/// Held in memory rather than streamed: a pack is small by this module's
+/// own bounds, every consumer wants random access to declared assets, and
+/// the alternative is a temporary directory the caller has to clean up.
+pub struct PackArchive {
     manifest: PackManifest,
     assets: BTreeMap<String, Vec<u8>>,
-    digest: [u8; 32],
+    /// SHA-256 of the exact `.tar.gz` bytes this was parsed from.
+    artifact_digest: [u8; 32],
 }
 
-impl std::fmt::Debug for PackAfb {
+impl std::fmt::Debug for PackArchive {
     /// Names the pack and what it carries, never the bytes.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PackAfb")
+        f.debug_struct("PackArchive")
             .field("name", &self.manifest.name)
             .field("version", &self.manifest.version)
             .field("assets", &self.assets.len())
-            .field("tools", &self.manifest.metadata.tools.len())
+            .field("plugins", &self.manifest.metadata.plugins.len())
             .finish()
     }
 }
 
-impl PackAfb {
-    /// Reads and fully validates a pack `.afb`.
+impl PackArchive {
+    /// Reads and fully validates a pack `.tar.gz`.
     ///
-    /// The codec has already enforced every container bound by the time
-    /// this sees the bytes. What is added here is the pack's own contract:
-    /// the manifest is held to exactly the rules a bundled pack is held
-    /// to, every declared asset is present, and no member is present that
-    /// the manifest did not declare.
+    /// Hostile-input safe: the compressed size is checked before anything
+    /// is decompressed, the decompressed byte count and entry count are
+    /// bounded while streaming rather than trusted from a header, every
+    /// member path is checked against the same rule a distributable asset
+    /// has to satisfy everywhere else (no escape, no symlink, no
+    /// non-regular entry), and duplicate members are refused. Once the
+    /// bytes are in, the pack's own contract is checked: the manifest is
+    /// held to exactly the rules a bundled pack is held to, every declared
+    /// asset is present, and no member is present that the manifest did
+    /// not declare.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let afb = Afb::from_bytes(bytes)
-            .map_err(|error| anyhow::anyhow!("this is not a readable .afb: {error}"))?;
-        Self::from_afb(&afb)
+        Self::from_bytes_bounded(bytes, MAX_PACK_BYTES, MAX_DECOMPRESSED_BYTES, MAX_ENTRIES)
     }
 
-    /// The same, for a caller that has already parsed the container.
-    pub fn from_afb(afb: &Afb) -> Result<Self> {
-        let mut assets: BTreeMap<String, Vec<u8>> = afb
-            .source
-            .iter()
-            .filter_map(|(path, bytes)| {
-                path.strip_prefix(SOURCE_PREFIX)
-                    .map(|relative| (relative.to_owned(), bytes.clone()))
-            })
-            .collect();
+    /// The same, with the size/count bounds passed explicitly instead of
+    /// this module's own constants - the seam the bound-enforcement tests
+    /// use, so they can prove a cap actually fires against a small fixture
+    /// instead of needing a multi-hundred-megabyte one to reach the real
+    /// limit.
+    fn from_bytes_bounded(
+        bytes: &[u8],
+        max_compressed: usize,
+        max_decompressed: u64,
+        max_entries: usize,
+    ) -> Result<Self> {
+        ensure!(
+            bytes.len() <= max_compressed,
+            "pack is {} bytes, over the {} byte compressed bound",
+            bytes.len(),
+            max_compressed
+        );
+
+        let gz = GzDecoder::new(bytes);
+        let bounded = BoundedReader::new(gz, max_decompressed);
+        let mut archive = tar::Archive::new(bounded);
+
+        let mut assets: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut entry_count = 0usize;
+        for entry in archive.entries().context("reading the pack tar stream")? {
+            let mut entry = entry.context("reading a pack tar entry")?;
+            entry_count += 1;
+            ensure!(
+                entry_count <= max_entries,
+                "pack carries more than {max_entries} entries"
+            );
+            ensure!(
+                entry.header().entry_type().is_file(),
+                "pack member {:?} is not a regular file",
+                entry.path().ok().map(|p| p.display().to_string())
+            );
+            let path = entry
+                .path()
+                .context("reading a pack member's path")?
+                .to_str()
+                .context("a pack member path is not valid UTF-8")?
+                .to_owned();
+            ensure!(
+                is_distributable_asset_path(&path),
+                "pack member {path:?} is not a path a pack may carry"
+            );
+            let mut data = Vec::new();
+            entry
+                .read_to_end(&mut data)
+                .with_context(|| format!("reading pack member {path:?}"))?;
+            ensure!(
+                assets.insert(path.clone(), data).is_none(),
+                "pack carries {path:?} twice"
+            );
+        }
+
         let manifest_bytes = assets
-            .get("manifest.json")
-            .context("this .afb carries no pack manifest, so it is not a pack")?
-            .clone();
+            .remove("manifest.json")
+            .context("this archive carries no manifest.json, so it is not a pack")?;
         let manifest: PackManifest = serde_json::from_slice(&manifest_bytes)
             .context("the pack manifest is not valid JSON")?;
         validate_manifest(&manifest.name.clone(), &manifest)?;
-        ensure!(
-            afb.manifest.package.name == manifest.name,
-            "the package says it is {:?} and the pack manifest says {:?}",
-            afb.manifest.package.name,
-            manifest.name
-        );
-        ensure!(
-            afb.manifest.package.version == manifest.version,
-            "the package says version {:?} and the pack manifest says {:?}",
-            afb.manifest.package.version,
-            manifest.version
-        );
 
         for path in &manifest.metadata.assets {
             ensure!(
@@ -142,10 +198,11 @@ impl PackAfb {
             );
         }
         assets.insert("manifest.json".to_owned(), manifest_bytes);
+
         Ok(Self {
             manifest,
             assets,
-            digest: afb.digest,
+            artifact_digest: sha256(bytes),
         })
     }
 
@@ -153,21 +210,25 @@ impl PackAfb {
         &self.manifest
     }
 
-    /// The tools this pack ships.
-    pub fn tools(&self) -> &[PackTool] {
-        &self.manifest.metadata.tools
+    /// The plugins this pack ships.
+    pub fn plugins(&self) -> &[PackPlugin] {
+        &self.manifest.metadata.plugins
     }
 
-    /// One tool's compiled module, by the name it was declared under.
-    pub fn tool_module(&self, name: &str) -> Result<&[u8]> {
-        let tool = self
-            .manifest
+    /// One plugin's declaration, by the name it was declared under.
+    pub fn plugin(&self, name: &str) -> Result<&PackPlugin> {
+        self.manifest
             .metadata
-            .tools
+            .plugins
             .iter()
-            .find(|tool| tool.name == name)
-            .with_context(|| format!("this pack ships no tool called {name:?}"))?;
-        self.asset(&tool.module)
+            .find(|plugin| plugin.name == name)
+            .with_context(|| format!("this pack ships no plugin called {name:?}"))
+    }
+
+    /// One plugin's compiled `.afb`, by the name it was declared under.
+    pub fn plugin_artifact(&self, name: &str) -> Result<&[u8]> {
+        let plugin = self.plugin(name)?;
+        self.asset(&plugin.artifact)
     }
 
     /// One asset's bytes. `manifest.json` is addressable like any other.
@@ -184,11 +245,11 @@ impl PackAfb {
         crate::pack::digest_declared_assets(&self.manifest, |path| self.asset(path))
     }
 
-    /// SHA-256 of the exact `.afb` bytes this was read from. What a
+    /// SHA-256 of the exact `.tar.gz` bytes this was read from. What a
     /// registry addresses the artifact by, and what a download is checked
     /// against before it is opened.
     pub fn artifact_digest(&self) -> String {
-        afterburner_afb::digest::hex(&self.digest)
+        hex32(self.artifact_digest)
     }
 
     /// Writes the pack out as a directory, creating parents as needed.
@@ -199,7 +260,7 @@ impl PackAfb {
     pub fn write_to(&self, dir: &Path) -> Result<()> {
         for (path, bytes) in &self.assets {
             ensure!(
-                crate::pack::is_distributable_asset_path(path),
+                is_distributable_asset_path(path),
                 "refusing to write pack asset {path:?}"
             );
             let target = dir.join(path);
@@ -214,33 +275,58 @@ impl PackAfb {
     }
 }
 
-/// What a pack is published as: the namespace and version its `.afb`
-/// carries, which is how a registry indexes and a client asks for it.
-#[derive(Clone, Debug)]
-pub struct PublishAs {
-    pub namespace: String,
+/// A [`Read`] that errors the moment more than `limit` bytes have come out
+/// of it, so a decompressed stream (whose true size a gzip trailer's
+/// 32-bit, attacker-controlled ISIZE cannot be trusted to report) can never
+/// make [`PackArchive::from_bytes`] spend unbounded memory before this file
+/// gets a chance to refuse it.
+struct BoundedReader<R> {
+    inner: R,
+    limit: u64,
+    read: u64,
 }
 
-impl Default for PublishAs {
-    fn default() -> Self {
+impl<R> BoundedReader<R> {
+    fn new(inner: R, limit: u64) -> Self {
         Self {
-            namespace: DEFAULT_NAMESPACE.to_owned(),
+            inner,
+            limit,
+            read: 0,
         }
     }
 }
 
-/// Packs a pack directory into `.afb` bytes, returning them with the
+impl<R: Read> Read for BoundedReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.read += n as u64;
+        if self.read > self.limit {
+            return Err(std::io::Error::other(format!(
+                "pack decompresses to more than {} decompressed bytes",
+                self.limit
+            )));
+        }
+        Ok(n)
+    }
+}
+
+/// Packs a pack directory into `.tar.gz` bytes, returning them with the
 /// artifact's own digest.
 ///
 /// The manifest decides what travels: an asset it declares and the
 /// directory does not have is an error, and a file the directory has and
 /// the manifest does not declare is simply not packed. What ships is
 /// exactly what the pack says it is, which is also what its digest covers.
+/// Entries are written via [`crate::pack::declared_paths`] - the same
+/// sorted, deduplicated path list the pack's own digest is computed over -
+/// so packing the same directory twice, on any machine, gives byte-identical
+/// output: every tar header pins `mtime`/`uid`/`gid`/`mode`, and gzip's own
+/// header carries no filename, comment, or timestamp either.
 ///
-/// Compiling a pack's tools is not this function's job. It packs what is
-/// on disk, so a module a tool declares must already be built; `gents pack
-/// build` is what compiles first and then calls this.
-pub fn pack_dir(dir: &Path, publish_as: &PublishAs) -> Result<(Vec<u8>, String)> {
+/// Compiling a pack's plugins is not this function's job. It packs what is
+/// on disk, so an artifact a plugin declares must already be built; `gents
+/// pack build` is what compiles first and then calls this.
+pub fn pack_dir(dir: &Path) -> Result<(Vec<u8>, String)> {
     let manifest_path = dir.join("manifest.json");
     let manifest_bytes = std::fs::read(&manifest_path)
         .with_context(|| format!("reading {}", manifest_path.display()))?;
@@ -248,148 +334,58 @@ pub fn pack_dir(dir: &Path, publish_as: &PublishAs) -> Result<(Vec<u8>, String)>
         .with_context(|| format!("parsing {}", manifest_path.display()))?;
     validate_manifest(&manifest.name.clone(), &manifest)?;
 
-    let afb_manifest = afb_manifest_for(&manifest, publish_as)?;
-    let mut builder = pack::Builder::new(afb_manifest, manifold_for(&manifest)?);
-    builder = builder.source(
-        format!("{SOURCE_PREFIX}manifest.json"),
-        manifest_bytes.clone(),
-    );
-    for path in &manifest.metadata.assets {
-        let source = dir.join(path);
-        let bytes = std::fs::read(&source).with_context(|| {
-            format!(
-                "the pack declares {path:?} and {} is unreadable; a tool module has to be built \
-                 before the pack is packed",
-                source.display()
-            )
-        })?;
-        builder = builder.source(format!("{SOURCE_PREFIX}{path}"), bytes);
-    }
-    let (bytes, digest) = builder
-        .build()
-        .map_err(|error| anyhow::anyhow!("building the pack .afb: {error}"))?;
-    Ok((bytes, afterburner_afb::digest::hex(&digest)))
-}
-
-/// The `afb.toml` a pack is published under.
-fn afb_manifest_for(manifest: &PackManifest, publish_as: &PublishAs) -> Result<Manifest> {
-    let toml = format!(
-        "[format]\nversion = \"{}\"\n\n\
-         [package]\nname = \"{}\"\nnamespace = \"{}\"\nversion = \"{}\"\n\
-         language = \"{PACK_LANGUAGE}\"\nentry = \"{SOURCE_PREFIX}manifest.json\"\n\
-         description = {}\nkeywords = {}\n\n\
-         [runtime]\nmin = \"{}\"\n",
-        afterburner_afb::reader_format_version(),
-        manifest.name,
-        publish_as.namespace,
-        manifest.version,
-        serde_json::to_string(&manifest.description).context("encoding the description")?,
-        serde_json::to_string(&manifest.metadata.tags).context("encoding the tags")?,
-        afterburner_core::VERSION,
-    );
-    manifest::Manifest::parse(&toml)
-        .map_err(|error| anyhow::anyhow!("building this pack's afb.toml: {error}"))
-}
-
-/// What the pack's tools may reach.
-///
-/// A pack that declares no manifold for a tool asks for nothing, which is
-/// the right default for a pure transform. A pack that does declare one
-/// gets it as written; an operator's ceiling narrows it at admission and
-/// can never widen it, which is enforced where the tool runs, not here.
-fn manifold_for(manifest: &PackManifest) -> Result<Manifold> {
-    let mut requested = Manifold::default();
-    for tool in &manifest.metadata.tools {
-        let Some(declared) = &tool.manifold else {
-            continue;
+    let mut builder = tar::Builder::new(Vec::new());
+    for path in declared_paths(&manifest) {
+        let bytes = if path == "manifest.json" {
+            manifest_bytes.clone()
+        } else {
+            let source = dir.join(&path);
+            std::fs::read(&source).with_context(|| {
+                format!(
+                    "the pack declares {path:?} and {} is unreadable; a plugin's artifact has to \
+                     be built before the pack is packed",
+                    source.display()
+                )
+            })?
         };
-        let parsed: Manifold = serde_json::from_value(declared.clone())
-            .with_context(|| format!("the manifold declared by tool {:?} is not one", tool.name))?;
-        // The package's manifold is the union of what its tools ask for,
-        // because the container carries one. Each tool is still admitted
-        // against its own declaration where it runs, so the union widens
-        // nothing at the call.
-        requested = union_manifold(requested, parsed);
+        append_entry(&mut builder, &path, &bytes)?;
     }
-    Ok(requested)
+    let tar_bytes = builder
+        .into_inner()
+        .context("finishing the pack tar stream")?;
+
+    let mut gz = GzEncoder::new(Vec::new(), Compression::best());
+    gz.write_all(&tar_bytes).context("compressing the pack")?;
+    let bytes = gz.finish().context("finishing pack compression")?;
+    let digest = hex32(sha256(&bytes));
+
+    Ok((bytes, digest))
 }
 
-/// The wider of two capability sets, field by field.
-///
-/// Written out rather than derived, so a capability added to `Manifold`
-/// upstream fails this to compile instead of silently defaulting one way
-/// or the other. Where two grants of the same shape differ, the union is
-/// the concatenation of what each asked for, because a package's manifold
-/// has to cover every tool it carries; each tool is still admitted against
-/// its own declaration where it runs, so this widens nothing at the call.
-fn union_manifold(left: Manifold, right: Manifold) -> Manifold {
-    use afterburner_core::manifold::{EnvAccess, FsAccess, NetAccess};
+/// Appends one member with every reproducibility-affecting header field
+/// pinned: fixed mode, zero mtime/uid/gid, and a plain regular-file type,
+/// so nothing about the machine or moment a pack was built leaks into its
+/// bytes.
+fn append_entry(builder: &mut tar::Builder<Vec<u8>>, path: &str, data: &[u8]) -> Result<()> {
+    let mut header = tar::Header::new_ustar();
+    header.set_size(data.len() as u64);
+    header.set_mode(0o644);
+    header.set_mtime(0);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_entry_type(tar::EntryType::Regular);
+    builder
+        .append_data(&mut header, path, data)
+        .with_context(|| format!("writing pack member {path:?}"))
+}
 
-    /// Two host allow-lists become one, and either side asking for "any
-    /// host" makes the union any host.
-    fn hosts(left: &Option<Vec<String>>, right: &Option<Vec<String>>) -> Option<Vec<String>> {
-        match (left, right) {
-            (None, _) | (_, None) => None,
-            (Some(left), Some(right)) => {
-                let mut merged = left.clone();
-                merged.extend(right.iter().cloned());
-                merged.sort();
-                merged.dedup();
-                Some(merged)
-            }
-        }
-    }
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
 
-    fn roots(left: &[std::path::PathBuf], right: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
-        let mut merged = left.to_vec();
-        merged.extend(right.iter().cloned());
-        merged.sort();
-        merged.dedup();
-        merged
-    }
-
-    Manifold {
-        fs: match (&left.fs, &right.fs) {
-            (FsAccess::None, other) | (other, FsAccess::None) => other.clone(),
-            // Read-write is the wider of the two, so a mixed pair takes
-            // every root either side named at the wider level.
-            (FsAccess::ReadWrite(a), FsAccess::ReadWrite(b))
-            | (FsAccess::ReadWrite(a), FsAccess::ReadOnly(b))
-            | (FsAccess::ReadOnly(a), FsAccess::ReadWrite(b)) => FsAccess::ReadWrite(roots(a, b)),
-            (FsAccess::ReadOnly(a), FsAccess::ReadOnly(b)) => FsAccess::ReadOnly(roots(a, b)),
-        },
-        net: match (&left.net, &right.net) {
-            (NetAccess::None, other) | (other, NetAccess::None) => other.clone(),
-            (NetAccess::OutboundFull(a), NetAccess::OutboundFull(b))
-            | (NetAccess::OutboundFull(a), NetAccess::OutboundHttp(b))
-            | (NetAccess::OutboundHttp(a), NetAccess::OutboundFull(b)) => {
-                NetAccess::OutboundFull(hosts(a, b))
-            }
-            (NetAccess::OutboundHttp(a), NetAccess::OutboundHttp(b)) => {
-                NetAccess::OutboundHttp(hosts(a, b))
-            }
-        },
-        env: match (&left.env, &right.env) {
-            (EnvAccess::None, other) | (other, EnvAccess::None) => other.clone(),
-            (EnvAccess::Full, _) | (_, EnvAccess::Full) => EnvAccess::Full,
-            (EnvAccess::AllowList(a), EnvAccess::AllowList(b)) => {
-                let mut merged = a.clone();
-                merged.extend(b.iter().cloned());
-                merged.sort();
-                merged.dedup();
-                EnvAccess::AllowList(merged)
-            }
-        },
-        // A pack's tool is called, never a server: nothing in a pack has
-        // a reason to bind a port, so this stays denied whatever either
-        // side asked for, and a tool that wanted one is refused when the
-        // pack is validated rather than quietly granted here.
-        listen: afterburner_core::manifold::ListenAccess::None,
-        crypto: left.crypto || right.crypto,
-        child_process: left.child_process || right.child_process,
-        allow_exit: left.allow_exit || right.allow_exit,
-        http_timeout_ms: left.http_timeout_ms.max(right.http_timeout_ms),
-    }
+fn hex32(bytes: [u8; 32]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 #[cfg(test)]
@@ -414,8 +410,8 @@ mod tests {
     #[test]
     fn a_packed_pack_reads_back_as_the_same_pack() {
         let (_guard, root) = bundled_pack_dir("mailbox");
-        let (bytes, _) = pack_dir(&root, &PublishAs::default()).expect("packing");
-        let packed = PackAfb::from_bytes(&bytes).expect("reading back");
+        let (bytes, _) = pack_dir(&root).expect("packing");
+        let packed = PackArchive::from_bytes(&bytes).expect("reading back");
 
         let bundled = crate::pack::resolve_pack("mailbox").expect("a bundled pack");
         assert_eq!(packed.manifest().name, bundled.manifest.name);
@@ -432,8 +428,8 @@ mod tests {
     #[test]
     fn a_pack_has_the_same_identity_however_it_arrived() {
         let (_guard, root) = bundled_pack_dir("mailbox");
-        let (bytes, _) = pack_dir(&root, &PublishAs::default()).expect("packing");
-        let packed = PackAfb::from_bytes(&bytes).expect("reading");
+        let (bytes, _) = pack_dir(&root).expect("packing");
+        let packed = PackArchive::from_bytes(&bytes).expect("reading");
         let bundled = crate::pack::resolve_pack("mailbox").expect("a bundled pack");
         assert_eq!(
             packed.digest().expect("packed digest"),
@@ -445,8 +441,8 @@ mod tests {
     #[test]
     fn packing_twice_gives_the_same_bytes() {
         let (_guard, root) = bundled_pack_dir("mailbox");
-        let (first, first_digest) = pack_dir(&root, &PublishAs::default()).expect("first");
-        let (second, second_digest) = pack_dir(&root, &PublishAs::default()).expect("second");
+        let (first, first_digest) = pack_dir(&root).expect("first");
+        let (second, second_digest) = pack_dir(&root).expect("second");
         assert_eq!(
             first, second,
             "a rebuild that changes nothing changes no bytes"
@@ -455,40 +451,49 @@ mod tests {
     }
 
     #[test]
-    fn a_pack_is_an_afb_a_registry_can_index() {
+    fn a_pack_is_a_tar_gz_any_archive_tool_can_read() {
         let (_guard, root) = bundled_pack_dir("mailbox");
-        let (bytes, digest) = pack_dir(&root, &PublishAs::default()).expect("packing");
-        // The registry parses artifacts with the codec, not with anything
-        // of ours, so this is the check that a pack really is publishable
-        // without the registry learning a second format.
-        let afb = Afb::from_bytes(&bytes).expect("the codec reads it");
-        assert_eq!(afb.qualified_name(), "gents/mailbox");
-        assert_eq!(afb.manifest.package.version, "1.0.0");
-        assert_eq!(afterburner_afb::digest::hex(&afb.digest), digest);
+        let (bytes, digest) = pack_dir(&root).expect("packing");
+        // Decoded with the same crates any other consumer would use, not
+        // with anything of ours, so this is the check that a pack really
+        // is a plain tar.gz without the registry learning a second format.
+        let mut archive = tar::Archive::new(GzDecoder::new(bytes.as_slice()));
+        let names: Vec<String> = archive
+            .entries()
+            .expect("entries")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .path()
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        assert!(names.contains(&"manifest.json".to_owned()));
+        let packed = PackArchive::from_bytes(&bytes).expect("and it is a pack");
         assert_eq!(
-            PackAfb::from_afb(&afb)
-                .expect("and it is a pack")
-                .digest()
-                .unwrap(),
+            packed.digest().unwrap(),
             crate::pack::resolve_pack("mailbox").unwrap().digest
+        );
+        assert_eq!(
+            packed.artifact_digest(),
+            digest,
+            "pack_dir's returned digest is the same artifact digest PackArchive computes"
         );
     }
 
     #[test]
-    fn an_afb_that_is_not_a_pack_is_refused() {
-        let toml = format!(
-            "[format]\nversion = \"{}\"\n\n[package]\nname = \"widget\"\nnamespace = \"acme\"\n\
-             version = \"0.1.0\"\nlanguage = \"js\"\nentry = \"source/main.js\"\n\n\
-             [runtime]\nmin = \"{}\"\n",
-            afterburner_afb::reader_format_version(),
-            afterburner_core::VERSION,
-        );
-        let manifest = manifest::Manifest::parse(&toml).expect("a manifest");
-        let (bytes, _) = pack::Builder::new(manifest, Manifold::default())
-            .source("source/main.js", b"module.exports = () => {};".to_vec())
-            .build()
-            .expect("building");
-        let error = PackAfb::from_bytes(&bytes).expect_err("must be refused");
+    fn an_archive_with_no_manifest_is_refused() {
+        let mut builder = tar::Builder::new(Vec::new());
+        append_entry(&mut builder, "README.md", b"# not a pack").expect("append");
+        let tar_bytes = builder.into_inner().expect("tar bytes");
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_bytes).expect("write");
+        let bytes = gz.finish().expect("finish");
+
+        let error = PackArchive::from_bytes(&bytes).expect_err("must be refused");
         assert!(format!("{error:#}").contains("not a pack"), "{error:#}");
     }
 
@@ -496,9 +501,9 @@ mod tests {
     fn a_member_the_manifest_does_not_declare_is_refused() {
         let (_guard, root) = bundled_pack_dir("mailbox");
         std::fs::write(root.join("stowaway.md"), b"not declared").expect("write");
-        let (bytes, _) = pack_dir(&root, &PublishAs::default()).expect("packing");
+        let (bytes, _) = pack_dir(&root).expect("packing");
         // Packing ignores it, because the manifest is the description.
-        assert!(PackAfb::from_bytes(&bytes)
+        assert!(PackArchive::from_bytes(&bytes)
             .expect("reading")
             .asset("stowaway.md")
             .is_err());
@@ -506,23 +511,23 @@ mod tests {
         // And an archive built to carry it anyway is refused on the way in.
         let manifest_bytes = std::fs::read(root.join("manifest.json")).expect("manifest");
         let manifest: PackManifest = serde_json::from_slice(&manifest_bytes).expect("parse");
-        let mut builder = pack::Builder::new(
-            afb_manifest_for(&manifest, &PublishAs::default()).expect("afb manifest"),
-            Manifold::default(),
-        )
-        .source(format!("{SOURCE_PREFIX}manifest.json"), manifest_bytes)
-        .source(
-            format!("{SOURCE_PREFIX}stowaway.md"),
-            b"not declared".to_vec(),
-        );
+        let mut builder = tar::Builder::new(Vec::new());
+        append_entry(&mut builder, "manifest.json", &manifest_bytes).expect("append");
+        append_entry(&mut builder, "stowaway.md", b"not declared").expect("append");
         for path in &manifest.metadata.assets {
-            builder = builder.source(
-                format!("{SOURCE_PREFIX}{path}"),
-                std::fs::read(root.join(path)).expect("asset"),
-            );
+            append_entry(
+                &mut builder,
+                path,
+                &std::fs::read(root.join(path)).expect("asset"),
+            )
+            .expect("append");
         }
-        let (smuggled, _) = builder.build().expect("building");
-        let error = PackAfb::from_bytes(&smuggled).expect_err("must be refused");
+        let tar_bytes = builder.into_inner().expect("tar bytes");
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_bytes).expect("write");
+        let smuggled = gz.finish().expect("finish");
+
+        let error = PackArchive::from_bytes(&smuggled).expect_err("must be refused");
         assert!(
             format!("{error:#}").contains("does not declare"),
             "{error:#}"
@@ -537,18 +542,92 @@ mod tests {
                 .expect("parse");
         let dropped = manifest.metadata.assets[0].clone();
         std::fs::remove_file(root.join(&dropped)).expect("remove");
-        let error = pack_dir(&root, &PublishAs::default()).expect_err("must be refused");
+        let error = pack_dir(&root).expect_err("must be refused");
         assert!(format!("{error:#}").contains(&dropped), "{error:#}");
+    }
+
+    #[test]
+    fn a_path_that_escapes_the_pack_is_refused() {
+        // `tar::Header::set_path` refuses a `..` component outright (its
+        // own defense against the classic archive-extraction escape), so a
+        // hostile entry has to be written at the raw-byte level to prove
+        // this file's own, independent check refuses it too.
+        let mut header = tar::Header::new_ustar();
+        header.set_size(4);
+        header.set_mode(0o644);
+        header.set_mtime(0);
+        header.set_entry_type(tar::EntryType::Regular);
+        let name = b"../escape.txt";
+        header.as_old_mut().name[..name.len()].copy_from_slice(name);
+        header.set_cksum();
+
+        let mut builder = tar::Builder::new(Vec::new());
+        append_entry(&mut builder, "manifest.json", b"{}").expect("append");
+        builder
+            .append(&header, &b"nope"[..])
+            .expect("append escaping entry");
+        let tar_bytes = builder.into_inner().expect("tar bytes");
+        let mut gz = GzEncoder::new(Vec::new(), Compression::default());
+        gz.write_all(&tar_bytes).expect("write");
+        let bytes = gz.finish().expect("finish");
+
+        let error = PackArchive::from_bytes(&bytes).expect_err("must be refused");
+        assert!(
+            format!("{error:#}").contains("is not a path a pack may carry"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_pack_over_the_compressed_size_bound_is_refused() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        let (bytes, _) = pack_dir(&root).expect("packing");
+        let error = PackArchive::from_bytes_bounded(
+            &bytes,
+            bytes.len() - 1,
+            MAX_DECOMPRESSED_BYTES,
+            MAX_ENTRIES,
+        )
+        .expect_err("must be refused");
+        assert!(
+            format!("{error:#}").contains("compressed bound"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_pack_over_the_decompressed_size_bound_is_refused() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        let (bytes, _) = pack_dir(&root).expect("packing");
+        let error = PackArchive::from_bytes_bounded(&bytes, MAX_PACK_BYTES, 16, MAX_ENTRIES)
+            .expect_err("must be refused");
+        assert!(
+            format!("{error:#}").contains("decompressed bytes"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn a_pack_over_the_entry_count_bound_is_refused() {
+        let (_guard, root) = bundled_pack_dir("mailbox");
+        let (bytes, _) = pack_dir(&root).expect("packing");
+        let error =
+            PackArchive::from_bytes_bounded(&bytes, MAX_PACK_BYTES, MAX_DECOMPRESSED_BYTES, 1)
+                .expect_err("must be refused");
+        assert!(
+            format!("{error:#}").contains("more than 1 entries"),
+            "{error:#}"
+        );
     }
 
     #[test]
     fn writing_a_pack_out_reproduces_the_directory_it_came_from() {
         let (_guard, root) = bundled_pack_dir("mailbox");
-        let (bytes, digest) = pack_dir(&root, &PublishAs::default()).expect("packing");
-        let packed = PackAfb::from_bytes(&bytes).expect("reading");
+        let (bytes, digest) = pack_dir(&root).expect("packing");
+        let packed = PackArchive::from_bytes(&bytes).expect("reading");
         let out = tempfile::tempdir().expect("tempdir");
         packed.write_to(out.path()).expect("writing out");
-        let (again, again_digest) = pack_dir(out.path(), &PublishAs::default()).expect("repacking");
+        let (again, again_digest) = pack_dir(out.path()).expect("repacking");
         assert_eq!(
             again, bytes,
             "a pack written to disk and packed again is the same pack"
@@ -557,25 +636,27 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_pack_carries_its_module_and_asks_for_what_the_tool_asks() {
+    fn a_plugin_pack_carries_its_artifact_and_asks_for_what_the_plugin_asks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().join("shipping_tools");
-        std::fs::create_dir_all(root.join("tools")).expect("mkdir");
-        std::fs::write(root.join("README.md"), b"# shipping tools").expect("write");
-        std::fs::write(root.join("tools/format_check.wasm"), b"\0asm\x01\0\0\0").expect("write");
+        let root = dir.path().join("shipping_plugins");
+        std::fs::create_dir_all(root.join("plugins")).expect("mkdir");
+        std::fs::write(root.join("README.md"), b"# shipping plugins").expect("write");
+        std::fs::write(root.join("plugins/format_check.afb"), b"not a real afb yet")
+            .expect("write");
         let manifest = serde_json::json!({
             "manifest_version": 1,
-            "name": "shipping_tools",
+            "name": "shipping_plugins",
             "version": "0.1.0",
             "description": "A pack that is nothing but capabilities",
             "authors": ["gents-ai contributors"],
-            "tags": ["tools"],
-            "kind": "tools",
-            "assets": ["README.md", "tools/format_check.wasm"],
-            "tools": [{
+            "tags": ["plugins"],
+            "kind": "plugins",
+            "assets": ["README.md", "plugins/format_check.afb"],
+            "plugins": [{
                 "name": "format_check",
                 "description": "Checks formatting and says what is wrong",
-                "module": "tools/format_check.wasm",
+                "artifact": "plugins/format_check.afb",
+                "language": "rust",
                 "input_schema": {"type": "object", "properties": {}},
                 "manifold": {"fs": {"ReadOnly": ["/workspace"]}, "net": "None", "env": "None",
                              "crypto": false, "child_process": false, "allow_exit": false,
@@ -588,55 +669,49 @@ mod tests {
         )
         .expect("write");
 
-        let (bytes, _) = pack_dir(&root, &PublishAs::default()).expect("packing a tools pack");
-        let packed = PackAfb::from_bytes(&bytes).expect("reading it back");
-        assert_eq!(packed.tools().len(), 1);
-        assert_eq!(packed.tools()[0].name, "format_check");
+        let (bytes, _) = pack_dir(&root).expect("packing a plugins pack");
+        let packed = PackArchive::from_bytes(&bytes).expect("reading it back");
+        assert_eq!(packed.plugins().len(), 1);
+        assert_eq!(packed.plugins()[0].name, "format_check");
         assert_eq!(
-            packed.tool_module("format_check").expect("the module"),
-            b"\0asm\x01\0\0\0",
-            "a tool's compiled module travels inside the pack"
+            packed
+                .plugin_artifact("format_check")
+                .expect("the artifact"),
+            b"not a real afb yet",
+            "a plugin's compiled artifact travels inside the pack"
         );
-
-        // The package asks the sandbox for what its tool asked for, and
-        // never for a port.
-        let afb = Afb::from_bytes(&bytes).expect("the codec reads it");
-        assert!(matches!(
-            afb.manifold.fs,
-            afterburner_core::manifold::FsAccess::ReadOnly(_)
-        ));
-        assert!(matches!(
-            afb.manifold.listen,
-            afterburner_core::manifold::ListenAccess::None
-        ));
     }
 
     #[test]
-    fn a_tool_whose_module_is_not_a_declared_asset_is_refused() {
+    fn a_plugin_whose_artifact_is_not_a_declared_asset_is_refused() {
         let mut manifest: crate::pack::PackManifest = serde_json::from_value(serde_json::json!({
             "manifest_version": 1,
-            "name": "shipping_tools",
+            "name": "shipping_plugins",
             "version": "0.1.0",
             "description": "A pack that is nothing but capabilities",
             "authors": ["gents-ai contributors"],
-            "tags": ["tools"],
-            "kind": "tools",
+            "tags": ["plugins"],
+            "kind": "plugins",
             "assets": ["README.md"],
-            "tools": [{
+            "plugins": [{
                 "name": "format_check",
                 "description": "Checks formatting",
-                "module": "tools/format_check.wasm",
+                "artifact": "plugins/format_check.afb",
+                "language": "rust",
                 "input_schema": {"type": "object"}
             }]
         }))
         .expect("a manifest");
-        let error = validate_manifest("shipping_tools", &manifest).expect_err("must be refused");
-        assert!(format!("{error:#}").contains("not its module"), "{error:#}");
+        let error = validate_manifest("shipping_plugins", &manifest).expect_err("must be refused");
+        assert!(
+            format!("{error:#}").contains("not its artifact"),
+            "{error:#}"
+        );
 
         manifest
             .metadata
             .assets
-            .push("tools/format_check.wasm".to_owned());
-        validate_manifest("shipping_tools", &manifest).expect("and accepted once declared");
+            .push("plugins/format_check.afb".to_owned());
+        validate_manifest("shipping_plugins", &manifest).expect("and accepted once declared");
     }
 }

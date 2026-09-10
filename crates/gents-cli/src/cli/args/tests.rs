@@ -812,7 +812,7 @@ fn pack_install_parses_registry_override() {
 
 #[test]
 fn pack_build_parses_dir_out_and_all() {
-    match parse_pack(&["build", "packs/mailbox", "--out", "/tmp/mailbox.afb"]) {
+    match parse_pack(&["build", "packs/mailbox", "--out", "/tmp/mailbox.tar.gz"]) {
         PackCommand::Build(args) => {
             assert_eq!(
                 args.dir.as_deref(),
@@ -820,18 +820,16 @@ fn pack_build_parses_dir_out_and_all() {
             );
             assert_eq!(
                 args.out.as_deref(),
-                Some(std::path::Path::new("/tmp/mailbox.afb"))
+                Some(std::path::Path::new("/tmp/mailbox.tar.gz"))
             );
             assert!(!args.all);
-            assert_eq!(args.namespace, "gents");
         }
         _ => panic!("expected pack build"),
     }
-    match parse_pack(&["build", "--all", "--namespace", "acme"]) {
+    match parse_pack(&["build", "--all"]) {
         PackCommand::Build(args) => {
             assert!(args.dir.is_none());
             assert!(args.all);
-            assert_eq!(args.namespace, "acme");
         }
         _ => panic!("expected pack build --all"),
     }
@@ -852,11 +850,16 @@ fn pack_search_and_publish_parse() {
     }
     assert!(matches!(parse_pack(&["search"]), PackCommand::Search(args) if args.query.is_none()));
 
-    match parse_pack(&["publish", "/tmp/mailbox-1.0.0.afb", "--token", "gcpat_test"]) {
+    match parse_pack(&[
+        "publish",
+        "/tmp/mailbox-1.0.0.tar.gz",
+        "--token",
+        "gcpat_test",
+    ]) {
         PackCommand::Publish(args) => {
             assert_eq!(
                 args.file,
-                std::path::PathBuf::from("/tmp/mailbox-1.0.0.afb")
+                std::path::PathBuf::from("/tmp/mailbox-1.0.0.tar.gz")
             );
             assert_eq!(args.token.as_deref(), Some("gcpat_test"));
         }

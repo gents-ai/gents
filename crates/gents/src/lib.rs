@@ -56,7 +56,7 @@ pub mod openai_wire;
 pub mod p2p_observability;
 pub mod pack;
 pub mod pack_archive;
-pub mod pack_tool;
+pub mod plugin;
 pub(crate) mod provider_input;
 /// Exact provider context-window budget policy shared by compaction,
 /// diagnostics, and the final dispatch gate.
