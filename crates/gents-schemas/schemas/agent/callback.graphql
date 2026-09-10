@@ -1,0 +1,11 @@
+# Event action planner; task command hooks stay on Task.
+type Callback @branchable @index(fields: ["agent_did", "callback_id"], unique: true) {
+    callback_id: String
+    agent_did: String @index
+    display_name: String
+    description: String
+    handler: JSON
+    capabilities: [String!]
+    enabled: Boolean @index
+    tags: [String!]
+}

@@ -3832,6 +3832,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "ts-rs",
  "unicode-normalization",
  "uuid",
  "wasmtime",
@@ -4117,6 +4118,7 @@ dependencies = [
  "chrono",
  "ciborium",
  "gents-schemas",
+ "graphql-parser",
  "reqwest 0.12.28",
  "rig-core",
  "serde",
@@ -4124,6 +4126,7 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+ "ts-rs",
 ]
 
 [[package]]

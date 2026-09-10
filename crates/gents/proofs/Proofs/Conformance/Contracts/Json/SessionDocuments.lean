@@ -40,11 +40,18 @@ private def refreshJson (name : String) (event : AgentSession.RequestFact)
   [("name", toJson name), ("operation", toJson "refresh"), ("before", documentJson indexed),
    ("event", requestJson event), ("rows", toJson (rows.map requestJson)), ("now", toJson (4 : Nat)),
    ("after", documentJson (AgentSession.refresh indexed rows event.observed 4))]
+private def renameBefore : AgentSession.Document :=
+  { indexed with title := some ⟨"task title", .task⟩ }
 private def renameJson : Json := Json.mkObj
   [("name", toJson "user_rename_preserves_latest"), ("operation", toJson "rename"),
-   ("before", documentJson indexed), ("now", toJson (1 : Nat)),
+   ("before", documentJson renameBefore), ("now", toJson (1 : Nat)),
    ("title", Json.mkObj [("text", toJson "renamed"), ("source", toJson "user")]),
-   ("after", documentJson (AgentSession.rename indexed (some ⟨"renamed", .user⟩) 1))]
+   ("after", documentJson (AgentSession.rename renameBefore (some ⟨"renamed", .user⟩) 1))]
+private def clearTitleJson : Json := Json.mkObj
+  [("name", toJson "user_clear_preserves_latest"), ("operation", toJson "rename"),
+   ("before", documentJson renameBefore), ("now", toJson (4 : Nat)),
+   ("title", Json.null),
+   ("after", documentJson (AgentSession.rename renameBefore none 4))]
 private def retryStateJson (s : SessionState) : Json := Json.mkObj
   [("session_id", toJson s.sessionId), ("behavior", toJson s.behaviorId),
    ("latest", toJson s.latest), ("requests", toJson ([1, 3].filter
@@ -96,7 +103,7 @@ def sessionDocumentsJson : String := (Json.mkObj
       retryJson "newer_authoritative_row" [old, newerRequest] 101,
       retryJson "wrong_physical_parent" [old] 999,
       retryJson "existing_candidate_missing_from_auxiliary_projection" [old, olderExistingCandidate] 101]),
-   ("projection", toJson [renameJson,
+   ("projection", toJson [renameJson, clearTitleJson,
       advanceJson "stale_admission" old,
       advanceJson "current_admission" newerRequest,
       advanceJson "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed

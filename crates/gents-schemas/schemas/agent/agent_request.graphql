@@ -80,6 +80,8 @@ type AgentRequest @branchable {
     caused_by_parent_tool_call_id: String @index @immutable
     caused_by_parent_tool_call_doc_id: String @index @immutable
     workspace_id: String @index @immutable
+    # Signed principal scope of workspace_id, not host/deployment identity.
+    workspace_owner_agent_did: String @index @immutable
     workspace_authority: String @immutable
     # Signed principal scope of workspace_id, not host/deployment identity.
     workspace_owner_agent_did: String @index @immutable

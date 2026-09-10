@@ -452,18 +452,17 @@ def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentatio
 
 def projectionBehaviorId (rootBehaviorId : String)
     (threadBehaviorId : Option String) : String :=
-  match nonemptyReasoningText threadBehaviorId with
+  match threadBehaviorId with
   | some behaviorId => behaviorId
   | none => rootBehaviorId
 
-def projectedThreadModel (rootModel : String)
-    (projectedChildModel resolvedChildModel : Option String) : String :=
-  match nonemptyReasoningText resolvedChildModel with
-  | some model => model
-  | none =>
-      match nonemptyReasoningText projectedChildModel with
-      | some model => model
-      | none => rootModel
+/-- Display metadata must come from the exact selected principal/behavior pair.
+An unavailable binding stays unavailable; parent metadata is not a substitute. -/
+def projectedThreadModel (selectedOwner selectedBehavior actualOwner actualBehavior : String)
+    (resolvedModel : Option String) : Option String :=
+  if selectedOwner = actualOwner ∧ selectedBehavior = actualBehavior then
+    nonemptyReasoningText resolvedModel
+  else none
 
 def projectedToolIdentity (fallback : String) (selected : Option String) : String :=
   match nonemptyReasoningText selected with
@@ -515,16 +514,24 @@ theorem child_behavior_overrides_root_for_response_metadata :
 theorem absent_child_behavior_keeps_root_response_metadata :
     projectionBehaviorId "root" none = "root" := rfl
 
-theorem resolved_child_model_has_priority :
-    projectedThreadModel "root-model" (some "projected-child")
-      (some "resolved-child") = "resolved-child" := rfl
+theorem exact_binding_supplies_model :
+    projectedThreadModel "child-owner" "child" "child-owner" "child"
+      (some "child-model") = some "child-model" := rfl
 
-theorem projected_child_model_fills_unavailable_behavior :
-    projectedThreadModel "root-model" (some "projected-child") none =
-      "projected-child" := rfl
+theorem unavailable_binding_stays_unavailable :
+    projectedThreadModel "child-owner" "child" "child-owner" "child" none = none := rfl
 
-theorem unavailable_child_model_falls_back_to_root :
-    projectedThreadModel "root-model" none none = "root-model" := rfl
+theorem foreign_owner_cannot_supply_model
+    (selectedOwner selectedBehavior actualOwner actualBehavior : String)
+    (model : Option String) (h : selectedOwner ≠ actualOwner) :
+    projectedThreadModel selectedOwner selectedBehavior actualOwner actualBehavior model = none := by
+  simp [projectedThreadModel, h]
+
+theorem foreign_behavior_cannot_supply_model
+    (selectedOwner selectedBehavior actualOwner actualBehavior : String)
+    (model : Option String) (h : selectedBehavior ≠ actualBehavior) :
+    projectedThreadModel selectedOwner selectedBehavior actualOwner actualBehavior model = none := by
+  simp [projectedThreadModel, h]
 
 theorem selected_tool_identity_overrides_model_facing_name :
     projectedToolIdentity "gents" (some "service-a") = "service-a" := rfl

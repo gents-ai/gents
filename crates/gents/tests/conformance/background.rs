@@ -1370,13 +1370,24 @@ pub(super) async fn generated_r6_background_theorem_witnesses_drive_cascade_canc
         .await
         .expect("cancel bridge with cascade dispatch")
         .expect("cascade dispatch");
-    let gents::tool_call_lifecycle::CascadeDispatch::Local(intent) = dispatch else {
+    let gents::tool_call_lifecycle::CascadeDispatch::Local { intent, child } = dispatch else {
         panic!("local child must use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
-    interrupt_request(db.node.as_ref(), &intent.child_request_id)
-        .await
-        .expect("interrupt child request");
+    gents::interrupt_request_by_doc_id(
+        db.node.as_ref(),
+        child
+            .doc_id
+            .as_deref()
+            .expect("verified physical cascade child"),
+        child
+            .agent_did
+            .as_deref()
+            .expect("verified local child principal"),
+        child.requester_did.as_deref(),
+    )
+    .await
+    .expect("interrupt child request");
     // This isolated consumer has no daemon observer running; use its terminal owner.
     child_lifecycle
         .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))

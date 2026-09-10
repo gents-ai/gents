@@ -51,7 +51,7 @@ def queueState
     (active : Option RequestId)
     (pending : List QueueEntry)
     (terminal : Finset RequestId := ∅) : SessionQueueState :=
-  { sessionId := sessionId
+  { scope := ⟨1, sessionId, none⟩
   , active := active
   , pending := pending
   , terminal := terminal
@@ -159,8 +159,16 @@ def cancelDrainsAutomatedPreservesUserCase : QueueDeadlineConformanceCase :=
   let automated := backgroundCompletionEntry 301 10 drainKey
   let user := userEntry 302 11 none
   let pre := queueState sessionId none [automated, user]
-  let post? := SessionQueue.step? pre (.drainAutomated .backgroundCompletion (some drainKey))
+  let post? := SessionQueue.scopedStep? pre.scope pre (.drainAutomated .backgroundCompletion (some drainKey))
   let post := post?.getD pre
+  let foreignRequester : SessionQueueState :=
+    { pre with scope := ⟨1, sessionId, some 2⟩, pending := [backgroundCompletionEntry 303 12 drainKey] }
+  let foreignOwner : SessionQueueState :=
+    { pre with scope := ⟨2, sessionId, none⟩, pending := [backgroundCompletionEntry 304 13 drainKey] }
+  let requesterPost := (SessionQueue.scopedStep? pre.scope foreignRequester
+    (.drainAutomated .backgroundCompletion (some drainKey))).getD foreignRequester
+  let ownerPost := (SessionQueue.scopedStep? pre.scope foreignOwner
+    (.drainAutomated .backgroundCompletion (some drainKey))).getD foreignOwner
   { name := "cancel_drains_automated_wakeups_preserves_user_pending"
   , group := "queue_cancel"
   , action := "drainAutomated"
@@ -176,6 +184,8 @@ def cancelDrainsAutomatedPreservesUserCase : QueueDeadlineConformanceCase :=
   , queueKey := some (queueKeyLabel QueueSource.backgroundCompletion sessionId)
   , postCoalescedPendingCount :=
       coalescedPendingCount QueueSource.backgroundCompletion drainKey post.pending
+  , preservedForeignRequesterRequestIds := requestIds requesterPost.pending
+  , preservedForeignOwnerRequestIds := requestIds ownerPost.pending
   , automatedDrainedRequestIds := terminalIds [301] post
   , preservedUserPendingRequestIds := [302].filter (fun requestId =>
       if requestId ∈ requestIds post.pending then true else false)

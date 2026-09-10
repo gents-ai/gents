@@ -119,12 +119,14 @@ structure RequestSeed where
   causedByTriggerKind : TriggerKind
   deriving Repr
 
-abbrev TriggerKey := String × TriggerKind
+/-- Logical trigger identity within one runtime principal. Source kind selects a
+source, not a concurrency namespace; TriggerWideKey models explicit owner scoping. -/
+abbrev TriggerKey := String
 
 namespace FireIntent
 
 def SerialForKey (t : TriggerKey) (intent : FireIntent) : Prop :=
-  intent.triggerId = some t.1 → intent.triggerKind = t.2 → intent.concurrency = .serial
+  intent.triggerId = some t → intent.concurrency = .serial
 
 instance (t : TriggerKey) (intent : FireIntent) : Decidable (FireIntent.SerialForKey t intent) := by
   unfold FireIntent.SerialForKey
@@ -134,10 +136,9 @@ theorem serialForKey_target_is_serial
     {t : TriggerKey}
     {intent : FireIntent}
     (h_serial : intent.SerialForKey t)
-    (h_triggerId : intent.triggerId = some t.1)
-    (h_kind : intent.triggerKind = t.2) :
+    (h_triggerId : intent.triggerId = some t) :
     intent.concurrency = .serial :=
-  h_serial h_triggerId h_kind
+  h_serial h_triggerId
 
 end FireIntent
 

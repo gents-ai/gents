@@ -22,11 +22,7 @@ def jsonOptionNat : Option Nat → String
   | none => "null"
   | some value => toString value
 
-def keyJson (key : TriggerKey) : String :=
-  "{"
-    ++ "\"trigger_id\":" ++ jsonString key.1 ++ ","
-    ++ "\"trigger_kind\":" ++ jsonString key.2.toDefraDB
-    ++ "}"
+def keyJson (key : TriggerKey) : String := jsonString key
 
 def schedule (triggerId : String) : ActiveSchedule :=
   { triggerId := triggerId, taskId := "task", enabled := true }
@@ -62,7 +58,7 @@ def request
     (concurrency : ConcurrencyMode)
     (isTerminal : Bool) : AgentRequest :=
   { id := id
-  , causedBy := some (triggerId, triggerKind)
+  , causedBy := some triggerId
   , concurrency := concurrency
   , isTerminal := isTerminal
   , executionOrigin :=
@@ -75,17 +71,17 @@ def after (scenario : TriggerScenario) : SystemState :=
   dispatchStep scenario.before scenario.snap scenario.intent
 
 def targetKey? (scenario : TriggerScenario) : Option TriggerKey :=
-  scenario.intent.triggerId.map fun triggerId =>
-    (triggerId, scenario.intent.triggerKind)
+  scenario.intent.triggerId
 
 def newRequest? (scenario : TriggerScenario) : Option AgentRequest :=
   (after scenario).requests[scenario.before.requests.length]?
 
-def causedById? (request : AgentRequest) : Option String :=
-  request.causedBy.map Prod.fst
+def causedById? (request : AgentRequest) : Option String := request.causedBy
 
-def causedByKind? (request : AgentRequest) : Option String :=
-  request.causedBy.map fun key => key.2.toDefraDB
+/-- Lineage source comes from the selected seed independently of gate identity. -/
+def causedByKind? (scenario : TriggerScenario) : Option String :=
+  (dispatch scenario.snap scenario.intent).bind fun seed =>
+    seed.causedByTriggerId.map fun _ => seed.causedByTriggerKind.toDefraDB
 
 def expectedResult (scenario : TriggerScenario) : String :=
   if scenario.before.requests.length < (after scenario).requests.length then
@@ -106,7 +102,7 @@ def expectedSkipReason (scenario : TriggerScenario) : Option String :=
 
 def expectedSupersedeCallKeys (scenario : TriggerScenario) : List TriggerKey :=
   match dispatch scenario.snap scenario.intent, scenario.intent.concurrency, scenario.intent.triggerId with
-  | some _, .latestOnly, some triggerId => [(triggerId, scenario.intent.triggerKind)]
+  | some _, .latestOnly, some triggerId => [triggerId]
   | _, _, _ => []
 
 def priorNonterminalKeys (scenario : TriggerScenario) : List TriggerKey :=
@@ -165,7 +161,7 @@ def contractJson (scenario : TriggerScenario) : String :=
     ++ "\"expected_request_caused_by_id\":"
       ++ (materialized.bind causedById? |> jsonOptionString) ++ ","
     ++ "\"expected_request_caused_by_kind\":"
-      ++ (materialized.bind causedByKind? |> jsonOptionString) ++ ","
+      ++ (materialized.bind (fun _ => causedByKind? scenario) |> jsonOptionString) ++ ","
     ++ "\"expected_execution_origin\":"
       ++ (materialized.map (fun request => request.executionOrigin.toDefraDB)
           |> jsonOptionString) ++ ","
@@ -215,17 +211,17 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , before := SystemState.empty
     , intent := intent (some "event-a") .event .serial
     }
-  , { name := "schedule_serial_same_tuple_skips"
+  , { name := "schedule_serial_same_id_skips"
     , snap := snapshot ["sched-a"] []
     , before := { requests := [request "prior-schedule" "sched-a" .schedule .serial false] }
     , intent := intent (some "sched-a") .schedule .serial
     }
-  , { name := "schedule_serial_same_id_other_kind_fires"
+  , { name := "schedule_serial_same_id_other_kind_skips"
     , snap := snapshot ["shared"] []
     , before := { requests := [request "prior-event" "shared" .event .serial false] }
     , intent := intent (some "shared") .schedule .serial
     }
-  , { name := "event_serial_same_tuple_skips"
+  , { name := "event_serial_same_id_skips"
     , snap := snapshot [] ["event-a"]
     , before := { requests := [request "prior-event" "event-a" .event .serial false] }
     , intent := intent (some "event-a") .event .serial
@@ -244,6 +240,11 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , snap := snapshot ["sched-a"] []
     , before := { requests := [request "prior-schedule" "sched-a" .schedule .latestOnly false] }
     , intent := intent (some "sched-a") .schedule .latestOnly
+    }
+  , { name := "event_latest_only_supersedes_prior_schedule_same_id"
+    , snap := snapshot [] ["shared"]
+    , before := { requests := [request "prior-schedule" "shared" .schedule .serial false] }
+    , intent := intent (some "shared") .event .latestOnly
     }
   , { name := "event_latest_only_supersedes_prior"
     , snap := snapshot [] ["event-a"]

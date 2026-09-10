@@ -5,18 +5,15 @@ use anyhow::Result;
 use async_trait::async_trait;
 use gents::agent::directory_projection::{
     derive_directory_entries, directory_entry_key, reconcile_directory_tick, BehaviorInfo,
-    CatalogOptions, DirectoryEntry, DirectoryStore, DirectoryTickOutcome, SelectionInfo,
-    SourceSnapshot,
+    CatalogOptions, DirectoryEntry, DirectoryStore, DirectoryTickOutcome, SourceSnapshot,
 };
-use gents::agent::persona_presets::preset_fields;
 
 #[derive(Default)]
 struct DirectoryFixtureStore {
     principals: Vec<(String, String, String)>,
     behaviors: BTreeMap<String, Vec<BehaviorInfo>>,
     runtimes: BTreeMap<String, (String, String)>,
-    selections: BTreeMap<String, SelectionInfo>,
-    options: CatalogOptions,
+    options: BTreeMap<String, CatalogOptions>,
     entries: Mutex<BTreeMap<(String, String), DirectoryEntry>>,
     upserts: Mutex<Vec<String>>,
     deletes: Mutex<Vec<String>>,
@@ -29,7 +26,6 @@ impl DirectoryStore for DirectoryFixtureStore {
             principals: self.principals.clone(),
             behaviors: self.behaviors.clone(),
             runtimes: self.runtimes.clone(),
-            selections: self.selections.clone(),
             options: self.options.clone(),
         })
     }
@@ -106,7 +102,8 @@ fn derivation_projects_exactly_the_principals() {
         display_name: "Coder".to_string(),
         backend_id: "openai".to_string(),
         model_name: "gpt-5".to_string(),
-        tool_selection_id: "sel-coder".to_string(),
+        host_root: "/repo/a".to_string(),
+        preset: "readonly".to_string(),
         inference_profile_id: "profile-fast".to_string(),
     };
     let artist = BehaviorInfo {
@@ -114,32 +111,10 @@ fn derivation_projects_exactly_the_principals() {
         display_name: "Artist".to_string(),
         backend_id: "anthropic".to_string(),
         model_name: "claude".to_string(),
-        tool_selection_id: "sel-artist".to_string(),
+        host_root: String::new(),
+        preset: String::new(),
         inference_profile_id: "".to_string(),
     };
-    let selections = BTreeMap::from([
-        (
-            "sel-coder".to_string(),
-            SelectionInfo {
-                file_tool_root: "/repo/a".to_string(),
-                preset: preset_fields("readonly").expect("readonly preset should exist"),
-            },
-        ),
-        (
-            "sel-artist".to_string(),
-            SelectionInfo {
-                file_tool_root: String::new(),
-                preset: {
-                    let mut fields =
-                        preset_fields("readonly").expect("readonly preset should exist");
-                    fields
-                        .command_allowed_argv_prefixes
-                        .push("git status".to_string());
-                    fields
-                },
-            },
-        ),
-    ]);
     let options = CatalogOptions {
         available_models: vec!["anthropic|claude".to_string(), "openai|gpt-5".to_string()],
         allowed_roots: vec!["/repo/a".to_string()],
@@ -161,8 +136,7 @@ fn derivation_projects_exactly_the_principals() {
             "did:key:a".to_string(),
             ("running".to_string(), "2026-07-23T00:00:00Z".to_string()),
         )]),
-        &selections,
-        &options,
+        &BTreeMap::from([("did:key:a".to_string(), options.clone())]),
     );
     assert_eq!(
         derived.keys().cloned().collect::<BTreeSet<_>>(),
@@ -196,12 +170,12 @@ fn derivation_projects_exactly_the_principals() {
     assert_eq!(
         a.behavior_roots,
         vec![String::new(), "/repo/a".to_string()],
-        "behavior_roots must copy each selection's file_tool_root, aligned"
+        "behavior_roots must copy the resolved host root, aligned"
     );
     assert_eq!(
         a.behavior_presets,
         vec![String::new(), "readonly".to_string()],
-        "custom selection (extra argv prefix) must classify as \"\", exact match as its preset name"
+        "resolved preset names must remain aligned with behavior IDs"
     );
     assert_eq!(
         a.behavior_profiles,
@@ -211,7 +185,7 @@ fn derivation_projects_exactly_the_principals() {
 
     assert_eq!(
         a.options, options,
-        "the five option lists must pass through verbatim on every entry"
+        "the five option lists must pass through for the matching principal"
     );
     assert_eq!(
         a.options.available_profile_params.len(),
@@ -238,19 +212,21 @@ fn derivation_projects_exactly_the_principals() {
         "a principal with no behaviors derives empty dimension arrays"
     );
     assert_eq!(
-        b.options, options,
-        "options are home-level, so every entry on the source carries them"
+        b.options,
+        CatalogOptions::default(),
+        "a principal without a catalog must not inherit another principal's options"
     );
 }
 
 #[test]
-fn derivation_yields_empty_strings_for_a_behavior_with_no_matching_selection() {
+fn derivation_preserves_empty_resolved_dimensions() {
     let coder = BehaviorInfo {
         behavior_id: "did:key:a:coder".to_string(),
         display_name: "Coder".to_string(),
         backend_id: String::new(),
         model_name: String::new(),
-        tool_selection_id: "missing-selection".to_string(),
+        host_root: String::new(),
+        preset: String::new(),
         inference_profile_id: String::new(),
     };
     let derived = derive_directory_entries(
@@ -259,7 +235,6 @@ fn derivation_yields_empty_strings_for_a_behavior_with_no_matching_selection() {
         &BTreeMap::from([("did:key:a".to_string(), vec![coder])]),
         &BTreeMap::new(),
         &BTreeMap::new(),
-        &CatalogOptions::default(),
     );
     let a = &derived["did:key:a"];
     assert_eq!(a.behavior_models, vec![String::new()]);

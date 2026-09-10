@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.AgentSession
 import Mathlib.Data.Finset.Basic
 import Mathlib.Data.Finset.Card
 
@@ -112,10 +113,13 @@ def matchesAutomatedWakeup
 end QueueEntry
 
 structure SessionQueueState where
-  sessionId : SessionId
+  scope : AgentSession.Scope
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
+
+/-- Queue execution belongs to the same exact session identity as durable sessions. -/
+def SessionQueueState.sessionId (s : SessionQueueState) : SessionId := s.scope.session
 
 instance : Repr SessionQueueState where
   reprPrec s _ :=

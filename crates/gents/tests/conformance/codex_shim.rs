@@ -304,6 +304,33 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
 
     let behavior_cases = lean_codex_shim_behavior_selection_cases();
     assert_eq!(behavior_cases.len(), 5);
+    for case in &behavior_cases {
+        let exact_scope = case.selected_owner == case.actual_owner
+            && case.projected_behavior_id == case.actual_behavior;
+        if !exact_scope || case.resolved_model.is_none() {
+            assert!(
+                case.projected_model.is_none(),
+                "{}: unavailable or foreign bindings cannot supply display metadata",
+                case.witness
+            );
+        } else {
+            assert_eq!(
+                case.projected_model, case.resolved_model,
+                "{}: exact binding must preserve the selected model",
+                case.witness
+            );
+        }
+    }
+    assert!(behavior_cases
+        .iter()
+        .any(|case| case.selected_owner != case.actual_owner));
+    assert!(behavior_cases
+        .iter()
+        .any(|case| case.projected_behavior_id != case.actual_behavior));
+    assert!(behavior_cases
+        .iter()
+        .any(|case| case.resolved_model.is_none()));
+
     let tool_metadata_cases = lean_codex_shim_tool_metadata_cases();
     assert_eq!(tool_metadata_cases.len(), 11);
     let context_cases = lean_codex_shim_context_usage_cases();

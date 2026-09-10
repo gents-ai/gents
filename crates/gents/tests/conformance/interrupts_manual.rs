@@ -68,6 +68,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
             source_session_id: &parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )

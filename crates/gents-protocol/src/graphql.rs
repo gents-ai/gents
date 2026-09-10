@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_protocol::{
-    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
-    RequestSnapshot, ResponseSnapshot, ResponseStatus,
+    AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState, RequestSnapshot,
+    ResponseSnapshot, ResponseStatus, project_attempt,
 };
 use crate::row::{
     AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
@@ -85,6 +85,106 @@ pub struct GraphqlSessionShape {
     pub tool_results: Vec<AgentToolResultRow>,
 }
 
+/// Adapt whole-object mutation variables to the pinned DefraDB parser, which
+/// resolves field variables but otherwise treats UPDATE/UPSERT input variables
+/// as empty objects. Values remain variables, preserving JSON keys and arrays.
+pub fn expand_mutation_input_variables(
+    document: &str,
+    variables: &Value,
+) -> Result<(String, Value)> {
+    use graphql_parser::query::{
+        Definition, OperationDefinition, Selection, Type, Value as AstValue, VariableDefinition,
+    };
+    let mut values = variables
+        .as_object()
+        .context("GraphQL variables must be an object")?
+        .clone();
+    if !document.contains('$') {
+        return Ok((document.to_owned(), variables.clone()));
+    }
+    let mut parsed = graphql_parser::parse_query::<String>(document)?.into_static();
+    let mut names: std::collections::HashSet<String> = values.keys().cloned().collect();
+    for definition in &parsed.definitions {
+        let definitions = match definition {
+            Definition::Operation(OperationDefinition::Mutation(operation)) => {
+                &operation.variable_definitions
+            }
+            Definition::Operation(OperationDefinition::Query(operation)) => {
+                &operation.variable_definitions
+            }
+            Definition::Operation(OperationDefinition::Subscription(operation)) => {
+                &operation.variable_definitions
+            }
+            _ => continue,
+        };
+        names.extend(definitions.iter().map(|variable| variable.name.clone()));
+    }
+    let mut changed = false;
+    let mut next = 0usize;
+    for definition in &mut parsed.definitions {
+        let Definition::Operation(OperationDefinition::Mutation(operation)) = definition else {
+            continue;
+        };
+        for selection in &mut operation.selection_set.items {
+            let Selection::Field(field) = selection else {
+                continue;
+            };
+            for (argument, value) in &mut field.arguments {
+                if !((field.name.starts_with("update_") && argument == "input")
+                    || (field.name.starts_with("upsert_")
+                        && (argument == "add" || argument == "update")))
+                {
+                    continue;
+                }
+                let AstValue::Variable(name) = value else {
+                    continue;
+                };
+                let input = values
+                    .get(name)
+                    .with_context(|| format!("missing mutation variable ${name}"))?
+                    .clone();
+                if input.is_null() {
+                    *value = AstValue::Null;
+                    changed = true;
+                    continue;
+                }
+                let input = input
+                    .as_object()
+                    .with_context(|| format!("mutation variable ${name} must be an object"))?;
+                let mut fields = std::collections::BTreeMap::new();
+                for (key, payload) in input {
+                    validate_graphql_name(key)?;
+                    let fresh = loop {
+                        let candidate = format!("_gents_input_{next}");
+                        next += 1;
+                        if names.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                    };
+                    operation.variable_definitions.push(VariableDefinition {
+                        position: field.position,
+                        name: fresh.clone(),
+                        var_type: Type::NamedType("JSON".to_owned()),
+                        default_value: None,
+                    });
+                    values.insert(fresh.clone(), payload.clone());
+                    fields.insert(key.clone(), AstValue::Variable(fresh));
+                }
+                *value = AstValue::Object(fields);
+                changed = true;
+            }
+        }
+    }
+    Ok((
+        if changed {
+            parsed.to_string()
+        } else {
+            document.to_owned()
+        },
+        Value::Object(values),
+    ))
+}
+
 /// Validate `name` against the GraphQL `Name` grammar:
 /// `[_A-Za-z][_0-9A-Za-z]*` (ASCII only). Anything interpolated into a
 /// GraphQL document in identifier position MUST pass this check first —
@@ -96,7 +196,7 @@ pub fn validate_graphql_name(name: &str) -> Result<()> {
         Some(c) => {
             return Err(anyhow!(
                 "invalid identifier {name:?}: must start with a letter or underscore, got {c:?}"
-            ))
+            ));
         }
         None => return Err(anyhow!("invalid identifier: empty string")),
     }
@@ -195,8 +295,8 @@ pub fn validate_graphql_filter_fragment(filter: &str) -> Result<()> {
             c if c.is_whitespace() => {}
             c => {
                 return Err(anyhow!(
-                "invalid filter: character {c:?} at byte {index} is not allowed in a filter object"
-            ))
+                    "invalid filter: character {c:?} at byte {index} is not allowed in a filter object"
+                ));
             }
         }
     }
@@ -656,11 +756,7 @@ pub fn nullable_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 pub fn graphql_bool_literal(value: bool) -> &'static str {
-    if value {
-        "true"
-    } else {
-        "false"
-    }
+    if value { "true" } else { "false" }
 }
 
 pub fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
@@ -1137,9 +1233,11 @@ mod tests {
 
         // Well-formed nested keys still render.
         let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
-        assert!(graphql_input_literal(&ok)
-            .expect("valid Name keys render")
-            .contains("inner_1: \"v\""));
+        assert!(
+            graphql_input_literal(&ok)
+                .expect("valid Name keys render")
+                .contains("inner_1: \"v\"")
+        );
     }
 
     #[test]
@@ -1169,7 +1267,7 @@ mod tests {
 #[cfg(test)]
 mod tx_tests {
     use super::*;
-    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
+    use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
@@ -1302,9 +1400,11 @@ mod tx_tests {
         )
         .await
         .expect_err("public transport is query-only");
-        assert!(error
-            .to_string()
-            .contains("GraphQL read transport requires a query document"));
+        assert!(
+            error
+                .to_string()
+                .contains("GraphQL read transport requires a query document")
+        );
     }
 
     #[test]
@@ -1315,9 +1415,11 @@ mod tx_tests {
             GraphqlRequestOptions::default(),
         )
         .expect_err("public transport is query-only");
-        assert!(error
-            .to_string()
-            .contains("GraphQL read transport requires a query document"));
+        assert!(
+            error
+                .to_string()
+                .contains("GraphQL read transport requires a query document")
+        );
     }
 
     #[test]
@@ -1339,5 +1441,45 @@ mod tx_tests {
             .context("request submit failed")
             .context("outer shim context");
         assert!(graphql_error_is_retryable(&error));
+    }
+}
+
+#[cfg(test)]
+mod mutation_variable_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn expansion_preserves_payload_and_variable_identity() {
+        let query = "mutation($input: ProbeMutationInputArg!, $_gents_input_0: String) { renamed: update_Probe(filter:{key:{_eq:$_gents_input_0}}, input:$input) {_docID} }";
+        let payload = json!({"not-a-graphql-key":[], "nested":{"雪":[]}});
+        let vars = json!({"input":{"payload":payload},"_gents_input_0":"selected"});
+        let (expanded, actual) = expand_mutation_input_variables(query, &vars).unwrap();
+        assert!(expanded.contains("renamed: update_Probe"));
+        assert!(expanded.contains("payload: $_gents_input_1"));
+        assert_eq!(actual["_gents_input_0"], "selected");
+        assert_eq!(actual["_gents_input_1"], payload);
+        assert_eq!(actual["input"], vars["input"]);
+    }
+    #[test]
+    fn expansion_reserves_names_declared_by_other_operations() {
+        let document = "mutation Edit($input: ProbeMutationInputArg!) { update_Probe(input:$input) {_docID} } query Read($_gents_input_0: String) { Probe(filter:{key:{_eq:$_gents_input_0}}) {_docID} }";
+        let (expanded, variables) =
+            expand_mutation_input_variables(document, &json!({"input":{"payload":[]}})).unwrap();
+        assert!(expanded.contains("payload: $_gents_input_1"));
+        assert!(variables.get("_gents_input_0").is_none());
+    }
+
+    #[test]
+    fn missing_or_invalid_mutation_input_is_rejected() {
+        let query =
+            "mutation($input: ProbeMutationInputArg!) { update_Probe(input:$input) {_docID} }";
+        for vars in [
+            json!({}),
+            json!({"input":[]}),
+            json!({"input":"wrong"}),
+            json!({"input":{"bad-field":1}}),
+        ] {
+            assert!(expand_mutation_input_variables(query, &vars).is_err());
+        }
     }
 }

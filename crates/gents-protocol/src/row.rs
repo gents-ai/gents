@@ -361,6 +361,8 @@ pub struct MailboxItemRow {
 pub struct AgentResponseRow {
     pub response_key: String,
     #[serde(default)]
+    pub request_doc_id: Option<String>,
+    #[serde(default)]
     pub request_id: Option<String>,
     #[serde(default)]
     pub agent_did: Option<String>,

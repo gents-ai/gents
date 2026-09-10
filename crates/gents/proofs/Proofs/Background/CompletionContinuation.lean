@@ -261,7 +261,7 @@ def canonicalWake : SessionQueue.QueueEntry :=
   }
 
 def canonicalQueue : SessionQueue.SessionQueueState :=
-  { sessionId := 900
+  { scope := ⟨1, 900, none⟩
   , active := none
   , pending := []
   , terminal := ∅

@@ -1,17 +1,11 @@
-type Schedule @branchable {
-    schedule_id: String @index(unique: true)
-    task_id: String @index
-    interval_secs: Int
-    cron: String
-    timezone: String @index
-    missed_run_policy: String @index
-    enabled: Boolean @index
-    concurrency: String @index
-    next_run_at: DateTime @index(direction: ASC)
-    last_attempt_at: DateTime @index(direction: DESC)
-    last_status: String @index
-    last_error: String
-    fire_count: Int
+# Reusable cadence. Trigger owns task selection, enablement and concurrency.
+# Runtime observations live on each referencing Trigger.
+type Schedule @branchable @index(fields: ["agent_did", "schedule_id"], unique: true) {
+    schedule_id: String
+    agent_did: String @index
+    display_name: String
+    cadence: JSON
     created_at: DateTime @index(direction: DESC)
     updated_at: DateTime @index(direction: DESC)
+    tags: [String!]
 }

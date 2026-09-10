@@ -745,30 +745,22 @@ structure CodexShimBehaviorSelectionCase where
   rootBehaviorId : String
   threadBehaviorId : Option String
   projectedBehaviorId : String
-  rootModel : String
-  projectedChildModel : Option String
-  resolvedChildModel : Option String
-  projectedModel : String
+  selectedOwner : String
+  actualOwner : String
+  actualBehavior : String
+  resolvedModel : Option String
+  projectedModel : Option String
 
 def codexShimBehaviorSelectionCase
-    (witness : String)
-    (leanTheorems : List String)
-    (rootBehaviorId : String)
-    (threadBehaviorId : Option String)
-    (rootModel : String := "root-model")
-    (projectedChildModel : Option String := none)
-    (resolvedChildModel : Option String := none) : CodexShimBehaviorSelectionCase :=
-  { witness
-  , leanTheorems
-  , rootBehaviorId
-  , threadBehaviorId
-  , projectedBehaviorId :=
-      CodexShim.projectionBehaviorId rootBehaviorId threadBehaviorId
-  , rootModel
-  , projectedChildModel
-  , resolvedChildModel
-  , projectedModel :=
-      CodexShim.projectedThreadModel rootModel projectedChildModel resolvedChildModel
+    (witness : String) (leanTheorems : List String)
+    (rootBehaviorId : String) (threadBehaviorId : Option String)
+    (selectedOwner actualOwner actualBehavior : String)
+    (resolvedModel : Option String) : CodexShimBehaviorSelectionCase :=
+  let projectedBehaviorId := CodexShim.projectionBehaviorId rootBehaviorId threadBehaviorId
+  { witness, leanTheorems, rootBehaviorId, threadBehaviorId, projectedBehaviorId
+  , selectedOwner, actualOwner, actualBehavior, resolvedModel
+  , projectedModel := CodexShim.projectedThreadModel selectedOwner projectedBehaviorId
+      actualOwner actualBehavior resolvedModel
   }
 
 def codexShimBehaviorSelectionCaseJson
@@ -779,36 +771,29 @@ def codexShimBehaviorSelectionCaseJson
     ++ "\"root_behavior_id\":" ++ jsonString witness.rootBehaviorId ++ ","
     ++ "\"thread_behavior_id\":" ++ jsonOptionalString witness.threadBehaviorId ++ ","
     ++ "\"projected_behavior_id\":" ++ jsonString witness.projectedBehaviorId ++ ","
-    ++ "\"root_model\":" ++ jsonString witness.rootModel ++ ","
-    ++ "\"projected_child_model\":" ++ jsonOptionalString witness.projectedChildModel ++ ","
-    ++ "\"resolved_child_model\":" ++ jsonOptionalString witness.resolvedChildModel ++ ","
-    ++ "\"projected_model\":" ++ jsonString witness.projectedModel
+    ++ "\"selected_owner\":" ++ jsonString witness.selectedOwner ++ ","
+    ++ "\"actual_owner\":" ++ jsonString witness.actualOwner ++ ","
+    ++ "\"actual_behavior\":" ++ jsonString witness.actualBehavior ++ ","
+    ++ "\"resolved_model\":" ++ jsonOptionalString witness.resolvedModel ++ ","
+    ++ "\"projected_model\":" ++ jsonOptionalString witness.projectedModel
     ++ "}"
 
 def codexShimBehaviorSelectionCases : List CodexShimBehaviorSelectionCase :=
-  [ codexShimBehaviorSelectionCase
-      "codex_shim.behavior.child"
-      ["CodexShim.child_behavior_overrides_root_for_response_metadata"]
-      "root" (some "child")
-  , codexShimBehaviorSelectionCase
-      "codex_shim.behavior.root"
+  [ codexShimBehaviorSelectionCase "codex_shim.behavior.child"
+      ["CodexShim.exact_binding_supplies_model"]
+      "root" (some "child") "child-owner" "child-owner" "child" (some "child-model")
+  , codexShimBehaviorSelectionCase "codex_shim.behavior.root"
       ["CodexShim.absent_child_behavior_keeps_root_response_metadata"]
-      "root" none
-  , codexShimBehaviorSelectionCase
-      "codex_shim.behavior.resolved_child_model"
-      ["CodexShim.resolved_child_model_has_priority"]
-      "root" (some "child")
-      (projectedChildModel := some "projected-child")
-      (resolvedChildModel := some "resolved-child")
-  , codexShimBehaviorSelectionCase
-      "codex_shim.behavior.projected_child_model"
-      ["CodexShim.projected_child_model_fills_unavailable_behavior"]
-      "root" (some "child")
-      (projectedChildModel := some "projected-child")
-  , codexShimBehaviorSelectionCase
-      "codex_shim.behavior.root_model_fallback"
-      ["CodexShim.unavailable_child_model_falls_back_to_root"]
-      "root" (some "child")
+      "root" none "root-owner" "root-owner" "root" (some "root-model")
+  , codexShimBehaviorSelectionCase "codex_shim.behavior.unavailable"
+      ["CodexShim.unavailable_binding_stays_unavailable"]
+      "root" (some "child") "child-owner" "child-owner" "child" none
+  , codexShimBehaviorSelectionCase "codex_shim.behavior.foreign_owner"
+      ["CodexShim.foreign_owner_cannot_supply_model"]
+      "root" (some "child") "child-owner" "root-owner" "child" (some "wrong-model")
+  , codexShimBehaviorSelectionCase "codex_shim.behavior.foreign_behavior"
+      ["CodexShim.foreign_behavior_cannot_supply_model"]
+      "root" (some "child") "child-owner" "child-owner" "root" (some "wrong-model")
   ]
 
 def codexShimBehaviorSelectionCasesJson : String :=

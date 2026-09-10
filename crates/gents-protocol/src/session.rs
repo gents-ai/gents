@@ -88,23 +88,29 @@ pub enum SessionTitleSource {
 /// neither select configuration nor confer graph membership or authorization.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SessionProvenance {
     /// Task invoked to create this session, scoped to the session's agent_did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub task_id: Option<String>,
     /// Existing graph execution, not a second graph definition or stage config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub graph_run_id: Option<String>,
     /// Exact causal request document for a spawned session, not its logical label.
     /// Further tool-call/trigger lineage remains on the existing request owners.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub parent_request_doc_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub fork: Option<SessionFork>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SessionFork {
     pub source_session_id: String,
     /// Existing fork API's user-turn cut, including zero for an empty prefix.

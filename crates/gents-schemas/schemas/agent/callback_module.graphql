@@ -2,8 +2,9 @@
 # decoded module (GraphQL String cannot carry raw NUL/non-UTF-8). `module_id`
 # is content-addressed over (decoded bytes, canonical_args, abi_version).
 # Resource limits deny execution; they do not mint capabilities.
-type CallbackModule @branchable {
-    module_id: String @index(unique: true)
+type CallbackModule @branchable @index(fields: ["agent_did", "module_id"], unique: true) {
+    module_id: String
+    agent_did: String @index
     abi_version: Int
     wasm_bytes: String
     canonical_args: String
@@ -14,6 +15,5 @@ type CallbackModule @branchable {
     memory_pages: Int
     max_input_bytes: Int
     max_output_bytes: Int
-    created_at: DateTime @index(direction: DESC)
-    updated_at: DateTime @index(direction: DESC)
+    tags: [String!]
 }

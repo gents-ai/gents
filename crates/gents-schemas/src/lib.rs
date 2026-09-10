@@ -38,8 +38,6 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
-pub const AGENT_TOOL_APPROVAL_NAME: &str = "AgentToolApproval";
-pub const AGENT_TOOL_APPROVAL: &str = include_str!("../schemas/agent/agent_tool_approval.graphql");
 pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
 pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
@@ -74,12 +72,18 @@ pub const WORKSPACE_PLACEMENT: &str = include_str!("../schemas/agent/workspace_p
 pub const REPOSITORY_PLACEMENT_NAME: &str = "RepositoryPlacement";
 pub const REPOSITORY_PLACEMENT: &str =
     include_str!("../schemas/agent/repository_placement.graphql");
-pub const HOST_DEPLOYMENT_NAME: &str = "HostDeployment";
-pub const HOST_DEPLOYMENT: &str = include_str!("../schemas/agent/host_deployment.graphql");
 pub const WORKSPACE_BINDING_NAME: &str = "WorkspaceBinding";
 pub const WORKSPACE_BINDING: &str = include_str!("../schemas/agent/workspace_binding.graphql");
 pub const WORKSPACE_RECEIPT_NAME: &str = "WorkspaceReceipt";
 pub const WORKSPACE_RECEIPT: &str = include_str!("../schemas/agent/workspace_receipt.graphql");
+pub const TRIGGER_NAME: &str = "Trigger";
+pub const TRIGGER: &str = include_str!("../schemas/agent/trigger.graphql");
+pub const SUBAGENT_TARGET_NAME: &str = "SubagentTarget";
+pub const SUBAGENT_TARGET: &str = include_str!("../schemas/agent/subagent_target.graphql");
+pub const CALLBACK_NAME: &str = "Callback";
+pub const CALLBACK: &str = include_str!("../schemas/agent/callback.graphql");
+pub const EVENT_SOURCE_NAME: &str = "EventSource";
+pub const EVENT_SOURCE: &str = include_str!("../schemas/agent/event_source.graphql");
 pub const CALLBACK_MODULE_NAME: &str = "CallbackModule";
 pub const CALLBACK_MODULE: &str = include_str!("../schemas/agent/callback_module.graphql");
 pub const CALLBACK_BINDING_NAME: &str = "CallbackBinding";
@@ -92,11 +96,9 @@ pub const TASK_NAME: &str = "Task";
 pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
 pub const SCHEDULE_NAME: &str = "Schedule";
 pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
-pub const EVENT_TRIGGER_NAME: &str = "EventTrigger";
-pub const EVENT_TRIGGER: &str = include_str!("../schemas/agent/event_trigger.graphql");
-pub const EVENT_TRIGGER_GROUP_STATE_NAME: &str = "EventTriggerGroupState";
-pub const EVENT_TRIGGER_GROUP_STATE: &str =
-    include_str!("../schemas/agent/event_trigger_group_state.graphql");
+pub const EVENT_GROUP_STATE_NAME: &str = "EventGroupState";
+pub const EVENT_GROUP_STATE: &str =
+    include_str!("../schemas/agent/event_group_state.graphql");
 pub const GRAPH_DEFINITION_NAME: &str = "GraphDefinition";
 pub const GRAPH_DEFINITION: &str = include_str!("../schemas/agent/graph_definition.graphql");
 pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
@@ -162,9 +164,12 @@ pub const ALL: &[&str] = &[
     ISOLATED_WORKSPACE,
     WORKSPACE_PLACEMENT,
     REPOSITORY_PLACEMENT,
-    HOST_DEPLOYMENT,
     WORKSPACE_BINDING,
     WORKSPACE_RECEIPT,
+    CALLBACK,
+    EVENT_SOURCE,
+    TRIGGER,
+    SUBAGENT_TARGET,
     CALLBACK_MODULE,
     CALLBACK_BINDING,
     CALLBACK_INVOCATION,
@@ -178,15 +183,13 @@ pub const ALL: &[&str] = &[
     MAILBOX_ITEM,
     AGENT_MESSAGE,
     AGENT_TOOL_CALL,
-    AGENT_TOOL_APPROVAL,
     COMPACTION_ENTRY,
     RENDERED_REQUEST,
     PROVIDER_CONTEXT_REDUCTION,
     PROJECTION_ACP_BINDING,
     TASK,
     SCHEDULE,
-    EVENT_TRIGGER,
-    EVENT_TRIGGER_GROUP_STATE,
+    EVENT_GROUP_STATE,
     GRAPH_DEFINITION,
     GRAPH_REVISION,
     GRAPH_RUN,
@@ -226,9 +229,12 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ISOLATED_WORKSPACE_NAME,
     WORKSPACE_PLACEMENT_NAME,
     REPOSITORY_PLACEMENT_NAME,
-    HOST_DEPLOYMENT_NAME,
     WORKSPACE_BINDING_NAME,
     WORKSPACE_RECEIPT_NAME,
+    CALLBACK_NAME,
+    EVENT_SOURCE_NAME,
+    TRIGGER_NAME,
+    SUBAGENT_TARGET_NAME,
     CALLBACK_MODULE_NAME,
     CALLBACK_BINDING_NAME,
     CALLBACK_INVOCATION_NAME,
@@ -242,15 +248,13 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
-    AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
     RENDERED_REQUEST_NAME,
     PROVIDER_CONTEXT_REDUCTION_NAME,
     PROJECTION_ACP_BINDING_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
-    EVENT_TRIGGER_NAME,
-    EVENT_TRIGGER_GROUP_STATE_NAME,
+    EVENT_GROUP_STATE_NAME,
     GRAPH_DEFINITION_NAME,
     GRAPH_REVISION_NAME,
     GRAPH_RUN_NAME,
@@ -289,12 +293,10 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     MAILBOX_ITEM_NAME,
     AGENT_MESSAGE_NAME,
     AGENT_TOOL_CALL_NAME,
-    AGENT_TOOL_APPROVAL_NAME,
     COMPACTION_ENTRY_NAME,
     TASK_NAME,
     SCHEDULE_NAME,
-    EVENT_TRIGGER_NAME,
-    EVENT_TRIGGER_GROUP_STATE_NAME,
+    EVENT_GROUP_STATE_NAME,
     GRAPH_DEFINITION_NAME,
     GRAPH_REVISION_NAME,
     GRAPH_RUN_NAME,
@@ -468,6 +470,10 @@ mod tests {
             ISOLATED_WORKSPACE_NAME,
             WORKSPACE_BINDING_NAME,
             WORKSPACE_RECEIPT_NAME,
+            CALLBACK_NAME,
+            EVENT_SOURCE_NAME,
+            TRIGGER_NAME,
+            SUBAGENT_TARGET_NAME,
             CALLBACK_MODULE_NAME,
             CALLBACK_BINDING_NAME,
             CALLBACK_INVOCATION_NAME,
@@ -482,7 +488,6 @@ mod tests {
         for name in [
             WORKSPACE_PLACEMENT_NAME,
             REPOSITORY_PLACEMENT_NAME,
-            HOST_DEPLOYMENT_NAME,
             WORKSPACE_ROOT_NAME,
         ] {
             let declaration = type_declaration(name);
@@ -515,6 +520,10 @@ mod tests {
             );
         }
         for name in [
+            CALLBACK_NAME,
+            EVENT_SOURCE_NAME,
+            TRIGGER_NAME,
+            SUBAGENT_TARGET_NAME,
             CALLBACK_MODULE_NAME,
             CALLBACK_BINDING_NAME,
             CALLBACK_INVOCATION_NAME,
@@ -527,7 +536,8 @@ mod tests {
         assert!(AGENT_REQUEST.contains("workspace_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("caused_by_trigger_doc_id: String @index @immutable"));
         assert!(AGENT_REQUEST.contains("workspace_authority: String @immutable"));
-        assert!(EVENT_TRIGGER.contains("workspace_authority: String"));
+        assert!(AGENT_REQUEST.contains("workspace_owner_agent_did: String @index @immutable"));
+        assert!(EVENT_SOURCE.contains("workspace_authority: String"));
         assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));
         assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));
         assert!(

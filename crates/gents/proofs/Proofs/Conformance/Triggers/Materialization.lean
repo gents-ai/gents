@@ -8,7 +8,7 @@ def materializedTriggerRequest
   , causedBy :=
       match seed.causedByTriggerId with
       | none => none
-      | some tid => some (tid, seed.causedByTriggerKind)
+      | some tid => some tid
   , concurrency := intent.concurrency
   , isTerminal := false
   , executionOrigin :=

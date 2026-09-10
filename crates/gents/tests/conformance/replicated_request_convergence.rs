@@ -783,6 +783,7 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
         &db.node,
         session_id,
         OWNER_DID,
+        None,
         "automated wake-up drained because active request was interrupted",
     )
     .await

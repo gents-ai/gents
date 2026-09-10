@@ -24,7 +24,7 @@ use gents::agent::persona_presets;
 fn catalog_with(
     roots: &[&str],
     profiles: &[&str],
-    behaviors: &[(&str, bool, &str)],
+    behaviors: &[(&str, bool)],
 ) -> PersonaCatalogView {
     PersonaCatalogView {
         allowed_roots: roots.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>(),
@@ -35,15 +35,7 @@ fn catalog_with(
         known_agent_dids: BTreeSet::from(["did:key:agent".to_string()]),
         behaviors: behaviors
             .iter()
-            .map(|(id, enabled, selection_id)| {
-                (
-                    id.to_string(),
-                    BehaviorRef {
-                        enabled: *enabled,
-                        tool_selection_id: selection_id.to_string(),
-                    },
-                )
-            })
+            .map(|(id, enabled)| (id.to_string(), BehaviorRef { enabled: *enabled }))
             .collect::<BTreeMap<_, _>>(),
         ..Default::default()
     }
@@ -53,10 +45,7 @@ fn base_catalog() -> PersonaCatalogView {
     catalog_with(
         &["/workspace/root"],
         &["profile-1"],
-        &[
-            ("existing-enabled", true, "sel-existing-enabled"),
-            ("existing-disabled", false, "sel-existing-disabled"),
-        ],
+        &[("existing-enabled", true), ("existing-disabled", false)],
     )
 }
 

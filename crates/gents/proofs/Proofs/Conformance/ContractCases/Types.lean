@@ -430,6 +430,8 @@ structure QueueDeadlineConformanceCase where
   postCoalescedPendingCount : Nat
   automatedDrainedRequestIds : List RequestId
   preservedUserPendingRequestIds : List RequestId
+  preservedForeignRequesterRequestIds : List RequestId := []
+  preservedForeignOwnerRequestIds : List RequestId := []
   postTerminalRequestIds : List RequestId
   preRequestDeadline : Option Time
   synthesizedClaimDeadline : Option Time

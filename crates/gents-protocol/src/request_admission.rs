@@ -263,6 +263,10 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
             request.caused_by_parent_tool_call_doc_id,
         ),
         ("workspace_id", request.workspace_id),
+        (
+            "workspace_owner_agent_did",
+            request.workspace_owner_agent_did,
+        ),
     ] {
         require_optional_identifier(name, value)?;
     }
@@ -277,13 +281,12 @@ pub fn validate_signing_fields(request: &AgentRequestSigningFields<'_>) -> anyho
             &["manual", "event", "schedule", "subagent", "goal"],
         )?;
     }
-    if let Some(authority) = request.workspace_authority {
-        require_enum(
-            "workspace_authority",
-            authority,
-            &["readOnly", "readWrite", "integrate"],
-        )?;
-    }
+    validate_workspace_reference(
+        request.workspace_id,
+        request.workspace_owner_agent_did,
+        request.workspace_authority,
+        request.workspace_seal_hash,
+    )?;
     parse_utc_seconds("created_at", request.created_at)?;
     if let Some(valid_until) = request.valid_until {
         parse_utc_seconds("valid_until", valid_until)?;
@@ -597,6 +600,7 @@ impl AgentRequestAdmissionRecord {
         push_option(&mut fields, request.caused_by_parent_tool_call_id);
         push_option(&mut fields, request.caused_by_parent_tool_call_doc_id);
         push_option(&mut fields, request.workspace_id);
+        push_option(&mut fields, request.workspace_owner_agent_did);
         push_option(&mut fields, request.workspace_authority);
         push_option(&mut fields, request.workspace_seal_hash);
         push_text(&mut fields, self.kind.as_str());
@@ -618,6 +622,29 @@ impl AgentRequestAdmissionRecord {
         );
         push_option(&mut fields, self.runtime_bridge_author_did.as_deref());
         serialize_fields(&fields)
+    }
+}
+
+/// Structural validation only. Admission authenticates the source; workspace
+/// owners still validate ACP, principal grants, lifecycle, placement and seal.
+pub fn validate_workspace_reference(
+    workspace_id: Option<&str>,
+    owner_agent_did: Option<&str>,
+    authority: Option<&str>,
+    seal_hash: Option<&str>,
+) -> anyhow::Result<()> {
+    require_optional_identifier("workspace_id", workspace_id)?;
+    require_optional_identifier("workspace_owner_agent_did", owner_agent_did)?;
+    match (workspace_id, owner_agent_did, authority) {
+        (None, None, None) if seal_hash.is_none() => Ok(()),
+        (Some(_), Some(_), Some(authority)) => require_enum(
+            "workspace_authority",
+            authority,
+            &["readOnly", "readWrite", "integrate"],
+        ),
+        _ => {
+            anyhow::bail!("workspace reference requires id, owner principal and authority together")
+        }
     }
 }
 
@@ -849,6 +876,7 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_id: None,
             caused_by_parent_tool_call_doc_id: None,
             workspace_id: None,
+            workspace_owner_agent_did: None,
             workspace_authority: None,
             workspace_seal_hash: None,
             initial_lifecycle_state: RequestLifecycleState::Pending,
@@ -886,6 +914,7 @@ impl AgentRequestCreate {
             caused_by_parent_tool_call_id: self.caused_by_parent_tool_call_id.as_deref(),
             caused_by_parent_tool_call_doc_id: self.caused_by_parent_tool_call_doc_id.as_deref(),
             workspace_id: self.workspace_id.as_deref(),
+            workspace_owner_agent_did: self.workspace_owner_agent_did.as_deref(),
             workspace_authority: self.workspace_authority.as_deref(),
             workspace_seal_hash: self.workspace_seal_hash.as_deref(),
         }
@@ -1001,6 +1030,11 @@ impl AgentRequestCreate {
             self.caused_by_parent_tool_call_doc_id.as_deref(),
         );
         optional_text(&mut fields, "workspace_id", self.workspace_id.as_deref());
+        optional_text(
+            &mut fields,
+            "workspace_owner_agent_did",
+            self.workspace_owner_agent_did.as_deref(),
+        );
         optional_text(
             &mut fields,
             "workspace_authority",
@@ -1246,6 +1280,9 @@ mod tests {
         changed!("workspace_id", |v: &mut AgentRequestCreate| v
             .workspace_id =
             Some("workspace".into()));
+        changed!("workspace_owner_agent_did", |v: &mut AgentRequestCreate| {
+            v.workspace_owner_agent_did = Some("did:other-owner".into())
+        });
         changed!("workspace_authority", |v: &mut AgentRequestCreate| v
             .workspace_authority =
             Some("authority".into()));
@@ -1553,6 +1590,8 @@ mod tests {
     fn workspace_authority_accepts_every_mode_modeled_by_the_runtime() {
         for authority in ["readOnly", "readWrite", "integrate"] {
             let mut request = local_create();
+            request.workspace_id = Some("workspace".into());
+            request.workspace_owner_agent_did = Some("did:owner".into());
             request.workspace_authority = Some(authority.to_string());
             assert!(
                 validate_signing_fields(&request.signing_fields()).is_ok(),
