@@ -121,91 +121,49 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
             mock_endpoint.endpoint(),
         ],
     )?;
-    let backend_id = init
-        .pointer("/init/backend_id")
+    let tools_id = init
+        .pointer("/init/tools_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
-        .to_string();
-    let selection_id = init
-        .pointer("/init/tool_selection_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("init output missing tool_selection_id: {init}"))?
+        .ok_or_else(|| anyhow!("init output missing tools_id: {init}"))?
         .to_string();
     let agent_did = agent_did_from_init(&init)?;
+    let config_root = tempdir.path().join("config");
+    run_cli_text(
+        &home_dir,
+        &["config", "export", "--root", config_root.to_str().unwrap()],
+    )?;
+    let config_path = config_root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    config["contexts"][0]["system_prompt"] = Value::String(fs::read_to_string(&system_prompt)?);
+    write_json_file(&config_path, &config)?;
+    run_cli_json(
+        &home_dir,
+        &["config", "apply", "--root", config_root.to_str().unwrap()],
+    )?;
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
-    let behavior = run_cli_json(
-        &home_dir,
-        &[
-            "config",
-            "behavior",
-            "set",
-            "--graphql",
-            &graphql,
-            "--agent-did",
-            &agent_did,
-            "--display-name",
-            "Default",
-            "--system-prompt-file",
-            system_prompt
-                .to_str()
-                .context("system prompt path is not UTF-8")?,
-            "--backend-id",
-            &backend_id,
-            "--model-name",
-            &model_name,
-            "--tool-selection-id",
-            &selection_id,
-        ],
-    )?;
-    let behavior_doc_id = behavior
-        .get("doc_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow!("behavior output missing doc_id: {behavior}"))?;
-    let selection_doc_id = doc_id_for_selection(&graphql, &selection_id).await?;
+    let tools_doc_id = doc_id_for_tools(&graphql, &tools_id).await?;
     let config_rows = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                AgentBehavior(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-                    behavior_id
-                    tool_selection_id
-                    backend_id
-                }}
-                ToolSelection(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-                    selection_id
-                    enable_file_tools
-                    file_tools_mode
+                Tools(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
+                    tools_id
+                    host
                 }}
             }}"#,
-            escape_graphql_string(behavior_doc_id),
-            escape_graphql_string(&selection_doc_id),
+            escape_graphql_string(&tools_doc_id),
         ),
     )
     .await?;
-    let behavior_row = first_graphql_row(&config_rows, "AgentBehavior")?;
-    assert_eq!(
-        behavior_row
-            .get("tool_selection_id")
-            .and_then(Value::as_str),
-        Some(selection_id.as_str())
-    );
-    assert_eq!(
-        behavior_row.get("backend_id").and_then(Value::as_str),
-        Some(backend_id.as_str())
-    );
-    let selection_row = first_graphql_row(&config_rows, "ToolSelection")?;
-    assert_eq!(
-        selection_row
-            .get("enable_file_tools")
-            .and_then(Value::as_bool),
-        Some(true)
-    );
-    assert_eq!(
-        selection_row.get("file_tools_mode").and_then(Value::as_str),
-        Some("ReadOnly")
-    );
+    let tools_row = first_graphql_row(&config_rows, "Tools")?;
+    let host = tools_row["host"]
+        .as_str()
+        .map(serde_json::from_str)
+        .transpose()?
+        .unwrap_or_else(|| tools_row["host"].clone());
+    assert_eq!(host["files"]["mode"], "ReadOnly");
     wait_for_runtime_quiescence(&graphql, &agent_did, 2, Duration::from_secs(6)).await?;
 
     let prompt =

@@ -26,7 +26,7 @@ use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    BootedAgent, create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready,
+    create_runtime_request, wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
 };
 use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{

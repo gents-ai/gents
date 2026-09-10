@@ -297,7 +297,7 @@ fn assert_deterministic_400_repairs(case: &LeanCompletionRetryCase) {
     );
 }
 
-fn assert_resample_budget_outlives_ladder(case: &LeanCompletionRetryCase) {
+fn assert_resample_budget_outlives_ladder(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 3,
@@ -325,7 +325,7 @@ fn assert_resample_budget_outlives_ladder(case: &LeanCompletionRetryCase) {
     assert_eq!(state.retry_count(), 3);
 }
 
-fn assert_resample_exhausts_on_its_own_budget(case: &LeanCompletionRetryCase) {
+fn assert_resample_exhausts_on_its_own_budget(_case: &LeanCompletionRetryCase) {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy {
         transport_backoff: vec![Duration::from_secs(5)],
         max_resample: 2,

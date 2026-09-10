@@ -452,30 +452,3 @@ pub(super) async fn max_sequence_in_txn(
         .context("message sequence exceeds u32"),
     }
 }
-
-#[cfg(test)]
-fn resolve_behavior_id(
-    existing: Option<&gents_protocol::session::AgentSession>,
-    requested_behavior_id: &str,
-    collection_name: &str,
-) -> Result<String> {
-    let existing_behavior_id = existing.map(|session| session.behavior_id.as_str());
-    let requested_behavior_id = normalize_optional_string(Some(requested_behavior_id));
-
-    match (existing_behavior_id, requested_behavior_id) {
-        (Some(existing), Some(requested)) if existing != requested => anyhow::bail!(
-            "{collection_name} session behavior mismatch: existing={existing} requested={requested}"
-        ),
-        (Some(existing), _) => Ok(existing.to_string()),
-        (None, Some(requested)) => Ok(requested.to_string()),
-        (None, None) => Ok(String::new()),
-    }
-}
-
-#[cfg(test)]
-fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}

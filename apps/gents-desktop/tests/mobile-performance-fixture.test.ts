@@ -14,9 +14,9 @@ describe("mobile performance fixture structural budgets", () => {
   it("keeps the durable session-index fixture shape explicit and bounded", async () => {
     const harness = createDesktopUiHarness({ scenario: "mobile-performance" });
     const snapshot = await harness.adapter.fetchDesktopSnapshot();
-    const conversations = snapshot.client?.deployments[0]?.conversations ?? [];
+    const sessions = snapshot.client?.deployments[0]?.sessions ?? [];
 
-    expect(conversations).toHaveLength(MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount);
+    expect(sessions).toHaveLength(MOBILE_PERFORMANCE_FIXTURE.sessionIndexCount);
     expect(serializedBytes(snapshot)).toBeLessThanOrEqual(512 * 1024);
 
     const shortSession = await harness.adapter.fetchSessionSnapshot(

@@ -127,7 +127,10 @@ pub struct QueryToolDecl {
     pub fields: Vec<String>,
     /// Filter slots. Runtime-filled entries are hidden from the model and
     /// applied as `_eq` clauses; the rest are optional/required string args.
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WriteToolField>>", optional))]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<Vec<WriteToolField>>", optional)
+    )]
     pub filter_fields: Vec<WriteToolField>,
 }
 

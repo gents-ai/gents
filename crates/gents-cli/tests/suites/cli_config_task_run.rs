@@ -59,34 +59,29 @@ async fn config_task_run_matches_lean_manual_dispatch_contract() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent_principal.json"))?;
-    let behavior_id = principal
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
         .to_string();
-    let agent_did = principal
+    let agent_did = config["agent_principal"]
         .get("agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
         .to_string();
 
     let task_id = format!("greet-{}", Uuid::new_v4().simple());
-    let task_path = root
-        .join("tasks")
-        .join(crate::support::document_handle(&task_id))
-        .join("object.json");
-    write_json_file(
-        &task_path,
-        &serde_json::json!({
-            "task_id": task_id.clone(),
-            "name": "Greet",
-            "description": "Manual-only task for CLI task run.",
-            "behavior_id": behavior_id.clone(),
-            "prompt_template": "hi {{ args.name }}",
-            "enabled": true,
-        }),
-    )?;
+    config["tasks"] = serde_json::json!([{
+        "task_id": task_id.clone(),
+        "display_name": "Greet",
+        "description": "Manual-only task for CLI task run.",
+        "behavior_id": behavior_id.clone(),
+        "prompt_template": "hi {{ args.name }}",
+        "enabled": true,
+    }]);
+    write_json_file(&config_path, &config)?;
 
     let root_str = root
         .to_str()
@@ -270,33 +265,28 @@ async fn config_task_run_rejects_disabled_task() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent_principal.json"))?;
-    let behavior_id = principal
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing default_behavior_id"))?
         .to_string();
-    let agent_did = principal
+    let agent_did = config["agent_principal"]
         .get("agent_did")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("exported bundle missing agent_did"))?
         .to_string();
 
     let task_id = format!("disabled-{}", Uuid::new_v4().simple());
-    let task_path = root
-        .join("tasks")
-        .join(crate::support::document_handle(&task_id))
-        .join("object.json");
-    write_json_file(
-        &task_path,
-        &serde_json::json!({
-            "task_id": task_id.clone(),
-            "name": "Disabled",
-            "behavior_id": behavior_id.clone(),
-            "prompt_template": "noop",
-            "enabled": false,
-        }),
-    )?;
+    config["tasks"] = serde_json::json!([{
+        "task_id": task_id.clone(),
+        "display_name": "Disabled",
+        "behavior_id": behavior_id.clone(),
+        "prompt_template": "noop",
+        "enabled": false,
+    }]);
+    write_json_file(&config_path, &config)?;
 
     let root_str = root
         .to_str()

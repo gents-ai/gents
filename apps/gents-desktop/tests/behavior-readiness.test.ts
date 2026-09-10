@@ -224,7 +224,7 @@ describe("selectedBehaviorReadinessDecision", () => {
         draft: "hello",
         sending: false,
         session: null,
-        selectedConversation: null,
+        selectedSessionSummary: null,
         localWorkflow: { kind: "ready" },
         operationalState: projectDeploymentOperationalState(remote),
       });

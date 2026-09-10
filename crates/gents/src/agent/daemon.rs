@@ -13,7 +13,7 @@ mod title;
 
 use super::runtime::StartupBarrier;
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::hook::FailurePolicy;
 use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult};
 use crate::prompt::LayeredPromptBuilder;
@@ -118,7 +118,7 @@ pub(crate) async fn verify_request_at_claim_boundary(
 
 pub(super) struct BehaviorDaemon<M: CompletionModel> {
     node: Arc<defra_node::EmbeddedNode>,
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     model: Arc<M>,
     preamble: String,
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
@@ -149,7 +149,7 @@ enum HandleRequestOutcome {
 impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn new(
         node: Arc<defra_node::EmbeddedNode>,
-        behavior: Arc<AgentBehavior>,
+        behavior: Arc<ResolvedBehavior>,
         model: Arc<M>,
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,

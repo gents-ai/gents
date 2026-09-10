@@ -138,7 +138,7 @@ describe("InferenceSetupWizard", () => {
             changes: expect.objectContaining({
               provider_kind: "ChatGptCodex",
               endpoint: "https://chatgpt.com/backend-api/codex",
-              auth: { kind: "principal_o_auth" },
+              auth: { kind: "principal_oauth" },
             }),
           },
           {

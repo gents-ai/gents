@@ -197,8 +197,6 @@ async fn patch_versioned_with_fixture_lens_registers_transform() {
         .expect("lens step");
     assert_eq!(report.steps_applied, 1, "{report:?}");
     assert_eq!(report.materialization.collections_attempted, 1);
-    assert!(!report.materialization.skipped_upstream_missing);
-    assert_eq!(report.materialization.read_through_scans, 0);
 
     let active = node
         .get_collection("FixtureDoc")

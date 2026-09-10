@@ -741,23 +741,11 @@ impl TurnManager {
             // The stock client hides auto-wake prompts by their ID family.
             // Preserve the submitted identity when replaying a human turn;
             // labeling every historical prompt notifications-* hides history.
-            let metadata = row
-                .metadata
-                .as_deref()
-                .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-            let prompt_id = metadata
-                .as_ref()
-                .and_then(|meta| meta.get("promptId"))
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| {
-                    if row.runtime_source_kind.is_some() {
-                        live_prompt_id.clone()
-                    } else {
-                        row.request_id.clone()
-                    }
-                });
+            let prompt_id = if row.runtime_source_kind.is_some() {
+                live_prompt_id.clone()
+            } else {
+                row.request_id.clone()
+            };
             let mut progress = ObservedRequest::new(live_prompt_id.clone(), started_at, false);
             progress.cursor.lock().await.request = Some(row.clone());
             if let Some(content) = row.content.as_deref().filter(|value| !value.is_empty()) {
@@ -1360,7 +1348,7 @@ impl TurnManager {
         let query = format!(
             r#"{{AgentRequest(filter:{{request_id:{{_eq:"{}"}},session_id:{{_eq:"{}"}},
             agent_did:{{_eq:"{principal}"}},requester_did:{{_eq:"{principal}"}}}})
-            {{metadata content runtime_source_kind}}}}"#,
+            {{content runtime_source_kind}}}}"#,
             escape_graphql_string(request),
             escape_graphql_string(session)
         );
@@ -1379,17 +1367,8 @@ impl TurnManager {
         if row["runtime_source_kind"].as_str().is_some() {
             return Ok(None);
         }
-        let metadata = row["metadata"]
-            .as_str()
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-        let prompt_id = metadata
-            .as_ref()
-            .and_then(|meta| meta["promptId"].as_str())
-            .filter(|value| !value.is_empty())
-            .unwrap_or(request)
-            .to_owned();
         Ok(Some((
-            prompt_id,
+            request.to_owned(),
             row["content"].as_str().unwrap_or_default().to_owned(),
         )))
     }
@@ -1714,23 +1693,11 @@ impl TurnManager {
     async fn submit_request(
         &self,
         request: &PromptRequest,
-        prompt_id: &str,
+        _prompt_id: &str,
     ) -> Result<gents_protocol::row::AgentRequestRow> {
         let content = prompt_text(request);
-        let mut metadata = json!({
-            "promptId": prompt_id,
-        });
-        if let Some(screen_mode) = request.screen_mode.as_deref() {
-            metadata["screenMode"] = json!(screen_mode);
-        }
-        if request.send_now {
-            metadata["sendNow"] = json!(true);
-        }
         let stable_request_id = uuid::Uuid::new_v4().to_string();
-        let options = crate::RequestSubmitOptions {
-            metadata: Some(metadata.to_string()),
-            ..Default::default()
-        };
+        let options = crate::RequestSubmitOptions::default();
         let submitted = if let Some(super::goals::GoalCommand::Create {
             objective,
             token_budget,
@@ -2601,6 +2568,7 @@ fn is_background_activity(payload: &Value) -> bool {
 }
 
 /// Whether a durable request lifecycle state is terminal.
+#[cfg(test)]
 pub(super) fn is_terminal_lifecycle_state(state: &str) -> bool {
     gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(Some(state))
 }
@@ -3894,7 +3862,7 @@ mod tests {
         assert_eq!(goal.status, "active");
         assert_eq!(goal.token_budget, Some(100000));
         let response = node.execute(&format!(
-            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content metadata retry_key admission_signer_did}}}}"
+            "{{AgentRequest(filter:{{request_id:{{_eq:\"{id}\"}}}}){{request_id agent_did session_id content input retry_key admission_signer_did}}}}"
         )).await;
         gents::graphql::ensure_no_errors(&response, "goal submission").unwrap();
         let row = &response.data.as_ref().unwrap()["AgentRequest"][0];
@@ -3903,10 +3871,7 @@ mod tests {
         assert_eq!(row["admission_signer_did"], principal);
         assert_eq!(row["session_id"], prompt.session_id);
         assert_eq!(row["retry_key"], format!("goal-request:{id}"));
-        let metadata: Value = serde_json::from_str(row["metadata"].as_str().unwrap()).unwrap();
-        assert_eq!(metadata["promptId"], "goal-prompt-id");
-        assert_eq!(metadata["screenMode"], "inline");
-        assert_eq!(metadata["sendNow"], true);
+        assert!(row["input"].is_null());
 
         prompt.prompt[0].text = "/goal Conflicting objective".into();
         assert!(manager.submit_request(&prompt, "conflict").await.is_err());
@@ -3979,7 +3944,6 @@ mod tests {
         // This request was not in the replay manifest. Discovery must begin
         // at the pre-replay attachment time, not the later response time.
         let second_receipt = manager.submit_request(&prompt, "second").await.unwrap();
-        let second = second_receipt.request_id.clone();
         seed_assistant_message(&node, &second_receipt, 3, "Created during replay.").await;
         terminalize_request(&node, &second_receipt, "completed").await;
         let mut after = String::new();
@@ -4237,7 +4201,6 @@ mod tests {
         }
         let second_receipt =
             seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
-        let second = second_receipt.request_id.clone();
         seed_assistant_message(&node, &second_receipt, 4, "Wake B response.").await;
         terminalize_request(&node, &second_receipt, "completed").await;
         seed_assistant_message(&node, &first_receipt, 5, "Wake A continues.").await;
@@ -4565,7 +4528,6 @@ mod tests {
             tokio::spawn(async move { manager.handle_prompt(prompt, &sender, &engine).await })
         };
         let root_receipt = wait_for_pending_request(&node, &agent_did).await;
-        let root = root_receipt.request_id.clone();
         let late_tool_doc = seed_tool_call(
             &node,
             &root_receipt,
@@ -5051,7 +5013,7 @@ mod tests {
         let seed_handle = tokio::spawn(async move {
             let request_id = wait_for_pending_request(&node_for_seed, &principal_for_seed).await;
             outbound_closed.notified().await;
-            let tool_doc = seed_tool_call(
+            let _tool_doc = seed_tool_call(
                 &node_for_seed,
                 &request_id,
                 "call-1",

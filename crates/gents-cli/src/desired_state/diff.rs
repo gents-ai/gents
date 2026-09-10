@@ -73,8 +73,10 @@ fn compare_manifests(
         "desired and live config belong to different principals"
     );
     if let Some(principal) = live_principal {
-        anyhow::ensure!(principal.agent_did == live.agent_principal.agent_did,
-            "live principal does not match config scope");
+        anyhow::ensure!(
+            principal.agent_did == live.agent_principal.agent_did,
+            "live principal does not match config scope"
+        );
     }
     let desired_docs = canonical_records(desired)?;
     let mut live_docs = canonical_records(live)?;
@@ -126,58 +128,6 @@ fn compare_manifests(
         collections.record_prune_deletes(&super::prune::prune_safe_deletes(desired, live)?);
     }
     Ok(collections)
-}
-
-pub(super) fn diff_single<T>(
-    id: &str,
-    desired: Option<&T>,
-    live: Option<&T>,
-) -> DesiredStateCollectionDiff
-where
-    T: PartialEq,
-{
-    match (desired, live) {
-        (Some(desired), Some(live)) => {
-            if desired == live {
-                DesiredStateCollectionDiff {
-                    create: Vec::new(),
-                    update: Vec::new(),
-                    delete: Vec::new(),
-                    unchanged: vec![id.to_string()],
-                    live_only: Vec::new(),
-                }
-            } else {
-                DesiredStateCollectionDiff {
-                    create: Vec::new(),
-                    update: vec![id.to_string()],
-                    delete: Vec::new(),
-                    unchanged: Vec::new(),
-                    live_only: Vec::new(),
-                }
-            }
-        }
-        (Some(_), None) => DesiredStateCollectionDiff {
-            create: vec![id.to_string()],
-            update: Vec::new(),
-            delete: Vec::new(),
-            unchanged: Vec::new(),
-            live_only: Vec::new(),
-        },
-        (None, Some(_)) => DesiredStateCollectionDiff {
-            create: Vec::new(),
-            update: Vec::new(),
-            delete: Vec::new(),
-            unchanged: Vec::new(),
-            live_only: vec![id.to_string()],
-        },
-        (None, None) => DesiredStateCollectionDiff {
-            create: Vec::new(),
-            update: Vec::new(),
-            delete: Vec::new(),
-            unchanged: Vec::new(),
-            live_only: Vec::new(),
-        },
-    }
 }
 
 pub(crate) fn diff_collection<T>(
@@ -272,7 +222,7 @@ mod canonical_tests {
         assert_eq!(report.counts.get(Collection::Tools).unchanged, 2);
         let counts = serde_json::to_value(report.counts).unwrap();
         assert_eq!(counts.as_object().unwrap().len(), Collection::ALL.len());
-        assert!(counts.get("tool_selections").is_none());
+        assert_eq!(counts["tools"]["unchanged"], 2);
     }
 
     #[test]

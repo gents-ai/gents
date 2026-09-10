@@ -14,9 +14,10 @@ pub use compiler::{
     bind_package_plan, compile_graph, graph_plan_digest, verify_graph_plan_digest, CompilerPolicy,
     GraphCompileError,
 };
+#[cfg(test)]
+pub(crate) use run::derive_graph_workspace;
 pub(crate) use run::{
-    derive_graph_workspace, finalize_graph_workspace, graph_binding_for_request_in_txn,
-    run_graph_run_reconciler,
+    graph_binding_for_request_in_txn, resolve_graph_workspace, run_graph_run_reconciler,
 };
 pub use run::{
     load_graph_run_result_view_with_access, load_graph_run_view, load_graph_run_view_with_access,

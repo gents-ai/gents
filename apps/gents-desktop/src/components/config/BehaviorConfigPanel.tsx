@@ -187,6 +187,8 @@ export function BehaviorConfigEditor({
   const context = contexts.find((entry) => entry.context_id === contextId);
   const compaction = compactions.find((entry) => entry.compaction_id === compactionId);
   const profile = inferenceProfiles.find((entry) => entry.profile_id === profileId);
+  const isDefaultBehavior =
+    Boolean(behavior) && principal?.default_behavior_id === behavior?.behavior_id;
   const originalContext = contexts.find(
     (entry) => entry.context_id === behavior?.context_id,
   );
@@ -488,7 +490,7 @@ export function BehaviorConfigEditor({
         <span>Literal context instructions; prompt templates belong to tasks.</span>
       </label>
       <div className="config-actions">
-        {behavior ? (
+        {behavior && !isDefaultBehavior ? (
           <button
             className="ghost-button danger-button"
             data-testid="behavior-delete"
@@ -523,7 +525,7 @@ export function BehaviorConfigEditor({
           type="submit"
           disabled={saving || !behaviorId.trim() || !profile || !thresholdValid}
         >
-          {saving ? "Saving..." : "Save behavior"}
+          {saving ? "Saving..." : "Save Behavior"}
         </button>
       </div>
     </form>

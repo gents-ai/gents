@@ -296,7 +296,7 @@ mod tests {
     use super::*;
     #[test]
     fn canonical_oauth_backend_retains_defaults_without_fake_catalog() {
-        let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_o_auth"}}"#).unwrap();
+        let (backend,plan)=backend_plan(br#"{"agent_did":"owner","backend_id":"claude","name":"Claude","provider_kind":"ClaudeCliSubscription","endpoint":"https://api.anthropic.com","auth":{"kind":"principal_oauth"}}"#).unwrap();
         assert_eq!(backend.auth, BackendAuth::PrincipalOAuth);
         assert_eq!(backend.max_concurrent, None);
         assert!(plan.documents()[0].add.get("catalogs").is_none());

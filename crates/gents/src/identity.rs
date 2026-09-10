@@ -14,28 +14,13 @@ pub struct ServiceAccount {
     pub deployment_id: String,
 }
 
-/// Deployment-level principal record.
+/// Resolved DID and signing handle for one runtime assembly.
 ///
-/// Represents the DID-backed principal for a gents deployment.
-/// The runtime constructs a single instance per deployment and shares
-/// it as `Arc<AgentPrincipal>` across all behaviors; the type itself
-/// does not enforce this constraint — the single-principal invariant
-/// lives in the loader and will be fenced by a loader-dedup proptest
-/// (Task 12, `tests/identity_conformance_proptest.rs`).
-///
-/// Owns the signing identity used for every DefraDB op the runtime
-/// issues. Every `AgentBehavior` on the deployment holds an
-/// `Arc<AgentPrincipal>` back-reference; the back-reference makes
-/// Lean's `behavior_id_determines_principal` theorem (`Identity.Properties`)
-/// structural at the type level (no path constructs a behavior with a
-/// dangling agent_did).
-///
-/// Extends the Lean `Identity.Principal` record in
-/// `crates/gents/proofs/Proofs/Identity/State.lean`
-/// (`Identity.Principal`) with the live signing handle (`identity`)
-/// and the routing shortcut (`default_behavior_id`).
+/// Each resolved behavior holds this handle so DefraDB operations use the
+/// behavior owner's DID and signing identity. The assembly path validates the
+/// owner relationship before the behavior becomes runnable.
 #[derive(Clone)]
-pub struct AgentPrincipal {
+pub struct RuntimePrincipal {
     pub agent_did: String,
     pub identity: Arc<dyn AgentIdentity>,
     pub default_behavior_id: String,
@@ -43,9 +28,9 @@ pub struct AgentPrincipal {
     pub enabled: bool,
 }
 
-impl std::fmt::Debug for AgentPrincipal {
+impl std::fmt::Debug for RuntimePrincipal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentPrincipal")
+        f.debug_struct("RuntimePrincipal")
             .field("agent_did", &self.agent_did)
             .field("default_behavior_id", &self.default_behavior_id)
             .field("display_name", &self.display_name)

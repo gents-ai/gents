@@ -110,7 +110,7 @@ pub(crate) fn prepare_goal_continuation(
 }
 
 /// Resolve the behavior for a goal continuation from its required parent
-/// selection. The historical AgentConversation fallback is retired.
+/// selection. The parent request is the sole authority for this choice.
 pub(crate) async fn goal_continuation_behavior(
     _txn: &crate::config_client::ConfigApplyTxn<'_>,
     parent: &AgentRequest,

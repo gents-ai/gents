@@ -12,7 +12,7 @@ use super::build::{
 use super::modes::ToolCeiling;
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
-    BackgroundToolConfig, CustomToolFactory, SubagentToolConfig, ToolSelection,
+    BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection, SubagentToolConfig,
 };
 use super::ToolSurface;
 use crate::document_config::{QueryToolDecl, WriteToolDecl};
@@ -92,7 +92,7 @@ impl BehaviorToolConfig {
 
     pub fn from_selection(
         behavior_name: &str,
-        selection: ToolSelection,
+        selection: ResolvedToolSelection,
         ceiling: &ToolCeiling,
         custom_tools: Vec<CustomToolFactory>,
     ) -> Result<Self> {
@@ -151,7 +151,7 @@ impl BehaviorToolConfig {
     ) -> Result<Self> {
         let merged = crate::document_config::merge_datastore_tool_surfaces(tools, surfaces)?;
         let expanded = crate::agent::document_view::expand_eth_tools_from_docs(tools, eth_tools)?;
-        let mut resolved = ToolSelection::from_document(tools)?;
+        let mut resolved = ResolvedToolSelection::from_document(tools)?;
         resolved.write_tools = merged.write_tools;
         resolved.query_tools = merged.query_tools;
         resolved.eth_queries = expanded.queries;
@@ -181,7 +181,7 @@ impl BehaviorToolConfig {
 
     pub(crate) fn from_selection_with_subagent_tools(
         behavior_name: &str,
-        selection: ToolSelection,
+        selection: ResolvedToolSelection,
         ceiling: &ToolCeiling,
         subagent_tools: SubagentToolConfig,
         custom_tools: Vec<CustomToolFactory>,
@@ -207,7 +207,7 @@ impl BehaviorToolConfig {
             &ceiling_policy,
             &ToolPolicySurface::runtime_all(),
         );
-        let ToolSelection {
+        let ResolvedToolSelection {
             file_tools: requested_file_tools,
             file_tool_root,
             bash: requested_bash,

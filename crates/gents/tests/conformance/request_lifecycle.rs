@@ -315,8 +315,8 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         .expect("legal Request transition case must carry an action");
     let valid_until = (action == "expire")
         .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
-    let request_metadata =
-        (action == "dedupLose").then(|| coalesce_metadata(&format!("dedup-{request_id}")));
+    let request_input =
+        (action == "dedupLose").then(|| coalesce_input(&format!("dedup-{request_id}")));
     let initial_state = if action == "bindWorkspace" {
         "workspaceBindingPending"
     } else {
@@ -329,7 +329,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
         initial_state,
         &created_at,
         valid_until.as_deref(),
-        request_metadata.as_deref(),
+        request_input.as_deref(),
         None,
         None,
     )
@@ -359,7 +359,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             let survivor_created_at =
                 (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
             let key = format!("dedup-{request_id}");
-            let survivor_metadata = coalesce_metadata(&key);
+            let survivor_input = coalesce_input(&key);
             let survivor_doc_id = create_request_with_signed_fields(
                 &db.node,
                 &survivor_id,
@@ -367,7 +367,7 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 "pending",
                 &survivor_created_at,
                 None,
-                Some(&survivor_metadata),
+                Some(&survivor_input),
                 None,
                 None,
             )
@@ -596,9 +596,9 @@ async fn force_terminal_persisted_state(node: &EmbeddedNode, doc_id: &str, lifec
     force_persisted_lifecycle_state(node, doc_id, lifecycle_state).await;
 }
 
-/// Queue metadata marking a request as coalescible under `key`, the shape
+/// Queue input marking a request as coalescible under `key`, the shape
 /// `reconcile_coalesced_pending_request` matches on.
-fn coalesce_metadata(key: &str) -> String {
+fn coalesce_input(key: &str) -> String {
     serde_json::json!({
         "queue": {
             "source": "user",
@@ -750,7 +750,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
             let valid_until = (writer == "claim_after_ttl_lapse")
                 .then(|| (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339());
             let coalesce =
-                (writer == "coalesce_pending").then(|| coalesce_metadata("conformance-key"));
+                (writer == "coalesce_pending").then(|| coalesce_input("conformance-key"));
             let doc_id = create_request_with_signed_fields(
                 &db.node,
                 &request_id,
@@ -821,7 +821,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                     let survivor_id = uuid::Uuid::new_v4().to_string();
                     let survivor_created_at =
                         (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-                    let survivor_metadata = coalesce_metadata("conformance-key");
+                    let survivor_input = coalesce_input("conformance-key");
                     let survivor_doc_id = create_request_with_signed_fields(
                         &db.node,
                         &survivor_id,
@@ -829,7 +829,7 @@ async fn production_request_writers_only_reach_contracted_edges() {
                         "pending",
                         &survivor_created_at,
                         None,
-                        Some(&survivor_metadata),
+                        Some(&survivor_input),
                         None,
                         None,
                     )
@@ -1427,7 +1427,6 @@ use gents::background_completion::{
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use gents::{AgentBehaviorDocument, ToolSelectionDocument};
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();
@@ -1463,7 +1462,7 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
 struct QueueRuntimeRow {
     request_id: String,
     lifecycle_state: Option<RequestLifecycleState>,
-    metadata: Option<String>,
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1518,13 +1517,10 @@ fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> 
     if !row_is_pending(row) {
         return false;
     }
-    let Some(metadata) = row.metadata.as_deref() else {
+    let Some(input) = row.input.as_ref() else {
         return false;
     };
-    let Ok(metadata) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    let Some(queue) = metadata.get("queue") else {
+    let Some(queue) = input.get("queue") else {
         return false;
     };
     queue.get("source").and_then(serde_json::Value::as_str) == Some("background_completion")
@@ -1547,7 +1543,7 @@ async fn fetch_queue_runtime_snapshot(
             ) {{
                 request_id
                 lifecycle_state
-                metadata
+                input
             }}
         }}"#
     );
@@ -1924,7 +1920,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "pending",
         "2026-03-23T00:00:10Z",
         "scheduled",
-        Some(&automated_queue_metadata(
+        Some(&automated_queue_input(
             case.queue_key.as_deref().expect("queue key"),
             parent_request_id,
         )),
@@ -1939,7 +1935,7 @@ async fn drive_cancel_drains_automated_wakeups_preserves_user_pending(
         "pending",
         "2026-03-23T00:00:20Z",
         "scheduled",
-        Some(&user_queue_metadata()),
+        Some(&user_queue_input()),
         None,
         None,
     )
@@ -2040,7 +2036,7 @@ async fn create_queue_request(
     status: &str,
     created_at: &str,
     execution_origin: &str,
-    metadata: Option<&str>,
+    input: Option<&str>,
     deadline: Option<&str>,
     agent_did: Option<&str>,
 ) -> String {
@@ -2059,8 +2055,12 @@ async fn create_queue_request(
     let escaped_created_at = escape_graphql_string(created_at);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
     let agent_did = escape_graphql_string(agent_did.unwrap_or(AGENT_DID));
-    let metadata_field = metadata
-        .map(|metadata| format!(r#", metadata: "{}""#, escape_graphql_string(metadata)))
+    let input_field = input
+        .map(|input| serde_json::from_str::<serde_json::Value>(input).expect("request input JSON"))
+        .map(|input| {
+            gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL")
+        })
+        .map(|input| format!(r#", input: {input}"#))
         .unwrap_or_default();
     let deadline_field = deadline
         .map(|deadline| format!(r#", deadline: "{}""#, escape_graphql_string(deadline)))
@@ -2083,7 +2083,7 @@ async fn create_queue_request(
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
                 max_retries: {max_retries},
-                subagent_depth: 0{metadata_field}{deadline_field}
+                subagent_depth: 0{input_field}{deadline_field}
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -2106,7 +2106,7 @@ async fn create_queue_request(
     support::first_row::<support::DocIdRow>(&node.execute(&query).await, "AgentRequest").doc_id
 }
 
-fn automated_queue_metadata(queue_key: &str, queued_after_request_id: &str) -> String {
+fn automated_queue_input(queue_key: &str, queued_after_request_id: &str) -> String {
     json!({
         "queue": {
             "source": "background_completion",
@@ -2118,7 +2118,7 @@ fn automated_queue_metadata(queue_key: &str, queued_after_request_id: &str) -> S
     .to_string()
 }
 
-fn user_queue_metadata() -> String {
+fn user_queue_input() -> String {
     json!({
         "queue": {
             "source": "user",
@@ -2134,72 +2134,33 @@ async fn install_background_completion_fixture(node: &EmbeddedNode, agent_did: &
     const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
     const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
 
-    gents::upsert_tool_selection(
+    crate::support::fixtures::configure_subagent_behavior(
         node,
-        &ToolSelectionDocument {
-            selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                agent_did,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        agent_did,
+        CHILD_BEHAVIOR_ID,
+        "queue-deadline-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    gents::upsert_agent_behavior(
+    .await;
+    crate::support::fixtures::configure_subagent_behavior(
         node,
-        &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: AGENT_NAME.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Queue deadline parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(TOOL_SELECTION_ID.to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: true,
-            created_at: Some("2026-03-23T00:00:00Z".to_string()),
-        },
+        agent_did,
+        AGENT_NAME,
+        TOOL_SELECTION_ID,
+        vec![crate::support::fixtures::subagent_target(
+            agent_did,
+            CHILD_BEHAVIOR_ID,
+            agent_did,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
-    gents::upsert_agent_behavior(
-        node,
-        &AgentBehaviorDocument {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Queue deadline child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: true,
-            created_at: Some("2026-03-23T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    .await;
 }
 
 async fn create_background_child_bridge(

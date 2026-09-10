@@ -3,7 +3,7 @@ use crate::error::BridgeError;
 use std::sync::Arc;
 
 use chrono::Utc;
-use gents::backend_registry::{derive_display_state, list_all_backends};
+use gents::backend_registry::{list_all_backends, lookup_backend_observation};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
@@ -470,23 +470,58 @@ pub async fn list_backends_with_health_for_core(
 
     let mut views = Vec::with_capacity(backends.len());
     for backend in backends {
+        let observation = lookup_backend_observation(node, &backend.agent_did, &backend.backend_id)
+            .await
+            .map_err(|err| err.to_string())?;
         let recent_calls = fetch_recent_calls(node, &backend.backend_id)
             .await
             .map_err(|err| err.to_string())?;
-        let display_state =
-            derive_display_state(backend.enabled, &backend.probe_status).to_string();
+        let probe_status = observation
+            .as_ref()
+            .and_then(|row| row.probe_status.clone())
+            .unwrap_or_else(|| "unknown".to_string());
+        let display_state = observation
+            .as_ref()
+            .map(|row| row.display_state(backend.enabled))
+            .unwrap_or_else(|| {
+                if backend.enabled {
+                    "unknown"
+                } else {
+                    "disabled"
+                }
+            })
+            .to_string();
+        let catalog_scope = matches!(
+            backend.auth,
+            gents::document_config::BackendAuth::PrincipalOAuth
+        )
+        .then_some(backend.agent_did.as_str());
+        let models = observation
+            .as_ref()
+            .map(|row| row.catalog_for(catalog_scope))
+            .transpose()
+            .map_err(|err| err.to_string())?
+            .flatten()
+            .map(|catalog| {
+                catalog
+                    .models
+                    .iter()
+                    .map(|model| model.model_name.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
         views.push(BackendHealthView {
             backend_id: backend.backend_id,
             name: backend.name,
             provider_kind: backend.provider_kind.as_str().to_string(),
             endpoint: backend.endpoint,
             enabled: backend.enabled,
-            probe_status: backend.probe_status,
+            probe_status,
             display_state,
-            last_probe: None,
-            max_concurrent: backend.max_concurrent,
-            max_queue_depth: backend.max_queue_depth,
-            models: backend.models,
+            last_probe: observation.and_then(|row| row.last_probe),
+            max_concurrent: backend.max_concurrent.unwrap_or(1),
+            max_queue_depth: backend.max_queue_depth.unwrap_or(100),
+            models,
             recent_calls,
         });
     }

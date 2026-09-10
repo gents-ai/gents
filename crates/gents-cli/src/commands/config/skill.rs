@@ -25,7 +25,6 @@ fn gql_string_list(values: &[String]) -> String {
 struct SkillInput {
     skill_id: String,
     agent_did: String,
-    scope: String,
     name: Option<String>,
     description: Option<String>,
     instructions: Option<String>,
@@ -48,7 +47,6 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
     };
     let fields = vec![
         gql_opt_string("agent_did", Some(&skill.agent_did)),
-        gql_opt_string("scope", Some(&skill.scope)),
         gql_opt_string("name", skill.name.as_deref()),
         gql_opt_string("description", skill.description.as_deref()),
         gql_opt_string("instructions", skill.instructions.as_deref()),
@@ -76,15 +74,7 @@ async fn upsert_skill(access: &ConfigAccess, skill: &SkillInput) -> Result<Strin
     extract_mutation_doc_id(&response, "Skill")
 }
 
-fn validate_scope(scope: &str) -> Result<()> {
-    if !matches!(scope, "principal" | "behavior") {
-        anyhow::bail!("skill scope must be \"principal\" or \"behavior\", got {scope:?}");
-    }
-    Ok(())
-}
-
 pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
-    validate_scope(&args.scope)?;
     let instructions = match args.instructions_file {
         Some(ref path) => Some(
             std::fs::read_to_string(path)
@@ -96,7 +86,6 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
     let skill = SkillInput {
         skill_id: args.skill_id.clone(),
         agent_did: args.agent_did.clone(),
-        scope: args.scope.clone(),
         name: args.name.clone(),
         description: args.description.clone(),
         instructions,
@@ -110,7 +99,6 @@ pub(super) async fn skill_add(args: SkillAddArgs) -> Result<()> {
         "doc_id": doc_id,
         "skill_id": args.skill_id,
         "agent_did": args.agent_did,
-        "scope": args.scope,
         "enabled": args.enabled,
     }))?;
     Ok(())
@@ -299,7 +287,6 @@ fn find_skill_dirs(root: &std::path::Path, max_depth: usize) -> Vec<std::path::P
 }
 
 pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
-    validate_scope(&args.scope)?;
     if !args.dir.is_dir() {
         anyhow::bail!("{} is not a directory", args.dir.display());
     }
@@ -361,7 +348,6 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
         let skill = SkillInput {
             skill_id: skill_id.clone(),
             agent_did: args.agent_did.clone(),
-            scope: args.scope.clone(),
             name: Some(name.clone()),
             description: frontmatter.description.clone(),
             instructions: (!body.is_empty()).then_some(body),
@@ -392,7 +378,6 @@ pub(super) async fn skill_import(args: SkillImportArgs) -> Result<()> {
 
     print_json(&json!({
         "agent_did": args.agent_did,
-        "scope": args.scope,
         "dry_run": args.dry_run,
         "imported_count": imported.len(),
         "imported": imported,

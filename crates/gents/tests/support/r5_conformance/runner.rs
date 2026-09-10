@@ -1,11 +1,11 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
     reconcile_unclaimed_cross_deployment_spawns,
 };
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn as read_desired_state_record,
+    apply_desired_state_plan, read_desired_state_record_in_txn as read_desired_state_record,
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, InferenceBackend, SubagentTools,
@@ -22,7 +22,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::support::{TestDb, first_optional_row, test_db};
+use crate::support::{first_optional_row, test_db, TestDb};
 
 use super::scenario::{Action, NodeId, Scenario};
 
@@ -466,7 +466,6 @@ async fn write_agent_request(
                     lifecycle_state: "{state}",
                     backend_id: "",
                     execution_origin: "interactive",
-                    metadata: "",
                     failure_reason: "",
                     created_at: "{now}",
                     deadline: "{deadline}",

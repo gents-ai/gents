@@ -31,8 +31,14 @@ async fn builder_rejects_node_without_signing_did() {
 async fn builder_includes_custom_tools_in_resolved_tool_surface() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
-    insert_backend(node.as_ref(), "builder-backend", "http://127.0.0.1:8777/v1").await;
     let identity = Arc::new(test_identity("builder-custom-tools"));
+    insert_backend(
+        node.as_ref(),
+        identity.did(),
+        "builder-backend",
+        "http://127.0.0.1:8777/v1",
+    )
+    .await;
 
     let agent = Gents::builder()
         .node(node.clone())
@@ -93,13 +99,14 @@ async fn builder_requires_resolvable_backend_documents() {
 async fn builder_rejects_backend_vetoed_by_measured_health() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let identity = Arc::new(test_identity("builder-measured-unhealthy"));
     insert_backend(
         node.as_ref(),
+        identity.did(),
         "builder-vetoed-backend",
         "http://127.0.0.1:8778/v1",
     )
     .await;
-    let identity = Arc::new(test_identity("builder-measured-unhealthy"));
 
     let backend_health = crate::backend_health::BackendHealthMap::new();
     backend_health

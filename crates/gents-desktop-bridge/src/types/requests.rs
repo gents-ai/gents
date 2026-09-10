@@ -52,7 +52,7 @@ pub struct MailboxItemRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationRenameRequest {
+pub struct SessionRenameRequest {
     pub agent_did: String,
     pub session_id: String,
     pub title: String,
@@ -95,7 +95,7 @@ pub struct ScheduleDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct EventTriggerDeleteRequest {
+pub struct TriggerDeleteRequest {
     pub trigger_id: String,
     pub agent_did: String,
 }
@@ -212,7 +212,7 @@ pub struct ScheduleRunRequest {
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]
-pub struct EventTriggerSaveRequest {
+pub struct TriggerSaveRequest {
     pub document: gents::document_config::Trigger,
 }
 
@@ -275,7 +275,7 @@ pub struct DesktopProbeMcpServiceRequest {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::*;
 
@@ -342,7 +342,7 @@ mod tests {
             "schedule-a"
         );
         assert_source_routed_delete_request!(
-            EventTriggerDeleteRequest,
+            TriggerDeleteRequest,
             "triggerId",
             trigger_id,
             "trigger-a"

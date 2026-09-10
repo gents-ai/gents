@@ -8,12 +8,12 @@ use gents_protocol::row::{
 };
 
 use super::super::types::{
-    normalize_optional, turn_state_label, AgentContext, AgentPrincipalView,
-    BehaviorEnvironmentView, BehaviorReadinessSourceView, BehaviorReadinessStatusView,
-    BehaviorReadinessUnknownReasonView, BehaviorReadinessView, BehaviorUnavailableReasonView,
-    BehaviorView, ClientRouteStatusView, DeploymentView, DesktopRuntimeSnapshot,
-    InferenceBackendView, InferenceProfile, MailboxItemView, RuntimeView, SessionSummary,
-    SkillView, TaskView, Tools, TriggerView,
+    normalize_optional, AgentContext, AgentPrincipalView, BehaviorEnvironmentView,
+    BehaviorReadinessSourceView, BehaviorReadinessStatusView, BehaviorReadinessUnknownReasonView,
+    BehaviorReadinessView, BehaviorUnavailableReasonView, BehaviorView, ClientRouteStatusView,
+    DeploymentView, DesktopRuntimeSnapshot, InferenceBackendView, InferenceProfile,
+    MailboxItemView, RuntimeView, SessionSummary, SkillView, TaskRecentRunsView,
+    TaskRunSummaryView, TaskView, Tools, TriggerView,
 };
 use super::runtime_tasks::{
     recent_runs_for_task_views, session_summaries, source_matches_agent, task_run_history,
@@ -44,11 +44,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
         .into_iter()
         .map(|peer| {
             let status = peer_statuses_by_id.get(&peer.peer_id);
-            let require_source_scope = peer.is_enrollment()
-                || peer
-                    .graphql
-                    .as_deref()
-                    .is_some_and(|graphql| !graphql.trim().is_empty());
             let principal = store
                 .agent_principals
                 .iter()
@@ -337,28 +332,12 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
 
             let mut tasks = scoped_task_rows
                 .into_iter()
-                .map(|(_index, row)| TaskView {
-                    task_id: row.task_id.clone(),
-                    name: normalize_optional(row.display_name.as_deref()),
-                    description: normalize_optional(row.description.as_deref()),
-                    behavior_id: Some(row.behavior_id.clone()),
-                    prompt_template: Some(row.prompt_template.clone()),
-                    goal_objective_template: normalize_optional(
-                        row.goal_objective_template.as_deref(),
-                    ),
-                    goal_token_budget: row.goal_token_budget,
-                    enabled: Some(row.enabled),
-                    recent_runs: recent_runs_for_task_views(
-                        &triggers,
-                        &peer.agent_did,
-                        &row.task_id,
-                    ),
-                    run_history: task_run_history(
-                        store.as_ref(),
-                        &peer.agent_did,
-                        &row.task_id,
-                        &triggers,
-                    ),
+                .map(|(_index, row)| {
+                    project_task_view(
+                        row,
+                        recent_runs_for_task_views(&triggers, &peer.agent_did, &row.task_id),
+                        task_run_history(store.as_ref(), &peer.agent_did, &row.task_id, &triggers),
+                    )
                 })
                 .collect::<Vec<_>>();
             tasks.sort_by(|left, right| left.task_id.cmp(&right.task_id));
@@ -522,6 +501,82 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
     }
 }
 
+fn project_task_view(
+    task: &gents::document_config::Task,
+    recent_runs: TaskRecentRunsView,
+    run_history: Vec<TaskRunSummaryView>,
+) -> TaskView {
+    TaskView {
+        task_id: task.task_id.clone(),
+        name: normalize_optional(task.display_name.as_deref()),
+        description: normalize_optional(task.description.as_deref()),
+        behavior_id: Some(task.behavior_id.clone()),
+        prompt_template: Some(task.prompt_template.clone()),
+        goal_objective_template: normalize_optional(task.goal_objective_template.as_deref()),
+        goal_token_budget: task.goal_token_budget,
+        hooks: task.hooks.clone(),
+        enabled: Some(task.enabled),
+        output_schema_ref: task.output_schema_ref.clone(),
+        tags: task.tags.clone(),
+        recent_runs,
+        run_history,
+    }
+}
+
+#[cfg(test)]
+mod task_view_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_task_hooks_and_tags_survive_projection() {
+        let task: gents::document_config::Task = serde_json::from_value(serde_json::json!({
+            "agent_did": "did:test:owner",
+            "task_id": "release",
+            "display_name": "Release",
+            "behavior_id": "operator",
+            "prompt_template": "Ship it",
+            "output_schema_ref": "schemas/release-result.json",
+            "hooks": [
+                {
+                    "hook_id": "prepare",
+                    "phase": "before",
+                    "command": ["sh", "-c", "./prepare.sh"],
+                    "timeout_secs": 45
+                },
+                {
+                    "hook_id": "cleanup",
+                    "phase": "finally",
+                    "command": ["./cleanup"]
+                }
+            ],
+            "tags": ["release", "operator"]
+        }))
+        .expect("canonical task");
+        let view = project_task_view(
+            &task,
+            TaskRecentRunsView {
+                total_fires: 0,
+                last_attempt_at: None,
+                last_status: None,
+                last_error: None,
+                schedule_count: 0,
+                event_count: 0,
+            },
+            Vec::new(),
+        );
+
+        assert_eq!(view.hooks, task.hooks);
+        assert_eq!(view.output_schema_ref, task.output_schema_ref);
+        assert_eq!(view.tags, ["release", "operator"]);
+        let wire = serde_json::to_value(view).expect("TaskView wire value");
+        assert_eq!(wire["hooks"][0]["hook_id"], "prepare");
+        assert_eq!(wire["hooks"][0]["phase"], "before");
+        assert_eq!(wire["hooks"][0]["timeout_secs"], 45);
+        assert_eq!(wire["hooks"][1]["phase"], "finally");
+        assert_eq!(wire["tags"], serde_json::json!(["release", "operator"]));
+    }
+}
+
 pub(crate) fn project_behavior_readiness<'a>(
     row: Option<&AgentBehaviorReadinessRow>,
     expected_agent_did: &str,
@@ -642,12 +697,9 @@ fn backend_config_view(
         BackendAuth::Environment { variable } => {
             ("environment", false, Some(variable.clone()), None)
         }
-        BackendAuth::PrincipalOAuth => (
-            "principal_o_auth",
-            false,
-            None,
-            Some(row.agent_did.as_str()),
-        ),
+        BackendAuth::PrincipalOAuth => {
+            ("principal_oauth", false, None, Some(row.agent_did.as_str()))
+        }
     };
     let models = observation
         .and_then(|observation| match observation.catalog_for(catalog_scope) {

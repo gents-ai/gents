@@ -143,7 +143,7 @@ async fn scan_requests(
             {session_filter} request_id: {{_gt: "{}"}}
         }}, order: {{request_id: ASC}}, limit: {PAGE_SIZE}) {{
             _docID request_id session_id agent_did requester_did behavior_id
-            content metadata created_at terminalized_at lifecycle_state runtime_source_kind
+            content created_at terminalized_at lifecycle_state runtime_source_kind
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }} }}"#,
                 escape_graphql_string(&after)

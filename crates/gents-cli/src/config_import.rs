@@ -1,9 +1,9 @@
 use anyhow::Result;
-use gents::Collection;
 use gents::config_client::{
-    DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
+use gents::Collection;
 use serde_json::Value;
 
 use crate::config_bundle::select_apply_collection_docs;

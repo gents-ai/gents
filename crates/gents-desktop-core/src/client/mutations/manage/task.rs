@@ -1,17 +1,16 @@
 //! Canonical automation configuration through the shared candidate transaction.
 //! Runtime task invocation below remains a separate integration surface.
 use super::super::graphql::{escape_graphql_string, normalize_required};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::{EventSource, Schedule, Task, Trigger};
 use gents::{task_session_title, write_manual_agent_request_with_conversation_title};
-use gents_protocol::row::{ScheduleRow, TaskRow};
 
 pub async fn upsert_task(node: &EmbeddedNode, document: &Task) -> Result<()> {
     let value = serde_json::to_value(document)?;
@@ -171,34 +170,29 @@ pub async fn delete_event_source(node: &EmbeddedNode, agent_did: &str, id: &str)
 /// Returns the new `AgentRequest`'s `_docID` on success.
 pub async fn fire_task_now(
     node: &EmbeddedNode,
-    task_row: &TaskRow,
+    task_row: &Task,
     args: serde_json::Value,
 ) -> Result<String> {
     let task_id = normalize_required("task_id", &task_row.task_id)?;
-    let behavior_id = task_row
-        .behavior_id
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
-        })
-        .ok_or_else(|| anyhow!("task {task_id} has no behavior_id"))?;
-    let prompt_template = task_row
-        .prompt_template
-        .as_deref()
-        .ok_or_else(|| anyhow!("task {task_id} has no prompt_template"))?;
-    if !task_row.enabled.unwrap_or(false) {
+    let agent_did = normalize_required("agent_did", &task_row.agent_did)?;
+    let behavior_id = normalize_required("behavior_id", &task_row.behavior_id)?;
+    let prompt_template = normalize_required("prompt_template", &task_row.prompt_template)?;
+    if !task_row.enabled {
         bail!("task {task_id} is disabled");
     }
 
     let behavior_query = format!(
         r#"query {{
-            AgentBehavior(filter: {{ behavior_id: {{ _eq: "{id}" }} }}, limit: 1) {{
+            AgentBehavior(filter: {{
+                agent_did: {{ _eq: "{agent_did}" }},
+                behavior_id: {{ _eq: "{id}" }}
+            }}, limit: 1) {{
                 agent_did
                 enabled
             }}
         }}"#,
         id = escape_graphql_string(behavior_id),
+        agent_did = escape_graphql_string(agent_did),
     );
     let behavior_response = node.execute(&behavior_query).await;
     if behavior_response.has_errors() {
@@ -219,11 +213,14 @@ pub async fn fire_task_now(
                 behavior_id
             )
         })?;
-    let agent_did = behavior_row
+    let behavior_agent_did = behavior_row
         .get("agent_did")
         .and_then(|value| value.as_str())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| anyhow!("AgentBehavior {behavior_id} has no agent_did"))?;
+    if behavior_agent_did != agent_did {
+        bail!("AgentBehavior {behavior_id} belongs to a different principal");
+    }
     if !behavior_row
         .get("enabled")
         .and_then(|value| value.as_bool())
@@ -233,7 +230,7 @@ pub async fn fire_task_now(
     }
 
     let task_label = task_row
-        .name
+        .display_name
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -327,35 +324,79 @@ pub async fn fire_task_now(
 /// not a cron fire, so observers can cleanly separate "the scheduler
 /// decided to fire" from "a human pressed Run Now on the Schedule row."
 ///
-/// We load the `TaskRow` from GraphQL directly rather than from the
+/// We load the canonical `Task` from GraphQL directly rather than from the
 /// desktop store, so this path stays correct even if the store is
 /// stale (e.g., the schedule was just created and the watcher has not
 /// caught up yet). The `SELECT` mirrors every field on
-/// `gents_protocol::row::TaskRow` so `serde_json::from_value`
-/// does not fail on a missing column.
-pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) -> Result<String> {
-    let task_id = schedule_row
-        .task_id
-        .as_deref()
-        .and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then_some(trimmed)
-        })
-        .ok_or_else(|| anyhow!("schedule {} has no task_id", schedule_row.schedule_id))?;
+/// canonical document so `serde_json::from_value` sees the authoritative shape.
+pub async fn fire_schedule_now(node: &EmbeddedNode, schedule: &Schedule) -> Result<String> {
+    let agent_did = normalize_required("agent_did", &schedule.agent_did)?;
+    let schedule_id = normalize_required("schedule_id", &schedule.schedule_id)?;
+    let trigger_query = format!(
+        r#"query {{
+            Trigger(filter: {{ agent_did: {{ _eq: "{agent_did}" }} }}) {{
+                agent_did
+                trigger_id
+                task_id
+                display_name
+                description
+                source
+                enabled
+                concurrency
+                created_at
+                updated_at
+                tags
+            }}
+        }}"#,
+        agent_did = escape_graphql_string(agent_did),
+    );
+    let trigger_response = node.execute(&trigger_query).await;
+    if trigger_response.has_errors() {
+        bail!(
+            "fetch triggers for schedule {schedule_id} failed: {:?}",
+            trigger_response.errors
+        );
+    }
+    let mut matching = trigger_response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("Trigger"))
+        .and_then(|rows| rows.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|value| serde_json::from_value::<Trigger>(value.clone()).ok())
+        .filter(|trigger| {
+            trigger.enabled
+                && matches!(
+                    &trigger.source,
+                    gents::document_config::TriggerSource::Schedule { schedule_id: id }
+                        if id == schedule_id
+                )
+        });
+    let trigger = matching
+        .next()
+        .ok_or_else(|| anyhow!("schedule {schedule_id} has no enabled Trigger"))?;
+    if matching.next().is_some() {
+        bail!("schedule {schedule_id} has multiple enabled Triggers; run a Trigger explicitly");
+    }
+    let task_id = trigger.task_id.as_str();
     let task_query = format!(
         r#"query {{
             Task(filter: {{ task_id: {{ _eq: "{id}" }} }}, limit: 1) {{
                 task_id
-                name
+                agent_did
+                display_name
                 description
                 behavior_id
                 prompt_template
                 goal_objective_template
                 goal_token_budget
+                hooks
                 enabled
                 output_schema_ref
                 created_at
                 updated_at
+                tags
             }}
         }}"#,
         id = escape_graphql_string(task_id),
@@ -365,7 +406,6 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
         bail!(
             "fetch task for schedule {schedule_id} failed: {:?}",
             task_response.errors,
-            schedule_id = schedule_row.schedule_id,
         );
     }
     let task_row_json = task_response
@@ -375,8 +415,8 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule_row: &ScheduleRow) 
         .and_then(|arr| arr.as_array())
         .and_then(|arr| arr.first())
         .ok_or_else(|| anyhow!("task {task_id} not found"))?;
-    let task_row: TaskRow = serde_json::from_value(task_row_json.clone())
-        .map_err(|e| anyhow!("deserialize TaskRow: {e}"))?;
+    let task_row: Task = serde_json::from_value(task_row_json.clone())
+        .map_err(|e| anyhow!("deserialize Task: {e}"))?;
 
     fire_task_now(node, &task_row, serde_json::json!({})).await
 }

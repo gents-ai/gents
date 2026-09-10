@@ -127,7 +127,7 @@ pub(crate) fn graph_trigger_id(digest: &str, route: &str) -> Result<String> {
 }
 
 /// Extract the immutable revision identity from the reserved artifact ID
-/// namespace. Ordinary operator-authored Task/EventTrigger IDs return `None`.
+/// namespace. Ordinary operator-authored task and trigger IDs return `None`.
 pub(crate) fn graph_artifact_revision_digest(id: &str) -> Option<String> {
     let tail = id.strip_prefix(TRIGGER_PREFIX)?;
     let (digest, component) = tail.split_once('-')?;
@@ -200,9 +200,10 @@ pub(crate) async fn load_runtime_graph_artifacts_in_txn(
 }
 
 /// Resolve package-owned ordinary configuration resources through the same
-/// active-revision/nonterminal-run pin set used for Task/EventTrigger
+/// active-revision/nonterminal-run pin set used for task-trigger
 /// visibility. The plan remains the only ownership ledger; no package catalog
 /// or mutable install state is consulted at runtime.
+#[cfg(test)]
 pub(crate) async fn load_visible_package_artifact_ids(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -989,7 +990,7 @@ async fn activate_in_txn(
     {
         anyhow::bail!("candidate revision is not complete for this graph and owner");
     }
-    let plan = verified_revision_plan(&revision, graph_id, owner_did)?;
+    verified_revision_plan(&revision, graph_id, owner_did)?;
     if current.as_deref() == Some(digest) {
         let gate = revision_gate_decision(
             revision

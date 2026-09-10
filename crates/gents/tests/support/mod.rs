@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::graphql::escape_graphql_string;
-use gents::{AgentIdentity, KeyIdentity, ensure_runtime_schemas, watcher::AgentRequest};
+use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -250,7 +250,7 @@ pub async fn create_request_with_signed_fields(
     status: &str,
     created_at: &str,
     valid_until: Option<&str>,
-    metadata: Option<&str>,
+    input: Option<&str>,
     retry_parent_request: Option<&str>,
     retry_root_request: Option<&str>,
 ) -> String {
@@ -262,7 +262,7 @@ pub async fn create_request_with_signed_fields(
         status,
         created_at,
         valid_until,
-        metadata,
+        input,
         retry_parent_request,
         retry_root_request,
     )
@@ -278,7 +278,7 @@ pub async fn create_request_for_agent_with_signed_fields(
     lifecycle_state: &str,
     created_at: &str,
     valid_until: Option<&str>,
-    metadata: Option<&str>,
+    input: Option<&str>,
     retry_parent_request: Option<&str>,
     retry_root_request: Option<&str>,
 ) -> String {
@@ -290,9 +290,12 @@ pub async fn create_request_for_agent_with_signed_fields(
         .map(escape_graphql_string)
         .map(|value| format!(r#"valid_until: "{value}","#))
         .unwrap_or_default();
-    let metadata = metadata
-        .map(escape_graphql_string)
-        .map(|value| format!(r#"metadata: "{value}","#))
+    let input = input
+        .map(|value| serde_json::from_str::<serde_json::Value>(value).expect("request input JSON"))
+        .map(|value| {
+            gents_protocol::graphql::graphql_input_literal(&value).expect("request input GraphQL")
+        })
+        .map(|value| format!("input: {value},"))
         .unwrap_or_default();
     let retry_parent_request = retry_parent_request
         .map(escape_graphql_string)
@@ -314,7 +317,7 @@ pub async fn create_request_for_agent_with_signed_fields(
                 execution_origin: "interactive",
                 created_at: "{created_at}",
                 {valid_until}
-                {metadata}
+                {input}
                 retry_count: 0,
                 max_retries: {max_retries},
                 subagent_depth: 0

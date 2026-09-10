@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::*;
@@ -11,7 +11,7 @@ use crate::request_helpers::resolve_dual_id;
 use crate::{extract_mutation_doc_id, print_json, resolve_config_access};
 
 // Operator-local allowed-root ceiling used by persona enrollment. This is not
-// pack configuration: HostTools.cwd selects a path but does not grant authority.
+// pack configuration: Tools.host.root selects a path but does not grant authority.
 
 pub(super) async fn workspace_root_list(args: ConfigListArgs) -> Result<()> {
     let (access, _) = resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;

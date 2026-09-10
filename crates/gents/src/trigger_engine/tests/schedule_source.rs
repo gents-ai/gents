@@ -7,8 +7,8 @@ use super::*;
 /// resolves from the snapshot (`snapshot.behavior(...).agent_did()`).
 /// `integration_test_behavior` mints a fresh principal per call, so seeding
 /// needs this stable handle.
-fn schedule_test_behavior() -> Arc<AgentBehavior> {
-    static BEHAVIOR: std::sync::OnceLock<Arc<AgentBehavior>> = std::sync::OnceLock::new();
+fn schedule_test_behavior() -> Arc<ResolvedBehavior> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedBehavior>> = std::sync::OnceLock::new();
     BEHAVIOR
         .get_or_init(|| integration_test_behavior("general"))
         .clone()

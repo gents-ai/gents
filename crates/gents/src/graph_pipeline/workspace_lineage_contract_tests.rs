@@ -134,7 +134,7 @@ impl Fixture {
             .unwrap()
             .0
     }
-    async fn request(
+    async fn request_create(
         &self,
         id: &str,
         node: &str,
@@ -182,6 +182,15 @@ impl Fixture {
         request.workspace_authority = lineage.workspace_authority.clone();
         request.workspace_owner_agent_did = lineage.workspace_owner_agent_did.clone();
         request.workspace_seal_hash = lineage.workspace_seal_hash.clone();
+        request
+    }
+    async fn request(
+        &self,
+        id: &str,
+        node: &str,
+        lineage: &WorkspaceLineage,
+    ) -> AgentRequestCreate {
+        let mut request = self.request_create(id, node, lineage).await;
         crate::sign_agent_request_create(&self.identity, &mut request)
             .await
             .unwrap();
@@ -311,6 +320,17 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
             "scan"
         };
         let explicit = explicit_from_case(&fx, &case["explicit"]);
+        if name == "bootstrap_unverified_workspace_owner" {
+            execute(
+                &fx.node,
+                &format!(
+                    "mutation {{ delete_IsolatedWorkspace(filter: {{ workspace_id: {{ _eq: \"{}\" }}, owner_agent_did: {{ _eq: \"{}\" }} }}) {{ _docID }} }}",
+                    escape_graphql_string(&fx.workspace.workspace.workspace_id),
+                    escape_graphql_string(fx.identity.did()),
+                ),
+            )
+            .await;
+        }
         if case["cancelled"] == true {
             let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
             persist_cancellation_intent(
@@ -351,7 +371,7 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
         if stopped || case["expected"].is_null() {
             assert!(observed.is_err(), "{name}: unexpected permitted projection");
             assert_eq!(case["published"], false, "{name}");
-            let mut candidate = fx.request("candidate", destination, &explicit).await;
+            let mut candidate = fx.request_create("candidate", destination, &explicit).await;
             if case["context"]["destination_route_verified"] == false {
                 candidate.caused_by_trigger_id = Some(
                     super::super::runtime::graph_trigger_id(&fx.run.revision_digest, "unplanned")
@@ -359,19 +379,35 @@ async fn generated_graph_workspace_cases_drive_installed_plan_and_signed_receipt
                 );
                 candidate.admission.runtime_source_request_id =
                     candidate.caused_by_trigger_id.clone();
-                crate::sign_agent_request_create(&fx.identity, &mut candidate)
-                    .await
-                    .unwrap();
             }
             let before = query_run(fx.node.as_ref(), &fx.run.run_id).await.unwrap();
-            let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
-            assert!(
-                workspace_lineage::fence_root_workspace_in_txn(&txn, &candidate)
-                    .await
-                    .is_err(),
-                "{name}"
-            );
-            txn.discard().await.unwrap();
+            let populated = [
+                candidate.workspace_id.is_some(),
+                candidate.workspace_owner_agent_did.is_some(),
+                candidate.workspace_authority.is_some(),
+            ]
+            .into_iter()
+            .filter(|present| *present)
+            .count();
+            let structurally_complete =
+                (populated == 0 && candidate.workspace_seal_hash.is_none()) || populated == 3;
+            let signed = crate::sign_agent_request_create(&fx.identity, &mut candidate).await;
+            if structurally_complete {
+                signed.unwrap_or_else(|error| panic!("{name}: {error:#}"));
+                let txn = ConfigApplyTxn::begin_local(&fx.node, None).await.unwrap();
+                assert!(
+                    workspace_lineage::fence_root_workspace_in_txn(&txn, &candidate)
+                        .await
+                        .is_err(),
+                    "{name}"
+                );
+                txn.discard().await.unwrap();
+            } else {
+                assert!(
+                    signed.is_err(),
+                    "{name}: a partial workspace tuple must fail before publication"
+                );
+            }
             let after = query_run(fx.node.as_ref(), &fx.run.run_id).await.unwrap();
             assert_eq!(
                 after["update_generation"], before["update_generation"],
@@ -646,7 +682,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         ConcurrencyMode, EventTriggerFireMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
         ResolvedTask,
     };
-    use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolSelection};
+    use crate::tool_surface::{BehaviorToolConfig, ResolvedToolSelection, ToolCeiling};
     use crate::trigger_engine::{MaterializerHandle, TriggerKind, TriggerSource};
     use std::collections::HashMap;
     use tokio::sync::watch;
@@ -702,7 +738,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             .find(|surface| surface.surface_id == format!("review-{stage}-writes"))
             .expect("canonical installed surface");
         let entries = declared.entries.clone().unwrap_or_default();
-        let mut selection = ToolSelection::default();
+        let mut selection = ResolvedToolSelection::default();
         // Include the installed query declarations: their runtime source fills
         // tell EventSource which evidence fields the scanner must inherit.
         for entry in entries {
@@ -797,6 +833,48 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         CancellationToken::new(),
     );
     source.reconcile_subscriptions(snapshot.as_ref()).await;
+    // The installed entry input persists only the author-supplied workspace
+    // id and authority in graph state. The durable workspace record is the
+    // owner of truth for the principal and seal that complete the tuple.
+    let entry_route = &routes["recon"].0;
+    let derived_entry = super::workspace_lineage::derive_graph_workspace(
+        fx.node.as_ref(),
+        entry_route,
+        Some(&fx.run.correlation),
+        fx.identity.did(),
+        Some(&fx.run.seed_doc_id),
+        &WorkspaceLineage::default(),
+    )
+    .await
+    .unwrap()
+    .expect("installed graph entry workspace");
+    assert_eq!(derived_entry.lineage.workspace_id, fx.tuple().workspace_id);
+    assert_eq!(
+        derived_entry.lineage.workspace_authority.as_deref(),
+        Some("readOnly")
+    );
+    assert!(derived_entry.lineage.workspace_owner_agent_did.is_none());
+    let resolved_entry =
+        super::workspace_lineage::finalize_graph_workspace(fx.node.as_ref(), derived_entry)
+            .await
+            .unwrap();
+    let expected_entry = fx.tuple();
+    assert_eq!(
+        resolved_entry.lineage.workspace_id,
+        expected_entry.workspace_id
+    );
+    assert_eq!(
+        resolved_entry.lineage.workspace_owner_agent_did,
+        expected_entry.workspace_owner_agent_did
+    );
+    assert_eq!(
+        resolved_entry.lineage.workspace_authority,
+        expected_entry.workspace_authority
+    );
+    assert_eq!(
+        resolved_entry.lineage.workspace_seal_hash,
+        expected_entry.workspace_seal_hash
+    );
     // Only the entry receives the operator's explicit tuple. Child input comes
     // from the actual domain event and contains no copied workspace fields.
     let root_context = serde_json::to_string(&crate::lifecycle::TriggerExecutionContext {

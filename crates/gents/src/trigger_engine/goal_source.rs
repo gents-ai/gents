@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
@@ -16,17 +16,18 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
-use crate::UpdateSubscriptionSource;
 use crate::goal::publish_claimed_continuation;
 use crate::goal::{
-    GOAL_TRIGGER_KIND, GoalAction, GoalContinuationAction, GoalContinuationPhase, GoalDecision,
-    GoalDocument, GoalRequestTerminal, GoalStatus, MAX_INFRASTRUCTURE_RETRIES, claim_continuation,
-    claim_retry_continuation, decide_goal_continuation, goal_continuation_materialization_step,
-    load_goal_by_id, load_goals_for_session, refresh_goal_usage, update_goal_fields_if_status,
+    claim_continuation, claim_retry_continuation, decide_goal_continuation,
+    goal_continuation_materialization_step, load_goal_by_id, load_goals_for_session,
+    refresh_goal_usage, update_goal_fields_if_status, GoalAction, GoalContinuationAction,
+    GoalContinuationPhase, GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus,
+    GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
+use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 

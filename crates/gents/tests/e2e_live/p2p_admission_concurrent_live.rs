@@ -32,7 +32,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
+    ensure_agent_principal, load_inference_profile, upsert_inference_profile, AgentIdentity,
     DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -163,38 +163,35 @@ async fn assert_endpoint_reachable(endpoint: &str) {
     }
 }
 
-async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
+async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &str) {
     let backend_id = escape_graphql_string(LIVE_BACKEND_ID);
+    let agent_did = escape_graphql_string(agent_did);
     let endpoint = escape_graphql_string(endpoint);
-    let model = escape_graphql_string(model);
     let mutation = format!(
         r#"mutation {{
             upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
+                filter: {{ agent_did: {{ _eq: "{agent_did}" }}, backend_id: {{ _eq: "{backend_id}" }} }},
                 add: {{
+                    agent_did: "{agent_did}",
                     backend_id: "{backend_id}",
                     name: "{backend_id}",
                     provider_kind: "OpenAiCompatible",
+                    openai_wire_api: "chat_completions",
                     endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
+                    auth: {{ kind: "unauthenticated" }},
                     max_concurrent: 8,
                     max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
+                    enabled: true
                 }},
                 update: {{
                     name: "{backend_id}",
                     provider_kind: "OpenAiCompatible",
+                    openai_wire_api: "chat_completions",
                     endpoint: "{endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
+                    auth: {{ kind: "unauthenticated" }},
                     max_concurrent: 8,
                     max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{model}"],
-                    probe_status: "healthy"
+                    enabled: true
                 }}
             ) {{ _docID }}
         }}"#
@@ -217,20 +214,22 @@ async fn bind_live_backend(
     let bootstrap = ensure_agent_principal(node, &agent_did)
         .await
         .expect("ensure principal");
-    let behavior_id = bootstrap.default_behavior.behavior_id.clone();
-    upsert_live_backend(node, endpoint, model).await;
+    let behavior_id = bootstrap
+        .default_behavior_id
+        .clone()
+        .expect("principal has a default behavior");
+    upsert_live_backend(node, &agent_did, endpoint).await;
 
-    let mut behavior = load_agent_behavior(node, &behavior_id)
+    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
+    let mut profile = load_inference_profile(node, &agent_did, &profile_id)
         .await
-        .expect("load behavior")
-        .expect("default behavior exists");
-    behavior.backend_id = Some(LIVE_BACKEND_ID.to_string());
-    behavior.model_name = Some(model.to_string());
-    behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
-    behavior.enabled = true;
-    upsert_agent_behavior(node, &behavior)
+        .expect("load inference profile")
+        .expect("default inference profile exists");
+    profile.backend_id = LIVE_BACKEND_ID.to_string();
+    profile.model_name = model.to_string();
+    upsert_inference_profile(node, &profile)
         .await
-        .expect("point behavior at live backend");
+        .expect("point inference profile at live backend");
 
     debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)

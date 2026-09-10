@@ -570,9 +570,19 @@ async fn create_session_with_id_is_idempotent() {
     create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
         .unwrap();
-    let patched = node.execute(r#"mutation { update_AgentSession(filter: {session_id: {_eq: "session-1"}}, input: {
-        created_at: "2020-01-01T00:00:00Z", tags: ["keep-on-resume"], title: {text: "User title", source: "user"}
-    }) {_docID} }"#).await;
+    let before = node
+        .execute(r#"{ AgentSession(filter: {session_id: {_eq: "session-1"}}) {created_at} }"#)
+        .await;
+    assert!(!before.has_errors(), "{:?}", before.errors);
+    let original_created_at =
+        before.data.as_ref().unwrap()["AgentSession"][0]["created_at"].clone();
+    let patched = node
+        .execute(
+            r#"mutation { update_AgentSession(filter: {session_id: {_eq: "session-1"}}, input: {
+        tags: ["keep-on-resume"], title: {text: "User title", source: "user"}
+    }) {_docID} }"#,
+        )
+        .await;
     assert!(!patched.has_errors(), "{:?}", patched.errors);
 
     create_session_with_id(&node, "session-1", "general", "did:test:test")
@@ -610,7 +620,7 @@ async fn create_session_with_id_is_idempotent() {
         .expect("session rows");
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["created_at"], "2020-01-01T00:00:00Z");
+    assert_eq!(rows[0]["created_at"], original_created_at);
     assert_eq!(rows[0]["tags"], serde_json::json!(["keep-on-resume"]));
     assert_eq!(
         rows[0]["title"],

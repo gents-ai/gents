@@ -100,6 +100,7 @@ async fn setup_background_tool_hook(
         &session_id,
         "r6-background-theorem",
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -130,74 +131,33 @@ async fn setup_background_spawn_fixture(
     let parent_deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     let selection_id = format!("{test_name}-tools");
 
-    upsert_tool_selection(
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.clone(),
-            subagent_targets: Some(
-                targets
-                    .into_iter()
-                    .map(|behavior_id| {
-                        gents::subagent_target_entry(behavior_id, &agent_did, behavior_id, None)
-                    })
-                    .collect(),
-            ),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(background_enabled),
-            ..Default::default()
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID,
+        &format!("{test_name}-child-tools"),
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .expect("upsert theorem tool selection");
-    upsert_agent_behavior(
+    .await;
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R6 theorem parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        &selection_id,
+        targets
+            .into_iter()
+            .map(|behavior_id| {
+                support::fixtures::subagent_target(&agent_did, behavior_id, &agent_did, behavior_id)
+            })
+            .collect(),
+        true,
+        background_enabled,
+        None,
     )
-    .await
-    .expect("upsert theorem parent behavior");
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R6 theorem child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .expect("upsert theorem child behavior");
+    .await;
 
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-parent");
@@ -223,6 +183,7 @@ async fn setup_background_spawn_fixture(
         &session_id,
         BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1564,6 +1525,7 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         &session_id,
         "r6-background-theorem",
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1619,6 +1581,7 @@ pub(super) async fn generated_read_tool_output_witness_drives_hook_dispatch() {
         &session_id,
         "r6-background-theorem",
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -1745,30 +1708,17 @@ async fn seed_bridge_step_fixture(
     let tool_call_id = format!("{}-tool", case.name);
     let child_request_id = format!("{}-child", case.name);
 
-    upsert_agent_behavior(
+    support::fixtures::configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("bridge step parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-19T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        BACKGROUND_THEOREM_PARENT_BEHAVIOR_ID,
+        &format!("{}-bridge-tools", case.name),
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .expect("upsert bridge step parent behavior");
+    .await;
     create_background_theorem_parent_request(
         db.node.as_ref(),
         &parent_request_id,
@@ -2433,6 +2383,7 @@ async fn cross_agent_process_controls_preserve_the_owners_running_job() {
         &session_id,
         "r6-background-theorem",
         foreign_did,
+        None,
         FailurePolicy::default(),
     )
     .await

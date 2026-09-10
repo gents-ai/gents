@@ -32,7 +32,7 @@ fn reusable_callback_and_event_binding_are_distinct() {
     round_trip::<CallbackBinding>(json!({"binding_id":"on-work", "agent_did":"did:key:test",
         "event_source_id":"work", "callback_id":"prepare"}));
     round_trip::<CallbackInvocationOrigin>(json!({"kind":"event_group",
-        "binding_id":"on-work", "group_id":"group-1"}));
+        "binding_id":"on-work", "group_key":"group-1"}));
 }
 
 #[test]

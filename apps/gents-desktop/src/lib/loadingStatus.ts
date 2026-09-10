@@ -95,21 +95,21 @@ export type SessionLoadState = {
   error: string | null;
 };
 
-export type ConversationLoadingLayer =
+export type SessionLoadingLayer =
   "localDatabase" | "p2p" | "sessionSync" | "sync" | "runtime" | "inference";
 
-export type ConversationLoadingAction =
+export type SessionLoadingAction =
   "retryLocal" | "retryHydration" | "reconnect" | "configureInference";
 
-export type ConversationLoadingStatus = {
-  layer: ConversationLoadingLayer;
+export type SessionLoadingStatus = {
+  layer: SessionLoadingLayer;
   phase: "loading" | "blocked" | "failed";
   title: string;
   detail: string;
-  action: ConversationLoadingAction | null;
+  action: SessionLoadingAction | null;
 };
 
-type ConversationLoadingInput = {
+type SessionLoadingInput = {
   selectedSessionId: string | null;
   selectedAgentDid: string | null;
   session: DesktopSessionSnapshot | null;
@@ -118,17 +118,17 @@ type ConversationLoadingInput = {
 };
 
 /**
- * Sole projection for user-visible conversation waits. It does not invent
+ * Sole projection for user-visible session waits. It does not invent
  * progress: every state comes from an in-flight local read, signed hydration
  * progress, the application sync owner, or runtime-authored behavior readiness.
  */
-export function projectConversationLoadingStatus({
+export function projectSessionLoadingStatus({
   selectedSessionId,
   selectedAgentDid,
   session,
   sessionLoad,
   operationalState,
-}: ConversationLoadingInput): ConversationLoadingStatus | null {
+}: SessionLoadingInput): SessionLoadingStatus | null {
   if (!selectedSessionId) return null;
 
   const sessionMatches =
@@ -144,7 +144,7 @@ export function projectConversationLoadingStatus({
     return {
       layer: "localDatabase",
       phase: "loading",
-      title: "Loading conversation",
+      title: "Loading session",
       detail: "Reading saved messages from the local database.",
       action: null,
     };
@@ -154,7 +154,7 @@ export function projectConversationLoadingStatus({
     return {
       layer: "localDatabase",
       phase: "failed",
-      title: "Couldn’t load this conversation",
+      title: "Couldn’t load this session",
       detail: sessionLoad.error ?? "The local database read failed.",
       action: "retryLocal",
     };
@@ -164,7 +164,7 @@ export function projectConversationLoadingStatus({
     return {
       layer: "localDatabase",
       phase: "loading",
-      title: "Opening conversation",
+      title: "Opening session",
       detail: "Preparing the exact local session read.",
       action: null,
     };
@@ -179,7 +179,7 @@ export function projectConversationLoadingStatus({
     return {
       layer: "sessionSync",
       phase: "failed",
-      title: "Conversation sync failed",
+      title: "Session sync failed",
       detail: "The agent could not finish sending the requested session history.",
       action: "retryHydration",
     };
@@ -188,7 +188,7 @@ export function projectConversationLoadingStatus({
     return {
       layer: "sessionSync",
       phase: "loading",
-      title: "Syncing conversation history",
+      title: "Syncing session history",
       detail: sessionHydrationLabel(hydration),
       action: null,
     };
@@ -196,11 +196,11 @@ export function projectConversationLoadingStatus({
   if (hydration?.phase === "requested") {
     const routeBlocker = operationalState?.admissionBlocker;
     if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
-      return conversationStatusFromOperational(routeBlocker);
+      return sessionStatusFromOperational(routeBlocker);
     return {
       layer: "sessionSync",
       phase: "loading",
-      title: "Requesting conversation history",
+      title: "Requesting session history",
       detail: "Waiting for the enrolled agent to begin the secure transfer.",
       action: null,
     };
@@ -209,11 +209,11 @@ export function projectConversationLoadingStatus({
   if (!sessionMatches) {
     const routeBlocker = operationalState?.admissionBlocker;
     if (routeBlocker?.layer === "p2p" || routeBlocker?.layer === "route")
-      return conversationStatusFromOperational(routeBlocker);
+      return sessionStatusFromOperational(routeBlocker);
     return {
       layer: "sessionSync",
       phase: "blocked",
-      title: "Waiting for conversation history",
+      title: "Waiting for session history",
       detail:
         "No local messages were found yet. Waiting for the enrolled agent’s session projection.",
       action: operationalState ? "reconnect" : "retryLocal",
@@ -221,14 +221,14 @@ export function projectConversationLoadingStatus({
   }
 
   if (operationalState?.admissionBlocker)
-    return conversationStatusFromOperational(operationalState.admissionBlocker);
+    return sessionStatusFromOperational(operationalState.admissionBlocker);
 
   return null;
 }
 
-function conversationStatusFromOperational(
+function sessionStatusFromOperational(
   operational: OperationalStatus,
-): ConversationLoadingStatus {
+): SessionLoadingStatus {
   return {
     layer:
       operational.layer === "p2p" || operational.layer === "route"

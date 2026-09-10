@@ -76,10 +76,10 @@ export function App() {
   const runtime = snapshot?.client ?? null;
   const deployments = runtime?.deployments ?? [];
   const selectedDeployment = deployments[0] ?? null;
-  const selectedConversation = selectedDeployment?.conversations[0] ?? null;
+  const selectedSession = selectedDeployment?.sessions[0] ?? null;
 
   useEffect(() => {
-    if (!selectedDeployment || !selectedConversation) {
+    if (!selectedDeployment || !selectedSession) {
       setSession(null);
       return;
     }
@@ -87,7 +87,7 @@ export function App() {
     let cancelled = false;
     void bridge
       .sessionSnapshot({
-        sessionId: selectedConversation.sessionId,
+        sessionId: selectedSession.sessionId,
         agentDid: selectedDeployment.agentDid,
       })
       .then((nextSession) => {
@@ -105,7 +105,7 @@ export function App() {
   }, [
     bridge,
     push,
-    selectedConversation,
+    selectedSession,
     selectedDeployment,
     storeState.generation,
   ]);
@@ -119,7 +119,7 @@ export function App() {
       bridge.chatSend({
         agentDid: selectedDeployment.agentDid,
         behaviorId: selectedDeployment.agentPrincipal.defaultBehaviorId ?? null,
-        sessionId: selectedConversation?.sessionId ?? null,
+        sessionId: selectedSession?.sessionId ?? null,
         content,
       }),
     )
@@ -210,7 +210,7 @@ export function App() {
       <section className="package-surface" data-testid="fixture-chat-surface">
         <h2>Chat package</h2>
         <ChatTranscriptPanel
-          selectedSessionId={selectedConversation?.sessionId ?? null}
+          selectedSessionId={selectedSession?.sessionId ?? null}
           session={session}
         />
         <ChatComposer

@@ -95,7 +95,7 @@ pub(crate) struct ReductionOptions {
 }
 
 impl ReductionOptions {
-    pub(crate) fn for_behavior(behavior: &crate::config::AgentBehavior) -> Result<Self> {
+    pub(crate) fn for_behavior(behavior: &crate::config::ResolvedBehavior) -> Result<Self> {
         let mut options = Self {
             mode: behavior.compaction_strategy().reduction_mode(),
             ..Self::default()

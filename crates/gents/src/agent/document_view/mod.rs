@@ -42,7 +42,6 @@ pub(crate) struct DocumentRuntimeView {
     pub(crate) event_sources: HashMap<String, DocumentRecord<EventSource>>,
     pub(crate) callbacks: HashMap<String, DocumentRecord<Callback>>,
     pub(crate) callback_bindings: HashMap<String, DocumentRecord<CallbackBinding>>,
-    pub(crate) graph_definitions: HashMap<String, DocumentRecord<GraphDefinition>>,
     pub(crate) chain_key_bindings: HashMap<String, DocumentRecord<ChainKeyBindingDocument>>,
     pub(crate) tool_services: HashMap<String, DocumentRecord<ToolServiceRegistry>>,
     pub(crate) projection_acp_bindings: HashMap<String, DocumentRecord<ProjectionAcpBinding>>,
@@ -55,8 +54,6 @@ pub(crate) struct DocumentRuntimeView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ControlUpdateOutcome {
     Irrelevant,
-    Applied,
-    PendingVisibility,
     FullReload,
 }
 

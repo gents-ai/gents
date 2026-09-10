@@ -1,5 +1,5 @@
 import type {
-  ConversationSummary,
+  SessionSummary,
   DeploymentOperationalState,
   DesktopSessionSnapshot,
   OperationalStatus,
@@ -62,7 +62,7 @@ export type ChatBlockedReason =
   | "composerEmpty"
   | "submittingRequest"
   | "waitingForRequestObservation"
-  | "conversationMissingFromSnapshot"
+  | "sessionMissingFromSnapshot"
   | "awaitingTurnTerminality"
   | "inconsistentTurnObservation";
 
@@ -106,7 +106,7 @@ type ProjectionInput = {
   draft: string;
   sending: boolean;
   session: DesktopSessionSnapshot | null;
-  selectedConversation: ConversationSummary | null;
+  selectedSessionSummary: SessionSummary | null;
   localWorkflow: ChatWorkflowState;
   operationalState: DeploymentOperationalState | null;
 };
@@ -199,8 +199,8 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       return "Submitting request";
     case "waitingForRequestObservation":
       return "Waiting for request observation";
-    case "conversationMissingFromSnapshot":
-      return "Conversation missing from snapshot";
+    case "sessionMissingFromSnapshot":
+      return "Session missing from snapshot";
     case "awaitingTurnTerminality":
       if (turnState === "waitingForClaim") {
         return "Waiting for the active turn to start";
@@ -254,12 +254,12 @@ function activityStatusFor(
           "Your request was created; waiting for it to appear in the shared conversation.",
         animated: true,
       };
-    case "conversationMissingFromSnapshot":
+    case "sessionMissingFromSnapshot":
       return {
         kind: "syncing",
-        label: "Loading conversation…",
+        label: "Loading session…",
         detail:
-          "Reading local conversation state before another message can be sent.",
+          "Reading local session state before another message can be sent.",
         animated: true,
       };
     case "awaitingTurnTerminality": {
@@ -309,7 +309,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     : null;
   const admissionStatus = clientStatus ?? deploymentStatus;
   const rawObservedTurnState =
-    input.session?.turnState ?? input.selectedConversation?.turnState ?? null;
+    input.session?.turnState ?? input.selectedSessionSummary?.turnState ?? null;
   const observedTurnState: TurnState | null = isTurnState(rawObservedTurnState)
     ? rawObservedTurnState
     : null;
@@ -325,7 +325,7 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
 
   const observedLatestRequestId =
     input.session?.latestRequestId ??
-    input.selectedConversation?.latestRequestId ??
+    input.selectedSessionSummary?.latestRequestId ??
     null;
   const pendingRequestId = input.session?.pendingTurn?.requestId ?? null;
   const activeRequestId =
@@ -396,8 +396,8 @@ export function projectChatShell(input: ProjectionInput): ChatShellProjection {
     } else if (!input.selectedAgentDid) {
       workflow = blocked("agentNotSelected");
     } else if (input.selectedSessionId) {
-      if (!input.session && !input.selectedConversation) {
-        workflow = blocked("conversationMissingFromSnapshot");
+      if (!input.session && !input.selectedSessionSummary) {
+        workflow = blocked("sessionMissingFromSnapshot");
       } else if (observedTurnState && !isTerminalTurnState(observedTurnState)) {
         workflow = {
           kind: "turnInProgress",

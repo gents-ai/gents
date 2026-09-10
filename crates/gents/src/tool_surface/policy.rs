@@ -8,7 +8,7 @@ use crate::eth::ResolvedEthQuery;
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
 use super::modes::{BashMode, FileToolMode};
-use super::selection::{SubagentToolConfig, ToolSelection};
+use super::selection::{ResolvedToolSelection, SubagentToolConfig};
 
 pub const TOOL_POLICY_V1: &str = "tool-policy/v1";
 
@@ -297,7 +297,7 @@ impl ToolPolicySurface {
     }
 
     pub(crate) fn from_selection(
-        selection: &ToolSelection,
+        selection: &ResolvedToolSelection,
         subagent_tools: &SubagentToolConfig,
     ) -> Self {
         let command_policy = selection.command_policy.as_ref();

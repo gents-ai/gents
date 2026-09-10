@@ -78,7 +78,6 @@ pub(super) async fn apply_config_writes(
 /// selects. `AgentBehavior` carries `inference_profile_id` only — backend,
 /// model, and effort choices live on the profile, never as behavior copies.
 pub(super) struct BoundBehavior {
-    pub(super) behavior: gents::AgentBehaviorDocument,
     pub(super) inference_profile: InferenceProfile,
 }
 
@@ -136,10 +135,7 @@ pub(super) async fn load_bound_behavior(state: &ShimState) -> Result<BoundBehavi
     inference_profile
         .validate()
         .context("bound inference profile is invalid")?;
-    Ok(BoundBehavior {
-        behavior,
-        inference_profile,
-    })
+    Ok(BoundBehavior { inference_profile })
 }
 
 pub(super) async fn available_model_backends(state: &ShimState) -> Result<Vec<AvailableBackend>> {
@@ -525,9 +521,9 @@ async fn apply_model_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config_writes::{
-        write_agent_behavior_document, write_inference_backend_document,
-        write_inference_profile_document,
+    use crate::config_writes::write_agent_behavior_document;
+    use gents::config_client::{
+        write_inference_backend_document, write_inference_profile_document,
     };
     use gents::defra_node::EmbeddedNode;
     use gents::document_config::AdvertisedModel;
@@ -729,7 +725,6 @@ mod tests {
     /// protocol vocabulary are omitted rather than invented.
     #[test]
     fn model_list_entries_advertise_discovered_models_and_efforts() {
-        let agent_did = "did:test:codex-shim";
         let catalog = BackendModelCatalog {
             agent_did: None,
             observed_at: "2026-09-03T12:00:00Z".to_string(),
@@ -755,7 +750,6 @@ mod tests {
             catalog: Some(catalog),
         };
         let bound = BoundBehavior {
-            behavior: behavior("default", "profile-x"),
             inference_profile: profile("profile-x", "model-x"),
         };
 

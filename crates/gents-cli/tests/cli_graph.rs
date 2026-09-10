@@ -56,9 +56,13 @@ fn all_pack_kinds_are_available_without_a_checkout() -> Result<()> {
     let first = run_cli_json(temp.path(), &args)?;
     anyhow::ensure!(run_cli_json(temp.path(), &args)? == first);
     let installed = std::path::Path::new(required_str(&first, &["installed_assets"])?);
-    anyhow::ensure!(installed
-        .join("datastore_tool_surfaces/mailbox_writes/object.json")
-        .is_file());
+    let config: Value =
+        serde_json::from_slice(&std::fs::read(installed.join("pack_config.json"))?)?;
+    anyhow::ensure!(config["datastore_tool_surfaces"]
+        .as_array()
+        .is_some_and(|surfaces| surfaces
+            .iter()
+            .any(|surface| { surface["surface_id"] == "mailbox-writes" })));
     std::fs::write(installed.join("README.md"), "operator edit")?;
     let denial = run_cli_failure_stderr(temp.path(), &args)?;
     anyhow::ensure!(denial.contains("installed asset was modified"));

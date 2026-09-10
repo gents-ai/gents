@@ -466,6 +466,7 @@ fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -521,10 +522,17 @@ fn versioned_background_wake_never_projects_as_a_user_turn() {
         Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string());
     rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
     rows.requests[0].execution_origin = Some("scheduled".to_string());
-    rows.requests[0].metadata = Some(
-        r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:sess-1","queued_after_request_id":"parent-1"},"background_completion_wake_version":1}"#
-            .to_string(),
-    );
+    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
+        queue: Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
+            policy: gents_protocol::request_input::QueuePolicy::Coalesce,
+            key: Some("background_completion:sess-1".to_string()),
+            queued_after_request_id: Some("parent-1".to_string()),
+            interrupted_request_id: None,
+            background_completion_wake_version: Some(1),
+        }),
+        ..Default::default()
+    });
     rows.messages[0].content = Some(user_message_json(
         gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
     ));
@@ -546,10 +554,17 @@ fn steering_projects_the_input_once_without_rendering_its_control_prompt() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();
     rows.requests[0].content = Some("also check the staging config".to_string());
-    rows.requests[0].metadata = Some(
-        r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
-            .to_string(),
-    );
+    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
+        queue: Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::Steering,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: Some("parent-1".to_string()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
+        ..Default::default()
+    });
     rows.messages[0].message_key = "steering-input:req-1".to_string();
     rows.messages[0].content = Some(user_message_json("also check the staging config"));
 
@@ -577,10 +592,17 @@ fn durable_goal_continuation_never_projects_as_user_authored_input() {
     let mut rows = make_streaming_store_with_response_content("").to_rows();
     rows.responses.clear();
     rows.requests[0].content = Some("Continue pursuing the durable goal.".to_string());
-    rows.requests[0].metadata = Some(
-        r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":"parent-1"}}"#
-            .to_string(),
-    );
+    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
+        queue: Some(gents_protocol::request_input::RequestQueue {
+            source: gents_protocol::request_input::QueueSource::Goal,
+            policy: gents_protocol::request_input::QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: Some("parent-1".to_string()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
+        ..Default::default()
+    });
     rows.messages[0].content = Some(user_message_json("Continue pursuing the durable goal."));
 
     let store = ClientStore::from_rows(rows);
@@ -770,6 +792,7 @@ fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
+            request_doc_id: Some("req-2".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -937,6 +960,7 @@ fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -1079,6 +1103,7 @@ fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix()
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
+            request_doc_id: Some("req-2".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),

@@ -4,8 +4,8 @@ mod manage;
 mod setup;
 
 pub use chat::{
-    SubmitRequestOptions, SubmittedRequest, interrupt_request, rename_conversation, resend_request,
-    retry_request, submit_request,
+    interrupt_request, rename_session, resend_request, retry_request, submit_request,
+    SubmitRequestOptions, SubmittedRequest,
 };
 pub use manage::{
     apply_config_components, delete_agent_behavior, delete_event_source, delete_inference_backend,

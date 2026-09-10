@@ -16,7 +16,7 @@ use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
 use crate::support::interrupt::wait_for_runtime_ready;
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::fetch_runtime_snapshot;
-use crate::support::{test_db, AGENT_NAME};
+use crate::support::test_db;
 
 async fn create_task(
     node: &gents::defra_node::EmbeddedNode,

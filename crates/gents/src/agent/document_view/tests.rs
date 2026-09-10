@@ -1349,7 +1349,7 @@ async fn bind_subscription_backend(
         Box::pin(async move {
             let mut documents = Vec::new();
             for (collection, id, patch) in [
-                (crate::Collection::InferenceBackend, format!("{behavior_id}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"principal_o_auth"}})),
+                (crate::Collection::InferenceBackend, format!("{behavior_id}:backend"), serde_json::json!({"provider_kind":provider, "endpoint":endpoint, "auth":{"kind":"principal_oauth"}})),
                 (crate::Collection::InferenceProfile, format!("{behavior_id}:inference"), serde_json::json!({"model_name":model})),
             ] {
                 let (_, mut value) = read_desired_state_record_in_txn(txn, collection, agent_did, &id).await?.expect("installed canonical component");
@@ -1441,8 +1441,10 @@ async fn chatgpt_codex_behavior_without_credential_is_unavailable() {
         .get(&default_behavior_id)
         .expect("behavior should be reported unavailable");
     assert!(
-        reason.diagnostic.contains("codex-login"),
-        "unavailable reason should point at codex-login: {}",
+        reason
+            .diagnostic
+            .contains("requires enabled OAuthCredential"),
+        "unavailable reason should identify the missing canonical credential: {}",
         reason.diagnostic
     );
 }
@@ -1539,11 +1541,10 @@ async fn claude_subscription_behavior_requires_enabled_credential() {
         gents_protocol::row::BehaviorReadinessUnavailableReason::CredentialsRequired
     );
     assert!(
-        reason.diagnostic.contains(&format!(
-            "run `gents claude-login --agent-did {}`",
-            identity.did()
-        )),
-        "unavailable reason should point at claude-login: {}",
+        reason
+            .diagnostic
+            .contains("requires enabled OAuthCredential"),
+        "unavailable reason should identify the missing canonical credential: {}",
         reason.diagnostic
     );
 
@@ -1732,7 +1733,6 @@ fn empty_runtime_view(agent_did: &str) -> DocumentRuntimeView {
         callback_modules: Default::default(),
         repository_placements: Default::default(),
         backend_observations: Default::default(),
-        graph_definitions: Default::default(),
     }
 }
 

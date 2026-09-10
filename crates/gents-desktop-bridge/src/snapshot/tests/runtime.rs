@@ -37,7 +37,7 @@ fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
         agent_did: Some("did:test:owner".into()),
         requester_did: requester.map(str::to_owned),
         session_id: Some("session".into()),
-        behavior_id: "behavior".into(),
+        behavior_id: Some("behavior".into()),
         lifecycle_state: Some(RequestLifecycleState::Processing),
         ..Default::default()
     }
@@ -100,16 +100,16 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
 fn live_session_response_requires_physical_and_requester_identity() {
     let session = indexed_session(Some("did:test:requester"));
     let request = indexed_request(Some("did:test:requester"));
-    let mut response = AgentResponseRow {
-        response_key: "logical-head".into(),
-        request_id: Some("logical-head".into()),
-        request_doc_id: Some("other-physical".into()),
-        agent_did: request.agent_did.clone(),
-        requester_did: request.requester_did.clone(),
-        session_id: request.session_id.clone(),
-        status: Some("streaming".into()),
-        ..Default::default()
-    };
+    let mut response: AgentResponseRow = serde_json::from_value(serde_json::json!({
+        "response_key": "logical-head",
+        "request_id": "logical-head",
+        "request_doc_id": "other-physical",
+        "agent_did": request.agent_did.clone(),
+        "requester_did": request.requester_did.clone(),
+        "session_id": request.session_id.clone(),
+        "status": "streaming"
+    }))
+    .expect("response row");
     let project = |response: AgentResponseRow| {
         session_summaries(
             &[session.clone()],
@@ -145,7 +145,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 request_id: "req-mini-1".to_string(),
                 agent_did: Some("did:test:mini-1".to_string()),
                 requester_did: None,
-                behavior_id: "default".to_string(),
+                behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-1".to_string()),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -181,7 +181,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 request_id: "req-mini-2".to_string(),
                 agent_did: Some("did:test:mini-2".to_string()),
                 requester_did: None,
-                behavior_id: "default".to_string(),
+                behavior_id: Some("default".to_string()),
                 session_id: Some("session-mini-2".to_string()),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -322,7 +322,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
                 request_id: request_id.clone(),
                 agent_did: Some("did:test:contract-agent".to_string()),
                 requester_did: None,
-                behavior_id: "contract-behavior".to_string(),
+                behavior_id: Some("contract-behavior".to_string()),
                 session_id: Some(format!("contract-session-{index}")),
                 retry_parent_request: None,
                 retry_root_request: None,
@@ -389,14 +389,13 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
             case.name
         );
         assert_eq!(
-            recent_runs.event_trigger_count,
+            recent_runs.event_count,
             usize::from(trigger_kind == "event"),
             "case {} event trigger count drifted",
             case.name
         );
 
-        let run_history =
-            task_run_history(&store, "did:test:contract-agent", true, &task_id, &triggers);
+        let run_history = task_run_history(&store, "did:test:contract-agent", &task_id, &triggers);
         assert_eq!(
             run_history.len(),
             1,

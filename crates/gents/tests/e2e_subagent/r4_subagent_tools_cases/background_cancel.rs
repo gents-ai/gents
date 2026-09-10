@@ -124,25 +124,17 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let request_id = fixture.request_id.clone();
-    upsert_agent_behavior(
+    gents::upsert_agent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
+        &gents::AgentBehaviorDocument {
             behavior_id: CHILD_BEHAVIOR_ID.to_string(),
             agent_did: "did:test:r5-remote-child".to_string(),
             display_name: Some("R5 remote child".to_string()),
             description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
+            context_id: None,
+            inference_profile_id: format!("{CHILD_BEHAVIOR_ID}-inference"),
             enabled: true,
+            tags: Vec::new(),
             created_at: Some("2026-05-14T00:00:00Z".to_string()),
         },
     )
@@ -214,26 +206,22 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
 
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                REMOTE_DID,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+            REMOTE_DID,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        Some(true),
     )
-    .await
-    .unwrap();
+    .await;
 
     let args = json!({
         "name": CHILD_BEHAVIOR_ID,

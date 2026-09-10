@@ -15,11 +15,11 @@ fn fingerprint_test_config(root: PathBuf, lsp_config: Option<String>) -> Behavio
     };
     BehaviorToolConfig::from_selection(
         "fingerprint",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools,
             enable_lsp,
             lsp_config,
-            ..ToolSelection::default()
+            ..ResolvedToolSelection::default()
         },
         &ToolCeiling::readwrite(root),
         Vec::new(),
@@ -60,7 +60,7 @@ fn selection_file_tool_root_clamps_within_operator_root() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(scoped_root.clone()),
             bash: BashMode::Unrestricted,
@@ -134,7 +134,7 @@ fn build_tools_does_not_bake_a_per_request_workspace_root() {
     std::fs::create_dir_all(&selection_root).unwrap();
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(selection_root.clone()),
             bash: BashMode::Unrestricted,
@@ -197,7 +197,7 @@ fn command_timeout_ceiling_reaches_selected_bash_tool() {
     let ceiling = ToolCeiling::readonly_at(&operator_root).with_command_timeout_secs(120);
     let config = BehaviorToolConfig::from_selection(
         "classifier",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -247,7 +247,7 @@ fn command_timeout_max_ceiling_reaches_selected_bash_tool() {
         .with_command_timeout_max_secs(3_600);
     let config = BehaviorToolConfig::from_selection(
         "classifier",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -296,7 +296,7 @@ fn selection_file_tool_root_rejects_escape_outside_operator_root() {
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(outside_root),
             bash: BashMode::Off,
@@ -344,7 +344,7 @@ fn readonly_selection_file_tool_root_rejects_escape_outside_operator_root() {
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(outside_root),
             bash: BashMode::ReadOnly,
@@ -392,7 +392,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: Some(stale_root),
             bash: BashMode::ReadOnly,
@@ -435,7 +435,7 @@ fn downgraded_off_selection_ignores_stale_file_tool_root() {
 fn readonly_ceiling_clamps_unrestricted_bash_policy() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -482,7 +482,7 @@ fn selection_without_root_inherits_operator_root() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: None,
             bash: BashMode::Unrestricted,
@@ -539,7 +539,7 @@ fn selection_cli_tools_require_ceiling_entries() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -593,7 +593,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -646,7 +646,7 @@ fn selection_cli_tools_expose_only_ceiling_entries() {
 fn selection_mcp_service_allowlist_is_deduped() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::Off,
             file_tool_root: None,
             bash: BashMode::Off,
@@ -713,7 +713,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
 
     let config = BehaviorToolConfig::from_selection(
         "investigator",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -779,7 +779,7 @@ async fn required_mcp_service_needs_agent_scoped_measured_availability() {
 fn background_tool_allowlist_registers_r6_tools() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -824,7 +824,7 @@ fn background_tool_allowlist_registers_r6_tools() {
 fn background_tool_allowlist_rejects_non_backgroundable_tools() {
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadOnly,
             file_tool_root: None,
             bash: BashMode::ReadOnly,
@@ -877,7 +877,7 @@ fn selection_file_tool_root_rejects_symlink_escape_for_missing_child() {
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             file_tools: FileToolMode::ReadWrite,
             file_tool_root: Some(symlink_path.join("workspace")),
             bash: BashMode::Unrestricted,
@@ -925,7 +925,7 @@ async fn defra_query_tool_gated_by_selection() {
 
     let enabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: true,
             ..Default::default()
         },
@@ -940,7 +940,7 @@ async fn defra_query_tool_gated_by_selection() {
 
     let disabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: false,
             ..Default::default()
         },
@@ -961,7 +961,7 @@ async fn context_budget_tool_gated_by_selection() {
 
     let enabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_context_budget: true,
             ..Default::default()
         },
@@ -976,7 +976,7 @@ async fn context_budget_tool_gated_by_selection() {
 
     let disabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_context_budget: false,
             ..Default::default()
         },
@@ -1005,7 +1005,7 @@ async fn write_tools_register_under_declared_names() {
 
     let surface = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: false,
             write_tools: vec![WriteToolDecl {
                 tool_name: "request_action".to_string(),
@@ -1050,7 +1050,7 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
 
     let granted = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: false,
             write_tools: vec![crate::mailbox::canonical_mailbox_write_decl()],
             ..Default::default()
@@ -1066,7 +1066,10 @@ async fn mailbox_surface_registers_stamped_tool_and_captures_owner_lineage() {
         .tool_names()
         .contains(&crate::mailbox::FILE_MAILBOX_ITEM_TOOL_NAME.to_string()));
     assert!(granted.source_fill_fields().contains("requester_did"));
-    let runtime = ToolRuntimeContext::oneshot(std::sync::Arc::new(node));
+    let runtime = ToolRuntimeContext::oneshot_with_agent_did(
+        std::sync::Arc::new(node),
+        "did:key:z-test-agent",
+    );
     let built = granted.build_tools(&runtime).await.unwrap();
     assert!(built
         .iter()
@@ -1091,7 +1094,7 @@ async fn query_tool_is_advertised_and_registered() {
 
     let surface = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: false,
             query_tools: vec![QueryToolDecl {
                 tool_name: "query_candidate_finding".to_string(),
@@ -1162,7 +1165,9 @@ fn document_tool_config_expands_linked_datastore_surfaces() {
         Vec::new(),
     )
     .unwrap_err();
-    assert!(missing.to_string().contains("missing DatastoreToolSurface"));
+    assert!(missing
+        .to_string()
+        .contains("missing same-agent DatastoreToolSurface"));
 
     let config = BehaviorToolConfig::from_tools_document_with_surfaces(
         "reporter",
@@ -1184,7 +1189,7 @@ fn malformed_write_tool_is_rejected_during_configuration() {
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             write_tools: vec![WriteToolDecl {
                 tool_name: "broken_tool".to_string(),
                 collection: "  ".to_string(),
@@ -1207,7 +1212,7 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 
     let error = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: false,
             write_tools: vec![WriteToolDecl {
                 tool_name: "context_budget".to_string(),
@@ -1231,8 +1236,8 @@ fn write_tool_colliding_with_builtin_is_rejected_during_configuration() {
 
 #[test]
 fn memory_tool_defaults_disabled() {
-    assert!(!ToolSelection::default().enable_memory);
-    assert!(!ToolSelection::default().enable_session_history_tool);
+    assert!(!ResolvedToolSelection::default().enable_memory);
+    assert!(!ResolvedToolSelection::default().enable_session_history_tool);
     assert!(!BehaviorToolConfig::meta_only().goal_creation_requested());
     assert!(!BehaviorToolConfig::meta_only()
         .static_policy()
@@ -1245,7 +1250,7 @@ async fn explicitly_disabling_goal_tools_removes_them_from_names_and_runtime() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = BehaviorToolConfig::from_selection(
         "benchmark",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_meta_tools: true,
             enable_goal_tools: false,
             enable_goal_creation: false,
@@ -1282,7 +1287,7 @@ async fn goal_tools_are_independent_from_generic_meta_tools() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let surface = BehaviorToolConfig::from_selection(
         "durable",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_meta_tools: false,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -1311,7 +1316,7 @@ async fn goal_creation_requires_its_separate_capability() {
 
     let without_create = BehaviorToolConfig::from_selection(
         "durable",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_goal_tools: true,
             enable_goal_creation: false,
             ..Default::default()
@@ -1329,7 +1334,7 @@ async fn goal_creation_requires_its_separate_capability() {
 
     let with_create = BehaviorToolConfig::from_selection(
         "durable",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_goal_tools: true,
             enable_goal_creation: true,
             ..Default::default()
@@ -1363,7 +1368,7 @@ async fn operator_ceiling_can_deny_goal_creation_only() {
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
     let surface = BehaviorToolConfig::from_selection(
         "durable",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_goal_tools: true,
             enable_goal_creation: true,
             ..Default::default()
@@ -1392,7 +1397,7 @@ async fn operator_ceiling_denies_all_goal_mutation_when_base_capability_is_off()
     let ceiling = ToolCeiling::meta_only().with_policy(ceiling_policy);
     let surface = BehaviorToolConfig::from_selection(
         "durable",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_goal_tools: true,
             enable_goal_creation: true,
             ..Default::default()
@@ -1530,7 +1535,7 @@ fn from_document_read_only_allowlist_override_and_fallback() {
         .as_mut()
         .unwrap()
         .read_only_commands = Some(vec!["cat".to_string()]);
-    let selection = ToolSelection::from_document(&doc).unwrap();
+    let selection = ResolvedToolSelection::from_document(&doc).unwrap();
     let policy = selection
         .command_policy
         .expect("custom read-only allowlist must produce Some(command_policy)");
@@ -1548,7 +1553,7 @@ fn from_document_read_only_allowlist_override_and_fallback() {
         .as_mut()
         .unwrap()
         .read_only_commands = None;
-    assert!(ToolSelection::from_document(&absent)
+    assert!(ResolvedToolSelection::from_document(&absent)
         .unwrap()
         .command_policy
         .is_none());
@@ -1562,7 +1567,7 @@ fn from_document_read_only_allowlist_override_and_fallback() {
         .as_mut()
         .unwrap()
         .read_only_commands = Some(Vec::new());
-    assert!(ToolSelection::from_document(&empty)
+    assert!(ResolvedToolSelection::from_document(&empty)
         .unwrap()
         .command_policy
         .is_none());
@@ -1570,12 +1575,13 @@ fn from_document_read_only_allowlist_override_and_fallback() {
 
 #[test]
 fn absent_groups_grant_nothing_and_goal_controls_are_independent() {
-    let absent = ToolSelection::from_document(&tools_document(serde_json::json!({}))).unwrap();
+    let absent =
+        ResolvedToolSelection::from_document(&tools_document(serde_json::json!({}))).unwrap();
     assert!(!absent.enable_meta_tools);
     assert!(!absent.enable_goal_tools);
     assert!(!absent.enable_goal_creation);
     assert!(!absent.enable_defra_query);
-    let independent = ToolSelection::from_document(&tools_document(serde_json::json!({
+    let independent = ResolvedToolSelection::from_document(&tools_document(serde_json::json!({
         "built_ins": {"enable_goal_tools":true,"enable_goal_creation":true}
     })))
     .unwrap();
@@ -1597,7 +1603,7 @@ async fn session_history_tool_requires_selection_opt_in() {
 
     let disabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_session_history_tool: false,
             enable_context_budget: true,
             ..Default::default()
@@ -1615,7 +1621,7 @@ async fn session_history_tool_requires_selection_opt_in() {
 
     let enabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_session_history_tool: true,
             ..Default::default()
         },
@@ -1870,7 +1876,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
     let ceiling = ToolCeiling::readonly_at(temp_root("gents-complex-package-root"));
     let mut subagents = SubagentToolConfig::from_document(&selection).unwrap();
     subagents.targets = targets.clone();
-    let mut resolved = ToolSelection::from_document(&selection).unwrap();
+    let mut resolved = ResolvedToolSelection::from_document(&selection).unwrap();
     resolved.backgroundable_tool_names = vec!["bash".into()];
     let config = BehaviorToolConfig::from_selection_with_subagent_tools(
         "complex",
@@ -1954,7 +1960,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
     selection.subagents.as_mut().unwrap().allow_cross_principal = Some(true);
     let mut subagents = SubagentToolConfig::from_document(&selection).unwrap();
     subagents.targets = targets;
-    let mut resolved = ToolSelection::from_document(&selection).unwrap();
+    let mut resolved = ResolvedToolSelection::from_document(&selection).unwrap();
     resolved.backgroundable_tool_names = vec!["bash".into()];
     let config = BehaviorToolConfig::from_selection_with_subagent_tools(
         "complex-cross-principal",
@@ -1982,7 +1988,7 @@ fn explain_complex_document_combination_filters_subagents_and_groups_surface() {
 fn explain_default_surface_calls_out_builtin_reads_and_defra_query_scope() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection::default(),
+        ResolvedToolSelection::default(),
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
@@ -2035,7 +2041,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
 
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection::default(),
+        ResolvedToolSelection::default(),
         &ToolCeiling::meta_only().with_policy(ceiling_policy),
         Vec::new(),
     )
@@ -2060,7 +2066,7 @@ fn category_complete_ceiling_clamps_builtin_reads() {
 fn explain_mcp_empty_allowlist_denies_all_services_when_online() {
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_meta_tools: true,
             allowed_mcp_service_ids: Vec::new(),
             required_mcp_service_ids: Vec::new(),
@@ -2096,7 +2102,7 @@ async fn memory_tool_requires_selection_opt_in() {
 
     let disabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_memory: false,
             ..Default::default()
         },
@@ -2113,7 +2119,7 @@ async fn memory_tool_requires_selection_opt_in() {
 
     let enabled = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_memory: true,
             ..Default::default()
         },
@@ -2140,7 +2146,7 @@ async fn defra_query_is_off_by_default() {
     // Programmatic default surface.
     let default_surface = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection::default(),
+        ResolvedToolSelection::default(),
         &ToolCeiling::meta_only(),
         Vec::new(),
     )
@@ -2152,14 +2158,14 @@ async fn defra_query_is_off_by_default() {
         !default_surface
             .tool_names()
             .contains(&"defra_query".to_string()),
-        "default ToolSelection must not surface defra_query: {:?}",
+        "default ResolvedToolSelection must not surface defra_query: {:?}",
         default_surface.tool_names()
     );
 
     // Explicit opt-in still decodes to enabled.
     let explicit = tools_document(serde_json::json!({"datastore":{"enable_defra_query":true}}));
     assert!(
-        ToolSelection::from_document(&explicit)
+        ResolvedToolSelection::from_document(&explicit)
             .unwrap()
             .enable_defra_query
     );
@@ -2187,7 +2193,7 @@ async fn agent_config_alias_expands_to_config_scope() {
 
     let surface = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             enable_defra_query: true,
             defra_query_collections: vec!["agent-config".to_string()],
             ..Default::default()
@@ -2231,7 +2237,7 @@ fn eth_query_tools_advertise_when_selection_has_resolved_queries() {
     };
     let config = BehaviorToolConfig::from_selection(
         "ops",
-        ToolSelection {
+        ResolvedToolSelection {
             eth_queries: vec![query],
             ..Default::default()
         },
@@ -2312,7 +2318,7 @@ fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
         ("Unrestricted", true, CommandExecutionMode::ReadOnly),
         ("ReadOnly", false, CommandExecutionMode::ReadOnly),
     ] {
-        let selection = ToolSelection::from_document(&tools_document(serde_json::json!({
+        let selection = ResolvedToolSelection::from_document(&tools_document(serde_json::json!({
             "host":{"bash":{"mode":bash_mode,"execution_mode":"artifact_write","network_mode":"disabled"}}
         }))).unwrap();
         let ceiling = if readonly_ceiling {
@@ -2342,7 +2348,7 @@ fn artifact_selection_preserves_effect_only_after_bash_and_operator_ceilings() {
 
 #[test]
 fn direct_readonly_selection_cannot_advertise_an_artifact_static_grant() {
-    let selection = ToolSelection {
+    let selection = ResolvedToolSelection {
         bash: BashMode::ReadOnly,
         command_policy: Some(
             crate::toolset::CommandExecutionPolicy::write_capable()

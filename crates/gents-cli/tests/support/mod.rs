@@ -17,7 +17,7 @@ pub use fs::{
     write_json_file, write_manifest_root_from_export,
 };
 pub use graphql::{
-    doc_id_for_selection, doc_id_from_create, escape_graphql_string, exec, first_graphql_row,
+    doc_id_for_tools, doc_id_from_create, escape_graphql_string, exec, first_graphql_row,
     graphql_query,
 };
 pub use mocks::{

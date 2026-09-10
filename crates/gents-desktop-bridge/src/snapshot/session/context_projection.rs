@@ -26,26 +26,38 @@ pub(super) fn build_session_context_view(
     let behavior = behavior_id.and_then(|behavior_id| {
         store.behaviors.iter().find(|row| {
             row.behavior_id == behavior_id
-                && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+                && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
         })
     });
-    let inference_profile = behavior
-        .and_then(|behavior| behavior.inference_profile_id.as_deref())
-        .and_then(|profile_id| {
+    let inference_profile = behavior.and_then(|behavior| {
+        store.inference_profiles.iter().find(|row| {
+            row.profile_id == behavior.inference_profile_id && row.agent_did == behavior.agent_did
+        })
+    });
+    let context = behavior
+        .and_then(|behavior| behavior.context_id.as_deref().map(|id| (behavior, id)))
+        .and_then(|(behavior, context_id)| {
             store
-                .inference_profiles
+                .contexts
                 .iter()
-                .find(|row| row.profile_id == profile_id)
+                .find(|row| row.context_id == context_id && row.agent_did == behavior.agent_did)
+        });
+    let compaction = context
+        .and_then(|context| context.compaction_id.as_deref().map(|id| (context, id)))
+        .and_then(|(context, compaction_id)| {
+            store.compactions.iter().find(|row| {
+                row.compaction_id == compaction_id && row.agent_did == context.agent_did
+            })
         });
     let context_window = inference_profile
         .and_then(|profile| profile.context_window)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(gents::config::DEFAULT_CONTEXT_WINDOW);
-    let compaction_threshold = behavior
-        .and_then(|behavior| behavior.compaction_threshold)
+    let compaction_threshold = compaction
+        .and_then(|compaction| compaction.threshold)
         .unwrap_or(gents::config::DEFAULT_COMPACTION_THRESHOLD);
-    let compaction_strategy = behavior
-        .and_then(|behavior| normalize_optional(behavior.compaction_strategy.as_deref()))
+    let compaction_strategy = compaction
+        .map(|compaction| compaction.strategy.as_str().to_string())
         .unwrap_or_else(|| {
             gents::compaction::CompactionStrategy::default()
                 .as_str()

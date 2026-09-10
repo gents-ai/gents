@@ -272,10 +272,10 @@ fn admission_matrix_mirrors_lean_admits() {
 fn preset_vocabulary_and_effective_capabilities_match_lean() {
     assert_eq!(
         persona_presets::builtin_preset_names(),
-        (&[
+        &[
             persona_presets::PRESET_READONLY,
             persona_presets::PRESET_WRITE
-        ])[..],
+        ],
         "Lean presetKnown pins exactly the readonly/write vocabulary"
     );
 

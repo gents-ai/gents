@@ -1,25 +1,25 @@
 use std::time::Duration;
 
 use gents::background_completion::{
-    BackgroundCompletionOutcome, project_background_subagent_completion,
+    project_background_subagent_completion, BackgroundCompletionOutcome,
 };
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{
     AgentBehavior, AgentContext, SubagentTargetDocument, SubagentTools, Tools,
 };
 use gents::graphql::escape_graphql_string;
-use gents::llm::ToolCallHookAction;
 use gents::llm::message::{
     AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
     UserContent,
 };
+use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::{
-    AwaitMode, CancelPolicy, ToolCallLifecycle, create_subagent_request_with_request_id,
+    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use gents::{DefraSessionHook, FailurePolicy, fetch_interrupt_requested_at};
+use gents::{fetch_interrupt_requested_at, DefraSessionHook, FailurePolicy};
 use gents_protocol::request_input::{QueuePolicy, QueueSource};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -757,11 +757,9 @@ async fn background_completion_projects_bridge_notifies_and_enqueues_wake() {
     assert_eq!(messages[0].role, "user");
     assert!(messages[0].content.contains(r#"<subagent-notification"#));
     assert!(messages[0].content.contains(r#"status="completed""#));
-    assert!(
-        messages[0]
-            .content
-            .contains("child final answer &lt;ok&gt;")
-    );
+    assert!(messages[0]
+        .content
+        .contains("child final answer &lt;ok&gt;"));
 
     let wakes = fetch_scheduled_wakes(db.node.as_ref(), &session_id).await;
     assert_eq!(wakes.len(), 1);
@@ -812,22 +810,16 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
         .await
         .unwrap()
         .expect("bridge should exist");
-    assert!(
-        lifecycle
-            .bridge_complete("child completed before observer side effects".to_string())
-            .await
-            .unwrap()
-    );
-    assert!(
-        fetch_parent_messages(db.node.as_ref(), &session_id)
-            .await
-            .is_empty()
-    );
-    assert!(
-        fetch_scheduled_wakes(db.node.as_ref(), &session_id)
-            .await
-            .is_empty()
-    );
+    assert!(lifecycle
+        .bridge_complete("child completed before observer side effects".to_string())
+        .await
+        .unwrap());
+    assert!(fetch_parent_messages(db.node.as_ref(), &session_id)
+        .await
+        .is_empty());
+    assert!(fetch_scheduled_wakes(db.node.as_ref(), &session_id)
+        .await
+        .is_empty());
 
     let outcome = project_background_subagent_completion(
         db.node.clone(),
@@ -842,11 +834,9 @@ async fn background_completion_recovers_side_effects_after_bridge_already_projec
     ));
     let messages = fetch_parent_messages(db.node.as_ref(), &session_id).await;
     assert_eq!(messages.len(), 1);
-    assert!(
-        messages[0]
-            .content
-            .contains("child completed before observer side effects")
-    );
+    assert!(messages[0]
+        .content
+        .contains("child completed before observer side effects"));
     assert_eq!(
         fetch_scheduled_wakes(db.node.as_ref(), &session_id)
             .await
@@ -978,7 +968,7 @@ async fn background_notification_sorts_after_reserved_spawn_tool_result() {
     assert_eq!(wakes.len(), 1);
     assert_eq!(
         messages[2].request_id.as_deref(),
-        wakes[0].request_id.as_deref()
+        Some(wakes[0].request_id.as_str())
     );
     assert_eq!(
         messages[2].request_doc_id.as_deref(),

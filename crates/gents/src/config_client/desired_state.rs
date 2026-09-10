@@ -1,16 +1,14 @@
 //! Canonical configuration replacement inside the existing apply transaction.
 //! File loading belongs to the common pack loader. This owner validates the
 //! complete retained reference set; callers own commit/discard.
-use super::{ConfigApplyTxn, mint_recreate_identity};
+use super::{mint_recreate_identity, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::{Collection, DESIRED_STATE_APPLY_ORDER};
 use anyhow::{Context, Result};
-use gents_protocol::graphql::{
-    extract_mutation_doc_id, graphql_input_literal, graphql_rows_from_response,
-};
+use gents_protocol::graphql::{extract_mutation_doc_id, graphql_rows_from_response};
 use serde::{
-    Serialize,
     de::{DeserializeOwned, Visitor},
+    Serialize,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -67,6 +65,11 @@ fn project<T: DeserializeOwned + Serialize>(
                     }
                 });
             }
+            // `updated_at` is written by the mutation owner, including the
+            // recreate-identity nonce on create. It is observation metadata,
+            // not desired configuration, so retaining it would make an
+            // immediate read-after-create differ from the authored document.
+            object.remove("updated_at");
             // Verify that clearing omitted values preserves the canonical type's defaults.
             let _: T = serde_json::from_value(config.clone())
                 .context("canonical replacement defaults do not roundtrip")?;
@@ -293,12 +296,10 @@ impl DesiredStateApplyPlan {
                     .and_then(Value::as_array)
                     .cloned()
                     .unwrap_or_default(),
-                None => vec![
-                    bundle
-                        .get("agent_principal")
-                        .context("pack requires agent_principal")?
-                        .clone(),
-                ],
+                None => vec![bundle
+                    .get("agent_principal")
+                    .context("pack requires agent_principal")?
+                    .clone()],
             };
             documents.extend(values.into_iter().map(|value| DesiredStateApplyDocument {
                 collection,

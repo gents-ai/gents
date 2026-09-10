@@ -44,6 +44,7 @@ pub struct ResolvedEthCall {
 }
 
 impl ResolvedEthCall {
+    #[cfg(test)]
     pub(crate) fn is_signing(&self) -> bool {
         matches!(
             self.kind,

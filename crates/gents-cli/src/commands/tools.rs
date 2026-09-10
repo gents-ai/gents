@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::tool_surface::{measured_mcp_services_for_access, RuntimeToolAvailability};
-use gents::{BehaviorToolConfig, ToolCeiling, ToolSelection};
+use gents::{BehaviorToolConfig, ToolCeiling};
 use serde_json::{json, Value};
 
 use crate::cli::args::{ToolCeilingArg, ToolExplainArgs, ToolsCommand};
@@ -90,9 +90,12 @@ async fn explain(args: ToolExplainArgs) -> Result<()> {
                     Vec::new(),
                 )?
             } else {
-                BehaviorToolConfig::from_selection(
+                BehaviorToolConfig::from_tools_documents(
                     &behavior.behavior_id,
-                    ToolSelection::default(),
+                    &gents::document_config::Tools::default(),
+                    &[],
+                    &[],
+                    &[],
                     &tool_ceiling,
                     Vec::new(),
                 )?

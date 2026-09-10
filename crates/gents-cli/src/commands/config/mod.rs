@@ -39,15 +39,9 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::Tools { command } => match command {
             ToolsConfigCommand::Set(args) => tools::tools_set(args).await,
-            ToolsConfigCommand::List(args) => {
-                crud::config_list(crud::TOOLS_SPEC, args).await
-            }
-            ToolsConfigCommand::Show(args) => {
-                crud::config_show(crud::TOOLS_SPEC, args).await
-            }
-            ToolsConfigCommand::Rm(args) => {
-                crud::config_rm(crud::TOOLS_SPEC, args).await
-            }
+            ToolsConfigCommand::List(args) => crud::config_list(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Show(args) => crud::config_show(crud::TOOLS_SPEC, args).await,
+            ToolsConfigCommand::Rm(args) => crud::config_rm(crud::TOOLS_SPEC, args).await,
             ToolsConfigCommand::SubagentTargetEntry(args) => {
                 tools::subagent_target_entry_command(args)
             }
@@ -86,12 +80,8 @@ pub(crate) async fn dispatch(command: ConfigCommand) -> Result<()> {
         },
         ConfigCommand::WorkspaceRoot { command } => match command {
             WorkspaceRootCommand::Set(args) => workspace_root::workspace_root_set(args).await,
-            WorkspaceRootCommand::List(args) => {
-                workspace_root::workspace_root_list(args).await
-            }
-            WorkspaceRootCommand::Show(args) => {
-                workspace_root::workspace_root_show(args).await
-            }
+            WorkspaceRootCommand::List(args) => workspace_root::workspace_root_list(args).await,
+            WorkspaceRootCommand::Show(args) => workspace_root::workspace_root_show(args).await,
             WorkspaceRootCommand::Rm(args) => workspace_root::workspace_root_rm(args).await,
         },
         ConfigCommand::Export(args) => export::config_export(args).await,

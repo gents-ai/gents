@@ -865,6 +865,7 @@ mod tests {
             enrollment_request_digest: format!("digest-{request_key}"),
             authorization_sequence: 1,
             authorization_expires_at: "2099-09-29T00:00:00Z".to_string(),
+            current_enrollment_authorized: true,
             op_raw: "create".to_string(),
             op: Some(PersonaOp::Create { clone_from: None }),
             persona_name: Some("Research Assistant".to_string()),
@@ -1147,6 +1148,8 @@ mod tests {
     async fn one_bad_row_does_not_wedge_the_sweep() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let node = build_apply_node(&tempdir).await;
+        crate::agent::persona_ops::seed_persona_validation_references(&node, "did:key:good-agent")
+            .await?;
 
         let good_doc = pending_create_doc("req-good", "did:key:good-agent");
         let bad_doc = pending_create_doc("req-bad", "did:key:bad-agent");
@@ -1196,6 +1199,7 @@ mod tests {
 
         let doc = pending_create_doc("req-repair", "did:key:repair-agent");
         let agent_did = doc.agent_did.clone();
+        crate::agent::persona_ops::seed_persona_validation_references(&node, &agent_did).await?;
         let mut catalog_by_agent = BTreeMap::new();
         catalog_by_agent.insert(agent_did.clone(), happy_catalog(&agent_did));
 

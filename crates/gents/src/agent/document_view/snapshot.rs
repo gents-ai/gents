@@ -7,10 +7,10 @@ use defra_node::EmbeddedNode;
 use gents_protocol::row::BehaviorReadinessUnavailableReason;
 
 use crate::admission::BackendAvailability;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::document_config::AgentBehavior as AgentBehaviorDocument;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableBehavior};
-use crate::tool_surface::ToolSelection;
+use crate::tool_surface::ResolvedToolSelection;
 
 use super::DocumentRuntimeView;
 
@@ -18,7 +18,7 @@ use crate::agent::{
     assemble_principal_and_behaviors, behavior_config_from_documents, tool_selection_from_document,
     BehaviorBuildError, DocumentResolveContext,
 };
-use crate::identity::AgentPrincipal;
+use crate::identity::RuntimePrincipal;
 use crate::tool_surface::SubagentToolConfig;
 
 // The view is already scoped; check again at reference resolution so a foreign
@@ -75,7 +75,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
         .map(ToOwned::to_owned)
         .unwrap_or_default();
 
-    let principal_data = AgentPrincipal {
+    let principal_data = RuntimePrincipal {
         agent_did: view.principal.value.agent_did.clone(),
         identity: context.identity.clone(),
         default_behavior_id: default_behavior_id.clone(),
@@ -100,8 +100,8 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let mut behavior_factories: Vec<
         Box<
             dyn FnOnce(
-                    Arc<AgentPrincipal>,
-                ) -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                    Arc<RuntimePrincipal>,
+                ) -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
                 + Send,
         >,
     > = Vec::new();
@@ -165,7 +165,10 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                     .map(|id| owned_doc!(&view.tools, id, scope))
                     .transpose()?;
                 let (tool_selection, subagents) = match tools {
-                    None => (ToolSelection::default(), SubagentToolConfig::default()),
+                    None => (
+                        ResolvedToolSelection::default(),
+                        SubagentToolConfig::default(),
+                    ),
                     Some(tools) => {
                         tools.validate()?;
                         if let Some(remote) = &tools.remote {
@@ -234,9 +237,9 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
                         .collect::<Vec<_>>();
                 let factory: Box<
                     dyn FnOnce(
-                            Arc<AgentPrincipal>,
+                            Arc<RuntimePrincipal>,
                         )
-                            -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                            -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
                         + Send,
                 > = Box::new(move |principal| {
                     behavior_config_from_documents(
@@ -270,7 +273,7 @@ pub(crate) async fn resolve_document_runtime_snapshot_from_view(
     let (principal, behavior_results) =
         assemble_principal_and_behaviors(principal_data, behavior_factories);
 
-    let mut behaviors = Vec::<Arc<AgentBehavior>>::new();
+    let mut behaviors = Vec::<Arc<ResolvedBehavior>>::new();
     for result in behavior_results {
         match result {
             Ok(behavior_arc) => behaviors.push(behavior_arc),
@@ -541,14 +544,9 @@ fn resolve_inference(
     Ok(resolved)
 }
 
-pub(super) fn non_empty(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
-}
-
 // The runtime configuration fingerprint is compared across independently
 // resolved views. Every collection map is keyed/sorted by the projector;
-// skills are the one value vector embedded in AgentBehavior's Debug value, so
+// skills are the one value vector embedded in ResolvedBehavior's Debug value, so
 // canonicalize it before both prompt construction and fingerprinting.
 pub(super) fn sorted_skills(view: &DocumentRuntimeView) -> Vec<crate::skills::Skill> {
     let mut skills = view

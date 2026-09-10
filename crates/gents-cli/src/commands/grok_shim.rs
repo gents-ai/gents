@@ -214,12 +214,11 @@ impl AcpDelegateFactoryInputs {
 
 pub(crate) use crate::commands::inference_binding::resolve_bound_behavior_id as resolve_grok_shim_behavior_id;
 
-pub(crate) use crate::commands::inference_binding::explicit_behavior_override;
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::grok_shim::server::AcpDelegateFactory;
+    use crate::commands::inference_binding::explicit_behavior_override;
 
     /// A leader-side registration: `yolo_mode=true`, `auto_mode=false`,
     /// `terminal=false` — the exact capabilities the edge probe registers.

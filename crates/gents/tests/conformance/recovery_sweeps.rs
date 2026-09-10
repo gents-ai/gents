@@ -1939,14 +1939,11 @@ async fn drive_restart_disposition_case(case: &lean_vocab_test::LeanRestartDispo
             "restart recovery case {} must enqueue exactly one coalesced wake",
             case.name
         );
-        let metadata: serde_json::Value = serde_json::from_str(
-            wakes[0]
-                .as_deref()
-                .expect("wake request must carry queue metadata"),
-        )
-        .expect("wake metadata must be JSON");
-        assert_eq!(metadata["queue"]["source"], queue_source, "{}", case.name);
-        assert_eq!(metadata["queue"]["key"], queue_key, "{}", case.name);
+        let input = wakes[0]
+            .as_ref()
+            .expect("wake request must carry queue input");
+        assert_eq!(input["queue"]["source"], queue_source, "{}", case.name);
+        assert_eq!(input["queue"]["key"], queue_key, "{}", case.name);
 
         // Idempotence: a second startup pass finds no running row, appends no
         // duplicate notification, and enqueues no second wake for the same agent.
@@ -2010,7 +2007,10 @@ async fn load_restart_notification_messages(node: &EmbeddedNode, session_id: &st
     rows.into_iter().map(|row| row.content).collect()
 }
 
-async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Option<String>> {
+async fn load_restart_wake_rows(
+    node: &EmbeddedNode,
+    session_id: &str,
+) -> Vec<Option<serde_json::Value>> {
     let session_id = escape_graphql_string(session_id);
     let query = format!(
         r#"{{
@@ -2019,7 +2019,7 @@ async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Op
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ metadata }}
+            ) {{ input }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -2030,7 +2030,7 @@ async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Op
     );
     #[derive(Deserialize)]
     struct WakeRow {
-        metadata: Option<String>,
+        input: Option<serde_json::Value>,
     }
     let rows: Vec<WakeRow> = response
         .data
@@ -2038,7 +2038,7 @@ async fn load_restart_wake_rows(node: &EmbeddedNode, session_id: &str) -> Vec<Op
         .and_then(|data| data.get("AgentRequest"))
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_default();
-    rows.into_iter().map(|row| row.metadata).collect()
+    rows.into_iter().map(|row| row.input).collect()
 }
 
 async fn own_child_fixture(

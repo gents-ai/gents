@@ -88,8 +88,11 @@ pub(crate) async fn apply_bound_desired_manifest(
         prune,
     );
 
-    anyhow::ensure!(planned.live_validation_errors.is_empty(),
-        "cannot apply invalid config diff: {}", planned.live_validation_errors.join("; "));
+    anyhow::ensure!(
+        planned.live_validation_errors.is_empty(),
+        "cannot apply invalid config diff: {}",
+        planned.live_validation_errors.join("; ")
+    );
     let desired_bundle_ref = &desired_bundle;
     let planned_ref = &planned;
     let (applied, pruned) = access
@@ -115,8 +118,7 @@ pub(crate) async fn apply_bound_desired_manifest(
         false,
     );
 
-    let changed = config_apply_counts_changed(&applied)
-        || config_apply_counts_changed(&pruned);
+    let changed = config_apply_counts_changed(&applied) || config_apply_counts_changed(&pruned);
     let report = ConfigApplyReport {
         status: if changed { "applied" } else { "noop" },
         ok: !diff_has_pending_apply(&remaining.counts),

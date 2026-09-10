@@ -939,6 +939,7 @@ async fn mark_materialized(node: std::sync::Arc<EmbeddedNode>, request_id: &str,
         "streaming-materialized-session",
         AGENT_NAME,
         AGENT_DID,
+        None,
         FailurePolicy::default(),
     )
     .await

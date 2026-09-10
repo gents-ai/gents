@@ -236,22 +236,6 @@ pub(crate) async fn lookup_backend_record(
     Ok(records.pop())
 }
 
-pub(crate) async fn lookup_backend_by_doc_id(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> Result<Option<(String, InferenceBackend)>> {
-    let mut records = query_backend_records(
-        node,
-        &format!(
-            r#"filter: {{ _docID: {{ _eq: "{}" }} }}"#,
-            escape_graphql_string(doc_id)
-        ),
-    )
-    .await?;
-    anyhow::ensure!(records.len() <= 1, "ambiguous physical backend document");
-    Ok(records.pop())
-}
-
 async fn query_backend_records(
     node: &EmbeddedNode,
     arguments: &str,

@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Result, bail};
-use gents::agent::p2p_reconcile::templates::{PairingFilters, equality_filter};
+use anyhow::{bail, Result};
+use gents::agent::p2p_reconcile::templates::{equality_filter, PairingFilters};
 use gents::agent::p2p_reconcile::{
-    DiffOp, PairingActual as RuntimePairingActual, compute_owned_pairing_diff,
-    to_replication_filters, update_applied_after_success,
+    compute_owned_pairing_diff, to_replication_filters, update_applied_after_success, DiffOp,
+    PairingActual as RuntimePairingActual,
 };
 use gents::graphql::escape_graphql_string;
 use serde::Deserialize;
 
-use crate::support::{TestDb, first_optional_row, test_db};
+use crate::support::{first_optional_row, test_db, TestDb};
 
 use super::invariants::ObservedSnapshot;
 use super::scenario::{Action, NodeId, Scenario};

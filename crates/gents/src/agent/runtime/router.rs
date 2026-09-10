@@ -458,13 +458,6 @@ pub(super) async fn fail_routed_request(
     lifecycle.reject_admission(error_message).await
 }
 
-fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
 pub(in crate::agent) fn default_hostname() -> String {
     hostname::get()
         .map(|host| host.to_string_lossy().to_string())

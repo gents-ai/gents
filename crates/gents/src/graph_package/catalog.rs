@@ -195,8 +195,12 @@ mod tests {
             &crate::pack::resolve_pack(name)?,
             &options(),
             &|variable| match variable {
-                "GENTS_REVIEW_MODEL" => Some("selected-model".to_owned()),
-                "GENTS_REVIEW_ENDPOINT" => Some("http://inference.example/v1".to_owned()),
+                "GENTS_REVIEW_MODEL" | "GENTS_WEB_RESEARCH_MODEL" => {
+                    Some("selected-model".to_owned())
+                }
+                "GENTS_REVIEW_ENDPOINT" | "GENTS_WEB_RESEARCH_ENDPOINT" => {
+                    Some("http://inference.example/v1".to_owned())
+                }
                 _ => None,
             },
         )

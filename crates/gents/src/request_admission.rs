@@ -1082,14 +1082,6 @@ async fn verify_automated_trigger_source(
     )
 }
 
-fn require_pending_deadline_absent(deadline: Option<&str>) -> Result<()> {
-    anyhow::ensure!(
-        deadline.is_none(),
-        "pending AgentRequest carries a caller-authored execution deadline"
-    );
-    Ok(())
-}
-
 /// Verify the original immutable request payload and its declared admission
 /// branch. Historical receipt authentication does not re-admit execution or
 /// require today's enrollment, TTL, lifecycle, or backend readiness. The
@@ -1298,7 +1290,7 @@ pub(crate) async fn load_request_for_admission_test(
 mod tests {
     use std::sync::Arc;
 
-    use super::{require_pending_deadline_absent, AgentRequestAdmissionVerifier};
+    use super::AgentRequestAdmissionVerifier;
     use crate::agent::p2p_reconcile::enrollment_authority_channel;
     use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_runtime_schemas;
@@ -1375,16 +1367,6 @@ mod tests {
                     .await;
             assert_eq!(admitted.is_ok(), allowed, "case {index}: {admitted:?}");
         }
-    }
-
-    #[test]
-    fn caller_authored_preclaim_deadline_fails_closed() {
-        assert!(require_pending_deadline_absent(None).is_ok());
-        assert!(require_pending_deadline_absent(Some(" ")).is_err());
-        let error = require_pending_deadline_absent(Some("2099-01-01T00:00:00Z")).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("caller-authored execution deadline"));
     }
 
     #[tokio::test]

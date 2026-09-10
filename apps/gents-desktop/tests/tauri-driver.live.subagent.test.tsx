@@ -20,20 +20,28 @@ describeLive("Tauri app live subagent backgrounding", () => {
         (behavior) =>
           behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
       );
-      const defaultTools = deployment.toolSelections.find(
-        (selection) => selection.selectionId === defaultBehavior?.toolSelectionId,
+      const context = deployment.contexts.find(
+        (candidate) => candidate.context_id === defaultBehavior?.contextId,
       );
-      const subagentTarget = defaultTools?.subagentTargets[0];
+      const defaultTools = deployment.tools.find(
+        (tools) => tools.tools_id === context?.tools_id,
+      );
+      const targetId = defaultTools?.subagents?.target_ids?.[0];
+      const subagentTarget = deployment.subagentTargets.find(
+        (target) => target.target_id === targetId,
+      );
       expect(
         subagentTarget,
         "live fixture did not expose a subagent target",
       ).toBeDefined();
-      expect(defaultTools?.subagentSpawnEnabled).toBe(true);
-      expect(defaultTools?.subagentBackgroundEnabled).toBe(true);
+      const subagentBehaviorId = subagentTarget?.behavior_id;
+      const subagents = defaultTools?.subagents;
+      expect(subagents?.spawn_enabled).toBe(true);
+      expect(subagents?.background_enabled).toBe(true);
 
       await driver.ready();
       await driver.openChat();
-      logTurn(`subagent driver ready target=${subagentTarget}`);
+      logTurn(`subagent driver ready target=${subagentBehaviorId}`);
 
       await driver.typeComposer(SUBAGENT_PROMPT);
       await driver.pressEnter();
@@ -86,17 +94,14 @@ describeLive("Tauri app live subagent backgrounding", () => {
           });
           expect(tree.edges.length).toBeGreaterThan(0);
           expect(tree.edges.some((edge) => edge.awaitMode === "background")).toBe(true);
-          expect(tree.nodes.some((node) => node.behaviorId === subagentTarget)).toBe(
-            true,
-          );
+          expect(
+            tree.nodes.some((node) => node.behaviorId === subagentBehaviorId),
+          ).toBe(true);
           const childNodes = tree.nodes.filter(
-            (node) => node.behaviorId === subagentTarget,
+            (node) => node.behaviorId === subagentBehaviorId,
           );
           expect(
-            childNodes.some(
-              (node) =>
-                node.lifecycleState === "completed" || node.status === "completed",
-            ),
+            childNodes.some((node) => node.lifecycleState === "completed"),
             `expected at least one subagent child to reach a completed terminal state; nodes=${JSON.stringify(childNodes)}`,
           ).toBe(true);
 
@@ -104,8 +109,34 @@ describeLive("Tauri app live subagent backgrounding", () => {
             (node) => node.requestId === submitted.requestId,
           );
           const childNode = tree.nodes.find(
-            (node) => node.behaviorId === subagentTarget,
+            (node) => node.behaviorId === subagentBehaviorId,
           );
+          // `backendId` on a subagent node is the runtime request's resolved
+          // inference backend observation (AgentRequest.backend_id), not a
+          // config copy. The parent and child profiles must resolve through
+          // behavior -> inference_profile_id -> InferenceProfile.
+          const parentProfile = deployment.inferenceProfiles.find(
+            (profile) =>
+              profile.profile_id ===
+              deployment.behaviors.find(
+                (behavior) => behavior.behaviorId === parentNode?.behaviorId,
+              )?.inferenceProfileId,
+          );
+          const childProfile = deployment.inferenceProfiles.find(
+            (profile) =>
+              profile.profile_id ===
+              deployment.behaviors.find(
+                (behavior) => behavior.behaviorId === childNode?.behaviorId,
+              )?.inferenceProfileId,
+          );
+          expect(
+            parentProfile,
+            "parent behavior should reference a resolvable inference profile",
+          ).toBeDefined();
+          expect(
+            childProfile,
+            "child behavior should reference a resolvable inference profile",
+          ).toBeDefined();
           expect(
             parentNode?.backendId,
             "parent backendId should be populated",
@@ -115,6 +146,9 @@ describeLive("Tauri app live subagent backgrounding", () => {
             "child backendId should be populated",
           ).toBeTruthy();
           if (process.env.GENTS_TAURI_LIVE_SUBAGENT_INFERENCE_URL) {
+            // Separate subagent backend endpoint: the child's profile must
+            // select a different backend than the parent's profile.
+            expect(childProfile?.backend_id).not.toBe(parentProfile?.backend_id);
             expect(childNode?.backendId).not.toBe(parentNode?.backendId);
           }
         },

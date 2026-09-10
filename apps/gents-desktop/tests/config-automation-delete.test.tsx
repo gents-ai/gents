@@ -5,25 +5,43 @@ import { TaskConfigEditor } from "../src/components/config/TaskConfigPanel";
 import { ScheduleConfigEditor } from "../src/components/config/ScheduleConfigPanel";
 import { BackendConfigEditor } from "../src/components/config/BackendConfigPanel";
 import { BehaviorConfigEditor } from "../src/components/config/BehaviorConfigPanel";
-import { EventTriggerConfigEditor } from "../src/components/config/EventTriggerConfigPanel";
+import { EventSourceConfigEditor } from "../src/components/config/EventSourceConfigPanel";
 import { InferenceProfileConfigEditor } from "../src/components/config/InferenceProfileConfigPanel";
 import { ToolsConfigEditor } from "../src/components/config/ToolsConfigPanel";
 import { ToolServiceConfigEditor } from "../src/components/config/ToolServiceConfigPanel";
-import type { TaskView } from "@source-inc/gents-desktop-client";
-import { toolSelection, toolService } from "./config-panel-buttons/fixtures";
+import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
+import {
+  eventSource,
+  schedule,
+  tools,
+  toolService,
+} from "./config-panel-buttons/fixtures";
 
 const sourceAgentDid = "did:test:source";
 
-const task: TaskView = {
+const task = {
   taskId: "nightly-report",
   name: "Nightly report",
   behaviorId: "default",
   promptTemplate: "Summarize the day.",
   goalObjectiveTemplate: null,
   goalTokenBudget: null,
+  hooks: [],
   enabled: true,
-  recentRuns: { totalFires: 0, runs: [] },
-} as unknown as TaskView;
+  outputSchemaRef: null,
+  tags: [],
+  recentRuns: {
+    totalFires: 0,
+    lastAttemptAt: null,
+    lastStatus: null,
+    lastError: null,
+    scheduleCount: 0,
+    eventCount: 0,
+  },
+  runHistory: [],
+};
+
+const api = {} as DesktopApiAdapter;
 
 describe("automation document deletion", () => {
   it("deletes a task only after confirmation", async () => {
@@ -92,8 +110,6 @@ describe("automation document deletion", () => {
       <ScheduleConfigEditor
         agentDid={sourceAgentDid}
         schedule={null}
-        selectedTask={null}
-        tasks={[]}
         savedStatus={null}
         saving={false}
         runningTask={false}
@@ -130,6 +146,7 @@ describe("automation document deletion", () => {
         saving={false}
         onSaved={vi.fn()}
         onSaveBackendConfig={vi.fn()}
+        onPatchConfigComponents={vi.fn()}
         onDeleteBackendConfig={onDeleteBackendConfig}
         onDeleted={onDeleted}
       />,
@@ -149,22 +166,24 @@ describe("automation document deletion", () => {
   it("hides behavior delete for the default behavior and deletes others", async () => {
     const onDeleteBehaviorConfig = vi.fn().mockResolvedValue(undefined);
     const base = {
+      api,
       agentDid: "did:key:z6MkAgent",
-      agentDisplayName: "Agent",
-      agentEnabled: true,
-      currentDefaultBehaviorId: "default",
-      inferenceBackends: [],
-      inferenceProfiles: [{ profileId: "p" }],
+      principal: {
+        agent_did: "did:key:z6MkAgent",
+        default_behavior_id: "default",
+      },
+      contexts: [],
+      compactions: [],
+      inferenceProfiles: [{ profile_id: "p", agent_did: "did:key:z6MkAgent" }],
       skills: [],
-      toolSelections: [],
+      tools: [],
       savedStatus: null,
       saving: false,
-      onCreateBackend: vi.fn(),
       onCreateProfile: vi.fn(),
-      onCreateToolSelection: vi.fn(),
+      onCreateTools: vi.fn(),
       onSaved: vi.fn(),
       onSaveAgentConfig: vi.fn(),
-      onSaveBehaviorConfig: vi.fn(),
+      onApplyConfigComponents: vi.fn(),
       onDeleteBehaviorConfig,
       onDeleted: vi.fn(),
     };
@@ -173,12 +192,10 @@ describe("automation document deletion", () => {
         {...base}
         behavior={
           {
-            behaviorId: "default",
-            displayName: "default",
-            systemPrompt: "x",
-            inferenceProfileId: "p",
+            behavior_id: "default",
+            display_name: "default",
+            inference_profile_id: "p",
             enabled: true,
-            isDefault: true,
           } as never
         }
       />,
@@ -190,12 +207,10 @@ describe("automation document deletion", () => {
         {...base}
         behavior={
           {
-            behaviorId: "ops",
-            displayName: "ops",
-            systemPrompt: "x",
-            inferenceProfileId: "p",
+            behavior_id: "ops",
+            display_name: "ops",
+            inference_profile_id: "p",
             enabled: true,
-            isDefault: false,
           } as never
         }
       />,
@@ -215,9 +230,7 @@ describe("automation document deletion", () => {
     render(
       <ScheduleConfigEditor
         agentDid={sourceAgentDid}
-        schedule={{ scheduleId: "timer-a" }}
-        selectedTask={null}
-        tasks={[]}
+        schedule={schedule}
         savedStatus={null}
         saving={false}
         runningTask={false}
@@ -239,28 +252,26 @@ describe("automation document deletion", () => {
     );
   });
 
-  it("routes the selected deployment when deleting an event trigger", async () => {
-    const onDeleteEventTriggerConfig = vi.fn().mockResolvedValue(undefined);
+  it("routes the selected deployment when deleting an event source", async () => {
+    const onDeleteEventSourceConfig = vi.fn().mockResolvedValue(undefined);
     render(
-      <EventTriggerConfigEditor
+      <EventSourceConfigEditor
         agentDid={sourceAgentDid}
-        eventTrigger={{ triggerId: "event-a" }}
-        selectedTask={null}
-        tasks={[]}
+        eventSource={eventSource}
         savedStatus={null}
         saving={false}
         onSaved={vi.fn()}
-        onSaveEventTriggerConfig={vi.fn()}
-        onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
+        onSaveEventSourceConfig={vi.fn()}
+        onDeleteEventSourceConfig={onDeleteEventSourceConfig}
         onDeleted={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("event-trigger-delete"));
+    fireEvent.click(screen.getByTestId("event-source-delete"));
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
     await waitFor(() =>
-      expect(onDeleteEventTriggerConfig).toHaveBeenCalledWith({
-        triggerId: "event-a",
+      expect(onDeleteEventSourceConfig).toHaveBeenCalledWith({
+        eventSourceId: "source-a",
         agentDid: sourceAgentDid,
       }),
     );
@@ -271,11 +282,13 @@ describe("automation document deletion", () => {
     render(
       <InferenceProfileConfigEditor
         agentDid={sourceAgentDid}
-        profile={{ profileId: "profile-a" }}
+        profile={{ profile_id: "profile-a" }}
+        samplingConfigs={[]}
+        executionConfigs={[]}
         savedStatus={null}
         saving={false}
         onSaved={vi.fn()}
-        onSaveInferenceProfileConfig={vi.fn()}
+        onApplyConfigComponents={vi.fn()}
         onDeleteInferenceProfileConfig={onDeleteInferenceProfileConfig}
         onDeleted={vi.fn()}
       />,
@@ -291,28 +304,29 @@ describe("automation document deletion", () => {
     );
   });
 
-  it("prefers the tool selection row's source deployment when deleting", async () => {
+  it("routes the selected deployment when deleting a tools document", async () => {
     const onDeleteToolsConfig = vi.fn().mockResolvedValue(undefined);
     render(
       <ToolsConfigEditor
         agentDid={sourceAgentDid}
-        toolSelection={{ ...toolSelection, agentDid: "did:test:replica-source" }}
-        toolServiceRegistries={[toolService]}
+        tools={tools}
+        toolServices={[toolService]}
+        subagentTargets={[]}
         savedStatus={null}
         saving={false}
         onSaved={vi.fn()}
-        onSaveToolsConfig={vi.fn()}
+        onApplyConfigComponents={vi.fn()}
         onDeleteToolsConfig={onDeleteToolsConfig}
         onDeleted={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("tool-selection-delete"));
+    fireEvent.click(screen.getByTestId("tools-delete"));
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
     await waitFor(() =>
       expect(onDeleteToolsConfig).toHaveBeenCalledWith({
-        selectionId: "default-tools",
-        agentDid: "did:test:replica-source",
+        toolsId: "default-tools",
+        agentDid: sourceAgentDid,
       }),
     );
   });

@@ -709,47 +709,19 @@ async fn install_subagent_source_fixture(
 ) -> Result<(), String> {
     const TOOL_SELECTION_ID: &str = "event-delivery-subagent-tools";
 
-    upsert_tool_selection(
+    support::fixtures::configure_subagent_behavior(
         node,
-        &ToolSelectionDocument {
-            selection_id: TOOL_SELECTION_ID.to_string(),
-            agent_did: agent_did.to_string(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                AGENT_NAME, agent_did, AGENT_NAME, None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        agent_did,
+        AGENT_NAME,
+        TOOL_SELECTION_ID,
+        vec![support::fixtures::subagent_target(
+            agent_did, AGENT_NAME, agent_did, AGENT_NAME,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .map_err(|err| format!("upsert ToolSelection failed: {err}"))?;
-
-    upsert_agent_behavior(
-        node,
-        &AgentBehaviorDocument {
-            behavior_id: AGENT_NAME.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Event delivery subagent fixture".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(TOOL_SELECTION_ID.to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-20T00:00:00Z".to_string()),
-        },
-    )
-    .await
-    .map_err(|err| format!("upsert AgentBehavior failed: {err}"))?;
+    .await;
 
     Ok(())
 }
@@ -763,6 +735,7 @@ fn active_snapshot_with_event_trigger() -> Arc<ActiveRuntimeSnapshot> {
         goal_objective_template: None,
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
     let trigger = ResolvedEventTrigger {
         trigger_doc_id: "event-source-trigger-doc".to_string(),
@@ -792,7 +765,7 @@ fn active_snapshot_without_event_triggers(
     identity: Arc<dyn gents::AgentIdentity>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let agent_did = identity.did().to_string();
-    let principal = Arc::new(gents::AgentPrincipal {
+    let principal = Arc::new(gents::RuntimePrincipal {
         agent_did: agent_did.clone(),
         identity,
         default_behavior_id: AGENT_NAME.to_string(),
@@ -848,11 +821,11 @@ fn active_snapshot(
     })
 }
 
-fn runtime_behavior(behavior_id: &str) -> Arc<gents::AgentBehavior> {
+fn runtime_behavior(behavior_id: &str) -> Arc<gents::ResolvedBehavior> {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(
         crate::support::fixtures::test_identity(&format!("event-delivery-{behavior_id}")),
     );
-    let principal = Arc::new(gents::AgentPrincipal {
+    let principal = Arc::new(gents::RuntimePrincipal {
         agent_did: AGENT_DID.to_string(),
         identity,
         default_behavior_id: AGENT_NAME.to_string(),

@@ -253,7 +253,10 @@ pub struct TaskView {
     pub prompt_template: Option<String>,
     pub goal_objective_template: Option<String>,
     pub goal_token_budget: Option<i64>,
+    pub hooks: Vec<gents::document_config::TaskHook>,
     pub enabled: Option<bool>,
+    pub output_schema_ref: Option<String>,
+    pub tags: Vec<String>,
     pub recent_runs: TaskRecentRunsView,
     pub run_history: Vec<TaskRunSummaryView>,
 }
@@ -266,7 +269,7 @@ pub struct TaskRecentRunsView {
     pub last_status: Option<String>,
     pub last_error: Option<String>,
     pub schedule_count: usize,
-    pub event_trigger_count: usize,
+    pub event_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

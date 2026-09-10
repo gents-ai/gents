@@ -375,7 +375,7 @@ describe("projectChatShell", () => {
       draft: "",
       sending: false,
       session: null,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
       operationalState: operationalStateFor({
         kind: "unavailable",
@@ -402,7 +402,7 @@ describe("projectChatShell", () => {
       draft: "hello",
       sending: false,
       session: null,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       localWorkflow: { kind: "ready" },
       operationalState,
     });
@@ -429,7 +429,7 @@ describe("projectChatShell", () => {
           ),
           draft: contractCase.frontend_composer_non_empty ? "follow up" : "",
           sending: contractCase.frontend_sending,
-          selectedConversation: null,
+          selectedSessionSummary: null,
           session: sessionFromContract(contractCase),
           localWorkflow: localWorkflowFromContract(contractCase),
         });
@@ -472,7 +472,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({ turnState: "streaming", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -498,7 +498,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         turnState: "waitingForClaim",
         latestRequestId: "req-1",
@@ -531,7 +531,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         latestRequestId: "req-new",
         turnState: "streaming",
@@ -569,7 +569,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         latestRequestId: "req-user",
         turnState: "completed",
@@ -590,7 +590,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         latestRequestId: "req-wake",
         turnState: "streaming",
@@ -615,7 +615,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({ latestRequestId: "req-old", turnState: "completed" }),
       localWorkflow: {
         kind: "awaitingObservation",
@@ -652,7 +652,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-2",
       draft: "new session follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         sessionId: "session-2",
         latestRequestId: "req-2",
@@ -679,8 +679,11 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
-      session: session({ latestRequestId: "req-missing", turnState: undefined }),
+      selectedSessionSummary: null,
+      session: session({
+        latestRequestId: "req-missing",
+        turnState: undefined,
+      }),
       localWorkflow: { kind: "ready" },
     });
 
@@ -703,7 +706,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({ turnState: "completed", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -719,7 +722,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({ turnState: "interrupted", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
@@ -735,7 +738,7 @@ describe("projectChatShell", () => {
       selectedSessionId: "session-1",
       draft: "follow up",
       sending: false,
-      selectedConversation: null,
+      selectedSessionSummary: null,
       session: session({
         title: null,
         previewText: null,

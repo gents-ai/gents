@@ -48,13 +48,13 @@ pub(super) async fn signed_invocation_fixture(
     let trigger_rows = execute(
         &node,
         &format!(
-            r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&trigger)
         ),
     )
     .await;
     root.caused_by_trigger_doc_id = Some(
-        trigger_rows["EventTrigger"][0]["_docID"]
+        trigger_rows["Trigger"][0]["_docID"]
             .as_str()
             .unwrap()
             .into(),
@@ -1223,9 +1223,16 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
         let foreign = KeyIdentity::load_or_create(dir.path().join("foreign.key"), None).unwrap();
-        let routes = execute(&node, &format!(r#"{{ EventTrigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#, crate::graphql::escape_graphql_string(&trigger))).await;
+        let routes = execute(
+            &node,
+            &format!(
+                r#"{{ Trigger(filter: {{ trigger_id: {{ _eq: "{}" }} }}) {{ _docID task_id }} }}"#,
+                crate::graphql::escape_graphql_string(&trigger)
+            ),
+        )
+        .await;
         if missing_task {
-            let task = routes["EventTrigger"][0]["task_id"].as_str().unwrap();
+            let task = routes["Trigger"][0]["task_id"].as_str().unwrap();
             execute(&node, &format!(r#"mutation {{ delete_Task(filter: {{ task_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(task))).await;
         } else {
             execute(&node, &format!(r#"mutation {{ update_AgentBehavior(filter: {{ behavior_id: {{ _eq: "test-behavior" }} }}, input: {{ agent_did: "{}" }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(foreign.did()))).await;
@@ -1243,7 +1250,7 @@ async fn generic_graph_foreign_roots_remain_ignored_after_reassignment_or_missin
         );
         request.caused_by_trigger_id = Some(trigger.clone());
         request.caused_by_trigger_doc_id =
-            Some(routes["EventTrigger"][0]["_docID"].as_str().unwrap().into());
+            Some(routes["Trigger"][0]["_docID"].as_str().unwrap().into());
         request.caused_by_trigger_kind = Some("event".into());
         request.caused_by_correlation = Some(run.correlation.clone());
         request.caused_by_source_doc_id = Some(run.seed_doc_id.clone());

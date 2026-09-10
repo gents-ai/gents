@@ -9,7 +9,7 @@ use tokio::sync::watch;
 
 use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
-use crate::support::snapshots::{RuntimeSnapshot, fetch_runtime_snapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -155,11 +155,11 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
             let agent_did = &agent_did;
             let behavior_id = &default_behavior_id;
             Box::pin(async move {
-                use gents::Collection;
                 use gents::config_client::{
-                    DesiredStateApplyDocument, DesiredStateApplyPlan,
-                    read_desired_state_record_in_txn as read,
+                    read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
+                    DesiredStateApplyPlan,
                 };
+                use gents::Collection;
                 let (_, mut behavior) =
                     read(txn, Collection::AgentBehavior, agent_did, behavior_id)
                         .await?

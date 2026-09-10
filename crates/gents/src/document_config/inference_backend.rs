@@ -92,7 +92,7 @@ pub enum BackendAuth {
     /// and the provider adapter's OAuth provider key. Existing login, refresh,
     /// expiry, and credential ownership rules remain authoritative. No tokens
     /// or fixed principal DID are copied into the shared backend.
-    #[serde(rename = "principal_o_auth")]
+    #[serde(rename = "principal_oauth")]
     PrincipalOAuth,
 }
 

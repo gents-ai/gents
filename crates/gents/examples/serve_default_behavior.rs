@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyPlan, apply_desired_state_plan, load_inference_backend_in_txn,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, load_inference_backend_in_txn, read_desired_state_record_in_txn,
+    ConfigAccess, DesiredStateApplyPlan,
 };
 use gents::defra_node::{EmbeddedNode, HttpConfig};
 use gents::document_config::{AgentPrincipal, BackendAuth, PackConfig};
 use gents::{
-    AgentIdentity, Collection, DEFAULT_MAX_TURNS, DocumentRuntimeOptions, Gents, InferenceBackend,
-    KeyIdentity, McpPool, ToolCeiling, default_behavior_id_for_agent, ensure_runtime_schemas,
+    default_behavior_id_for_agent, ensure_runtime_schemas, AgentIdentity, Collection,
+    DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, McpPool, ToolCeiling,
+    DEFAULT_MAX_TURNS,
 };
 use tokio::sync::watch;
 
@@ -252,19 +253,17 @@ mod tests {
                 })
             })
             .await?;
-        assert!(
-            seed_demo_documents(
-                &node,
-                "did:test:demo-a",
-                "backend",
-                "http://localhost:9000/v1",
-                "model",
-                "",
-                u64::MAX
-            )
-            .await
-            .is_err()
-        );
+        assert!(seed_demo_documents(
+            &node,
+            "did:test:demo-a",
+            "backend",
+            "http://localhost:9000/v1",
+            "model",
+            "",
+            u64::MAX
+        )
+        .await
+        .is_err());
         Ok(())
     }
 }

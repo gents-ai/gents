@@ -31,7 +31,7 @@ const options: PersistBackendOptions = {
   providerKind: "ChatGptCodex",
   endpoint: "https://example.test/v1",
   modelName: "selected",
-  auth: { kind: "principal_o_auth" },
+  auth: { kind: "principal_oauth" },
 };
 describe("canonical inference setup", () => {
   it("resolves behavior through the profile and patches connection plus model atomically", async () => {
@@ -52,7 +52,7 @@ describe("canonical inference setup", () => {
             name: "Configured",
             provider_kind: "ChatGptCodex",
             endpoint: "https://example.test/v1",
-            auth: { kind: "principal_o_auth" },
+            auth: { kind: "principal_oauth" },
             openai_wire_api: null,
             enabled: true,
           },

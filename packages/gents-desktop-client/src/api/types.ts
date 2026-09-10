@@ -21,9 +21,10 @@ import type {
   DesktopListSubagentTreeRequest,
   DesktopPreviewInterruptCascadeRequest,
   DesktopSessionSnapshot,
+  SessionRenameRequest,
   SessionLiveDeltaView,
-  EventTriggerDeleteRequest,
-  EventTriggerSaveRequest,
+  TriggerDeleteRequest,
+  TriggerSaveRequest,
   InferenceProbeResult,
   InferenceProfileDeleteRequest,
   InferenceProfileSaveRequest,
@@ -127,15 +128,15 @@ export type DesktopApiAdapter = {
   listMailbox: () => Promise<MailboxItemView[]>;
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
-  renameConversation: (request: {
-    agentDid: string;
-    sessionId: string;
-    title: string;
-  }) => Promise<void>;
+  renameSession: (request: SessionRenameRequest) => Promise<void>;
   resendRequest: (requestId: string) => Promise<RequestResendResult>;
   retryRequest: (requestId: string) => Promise<ChatSendResult>;
-  applyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<DesktopClientSnapshot>;
-  patchConfigComponents: (request: ConfigComponentsPatchRequest) => Promise<DesktopClientSnapshot>;
+  applyConfigComponents: (
+    request: ConfigComponentsApplyRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  patchConfigComponents: (
+    request: ConfigComponentsPatchRequest,
+  ) => Promise<DesktopClientSnapshot>;
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -154,10 +155,14 @@ export type DesktopApiAdapter = {
   deleteScheduleConfig: (
     request: ScheduleDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
-  saveEventSourceConfig: (request: EventSourceSaveRequest) => Promise<DesktopClientSnapshot>;
-  deleteEventSourceConfig: (request: EventSourceDeleteRequest) => Promise<DesktopClientSnapshot>;
-  deleteEventTriggerConfig: (
-    request: EventTriggerDeleteRequest,
+  saveEventSourceConfig: (
+    request: EventSourceSaveRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteEventSourceConfig: (
+    request: EventSourceDeleteRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  deleteTriggerConfig: (
+    request: TriggerDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   deleteBackendConfig: (
     request: BackendDeleteRequest,
@@ -210,8 +215,8 @@ export type DesktopApiAdapter = {
     request: ScheduleSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   runSchedule: (request: ScheduleRunRequest) => Promise<TaskRunResult>;
-  saveEventTriggerConfig: (
-    request: EventTriggerSaveRequest,
+  saveTriggerConfig: (
+    request: TriggerSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   runTask: (request: TaskRunRequest) => Promise<TaskRunResult>;
   listSubagentTree: (

@@ -71,6 +71,7 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -146,6 +147,7 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -233,6 +235,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentResponseRow {
                 response_key: "resp-1".to_string(),
                 request_id: Some("req-1".to_string()),
+                request_doc_id: Some("req-1".to_string()),
                 agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
@@ -253,6 +256,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentResponseRow {
                 response_key: "resp-2".to_string(),
                 request_id: Some("req-2".to_string()),
+                request_doc_id: Some("req-2".to_string()),
                 agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),
@@ -273,6 +277,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             AgentResponseRow {
                 response_key: "resp-3".to_string(),
                 request_id: Some("req-3".to_string()),
+                request_doc_id: Some("req-3".to_string()),
                 agent_did: Some("did:test:amy".to_string()),
                 requester_did: None,
                 behavior_id: Some("amy-default".to_string()),

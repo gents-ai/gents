@@ -6,7 +6,7 @@ use anyhow::Result;
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
 use crate::compaction::CompactionStrategy;
-use crate::identity::{AgentIdentity, AgentPrincipal};
+use crate::identity::{AgentIdentity, RuntimePrincipal};
 use crate::openai_wire::OpenAiWireApi;
 use crate::tool_surface::BehaviorToolConfig;
 
@@ -29,18 +29,15 @@ pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
 pub const DEFAULT_MODEL_NAME: &str = "default";
 
-/// Runtime configuration for one loaded behavior executor.
-///
-/// Mirrors the Lean `Identity.Behavior` record. Holds an
-/// `Arc<AgentPrincipal>` back-reference; the principal owns the
+/// Fully resolved runtime configuration for one behavior executor. Holds an
+/// `Arc<RuntimePrincipal>` back-reference; the principal owns the
 /// signing identity used for all DefraDB ops issued for this
-/// behavior. Two behaviors sharing the same principal Arc share the
-/// same actor DID (Lean's `behavior_id_determines_principal` is
-/// structural at the type level here).
+/// behavior. The resolved behavior therefore carries the validated owner and
+/// signing handle selected by its principal-and-behavior key.
 #[derive(Clone)]
-pub struct AgentBehavior {
+pub struct ResolvedBehavior {
     pub behavior_id: String,
-    pub principal: Arc<AgentPrincipal>,
+    pub principal: Arc<RuntimePrincipal>,
     pub backend_id: Option<String>,
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
@@ -294,9 +291,9 @@ impl SamplingConfig {
     }
 }
 
-impl std::fmt::Debug for AgentBehavior {
+impl std::fmt::Debug for ResolvedBehavior {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AgentBehavior")
+        f.debug_struct("ResolvedBehavior")
             .field("behavior_id", &self.behavior_id)
             .field("principal_did", &self.principal.agent_did)
             .field("backend_id", &self.backend_id)
@@ -326,7 +323,7 @@ impl std::fmt::Debug for AgentBehavior {
     }
 }
 
-impl AgentBehavior {
+impl ResolvedBehavior {
     pub fn compaction_threshold(&self) -> f64 {
         self.compaction
             .as_ref()
@@ -350,7 +347,7 @@ impl AgentBehavior {
     ///
     /// This is the only way to obtain an `Arc<dyn AgentIdentity>` for
     /// a behavior; the behavior itself does not hold one. Two
-    /// behaviors sharing an `Arc<AgentPrincipal>` return identical
+    /// behaviors sharing an `Arc<RuntimePrincipal>` return identical
     /// clones, so DefraDB ACP receives the same actor for both —
     /// satisfying Lean's `RespectsPrincipal` predicate.
     pub fn principal_identity(&self) -> &Arc<dyn AgentIdentity> {
@@ -392,7 +389,7 @@ mod tests {
     use super::*;
     use crate::identity::KeyIdentity;
 
-    fn stub_principal() -> Arc<AgentPrincipal> {
+    fn stub_principal() -> Arc<RuntimePrincipal> {
         let identity = Arc::new(
             KeyIdentity::load_or_create(
                 std::env::temp_dir().join(format!("config-behavior-{}.key", uuid::Uuid::new_v4())),
@@ -400,7 +397,7 @@ mod tests {
             )
             .unwrap(),
         );
-        Arc::new(AgentPrincipal {
+        Arc::new(RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity,
             default_behavior_id: String::new(),
@@ -409,8 +406,8 @@ mod tests {
         })
     }
 
-    fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> AgentBehavior {
-        AgentBehavior {
+    fn behavior_with_wire(openai_wire_api: OpenAiWireApi) -> ResolvedBehavior {
+        ResolvedBehavior {
             behavior_id: "general".to_string(),
             principal: stub_principal(),
             backend_id: Some("backend-general".to_string()),
@@ -513,7 +510,7 @@ mod tests {
         let responses = format!("{:?}", behavior_with_wire(OpenAiWireApi::Responses));
         assert_ne!(
             chat, responses,
-            "openai_wire_api must be in AgentBehavior Debug so the runtime fingerprint \
+            "openai_wire_api must be in ResolvedBehavior Debug so the runtime fingerprint \
              changes when the wire API changes"
         );
         assert!(chat.contains("ChatCompletions"));

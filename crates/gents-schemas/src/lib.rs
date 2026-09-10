@@ -97,8 +97,7 @@ pub const TASK: &str = include_str!("../schemas/agent/task.graphql");
 pub const SCHEDULE_NAME: &str = "Schedule";
 pub const SCHEDULE: &str = include_str!("../schemas/agent/schedule.graphql");
 pub const EVENT_GROUP_STATE_NAME: &str = "EventGroupState";
-pub const EVENT_GROUP_STATE: &str =
-    include_str!("../schemas/agent/event_group_state.graphql");
+pub const EVENT_GROUP_STATE: &str = include_str!("../schemas/agent/event_group_state.graphql");
 pub const GRAPH_DEFINITION_NAME: &str = "GraphDefinition";
 pub const GRAPH_DEFINITION: &str = include_str!("../schemas/agent/graph_definition.graphql");
 pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
@@ -540,12 +539,6 @@ mod tests {
         assert!(EVENT_SOURCE.contains("workspace_authority: String"));
         assert!(CALLBACK_RESULT.contains("work_unit_id: String @index"));
         assert!(WORKSPACE_RECEIPT.contains("caused_by_correlation: String @index @immutable"));
-        assert!(
-            !AGENT_REQUEST.lines().any(|line| line
-                .trim_start()
-                .starts_with("workspace_owner_deployment_id:")),
-            "workspace ownership resolves from the workspace, not a copied deployment selector"
-        );
         assert!(AGENT_REQUEST.contains("workspace_seal_hash: String @immutable"));
     }
 

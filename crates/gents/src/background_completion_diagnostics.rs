@@ -644,7 +644,8 @@ mod tests {
             .await?;
         let access = ConfigAccess::Local(node.clone());
         // An escaped owner exercises the distinction between raw lookup scope
-        // and GraphQL spelling. No AgentSession/AgentConversation cache exists.
+        // and GraphQL spelling. Diagnostics read authoritative documents
+        // directly and maintain no session cache.
         let owner = "did:test:diagnostics\"owner";
         let mut failed = serde_json::json!({
             "agent_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
@@ -688,7 +689,7 @@ mod tests {
         failed.as_object_mut().unwrap().remove("input");
         access
             .write(
-                "test.diagnostic.later-turn",
+                "test.diagnostic.later_turn",
                 &format!(
                     "mutation {{ create_AgentRequest(input:{}){{_docID}} }}",
                     gents_protocol::graphql::graphql_input_literal(&failed)?

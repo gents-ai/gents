@@ -4,16 +4,16 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 use super::*;
-use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
+use crate::identity::{AgentIdentity as _, KeyIdentity, RuntimePrincipal};
 use crate::tool_surface::{
-    BehaviorToolConfig, FileToolMode, RuntimeToolAvailability, SubagentToolConfig, ToolCeiling,
-    ToolSelection,
+    BehaviorToolConfig, FileToolMode, ResolvedToolSelection, RuntimeToolAvailability,
+    SubagentToolConfig, ToolCeiling,
 };
 
-/// Build a minimal `Arc<AgentPrincipal>` for tests that call `.activate()`.
+/// Build a minimal `Arc<RuntimePrincipal>` for tests that call `.activate()`.
 /// Does not exercise signing — only satisfies the principal invariant so that
 /// the `debug_assert!` in `activate()` does not fire.
-fn stub_principal() -> Arc<AgentPrincipal> {
+fn stub_principal() -> Arc<RuntimePrincipal> {
     let identity = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
@@ -21,7 +21,7 @@ fn stub_principal() -> Arc<AgentPrincipal> {
         )
         .unwrap(),
     );
-    Arc::new(AgentPrincipal {
+    Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: String::new(),
@@ -61,11 +61,11 @@ fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
     Arc::new(
         BehaviorToolConfig::from_selection(
             "fingerprint",
-            ToolSelection {
+            ResolvedToolSelection {
                 file_tools,
                 enable_lsp,
                 lsp_config,
-                ..ToolSelection::default()
+                ..ResolvedToolSelection::default()
             },
             &ToolCeiling::readwrite(std::env::temp_dir()),
             Vec::new(),

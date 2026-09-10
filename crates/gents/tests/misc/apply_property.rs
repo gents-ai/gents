@@ -10,20 +10,20 @@ fn collection_strategy() -> impl Strategy<Value = Collection> {
     prop_oneof![
         Just(Collection::AgentPrincipal),
         Just(Collection::AgentBehavior),
-        Just(Collection::ToolSelection),
+        Just(Collection::Tools),
         Just(Collection::InferenceBackend),
         Just(Collection::InferenceProfile),
         Just(Collection::ToolServiceRegistry),
         Just(Collection::ProjectionAcpBinding),
         Just(Collection::Task),
         Just(Collection::Schedule),
-        Just(Collection::EventTrigger),
+        Just(Collection::Trigger),
     ]
 }
 
 const LEAF_COLLECTIONS: &[Collection] = &[
     Collection::InferenceBackend,
-    Collection::ToolSelection,
+    Collection::Skill,
     Collection::InferenceProfile,
     Collection::ToolServiceRegistry,
 ];
@@ -32,7 +32,7 @@ fn leaf_docref_strategy() -> impl Strategy<Value = DocRef> {
     (
         prop_oneof![
             Just(Collection::InferenceBackend),
-            Just(Collection::ToolSelection),
+            Just(Collection::Skill),
             Just(Collection::InferenceProfile),
             Just(Collection::ToolServiceRegistry),
         ],

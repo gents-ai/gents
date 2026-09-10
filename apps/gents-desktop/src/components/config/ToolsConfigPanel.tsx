@@ -441,6 +441,7 @@ export function ToolsConfigEditor({
           <button
             type="button"
             className="ghost-button danger-button"
+            data-testid="tools-delete"
             disabled={saving}
             onClick={() => setConfirmDelete(true)}
           >
@@ -467,7 +468,7 @@ export function ToolsConfigEditor({
           type="submit"
           disabled={saving || !draft.tools_id.trim()}
         >
-          {saving ? "Saving..." : "Save tools"}
+          {saving ? "Saving..." : "Save Tools"}
         </button>
       </div>
     </form>

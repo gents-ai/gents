@@ -91,19 +91,37 @@ fn session_snapshot_is_agent_scoped_when_session_ids_match() {
 
 #[test]
 fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
-    let behavior: AgentBehaviorRow = serde_json::from_value(serde_json::json!({
-        "behavior_id": "default",
+    let behavior: gents::document_config::AgentBehavior =
+        serde_json::from_value(serde_json::json!({
+            "behavior_id": "default",
+            "agent_did": "did:test:amy",
+            "inference_profile_id": "large-context",
+            "context_id": "large-context-input"
+        }))
+        .expect("behavior");
+    let profile: gents::document_config::InferenceProfile =
+        serde_json::from_value(serde_json::json!({
+            "agent_did": "did:test:amy",
+            "profile_id": "large-context",
+            "backend_id": "backend",
+            "model_name": "model",
+            "context_window": 10_000
+        }))
+        .expect("profile");
+    let context: gents::document_config::AgentContext = serde_json::from_value(serde_json::json!({
         "agent_did": "did:test:amy",
-        "inference_profile_id": "large-context",
-        "compaction_strategy": "StripThenSummarize",
-        "compaction_threshold": 0.57
+        "context_id": "large-context-input",
+        "compaction_id": "compact"
     }))
-    .expect("behavior row");
-    let profile: InferenceProfileRow = serde_json::from_value(serde_json::json!({
-        "profile_id": "large-context",
-        "context_window": 10_000
-    }))
-    .expect("profile row");
+    .expect("context");
+    let compaction_config: gents::document_config::CompactionConfig =
+        serde_json::from_value(serde_json::json!({
+            "agent_did": "did:test:amy",
+            "compaction_id": "compact",
+            "strategy": "StripThenSummarize",
+            "threshold": 0.57
+        }))
+        .expect("compaction config");
     let compaction: CompactionEntryRow = serde_json::from_value(serde_json::json!({
         "compaction_key": "session-context:1",
         "session_id": "session-context",
@@ -150,6 +168,8 @@ fn session_snapshot_exposes_provider_context_pressure_and_compaction_history() {
         }],
         behaviors: vec![behavior],
         inference_profiles: vec![profile],
+        contexts: vec![context],
+        compactions: vec![compaction_config],
         messages,
         compaction_entries: vec![compaction],
         ..ClientStoreRows::default()

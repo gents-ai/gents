@@ -69,19 +69,27 @@ pub(crate) async fn validate_manifest_against_live(
             {
                 continue;
             }
-            let Some(task) = manifest.tasks.iter().find(|task|
-                task.agent_did == trigger.agent_did && task.task_id == trigger.task_id)
-            else { continue };
+            let Some(task) = manifest.tasks.iter().find(|task| {
+                task.agent_did == trigger.agent_did && task.task_id == trigger.task_id
+            }) else {
+                continue;
+            };
             if let Ok(refs) = parse_template_for_validation(&task.prompt_template) {
-                doc_paths.extend(refs.into_iter()
-                    .filter(|reference| reference.root() == Some("doc"))
-                    .map(|reference| reference.path));
+                doc_paths.extend(
+                    refs.into_iter()
+                        .filter(|reference| reference.root() == Some("doc"))
+                        .map(|reference| reference.path),
+                );
             }
         }
-        let expected_count_field = source.group.as_ref()
+        let expected_count_field = source
+            .group
+            .as_ref()
             .and_then(|group| group.expected_count.as_ref())
             .and_then(|count| match count {
-                gents::document_config::EventGroupCount::SourceField { source_field } => Some(source_field.as_str()),
+                gents::document_config::EventGroupCount::SourceField { source_field } => {
+                    Some(source_field.as_str())
+                }
                 gents::document_config::EventGroupCount::Fixed(_) => None,
             });
         if doc_paths.is_empty()

@@ -15,56 +15,52 @@ fn goal_row(goal_id: &str, created_at: &str, status: &str) -> GoalRow {
 
 fn schedule_row(
     schedule_id: &str,
-    task_id: &str,
-    fire_count: Option<i64>,
-    last_attempt_at: Option<&str>,
-    last_status: Option<&str>,
-    last_error: Option<&str>,
-) -> ScheduleRow {
-    ScheduleRow {
+    _task_id: &str,
+    _fire_count: Option<i64>,
+    _last_attempt_at: Option<&str>,
+    _last_status: Option<&str>,
+    _last_error: Option<&str>,
+) -> Schedule {
+    Schedule {
         schedule_id: schedule_id.to_string(),
-        task_id: Some(task_id.to_string()),
-        interval_secs: None,
-        cron: None,
-        timezone: None,
-        missed_run_policy: None,
-        enabled: None,
-        concurrency: None,
-        next_run_at: None,
-        last_attempt_at: last_attempt_at.map(str::to_string),
-        last_status: last_status.map(str::to_string),
-        last_error: last_error.map(str::to_string),
-        fire_count,
+        agent_did: "did:agent:1".to_string(),
+        display_name: None,
+        cadence: gents::document_config::ScheduleCadence::Interval { interval_secs: 300 },
         created_at: None,
         updated_at: None,
+        tags: Vec::new(),
     }
 }
 
-fn event_trigger_row(
+fn trigger(
     trigger_id: &str,
     task_id: &str,
+    source: gents::document_config::TriggerSource,
+) -> Trigger {
+    Trigger {
+        agent_did: "did:agent:1".to_string(),
+        trigger_id: trigger_id.to_string(),
+        display_name: None,
+        description: None,
+        task_id: task_id.to_string(),
+        source,
+        enabled: true,
+        concurrency: None,
+        created_at: None,
+        updated_at: None,
+        tags: Vec::new(),
+    }
+}
+
+fn trigger_observation(
+    trigger_id: &str,
     fire_count: Option<i64>,
     last_attempt_at: Option<&str>,
     last_status: Option<&str>,
     last_error: Option<&str>,
-) -> EventTriggerRow {
-    EventTriggerRow {
+) -> TriggerObservation {
+    TriggerObservation {
         trigger_id: trigger_id.to_string(),
-        task_id: Some(task_id.to_string()),
-        source_collection: None,
-        event_kind: None,
-        filter: None,
-        enabled: None,
-        concurrency: None,
-        correlation_field: None,
-        fire_mode: None,
-        expected_count: None,
-        expected_count_field: None,
-        group_timeout_secs: None,
-        group_min_count: None,
-        workspace_authority: None,
-        created_at: None,
-        updated_at: None,
         last_attempt_at: last_attempt_at.map(str::to_string),
         last_fired_source_doc_id: None,
         last_status: last_status.map(str::to_string),
@@ -73,19 +69,22 @@ fn event_trigger_row(
     }
 }
 
-fn task_row(task_id: &str, behavior_id: &str) -> TaskRow {
-    TaskRow {
+fn task_row(task_id: &str, behavior_id: &str) -> Task {
+    Task {
         task_id: task_id.to_string(),
-        name: None,
+        agent_did: "did:agent:1".to_string(),
+        display_name: None,
         description: None,
-        behavior_id: Some(behavior_id.to_string()),
-        prompt_template: None,
+        behavior_id: behavior_id.to_string(),
+        prompt_template: "run".to_string(),
         goal_objective_template: None,
         goal_token_budget: None,
-        enabled: Some(true),
+        hooks: Vec::new(),
+        enabled: true,
         output_schema_ref: None,
         created_at: None,
         updated_at: None,
+        tags: Vec::new(),
     }
 }
 
@@ -164,15 +163,16 @@ fn session_pointer_requires_the_observed_physical_request() {
             ..ClientStoreRows::default()
         });
 
+        let expected_request_id = expected_turn.map(|_| "not-replicated-yet");
         assert_eq!(
             store.latest_request_id_for_session("session-1").as_deref(),
-            Some("not-replicated-yet")
+            expected_request_id
         );
         assert_eq!(
             store
                 .latest_request_id_for_session_for_agent("session-1", "did:agent:1")
                 .as_deref(),
-            Some("not-replicated-yet")
+            expected_request_id
         );
         assert_eq!(
             store.derive_turn_for_agent("session-1", "did:agent:1"),
@@ -183,19 +183,31 @@ fn session_pointer_requires_the_observed_physical_request() {
 }
 
 #[test]
-fn recent_runs_aggregates_across_schedules_and_event_triggers() {
+fn recent_runs_aggregates_across_canonical_triggers() {
     let mut store = ClientStore::default();
-    store.schedules.push(schedule_row(
+    store.triggers.push(trigger(
         "s1",
         "task-1",
+        gents::document_config::TriggerSource::Schedule {
+            schedule_id: "schedule-1".to_string(),
+        },
+    ));
+    store.triggers.push(trigger(
+        "t1",
+        "task-1",
+        gents::document_config::TriggerSource::Event {
+            event_source_id: "source-1".to_string(),
+        },
+    ));
+    store.trigger_observations.push(trigger_observation(
+        "s1",
         Some(3),
         Some("2026-04-22T10:00:00Z"),
         Some("fired"),
         None,
     ));
-    store.event_triggers.push(event_trigger_row(
+    store.trigger_observations.push(trigger_observation(
         "t1",
-        "task-1",
         Some(5),
         Some("2026-04-22T11:00:00Z"),
         Some("skipped"),
@@ -211,7 +223,7 @@ fn recent_runs_aggregates_across_schedules_and_event_triggers() {
     assert_eq!(runs.last_status.as_deref(), Some("skipped"));
     assert_eq!(runs.last_error.as_deref(), Some("in-flight"));
     assert_eq!(runs.schedule_count, 1);
-    assert_eq!(runs.event_trigger_count, 1);
+    assert_eq!(runs.event_count, 1);
 }
 
 #[test]
@@ -226,17 +238,16 @@ fn source_agent_dids_round_trip_with_rows() {
     let store = ClientStore::from_rows(ClientStoreRows {
         tasks: vec![task_row("task-1", "default")],
         schedules: vec![schedule_row("schedule-1", "task-1", None, None, None, None)],
-        event_triggers: vec![event_trigger_row(
+        triggers: vec![trigger(
             "trigger-1",
             "task-1",
-            None,
-            None,
-            None,
-            None,
+            gents::document_config::TriggerSource::Event {
+                event_source_id: "source-1".to_string(),
+            },
         )],
         task_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
         schedule_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
-        event_trigger_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
+        trigger_source_agent_dids: vec![Some("did:test:mini-1".to_string())],
         ..ClientStoreRows::default()
     });
 
@@ -251,7 +262,7 @@ fn source_agent_dids_round_trip_with_rows() {
         vec![Some("did:test:mini-1".to_string())]
     );
     assert_eq!(
-        restored.event_trigger_source_agent_dids,
+        restored.trigger_source_agent_dids,
         vec![Some("did:test:mini-1".to_string())]
     );
 }

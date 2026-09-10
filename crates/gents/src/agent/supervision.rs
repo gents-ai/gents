@@ -7,17 +7,17 @@ use futures::FutureExt;
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::retry::RetryPolicy;
 
 pub(super) async fn supervise_behaviors_with_runner<F, Fut>(
-    behaviors: Vec<Arc<AgentBehavior>>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
     mut shutdown: watch::Receiver<bool>,
     retry_policy: RetryPolicy,
     runner: F,
 ) -> Result<()>
 where
-    F: Fn(Arc<AgentBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Arc<ResolvedBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let mut join_set = JoinSet::new();
@@ -90,13 +90,13 @@ where
 }
 
 fn spawn_behavior<F, Fut>(
-    join_set: &mut JoinSet<(Arc<AgentBehavior>, std::thread::Result<Result<()>>)>,
+    join_set: &mut JoinSet<(Arc<ResolvedBehavior>, std::thread::Result<Result<()>>)>,
     running: &mut std::collections::HashSet<String>,
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     shutdown: watch::Receiver<bool>,
     runner: F,
 ) where
-    F: Fn(Arc<AgentBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
+    F: Fn(Arc<ResolvedBehavior>, watch::Receiver<bool>) -> Fut + Send + Sync + Clone + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
     let name = behavior.behavior_id.clone();

@@ -16,7 +16,12 @@ pub(super) fn manifest_agent_dids(config: &PackConfig) -> Result<BTreeSet<String
     let mut owners = BTreeSet::from([config.agent_principal.agent_did.clone()]);
     for root in document_roots() {
         for row in value[root].as_array().into_iter().flatten() {
-            owners.insert(row["agent_did"].as_str().context("config owner missing")?.to_owned());
+            owners.insert(
+                row["agent_did"]
+                    .as_str()
+                    .context("config owner missing")?
+                    .to_owned(),
+            );
         }
     }
     owners.retain(|owner| !owner.trim().is_empty());
@@ -87,17 +92,33 @@ mod tests {
             "graph_capabilities": [{"capability_id": "cap", "revision": "v1",
                 "agent_did": "did:test:source", "task_id": "task",
                 "allowed_callers": ["did:test:source", "did:test:remote"]}]
-        })).unwrap();
+        }))
+        .unwrap();
         assert!(enforce_manifest_rebind_safety(&config, "did:test:target", false).is_err());
         enforce_manifest_rebind_safety(&config, "did:test:target", true).unwrap();
         enforce_manifest_rebind_safety(&config, "did:test:source", false).unwrap();
         rebind_manifest_agent_did(&mut config, "did:test:target").unwrap();
-        assert_eq!(manifest_agent_dids(&config).unwrap(), BTreeSet::from(["did:test:target".into()]));
-        assert_eq!(config.subagent_targets[0].target_agent_did, "did:test:target");
-        assert_eq!(config.subagent_targets[1].target_agent_did, "did:test:remote");
-        assert_eq!(config.contexts[0].system_prompt.as_deref(), Some("  did:test:source\n"));
+        assert_eq!(
+            manifest_agent_dids(&config).unwrap(),
+            BTreeSet::from(["did:test:target".into()])
+        );
+        assert_eq!(
+            config.subagent_targets[0].target_agent_did,
+            "did:test:target"
+        );
+        assert_eq!(
+            config.subagent_targets[1].target_agent_did,
+            "did:test:remote"
+        );
+        assert_eq!(
+            config.contexts[0].system_prompt.as_deref(),
+            Some("  did:test:source\n")
+        );
         assert_eq!(config.contexts[0].skill_ids, ["b", "a"]);
-        assert_eq!(config.graph_capabilities[0].allowed_callers, ["did:test:source", "did:test:remote"]);
+        assert_eq!(
+            config.graph_capabilities[0].allowed_callers,
+            ["did:test:source", "did:test:remote"]
+        );
         let once = serde_json::to_value(&config).unwrap();
         rebind_manifest_agent_did(&mut config, "did:test:target").unwrap();
         assert_eq!(serde_json::to_value(&config).unwrap(), once);

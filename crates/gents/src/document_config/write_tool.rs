@@ -1,7 +1,3 @@
-use anyhow::Result;
-use serde::Deserialize;
-
-use super::serde_helpers;
 use crate::defra_query::DEFRA_QUERY_TOOL_NAME;
 use crate::meta_tools::META_TOOL_NAMES;
 use crate::toolset::{
@@ -11,6 +7,7 @@ use crate::toolset::{
     SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME, WAIT_PROCESS_TOOL_NAME,
     WAIT_SUBAGENT_TOOL_NAME,
 };
+use anyhow::Result;
 
 /// One field of a [`WriteToolDecl`]: a named slot the bound write tool exposes,
 /// and whether the agent must provide it.
@@ -154,7 +151,10 @@ pub struct WriteToolDecl {
     pub collection: String,
     #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
     pub description: String,
-    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WriteToolField>>", optional))]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<Vec<WriteToolField>>", optional)
+    )]
     pub fields: Vec<WriteToolField>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -444,35 +444,6 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || SINGLETON_TOOL_NAMES.contains(&name)
         || crate::self_config::SELF_CONFIG_TOOL_NAMES.contains(&name)
         || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
-}
-
-/// Deserialize the `write_tools` field from either representation:
-/// - a JSON array of [`WriteToolDecl`] objects (manifest / `config apply` input),
-/// - a JSON array of strings, each the JSON serialization of one
-///   [`WriteToolDecl`] (how DefraDB returns the `[String]` column),
-/// - `null` / missing / empty string (→ `None`).
-///
-/// This mirrors how `subagent_targets` survives the GraphQL `[String]` round-trip
-/// while keeping the manifest-facing shape a structured list of objects.
-pub(crate) fn deserialize_optional_write_tools<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<Vec<WriteToolDecl>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error as _;
-    use serde_json::Value;
-
-    let value = Option::<Value>::deserialize(deserializer)?;
-    if matches!(value, None | Some(Value::Null)) {
-        return Ok(None);
-    }
-    serde_helpers::deserialize_dual_shape(
-        value,
-        "write_tools must be a list of WriteToolDecl objects or JSON strings",
-    )
-    .map(Some)
-    .map_err(D::Error::custom)
 }
 
 /// Reject a declared write/query tool name that collides with a built-in,

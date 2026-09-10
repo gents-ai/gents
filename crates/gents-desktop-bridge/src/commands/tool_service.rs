@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use gents::mcp_pool::{McpPool, resolve_mcp_url};
+use anyhow::{anyhow, bail, Context, Result};
+use gents::mcp_pool::{resolve_mcp_url, McpPool};
 use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{

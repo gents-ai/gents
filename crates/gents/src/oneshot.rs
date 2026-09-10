@@ -9,7 +9,7 @@ use rig::completion::CompletionModel;
 
 use crate::agent::stream_processor::{StreamAction, StreamProcessor};
 use crate::completion_factory::loop_config;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::hook::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use crate::lifecycle::TerminalizeResult;
 use crate::lifecycle::{ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TriggerLineage};
@@ -26,7 +26,7 @@ pub struct OneshotRunResult {
 
 pub async fn run_openai_oneshot(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
     run_openai_oneshot_with_tools(node, behavior, Vec::new(), prompt).await
@@ -34,7 +34,7 @@ pub async fn run_openai_oneshot(
 
 pub async fn run_openai_oneshot_with_tools(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     extra_tools: Vec<Box<dyn ToolDyn>>,
     prompt: &str,
 ) -> Result<OneshotRunResult> {
@@ -88,7 +88,7 @@ pub async fn run_openai_oneshot_with_tools(
 
 async fn run_oneshot_with_completion_client<C>(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt: &str,
     prompt_builder: LayeredPromptBuilder,
     output_obligations: &[(String, crate::document_config::WriteToolOutputObligation)],
@@ -108,7 +108,7 @@ where
     // `max_concurrent`/`max_queue_depth`/`probe_status`) so multiple daemon
     // slots sharing one backend stay bounded; it requires a registry that has
     // been `reconcile()`-d with that config, which only the daemon's runtime
-    // reconciler drives. `AgentBehavior` here carries no such fields (by
+    // reconciler drives. `ResolvedBehavior` here carries no such fields (by
     // design — one-shot is a single ad hoc call, not a slot pool with
     // contention to bound), so plugging in a fresh, never-reconciled registry
     // would make every completion fail immediately with "BackendGone: backend
@@ -163,7 +163,7 @@ async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str)
 #[allow(clippy::too_many_arguments)]
 async fn run_oneshot_owned<M: CompletionModel + 'static>(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     prompt_builder: &LayeredPromptBuilder,
     model: M,
     prompt: &str,

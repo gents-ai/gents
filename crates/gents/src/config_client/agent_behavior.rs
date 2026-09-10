@@ -3,7 +3,9 @@ use anyhow::{Context, Result};
 use crate::collection::Collection;
 use crate::AgentBehaviorDocument as AgentBehavior;
 
-use super::{ConfigAccess, ConfigApplyTxn, DesiredStateApplyDocument, DesiredStateApplyPlan};
+#[cfg(test)]
+use super::ConfigApplyTxn;
+use super::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
 
 /// Replace one complete canonical behavior. Omitted optional fields clear their
 /// previous values; sparse edits belong to the explicit patch owner.
@@ -36,7 +38,8 @@ pub async fn write_agent_behavior_document(
         .await
 }
 
-pub(crate) async fn load_agent_behavior_in_txn(
+#[cfg(test)]
+async fn load_agent_behavior_in_txn(
     txn: &ConfigApplyTxn<'_>,
     agent_did: &str,
     behavior_id: &str,

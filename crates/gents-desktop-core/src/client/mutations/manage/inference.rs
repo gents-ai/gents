@@ -1,11 +1,11 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::InferenceBackend;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::InferenceBackend;
 
 pub async fn upsert_inference_backend(
     node: &EmbeddedNode,
@@ -59,8 +59,8 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
-    async fn backend_save_preserves_catalog_and_scoped_delete_rejects_retained_profile()
-    -> Result<()> {
+    async fn backend_save_preserves_catalog_and_scoped_delete_rejects_retained_profile(
+    ) -> Result<()> {
         let node = Arc::new(EmbeddedNode::builder().build().await?);
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:owner", "did:test:other"] {
@@ -121,15 +121,13 @@ mod tests {
             delete_inference_backend(&node, &other.agent_did, "shared").await?,
             0
         );
-        assert!(
-            gents::backend_registry::lookup_backend_observation(
-                &node,
-                &backend.agent_did,
-                "shared"
-            )
-            .await?
-            .is_some()
-        );
+        assert!(gents::backend_registry::lookup_backend_observation(
+            &node,
+            &backend.agent_did,
+            "shared"
+        )
+        .await?
+        .is_some());
         Ok(())
     }
 }

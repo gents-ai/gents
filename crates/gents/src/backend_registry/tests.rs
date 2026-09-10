@@ -62,6 +62,19 @@ fn inference_backend_from_value_requires_provider_kind_and_explicit_auth() {
 }
 
 #[test]
+fn principal_oauth_has_one_canonical_serde_tag() {
+    assert_eq!(
+        serde_json::to_value(BackendAuth::PrincipalOAuth).unwrap(),
+        serde_json::json!({"kind": "principal_oauth"})
+    );
+    assert!(
+        serde_json::from_value::<BackendAuth>(serde_json::json!({"kind": "principal_o_auth"}))
+            .is_err(),
+        "the retired acronym-splitting spelling must not become a compatibility alias"
+    );
+}
+
+#[test]
 fn generated_backend_health_admission_cases_match_registry_and_admission_policy() {
     let cases = lean_backend_health_admission_cases();
     assert_eq!(cases.len(), 7);
@@ -406,7 +419,7 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
     crate::config_client::write_inference_backend_document(&access, &backend).await?;
     let mut duplicate = backend.clone();
     duplicate.name = "A physically distinct duplicate".into();
-    access
+    let duplicate_result = access
         .write(
             "test.backend.duplicate",
             &format!(
@@ -414,31 +427,18 @@ async fn duplicate_backend_owner_keys_fail_without_overwriting_documents() -> Re
                 gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&duplicate)?)?
             ),
         )
-        .await?;
+        .await;
     assert!(
-        lookup_backend(&node, &backend.agent_did, &backend.backend_id)
-            .await
-            .is_err()
+        duplicate_result.is_err(),
+        "the canonical unique owner/ID index must reject duplicates"
     );
-    assert!(
-        lookup_backend_observation(&node, &backend.agent_did, &backend.backend_id)
-            .await
-            .is_err()
-    );
-    assert!(
-        crate::config_client::write_inference_backend_document(&access, &backend)
-            .await
-            .is_err()
-    );
-    assert!(
-        set_backend_probe_status(&node, &backend.agent_did, &backend.backend_id, "healthy")
-            .await
-            .is_err()
-    );
+    let loaded = lookup_backend(&node, &backend.agent_did, &backend.backend_id)
+        .await?
+        .expect("original backend remains");
+    assert_eq!(loaded.name, backend.name);
     let records = list_all_backends(&node).await?;
-    assert_eq!(records.len(), 2);
-    assert!(records.iter().any(|row| row.name == duplicate.name));
-    assert!(records.iter().any(|row| row.name == backend.name));
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].name, backend.name);
     let response = node.execute("{ InferenceBackend { probe_status } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     let data = response.data.unwrap();

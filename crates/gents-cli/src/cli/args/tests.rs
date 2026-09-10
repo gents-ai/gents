@@ -844,22 +844,67 @@ fn claude_login_parses_oauth_flags_and_rejects_seat_flags() {
 
 #[test]
 fn tools_set_accepts_canonical_document_and_rejects_retired_flat_flags() {
-    let cli = Cli::try_parse_from(["gents", "config", "tools", "set", "--file", "tools.json", "--home", ".gents"]).unwrap();
+    let cli = Cli::try_parse_from([
+        "gents",
+        "config",
+        "tools",
+        "set",
+        "--file",
+        "tools.json",
+        "--home",
+        ".gents",
+    ])
+    .unwrap();
     match cli.command {
-        Command::Config { command: ConfigCommand::Tools { command: ToolsConfigCommand::Set(args) }} => {
+        Command::Config {
+            command:
+                ConfigCommand::Tools {
+                    command: ToolsConfigCommand::Set(args),
+                },
+        } => {
             assert_eq!(args.file, std::path::PathBuf::from("tools.json"));
             assert_eq!(args.home, Some(std::path::PathBuf::from(".gents")));
         }
         _ => panic!("expected tools set"),
     }
-    assert!(Cli::try_parse_from(["gents", "config", "tools", "set", "--file", "tools.json", "--enable-bash"]).is_err());
+    assert!(Cli::try_parse_from([
+        "gents",
+        "config",
+        "tools",
+        "set",
+        "--file",
+        "tools.json",
+        "--enable-bash"
+    ])
+    .is_err());
 }
 
 #[test]
 fn subagent_target_entry_distinguishes_owner_from_destination() {
-    let cli = Cli::try_parse_from(["gents", "config", "tools", "subagent-target-entry", "--target-id", "worker", "--agent-did", "caller", "--target-agent-did", "remote", "--name", "worker", "--behavior-id", "research"]).unwrap();
+    let cli = Cli::try_parse_from([
+        "gents",
+        "config",
+        "tools",
+        "subagent-target-entry",
+        "--target-id",
+        "worker",
+        "--agent-did",
+        "caller",
+        "--target-agent-did",
+        "remote",
+        "--name",
+        "worker",
+        "--behavior-id",
+        "research",
+    ])
+    .unwrap();
     match cli.command {
-        Command::Config { command: ConfigCommand::Tools { command: ToolsConfigCommand::SubagentTargetEntry(args) }} => {
+        Command::Config {
+            command:
+                ConfigCommand::Tools {
+                    command: ToolsConfigCommand::SubagentTargetEntry(args),
+                },
+        } => {
             assert_eq!(args.agent_did, "caller");
             assert_eq!(args.target_agent_did, "remote");
             assert_eq!(args.target_id, "worker");

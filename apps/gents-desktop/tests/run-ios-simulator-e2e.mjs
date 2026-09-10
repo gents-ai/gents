@@ -433,7 +433,7 @@ const serverAddress = enrollmentServerAddress();
         boundaries,
         dataset: {
           sessionIndexRows:
-            boundaries["session-index-visible"]?.metrics?.ui?.conversationRows ?? null,
+            boundaries["session-index-visible"]?.metrics?.ui?.sessionRows ?? null,
           transcriptCardsAtPass:
             boundaries.passed?.metrics?.ui?.transcriptCards ?? null,
           transcriptTurnBlocksAtPass:

@@ -7,7 +7,7 @@ import {
   type OptimisticPendingTurn,
 } from "@source-inc/gents-desktop-chat";
 import type {
-  ConversationSummary,
+  SessionSummary,
   DeploymentView,
   DesktopSessionSnapshot,
   SyncHealthView,
@@ -23,7 +23,7 @@ type ChatProjectionStateOptions = {
   clientAvailable: boolean;
   selectedAgentDid: string | null;
   selectedBehaviorId: string | null;
-  selectedConversation: ConversationSummary | null;
+  selectedSessionSummary: SessionSummary | null;
   selectedDeployment: DeploymentView | null;
   selectedSessionId: string | null;
   sending: boolean;
@@ -36,7 +36,7 @@ export function useDesktopChatProjectionState({
   clientAvailable,
   selectedAgentDid,
   selectedBehaviorId,
-  selectedConversation,
+  selectedSessionSummary,
   selectedDeployment,
   selectedSessionId,
   sending,
@@ -104,7 +104,7 @@ export function useDesktopChatProjectionState({
       draft,
       sending,
       session,
-      selectedConversation,
+      selectedSessionSummary,
       localWorkflow,
       operationalState,
     });
@@ -113,7 +113,7 @@ export function useDesktopChatProjectionState({
     draft,
     localWorkflow,
     selectedAgentDid,
-    selectedConversation,
+    selectedSessionSummary,
     operationalState,
     selectedSessionId,
     sending,
@@ -127,7 +127,7 @@ export function useDesktopChatProjectionState({
       draft: "",
       sending,
       session,
-      selectedConversation,
+      selectedSessionSummary,
       localWorkflow,
       operationalState: retryOperationalState,
     });
@@ -136,7 +136,7 @@ export function useDesktopChatProjectionState({
     localWorkflow,
     retryOperationalState,
     selectedAgentDid,
-    selectedConversation,
+    selectedSessionSummary,
     selectedDeployment,
     selectedSessionId,
     sending,

@@ -233,9 +233,7 @@ async fn apply_patch_versioned(
         return Err(Error::StepFailed {
             step: id.to_string(),
             collection: collection.to_string(),
-            source: anyhow::anyhow!(
-                "PatchVersioned steps require expected_version pin (design §8.1)"
-            ),
+            source: anyhow::anyhow!("PatchVersioned steps require expected_version pin"),
         });
     };
 

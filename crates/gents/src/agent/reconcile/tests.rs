@@ -9,10 +9,10 @@ use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgentBehavior;
 use crate::backend_provider::BackendProviderKind;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
+use crate::identity::{AgentIdentity as _, KeyIdentity, RuntimePrincipal};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
 use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolSurface};
@@ -27,7 +27,7 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-fn stub_principal() -> Arc<AgentPrincipal> {
+fn stub_principal() -> Arc<RuntimePrincipal> {
     let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
@@ -35,7 +35,7 @@ fn stub_principal() -> Arc<AgentPrincipal> {
         )
         .unwrap(),
     );
-    Arc::new(AgentPrincipal {
+    Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: String::new(),
@@ -47,7 +47,7 @@ fn stub_principal() -> Arc<AgentPrincipal> {
 async fn snapshot_for_behaviors(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
-    behaviors: Vec<Arc<AgentBehavior>>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
@@ -70,7 +70,7 @@ async fn snapshot_for_behaviors(
 async fn snapshot_for_behaviors_with_admission(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
-    behaviors: Vec<Arc<AgentBehavior>>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
     backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
@@ -320,7 +320,7 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
     let runner = {
         let starts = starts.clone();
         let starts_tx = starts_tx.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -396,7 +396,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
     let release = Arc::new(Notify::new());
     let runner = {
         let release = release.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -516,7 +516,7 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
     )
     .await;
 
-    let runner = move |_behavior: Arc<AgentBehavior>,
+    let runner = move |_behavior: Arc<ResolvedBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _generation: u64,
@@ -660,7 +660,7 @@ async fn generation_supervisor_rotates_dispatcher_on_behavior_change() {
 
     let runner = {
         let starts = starts.clone();
-        move |behavior: Arc<AgentBehavior>,
+        move |behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -825,7 +825,7 @@ async fn generation_supervisor_keeps_previous_generation_after_failed_apply() {
     )
     .with_principal(stub_principal());
 
-    let runner = move |_behavior: Arc<AgentBehavior>,
+    let runner = move |_behavior: Arc<ResolvedBehavior>,
                        _tool_surface: Arc<ToolSurface>,
                        request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                        _generation: u64,
@@ -1031,7 +1031,7 @@ async fn registration_failure_rolls_back_standing_before_any_staged_slot_spawns(
     let started_generations = Arc::new(StdMutex::new(Vec::new()));
     let runner = {
         let started_generations = started_generations.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1133,7 +1133,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1280,7 +1280,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         let generation_one_exit = generation_one_exit.clone();
         let generation_two_exit = generation_two_exit.clone();
         let generation_two_waiting_exit = generation_two_waiting_exit.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               _tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               generation: u64,
@@ -1386,7 +1386,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let agent_did = "did:test:reconcile-tool-surface-test";
     let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
     let identity = Arc::new(test_identity("tool-surface-general"));
-    let principal = Arc::new(AgentPrincipal {
+    let principal = Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity: identity.clone(),
         default_behavior_id: String::new(),
@@ -1394,7 +1394,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         enabled: true,
     });
 
-    let initial_behavior = Arc::new(AgentBehavior {
+    let initial_behavior = Arc::new(ResolvedBehavior {
         skills: Vec::new(),
         behavior_id: "general".to_string(),
         principal: principal.clone(),
@@ -1427,7 +1427,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         "built_ins": {"enable_context_budget": true}
     }))
     .unwrap();
-    let updated_behavior = Arc::new(AgentBehavior {
+    let updated_behavior = Arc::new(ResolvedBehavior {
         tools: BehaviorToolConfig::from_tools_document(
             "general",
             &updated_tools,
@@ -1446,7 +1446,7 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
     let observed_tool_names = Arc::new(StdMutex::new(Vec::<Vec<String>>::new()));
     let runner = {
         let observed_tool_names = observed_tool_names.clone();
-        move |_behavior: Arc<AgentBehavior>,
+        move |_behavior: Arc<ResolvedBehavior>,
               tool_surface: Arc<ToolSurface>,
               request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
               _generation: u64,
@@ -1577,7 +1577,7 @@ async fn retiring_a_slot_notifies_the_failure_policy() {
         snapshot_for_behaviors(node.as_ref(), "general", vec![behavior.clone()]).await;
     // A runner that parks until shutdown: the behavior never "starts", exactly
     // the mid-startup window the retirement release exists for.
-    let runner = |_behavior: Arc<AgentBehavior>,
+    let runner = |_behavior: Arc<ResolvedBehavior>,
                   _tool_surface: Arc<ToolSurface>,
                   _request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
                   _generation: u64,

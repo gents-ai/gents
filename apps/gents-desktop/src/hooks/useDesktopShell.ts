@@ -14,7 +14,7 @@ import type {
   DesktopApiAdapter,
   DesktopClientUpdatedListenerFactory,
 } from "@source-inc/gents-desktop-client";
-import { projectConversationLoadingStatus } from "../lib/loadingStatus";
+import { projectSessionLoadingStatus } from "../lib/loadingStatus";
 
 export { setDesktopShellTimingConfigForTests };
 export type { DesktopStartupPhase } from "./useDesktopClientLifecycle";
@@ -85,7 +85,7 @@ export function useDesktopShell({
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [selectedBehaviorId, setSelectedBehaviorId] = useState<string | null>(null);
   const {
-    newConversationAgentRef,
+    newSessionAgentRef,
     pendingMailboxCauseId,
     setPendingMailboxCauseId,
     clearPendingMailboxCause,
@@ -109,9 +109,9 @@ export function useDesktopShell({
   const deployments = snapshot?.client?.deployments ?? [];
   const selectedDeployment =
     deployments.find((deployment) => deployment.agentDid === selectedAgentDid) ?? null;
-  const selectedConversation =
-    selectedDeployment?.conversations.find(
-      (conversation) => conversation.sessionId === selectedSessionId,
+  const selectedSessionSummary =
+    selectedDeployment?.sessions.find(
+      (session) => session.sessionId === selectedSessionId,
     ) ?? null;
   const selectedSessionSnapshot =
     session?.sessionId === selectedSessionId &&
@@ -136,7 +136,7 @@ export function useDesktopShell({
     clientAvailable: Boolean(snapshot?.client),
     selectedAgentDid,
     selectedBehaviorId,
-    selectedConversation,
+    selectedSessionSummary,
     selectedDeployment,
     selectedSessionId,
     sending,
@@ -144,9 +144,9 @@ export function useDesktopShell({
     syncHealth: snapshot?.client?.syncHealth ?? null,
   });
   const canSendMessage = shellProjection.sendStatus.kind === "ready";
-  const conversationLoadingStatus = useMemo(
+  const sessionLoadingStatus = useMemo(
     () =>
-      projectConversationLoadingStatus({
+      projectSessionLoadingStatus({
         selectedSessionId,
         selectedAgentDid,
         session: selectedSessionSnapshot,
@@ -175,7 +175,7 @@ export function useDesktopShell({
     localWorkflow,
     localServerAvailable,
     listenToUpdates,
-    newConversationAgentRef,
+    newSessionAgentRef,
     onStartClient,
     refreshSession,
     refreshSessionLiveDelta,
@@ -247,7 +247,8 @@ export function useDesktopShell({
     onDeleteSkillConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
-    onDeleteEventTriggerConfig,
+    onDeleteEventSourceConfig,
+    onDeleteTriggerConfig,
     onDeleteBackendConfig,
     onDeleteInferenceProfileConfig,
     onDeleteToolsConfig,
@@ -274,22 +275,21 @@ export function useDesktopShell({
   });
 
   const {
-    onRenameConversationTitle,
+    onRenameSessionTitle,
     onRetryMessage,
     onSelectSession,
     onSendMessage,
-    onStartNewConversation,
+    onStartNewSession,
   } = createDesktopShellChatActions({
     api,
     behaviorReadiness,
     draft,
-    newConversationAgentRef,
+    newSessionAgentRef,
     refreshSession,
     refreshSnapshot,
     selectedDeployment,
     selectedSessionId,
     pendingMailboxCauseId,
-    session: selectedSessionSnapshot,
     setDraft,
     setError,
     setLocalWorkflow,
@@ -306,9 +306,10 @@ export function useDesktopShell({
   const {
     onRunSchedule,
     onRunTask,
-    onSaveEventTriggerConfig,
+    onSaveEventSourceConfig,
     onSaveScheduleConfig,
     onSaveTaskConfig,
+    onSaveTriggerConfig,
   } = createDesktopShellTaskActions({
     api,
     refreshSession,
@@ -328,7 +329,7 @@ export function useDesktopShell({
     snapshot,
     session: selectedSessionSnapshot,
     sessionLoad,
-    conversationLoadingStatus,
+    sessionLoadingStatus,
     optimisticPendingTurn,
     startupPhase,
     loading,
@@ -350,7 +351,7 @@ export function useDesktopShell({
     draft,
     deployments,
     selectedDeployment,
-    selectedConversation,
+    selectedSessionSummary,
     behaviorOptions,
     runtimeHealth,
     operationalState,
@@ -373,7 +374,7 @@ export function useDesktopShell({
     onOpenMailboxItem,
     onDismissMailboxItem,
     onSelectSession,
-    onStartNewConversation,
+    onStartNewSession,
     refreshSession,
     retrySessionHydration,
     loadOlderSessionTimeline,
@@ -386,13 +387,14 @@ export function useDesktopShell({
     onRepairP2P,
     onSendMessage,
     onRetryMessage,
-    onRenameConversationTitle,
+    onRenameSessionTitle,
     onSaveAgentConfig,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
-    onDeleteEventTriggerConfig,
+    onDeleteEventSourceConfig,
+    onDeleteTriggerConfig,
     onDeleteBackendConfig,
     onDeleteInferenceProfileConfig,
     onDeleteToolsConfig,
@@ -414,7 +416,8 @@ export function useDesktopShell({
     onSaveTaskConfig,
     onSaveScheduleConfig,
     onRunSchedule,
-    onSaveEventTriggerConfig,
+    onSaveEventSourceConfig,
+    onSaveTriggerConfig,
     onRunTask,
   };
 }

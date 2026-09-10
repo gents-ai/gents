@@ -5,13 +5,13 @@ use crate::error::BridgeError;
 use super::emit_config_update_and_snapshot;
 use crate::commands::{
     delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
-    save_event_trigger_config, save_schedule_config, save_task_config,
+    save_schedule_config, save_task_config, save_trigger_config,
 };
-use crate::state::{DesktopAppState, current_core};
+use crate::state::{current_core, DesktopAppState};
 use crate::types::{
     ClientUpdateEvent, DesktopClientSnapshot, EventSourceDeleteRequest, EventSourceSaveRequest,
-    EventTriggerSaveRequest, ScheduleRunRequest, ScheduleSaveRequest, TaskRunRequest,
-    TaskRunResult, TaskSaveRequest,
+    ScheduleRunRequest, ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
+    TriggerSaveRequest,
 };
 
 #[tauri::command]
@@ -67,16 +67,16 @@ pub async fn desktop_schedule_run<R: Runtime>(
 }
 
 #[tauri::command]
-pub async fn desktop_event_trigger_save<R: Runtime>(
+pub async fn desktop_trigger_save<R: Runtime>(
     app: AppHandle<R>,
-    request: EventTriggerSaveRequest,
+    request: TriggerSaveRequest,
     state: State<'_, DesktopAppState>,
 ) -> Result<DesktopClientSnapshot, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
-    save_event_trigger_config(core.as_ref(), request)
+    save_trigger_config(core.as_ref(), request)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     emit_config_update_and_snapshot(&app, &core, &state).await

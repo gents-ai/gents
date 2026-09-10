@@ -41,8 +41,8 @@ async fn session_list_and_show_include_request_count() -> Result<()> {
         &home_dir,
         &["config", "export", "--root", &root.to_string_lossy()],
     )?;
-    let principal = read_json_file(&root.join("agent_principal.json"))?;
-    let behavior_id = principal
+    let config = read_json_file(&root.join("pack_config.json"))?;
+    let behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("missing default_behavior_id after export"))?

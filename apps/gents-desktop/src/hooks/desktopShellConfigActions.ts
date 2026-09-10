@@ -19,7 +19,8 @@ import type {
   ToolServiceTestResult,
   TaskDeleteRequest,
   ScheduleDeleteRequest,
-  EventTriggerDeleteRequest,
+  EventSourceDeleteRequest,
+  TriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
   ToolsDeleteRequest,
@@ -146,11 +147,27 @@ export function createDesktopShellConfigActions({
     }
   }
 
-  async function onDeleteEventTriggerConfig(request: EventTriggerDeleteRequest) {
+  async function onDeleteEventSourceConfig(request: EventSourceDeleteRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteEventTriggerConfig(request);
+      const next = await api.deleteEventSourceConfig(request);
+      setSnapshot(next);
+      setSelectedAgentDid(request.agentDid);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onDeleteTriggerConfig(request: TriggerDeleteRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await api.deleteTriggerConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -396,7 +413,8 @@ export function createDesktopShellConfigActions({
     onDeleteSkillConfig,
     onDeleteTaskConfig,
     onDeleteScheduleConfig,
-    onDeleteEventTriggerConfig,
+    onDeleteEventSourceConfig,
+    onDeleteTriggerConfig,
     onDeleteBackendConfig,
     onDeleteInferenceProfileConfig,
     onDeleteToolsConfig,

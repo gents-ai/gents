@@ -318,12 +318,12 @@ mod tests {
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::config::{AgentBehavior, SamplingConfig};
+    use crate::config::{ResolvedBehavior, SamplingConfig};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
     use crate::graphql::escape_graphql_string;
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-    use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+    use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
     use crate::tool_surface::BehaviorToolConfig;
@@ -635,15 +635,15 @@ mod tests {
         }
     }
 
-    fn test_behavior(identity: Arc<dyn AgentIdentity>) -> Arc<AgentBehavior> {
-        let principal = Arc::new(AgentPrincipal {
+    fn test_behavior(identity: Arc<dyn AgentIdentity>) -> Arc<ResolvedBehavior> {
+        let principal = Arc::new(RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity,
             default_behavior_id: "behavior-1".to_string(),
             display_name: None,
             enabled: true,
         });
-        Arc::new(AgentBehavior {
+        Arc::new(ResolvedBehavior {
             behavior_id: "behavior-1".to_string(),
             principal,
             backend_id: Some("backend-behavior-1".to_string()),
@@ -671,7 +671,7 @@ mod tests {
 
     fn behavior_daemon(
         node: Arc<EmbeddedNode>,
-        behavior: Arc<AgentBehavior>,
+        behavior: Arc<ResolvedBehavior>,
         authority: super::super::EnrollmentAuthorityHandle,
         calls: Arc<AtomicUsize>,
     ) -> BehaviorDaemon<CountingReplyModel> {

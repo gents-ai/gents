@@ -9,7 +9,7 @@ use tracing::Instrument;
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
 use crate::compaction::ReductionOptions;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
 use crate::streaming::StreamWriter;
@@ -50,7 +50,7 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 
 pub(super) fn render_request_context_message(
     _node: &defra_node::EmbeddedNode,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
@@ -661,9 +661,9 @@ mod tests {
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::config::{AgentBehavior, SamplingConfig};
+    use crate::config::{ResolvedBehavior, SamplingConfig};
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
-    use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+    use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
     use crate::llm::tool::ToolDyn;
     use crate::prompt::LayeredPromptBuilder;
     use crate::tool_surface::BehaviorToolConfig;
@@ -744,7 +744,7 @@ mod tests {
         }
     }
 
-    fn test_behavior() -> Arc<AgentBehavior> {
+    fn test_behavior() -> Arc<ResolvedBehavior> {
         let identity: Arc<dyn AgentIdentity> = Arc::new(
             KeyIdentity::load_or_create(
                 std::env::temp_dir().join(format!("daemon-lineage-{}.key", uuid::Uuid::new_v4())),
@@ -752,7 +752,7 @@ mod tests {
             )
             .expect("test identity"),
         );
-        let principal = Arc::new(AgentPrincipal {
+        let principal = Arc::new(RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity,
             default_behavior_id: "general".to_string(),
@@ -760,7 +760,7 @@ mod tests {
             enabled: true,
         });
 
-        Arc::new(AgentBehavior {
+        Arc::new(ResolvedBehavior {
             behavior_id: "general".to_string(),
             principal,
             backend_id: Some("backend-general".to_string()),
@@ -788,9 +788,15 @@ mod tests {
 
     async fn create_routed_request(
         node: &defra_node::EmbeddedNode,
-        behavior: &AgentBehavior,
+        behavior: &ResolvedBehavior,
         requester_did: &str,
     ) -> AgentRequest {
+        crate::test_support::install_test_behavior(
+            node,
+            behavior.agent_did(),
+            &behavior.behavior_id,
+        )
+        .await;
         let request_id = uuid::Uuid::new_v4().to_string();
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -835,11 +841,17 @@ mod tests {
 
     async fn create_enrollment_daemon_request(
         node: &defra_node::EmbeddedNode,
-        behavior: &AgentBehavior,
+        behavior: &ResolvedBehavior,
         member: &dyn AgentIdentity,
         fence: &crate::agent::p2p_reconcile::enrollment_reconcile::EnrollmentAuthorizationFence,
         suffix: &str,
     ) -> AgentRequest {
+        crate::test_support::install_test_behavior(
+            node,
+            behavior.agent_did(),
+            &behavior.behavior_id,
+        )
+        .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
             format!("request-{suffix}"),
             behavior.agent_did(),

@@ -1,11 +1,11 @@
-use anyhow::{Result, anyhow, bail};
+use anyhow::{anyhow, bail, Result};
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 
 use super::super::types::{
-    EventSourceDeleteRequest, EventSourceSaveRequest, EventTriggerSaveRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
+    EventSourceDeleteRequest, EventSourceSaveRequest, ScheduleRunRequest, ScheduleSaveRequest,
+    TaskRunRequest, TaskRunResult, TaskSaveRequest, TriggerSaveRequest,
 };
 use super::util::require_trimmed;
 
@@ -77,11 +77,8 @@ pub async fn run_schedule_config(
     })
 }
 
-pub async fn save_event_trigger_config(
-    core: &ClientCore,
-    request: EventTriggerSaveRequest,
-) -> Result<()> {
-    core.save_event_trigger(&request.document).await
+pub async fn save_trigger_config(core: &ClientCore, request: TriggerSaveRequest) -> Result<()> {
+    core.save_trigger(&request.document).await
 }
 
 pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Result<TaskRunResult> {

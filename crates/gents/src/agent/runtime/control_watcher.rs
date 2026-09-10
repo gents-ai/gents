@@ -234,10 +234,6 @@ pub(super) async fn run_control_watcher(
                 .await
                 {
                     Ok(document_view::ControlUpdateOutcome::Irrelevant) => continue,
-                    Ok(document_view::ControlUpdateOutcome::Applied) => {}
-                    Ok(document_view::ControlUpdateOutcome::PendingVisibility) => {
-                        pending_visibility = true;
-                    }
                     Ok(document_view::ControlUpdateOutcome::FullReload) => {
                         match document_view::load_document_runtime_view(node.as_ref(), &agent_did).await {
                             Ok(reloaded) => {

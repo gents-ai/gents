@@ -1,11 +1,11 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::llm::HookAction;
 use crate::llm::message::{
     AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
     UserContent,
 };
+use crate::llm::HookAction;
 use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -133,12 +133,10 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
         .push_text("I started by checking the repo layout.");
 
     assert!(processor.has_observable_activity());
-    assert!(
-        processor
-            .persist_partial_turn("persist errored assistant turn")
-            .await
-            .unwrap()
-    );
+    assert!(processor
+        .persist_partial_turn("persist errored assistant turn")
+        .await
+        .unwrap());
 
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
@@ -476,12 +474,10 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         matches!(action, crate::llm::ToolCallHookAction::Continue),
         "tool call persistence failed: {action:?}"
     );
-    assert!(
-        processor
-            .persist_partial_turn("persist streamed assistant tool call")
-            .await
-            .unwrap()
-    );
+    assert!(processor
+        .persist_partial_turn("persist streamed assistant tool call")
+        .await
+        .unwrap());
     assert!(matches!(
         hook.on_tool_result(
             "discover_tools",
@@ -941,12 +937,10 @@ async fn backfill_pairs_completed_tool_result_after_provider_stall() {
     ));
 
     // Abort: persist the partial assistant turn (the tool-call message).
-    assert!(
-        processor
-            .persist_partial_turn("persist errored assistant turn")
-            .await
-            .unwrap()
-    );
+    assert!(processor
+        .persist_partial_turn("persist errored assistant turn")
+        .await
+        .unwrap());
 
     // The orphan: the completed tool call has no paired result message yet.
     assert_eq!(

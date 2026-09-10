@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{AgentContext, CompactionConfig, InferenceSampling};
 use gents::graphql::escape_graphql_string;
 use gents::{
-    default_inference_profile_id_for_behavior, load_agent_behavior, load_inference_profile,
-    upsert_agent_behavior, upsert_inference_profile, AgentIdentity,
+    default_inference_profile_id_for_behavior, AgentIdentity, Collection, CompactionStrategy,
 };
 use serde::Deserialize;
 
@@ -59,25 +59,7 @@ async fn d4f_live_seeds_reach_the_provider() {
     let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
 
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-    let mut profile = load_inference_profile(db.node.as_ref(), &profile_id)
-        .await
-        .expect("load d4f inference profile")
-        .expect("default inference profile exists");
-    profile.seed = Some(PROFILE_SEED);
-    profile.context_window = Some(64_000);
-    profile.max_output_tokens = Some(512);
-    upsert_inference_profile(db.node.as_ref(), &profile)
-        .await
-        .expect("set live profile seed");
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load d4f behavior")
-        .expect("default behavior exists");
-    behavior.compaction_strategy = Some("Summarize".to_string());
-    behavior.compaction_threshold = Some(0.25);
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("configure live compaction");
+    configure_seed_and_compaction(db.node.as_ref(), &agent_did, &behavior_id, &profile_id).await;
 
     // Create the requests before boot so setting an override cannot race the
     // daemon's claim. The first inherits the profile seed; the others replace it.
@@ -170,6 +152,100 @@ async fn d4f_live_seeds_reach_the_provider() {
     }
 
     agent.shutdown().await;
+}
+
+async fn configure_seed_and_compaction(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+    profile_id: &str,
+) {
+    use gents::config_client::{
+        apply_desired_state_plan, read_desired_state_record_in_txn as read,
+        DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+
+    gents::ConfigAccess::transact_local(node, None, "test.configure_live_seed", |txn| {
+        Box::pin(async move {
+            let (_, profile) = read(txn, Collection::InferenceProfile, agent_did, profile_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("default inference profile is missing"))?;
+            let mut profile: gents::InferenceProfile = serde_json::from_value(profile)?;
+            let (_, behavior) = read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("default behavior is missing"))?;
+            let mut behavior: gents::document_config::AgentBehavior =
+                serde_json::from_value(behavior)?;
+            let context_id = behavior
+                .context_id
+                .clone()
+                .unwrap_or_else(|| format!("{behavior_id}:context"));
+            let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                .await?
+                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                .transpose()?
+                .unwrap_or_else(|| AgentContext {
+                    context_id: context_id.clone(),
+                    agent_did: agent_did.to_string(),
+                    display_name: None,
+                    description: None,
+                    system_prompt: None,
+                    tools_id: None,
+                    compaction_id: None,
+                    skill_ids: Vec::new(),
+                    tags: Vec::new(),
+                });
+            let sampling_id = format!("{profile_id}:sampling");
+            let compaction_id = format!("{behavior_id}:compaction");
+            profile.sampling_id = Some(sampling_id.clone());
+            profile.context_window = Some(64_000);
+            profile.max_output_tokens = Some(512);
+            behavior.context_id = Some(context_id);
+            context.compaction_id = Some(compaction_id.clone());
+            let sampling = InferenceSampling {
+                agent_did: agent_did.to_string(),
+                sampling_id,
+                seed: Some(PROFILE_SEED),
+                ..Default::default()
+            };
+            let compaction = CompactionConfig {
+                compaction_id,
+                agent_did: agent_did.to_string(),
+                display_name: None,
+                strategy: CompactionStrategy::StripThenSummarize,
+                threshold: Some(0.25),
+                keep_recent_tokens: None,
+                tool_result_max_chars: None,
+                summary_max_output_tokens: None,
+                summary_file_list_max: None,
+                inference_profile_id: None,
+                tags: Vec::new(),
+            };
+            let documents = [
+                (
+                    Collection::InferenceSampling,
+                    serde_json::to_value(sampling)?,
+                ),
+                (Collection::Compaction, serde_json::to_value(compaction)?),
+                (Collection::InferenceProfile, serde_json::to_value(profile)?),
+                (Collection::AgentContext, serde_json::to_value(context)?),
+                (Collection::AgentBehavior, serde_json::to_value(behavior)?),
+            ];
+            let plan = DesiredStateApplyPlan::new(
+                documents
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+            )?;
+            apply_desired_state_plan(txn, &plan).await.map(|_| ())
+        })
+    })
+    .await
+    .expect("configure live seed and compaction");
 }
 
 async fn seed_compaction_history(node: &EmbeddedNode, session_id: &str) {

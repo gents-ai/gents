@@ -18,12 +18,15 @@ describeLive("Tauri app live operations snapshot", () => {
         (behavior) =>
           behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
       );
-      const defaultTools = deployment.toolSelections.find(
-        (selection) => selection.selectionId === defaultBehavior?.toolSelectionId,
+      const context = deployment.contexts.find(
+        (candidate) => candidate.context_id === defaultBehavior?.contextId,
       );
-      expect(defaultTools?.enableBash).toBe(true);
-      expect(defaultTools?.bashMode).toBe("Unrestricted");
-      expect(defaultTools?.backgroundableToolNames).toContain("bash_unrestricted");
+      const defaultTools = deployment.tools.find(
+        (tools) => tools.tools_id === context?.tools_id,
+      );
+      const bash = defaultTools?.host?.bash;
+      expect(bash?.mode).toBe("Unrestricted");
+      expect(bash?.background_enabled).toBe(true);
 
       await driver.ready();
       await driver.openChat();

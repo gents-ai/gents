@@ -4,12 +4,13 @@ import type {
   DesktopApiAdapter,
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
-  EventTriggerSaveRequest,
+  EventSourceSaveRequest,
   ScheduleRunRequest,
   ScheduleSaveRequest,
   TaskRunRequest,
   TaskRunResult,
   TaskSaveRequest,
+  TriggerSaveRequest,
 } from "@source-inc/gents-desktop-client";
 
 type TaskActionParams = {
@@ -84,11 +85,26 @@ export function createDesktopShellTaskActions({
     }
   }
 
-  async function onSaveEventTriggerConfig(request: EventTriggerSaveRequest) {
+  async function onSaveTriggerConfig(request: TriggerSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveEventTriggerConfig(request);
+      const next = await api.saveTriggerConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSaveEventSourceConfig(request: EventSourceSaveRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await api.saveEventSourceConfig(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -121,8 +137,9 @@ export function createDesktopShellTaskActions({
   return {
     onRunSchedule,
     onRunTask,
-    onSaveEventTriggerConfig,
+    onSaveEventSourceConfig,
     onSaveScheduleConfig,
     onSaveTaskConfig,
+    onSaveTriggerConfig,
   };
 }

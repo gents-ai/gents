@@ -16,7 +16,7 @@ pub use policy::{
     TOOL_POLICY_V1,
 };
 pub use runtime_context::ToolRuntimeContext;
-pub use selection::{resolve_goal_capabilities, CustomToolFactory, ToolSelection};
+pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
 pub(crate) use selection::{BackgroundToolConfig, SubagentToolConfig};
 
 use std::collections::{HashMap, HashSet};
@@ -98,7 +98,7 @@ impl ToolSurface {
             .iter()
             .any(|decl| decl.collection == crate::mailbox::MAILBOX_COLLECTION)
         {
-            // Mailbox-capable EventTrigger stages require explicit human-owner
+            // Mailbox-capable event-trigger stages require explicit human-owner
             // lineage from the source document. This is capture, not a model
             // fill vocabulary.
             fields.insert("requester_did".to_string());

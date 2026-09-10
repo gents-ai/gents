@@ -1,8 +1,7 @@
 use gents::llm::message::{Message, Text, UserContent};
 use gents_desktop_core::client::{ClientStore, ClientStoreRows};
 use gents_protocol::row::{
-    AgentBehaviorRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, CompactionEntryRow,
-    GoalRow, InferenceProfileRow,
+    AgentMessageRow, AgentRequestRow, AgentResponseRow, CompactionEntryRow, GoalRow,
 };
 use gents_protocol::session::{
     AgentSession, SessionObservation, SessionRequestObservation, SessionTitle, SessionTitleSource,

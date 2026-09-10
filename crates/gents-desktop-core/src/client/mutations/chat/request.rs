@@ -701,7 +701,9 @@ pub async fn resend_request(
     {
         anyhow::bail!(
             "request {stale_request_id} is not a stale terminal (lifecycle_state={}, failure_reason={})",
-            stale.lifecycle_state.map_or("<missing>", RequestLifecycleState::as_str),
+            stale
+                .lifecycle_state
+                .map_or("<missing>", RequestLifecycleState::as_str),
             stale.failure_reason.as_deref().unwrap_or("<missing>")
         );
     }

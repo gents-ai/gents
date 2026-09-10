@@ -1,8 +1,7 @@
 use super::*;
 use crate::config_client::write_tools_document;
 
-/// The implicit wide-open preset builder was retired with ToolSelection; the
-/// preset is now an authored nested `Tools` document. Pin its explicit
+/// The wide-open preset is an authored nested `Tools` document. Pin its explicit
 /// permissive surface: meta dispatch and DefraDB query capabilities on, every
 /// privilege-bearing host capability absent (absence grants nothing).
 fn wide_open_tools_document(agent_did: &str) -> Tools {
@@ -140,7 +139,7 @@ fn validate_rejects_blank_subagent_target_ids() {
 /// by every write path (`document_config::write_tool`); `cli_tool_names` and
 /// additional runtime tools are empty unless a collision test provides them.
 fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
-    super::validate_write_tool_declarations(decls, &[], &[])
+    super::write_tool::validate_write_tool_declarations(decls, &[], &[])
 }
 
 #[test]
@@ -222,12 +221,11 @@ fn validate_rejects_model_provided_requester_identity() {
         }],
         output_obligation: None,
     };
-    assert!(
-        decl.validate()
-            .expect_err("models must not choose requester identity")
-            .to_string()
-            .contains("must be runtime-filled")
-    );
+    assert!(decl
+        .validate()
+        .expect_err("models must not choose requester identity")
+        .to_string()
+        .contains("must be runtime-filled"));
 
     decl.fields[0].required = false;
     decl.fields[0].fill = Some(WriteToolFieldFill::SourceField("requester_did".to_string()));
@@ -336,12 +334,10 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
                 expected_count_field: Some("expected_total".to_string()),
             }),
         }];
-        assert!(
-            validate_write_tools(&decls)
-                .unwrap_err()
-                .to_string()
-                .contains("expected_count_field")
-        );
+        assert!(validate_write_tools(&decls)
+            .unwrap_err()
+            .to_string()
+            .contains("expected_count_field"));
     }
 }
 
@@ -399,7 +395,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
         output_obligation: None,
     }];
     let cli_tool_names = vec!["rg".to_string()];
-    let result = super::validate_write_tool_declarations(&decls, &cli_tool_names, &[]);
+    let result = super::write_tool::validate_write_tool_declarations(&decls, &cli_tool_names, &[]);
     assert!(
         result.is_err(),
         "collision with a host.cli entry must be rejected"
@@ -1284,16 +1280,12 @@ fn tools_validation_reports_every_violation() {
 
     let violations = doc.validation_violations();
     assert_eq!(violations.len(), 2, "{violations:?}");
-    assert!(
-        violations
-            .iter()
-            .any(|error| error.contains("subagents.target_ids"))
-    );
-    assert!(
-        violations
-            .iter()
-            .any(|error| error.contains("default_await_mode"))
-    );
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("subagents.target_ids")));
+    assert!(violations
+        .iter()
+        .any(|error| error.contains("default_await_mode")));
 }
 
 #[test]
@@ -1660,13 +1652,11 @@ fn behavior_and_context_share_canonical_reference_closure() {
     behavior.context_id = None;
     behavior.validate_references(&refs).unwrap();
     behavior.inference_profile_id = "missing".into();
-    assert!(
-        behavior
-            .validate_references(&refs)
-            .unwrap_err()
-            .to_string()
-            .contains("InferenceProfile")
-    );
+    assert!(behavior
+        .validate_references(&refs)
+        .unwrap_err()
+        .to_string()
+        .contains("InferenceProfile"));
 }
 
 #[test]
@@ -1680,12 +1670,11 @@ fn unchanged_nested_links_are_validated_without_a_behavior_write() {
             .into_iter()
             .filter(|(collection, _)| *collection != missing);
         let refs = ConfigReferences::from_documents("owner", documents).unwrap();
-        assert!(
-            refs.validate()
-                .unwrap_err()
-                .to_string()
-                .contains(missing.graphql_type())
-        );
+        assert!(refs
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains(missing.graphql_type()));
     }
 }
 
@@ -1696,12 +1685,10 @@ fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
     assert!(ConfigReferences::from_documents("owner", documents).is_err());
     let mut documents = reference_documents();
     documents.push(documents[0].clone());
-    assert!(
-        ConfigReferences::from_documents("owner", documents)
-            .unwrap_err()
-            .to_string()
-            .contains("multiple live")
-    );
+    assert!(ConfigReferences::from_documents("owner", documents)
+        .unwrap_err()
+        .to_string()
+        .contains("multiple live"));
     // Genuinely malformed canonical backend row: the auth object with a
     // competing credential selection fails the backend validator.
     let mut documents = reference_documents();

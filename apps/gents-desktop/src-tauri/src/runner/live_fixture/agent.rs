@@ -5,18 +5,18 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
 use gents::{
-    AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, ToolCeiling,
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
+    AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::{AgentBehaviorReadinessRow, decode_behavior_readiness_snapshot};
+use gents_protocol::row::{decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::Instrument;
 
-use super::DEFAULT_DEPLOYMENT_LABEL;
 use super::backend::AgentBackendConfig;
 use super::workspace::seed_repo_workspace;
+use super::DEFAULT_DEPLOYMENT_LABEL;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
@@ -24,8 +24,8 @@ pub(crate) struct LiveAgentDocs {
     pub(crate) subagent_behavior_id: String,
     pub(crate) backend_id: String,
     pub(crate) subagent_backend_id: String,
-    pub(crate) tool_selection_id: String,
-    pub(crate) subagent_tool_selection_id: String,
+    pub(crate) tools_id: String,
+    pub(crate) subagent_tools_id: String,
     pub(crate) inference_profile_id: String,
 }
 
@@ -102,8 +102,8 @@ async fn seed_live_behavior_documents(
     subagent_backend: Option<&AgentBackendConfig>,
 ) -> Result<LiveAgentDocs> {
     use gents::config_client::{
-        ConfigAccess, DesiredStateApplyPlan, apply_desired_state_plan,
-        load_inference_backend_in_txn,
+        apply_desired_state_plan, load_inference_backend_in_txn, ConfigAccess,
+        DesiredStateApplyPlan,
     };
     use gents::document_config::PackConfig;
     use serde_json::json;
@@ -115,8 +115,8 @@ async fn seed_live_behavior_documents(
     } else {
         backend_id.clone()
     };
-    let tool_selection_id = format!("{behavior_id}-tools");
-    let subagent_tool_selection_id = format!("{subagent_behavior_id}-tools");
+    let tools_id = format!("{behavior_id}-tools");
+    let subagent_tools_id = format!("{subagent_behavior_id}-tools");
     let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
     let subagent_profile_id = default_inference_profile_id_for_behavior(&subagent_behavior_id);
     let context_id = format!("{behavior_id}-context");
@@ -133,15 +133,15 @@ async fn seed_live_behavior_documents(
             {"agent_did":agent_did,"behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent","context_id":subagent_context_id,"inference_profile_id":subagent_profile_id}
         ],
         "contexts":[
-            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tool_selection_id,"compaction_id":compaction_id},
-            {"agent_did":agent_did,"context_id":subagent_context_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tool_selection_id,"compaction_id":compaction_id}
+            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tools_id,"compaction_id":compaction_id},
+            {"agent_did":agent_did,"context_id":subagent_context_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tools_id,"compaction_id":compaction_id}
         ],
         "tools":[
-            {"agent_did":agent_did,"tools_id":tool_selection_id,"display_name":"Live Repo Audit Tools",
+            {"agent_did":agent_did,"tools_id":tools_id,"display_name":"Live Repo Audit Tools",
              "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
              "built_ins":{"enable_context_budget":true},
              "subagents":{"target_ids":[target_id],"spawn_enabled":true,"steering_enabled":true,"background_enabled":true,"allow_cross_principal":false,"cross_principal_spawn_timeout_secs":60}},
-            {"agent_did":agent_did,"tools_id":subagent_tool_selection_id,"display_name":"Live Repo Audit Subagent Tools",
+            {"agent_did":agent_did,"tools_id":subagent_tools_id,"display_name":"Live Repo Audit Subagent Tools",
              "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
         ],
         "subagent_targets":[{"agent_did":agent_did,"target_id":target_id,"target_agent_did":agent_did,"behavior_id":subagent_behavior_id,"name":"repo-audit-subagent","description":"Local repository audit subagent for the desktop live fixture"}],
@@ -186,8 +186,8 @@ async fn seed_live_behavior_documents(
         subagent_behavior_id,
         backend_id,
         subagent_backend_id,
-        tool_selection_id,
-        subagent_tool_selection_id,
+        tools_id,
+        subagent_tools_id,
         inference_profile_id,
     })
 }
@@ -312,11 +312,9 @@ mod tests {
             matches!(replaced.auth, BackendAuth::Environment { variable } if variable == "BACKEND_API_KEY")
         );
         requested.api_key = Some("second-secret".into());
-        assert!(
-            live_backend_candidate(None, "owner", "backend", &requested)
-                .unwrap_err()
-                .to_string()
-                .contains("one credential source")
-        );
+        assert!(live_backend_candidate(None, "owner", "backend", &requested)
+            .unwrap_err()
+            .to_string()
+            .contains("one credential source"));
     }
 }

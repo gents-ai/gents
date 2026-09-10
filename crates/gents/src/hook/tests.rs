@@ -799,8 +799,8 @@ async fn create_interruptible_request(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
     session_id: &str,
-) {
-    create_interruptible_request_for_agent(node, request_id, session_id, "did:test:general").await;
+) -> String {
+    create_interruptible_request_for_agent(node, request_id, session_id, "did:test:general").await
 }
 
 async fn create_interruptible_request_for_agent(
@@ -808,7 +808,17 @@ async fn create_interruptible_request_for_agent(
     request_id: &str,
     session_id: &str,
     agent_did: &str,
-) {
+) -> String {
+    create_interruptible_request_with_fields(node, request_id, session_id, agent_did, "").await
+}
+
+async fn create_interruptible_request_with_fields(
+    node: &defra_node::EmbeddedNode,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    extra_fields: &str,
+) -> String {
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
@@ -827,6 +837,7 @@ async fn create_interruptible_request_for_agent(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "subagent",
+                {extra_fields}
                 created_at: "{created_at}",
                 retry_count: 0,
                 max_retries: {max_retries}
@@ -840,6 +851,49 @@ async fn create_interruptible_request_for_agent(
         "create interruptible request failed: {:?}",
         resp.errors
     );
+    let lookup = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(
+        !lookup.has_errors(),
+        "load interruptible request failed: {:?}",
+        lookup.errors
+    );
+    lookup.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
+        .as_str()
+        .expect("interruptible request _docID")
+        .to_owned()
+}
+
+async fn create_corroborated_child_request(
+    node: &defra_node::EmbeddedNode,
+    child_request_id: &str,
+    session_id: &str,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    tool_call_id: &str,
+    tool_call_doc_id: &str,
+) {
+    let extra_fields = format!(
+        r#"caused_by_parent_request_id: "{}",
+            caused_by_parent_request_doc_id: "{}",
+            caused_by_parent_tool_call_id: "{}",
+            caused_by_parent_tool_call_doc_id: "{}","#,
+        crate::graphql::escape_graphql_string(parent_request_id),
+        crate::graphql::escape_graphql_string(parent_request_doc_id),
+        crate::graphql::escape_graphql_string(tool_call_id),
+        crate::graphql::escape_graphql_string(tool_call_doc_id),
+    );
+    create_interruptible_request_with_fields(
+        node,
+        child_request_id,
+        session_id,
+        "did:test:general",
+        &extra_fields,
+    )
+    .await;
 }
 
 async fn bind_interruptible_request(
@@ -907,6 +961,8 @@ async fn fetch_tool_call_row(
 
 #[tokio::test]
 async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias() {
+    use crate::document_config::{RemoteServiceTools, RemoteToolStyle, RemoteTools};
+
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let hook = DefraSessionHook::with_identity(
@@ -914,7 +970,15 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         "general",
         "did:test:general",
         FailurePolicy::default(),
-    );
+    )
+    .with_remote_tools(Some(RemoteTools {
+        services: vec![RemoteServiceTools {
+            mcp_service_id: "metrics-prod".into(),
+            tool_names: vec!["query_metrics".into()],
+            style: RemoteToolStyle::Discovery,
+            ..Default::default()
+        }],
+    }));
     assert!(matches!(
         hook.on_completion_call(&user_text_message("Query metrics"), &[])
             .await,
@@ -1744,7 +1808,7 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
 
     let session_id = "session-cascade";
     let child_request_id = "child-cascade";
-    create_interruptible_request(&node, child_request_id, session_id).await;
+    let parent_doc_id = create_interruptible_request(&node, "parent-cascade", session_id).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1766,8 +1830,19 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:test:target".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
+    create_corroborated_child_request(
+        &node,
+        child_request_id,
+        session_id,
+        "parent-cascade",
+        &parent_doc_id,
+        "tool-cascade",
+        lifecycle.doc_id().unwrap(),
+    )
+    .await;
     hook.in_flight_lifecycles
         .lock()
         .await
@@ -1874,7 +1949,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
 
     let session_id = "session-mixed-tools";
     let child_request_id = "child-mixed-tools";
-    create_interruptible_request(&node, child_request_id, session_id).await;
+    let parent_doc_id = create_interruptible_request(&node, "parent-mixed-tools", session_id).await;
 
     let hook = DefraSessionHook::with_identity(
         node.clone(),
@@ -1895,7 +1970,8 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         "slow_tool".to_string(),
         "{}".to_string(),
         deadline,
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     outer.start_running().await.unwrap();
     hook.in_flight_lifecycles
         .lock()
@@ -1917,8 +1993,19 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
         child_request_id.to_string(),
         "did:test:target".to_string(),
-    );
+    )
+    .with_request_doc_id(Some(parent_doc_id.clone()));
     bridge.start_running().await.unwrap();
+    create_corroborated_child_request(
+        &node,
+        child_request_id,
+        session_id,
+        "parent-mixed-tools",
+        &parent_doc_id,
+        "child-bridge",
+        bridge.doc_id().unwrap(),
+    )
+    .await;
     hook.in_flight_lifecycles
         .lock()
         .await

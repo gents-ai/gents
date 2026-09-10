@@ -5,7 +5,7 @@ export type BehaviorEnvironmentSectionProps = {
   selectedAgentDid: string | null;
   selectedBehaviorId: string | null;
   onSelectBehavior: (behaviorId: string) => void;
-  onStartNewConversation: (behaviorId: string) => void;
+  onStartSession: (behaviorId: string) => void;
 };
 
 export function BehaviorEnvironmentSection({
@@ -13,7 +13,7 @@ export function BehaviorEnvironmentSection({
   selectedAgentDid,
   selectedBehaviorId,
   onSelectBehavior,
-  onStartNewConversation,
+  onStartSession,
 }: BehaviorEnvironmentSectionProps) {
   if (!selectedAgentDid) {
     return <p className="muted">Select an agent to see its environments.</p>;
@@ -100,7 +100,7 @@ export function BehaviorEnvironmentSection({
                 className="primary-button behavior-start-session"
                 data-testid={`sidebar-new-chat-${environment.behaviorId}`}
                 disabled={!environment.enabled}
-                onClick={() => onStartNewConversation(environment.behaviorId)}
+                onClick={() => onStartSession(environment.behaviorId)}
                 type="button"
               >
                 New session

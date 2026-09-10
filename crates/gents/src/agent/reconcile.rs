@@ -7,7 +7,7 @@ use tokio::task::JoinSet;
 use tracing::Instrument;
 
 use crate::admission::AdmissionRegistry;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -107,7 +107,7 @@ impl StagedSlots {
 impl<F, Fut> GenerationSupervisor<F>
 where
     F: Fn(
-            Arc<AgentBehavior>,
+            Arc<ResolvedBehavior>,
             Arc<ToolSurface>,
             Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
             u64,

@@ -266,13 +266,9 @@ async fn disabled_and_duplicate_registry_identity_fail_before_dispatch() {
         .await
         .is_err());
     let result = node.execute(r#"mutation { create_ToolServiceRegistry(input: {agent_did: "did:test:owner", service_id: "shared", hostname: "other", mcp_port: 9000}) {_docID} }"#).await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
     assert!(
-        crate::registry::configured_mcp_services(&node, "did:test:owner")
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("duplicate")
+        result.has_errors(),
+        "the canonical unique owner/service identity must reject duplicate rows"
     );
 }
 

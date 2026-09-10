@@ -15,7 +15,7 @@ function makeDeployment(): DeploymentView {
     displayName: "test",
     defaultBehaviorId: "default",
     behaviors: [{ behaviorId: "default", displayName: "default" }],
-    conversations: [],
+    sessions: [],
     process: null,
     runtime: null,
     inbox: { hasUnread: false, count: 0 },
@@ -143,18 +143,17 @@ describe("config dirty state", () => {
     dep.tasks = [];
     dep.schedules = [
       {
-        scheduleId: "sched-1",
-        taskId: null,
-        intervalSecs: 60,
-        enabled: true,
-        concurrency: "serial",
+        agent_did: "did:test:operator",
+        schedule_id: "sched-1",
+        display_name: "Sched 1",
+        cadence: { kind: "interval", interval_secs: 60 },
+        tags: [],
       },
     ];
     render(
       <ScheduleConfigPanel
         deployment={dep}
         selectedScheduleId="sched-1"
-        selectedTaskId={null}
         saving={false}
         runningTask={false}
         savedStatus={null}
@@ -162,6 +161,8 @@ describe("config dirty state", () => {
         onCreateSchedule={vi.fn()}
         onSavedStatusChange={vi.fn()}
         onSaveScheduleConfig={vi.fn()}
+        onDeleteScheduleConfig={vi.fn()}
+        onDeletedSchedule={vi.fn()}
         onRunSchedule={vi.fn()}
       />,
     );

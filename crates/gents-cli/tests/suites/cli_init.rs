@@ -6,7 +6,7 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use gents::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
+use gents::default_behavior_id_for_agent;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -14,38 +14,36 @@ fn generated_backend_id_for_agent(agent_did: &str) -> String {
     format!("{agent_did}:backend")
 }
 
-fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
+fn generated_tools_id_for_agent(agent_did: &str) -> String {
     let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    default_tool_selection_id_for_behavior(&default_behavior_id)
+    format!("{default_behavior_id}-tools")
 }
 
 fn add_principal_skill_pair(root: &Path, agent_did: &str) -> Result<()> {
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let skills = config["skills"]
+        .as_array_mut()
+        .context("exported skills is not an array")?;
     for suffix in ["alpha", "zeta"] {
         let skill_id = format!("{agent_did}:skill-{suffix}");
-        write_json_file(
-            &root
-                .join("skills")
-                .join(crate::support::document_handle(&skill_id))
-                .join("object.json"),
-            &serde_json::json!({
-                "skill_id": skill_id,
-                "agent_did": agent_did,
-                "scope": "principal",
-                "name": format!("Skill {suffix}"),
-                "description": null,
-                "instructions": format!("Instructions for skill {suffix}."),
-                "tool_refs": [],
-                "display_name": null,
-                "interface_json": null,
-                "enabled": true,
-            }),
-        )?;
+        skills.push(serde_json::json!({
+            "skill_id": skill_id,
+            "scope": "principal",
+            "name": format!("Skill {suffix}"),
+            "description": null,
+            "instructions": format!("Instructions for skill {suffix}."),
+            "tool_refs": [],
+            "display_name": null,
+            "interface_json": null,
+            "enabled": true,
+        }));
     }
-    Ok(())
+    write_json_file(&config_path, &config)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotently() -> Result<()> {
+async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
     let home_dir = tempdir.path().join("home");
     fs::create_dir_all(&home_dir)?;
@@ -78,7 +76,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
     );
     let agent_did = agent_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -100,7 +98,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         None,
         None,
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadOnly",
         "ReadOnly",
         "read-only operating mode",
@@ -140,7 +138,7 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
         None,
         None,
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadOnly",
         "ReadOnly",
         "read-only operating mode",
@@ -186,21 +184,21 @@ async fn init_bootstraps_backend_default_behavior_and_tool_selection_idempotentl
             .map(Vec::len),
         Some(1)
     );
-    let selection_rows = graphql_query(
+    let tools_rows = graphql_query(
         &graphql,
         &format!(
             r#"{{
-                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}) {{
-                    selection_id
+                Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}) {{
+                    tools_id
                 }}
             }}"#,
-            escape_graphql_string(&tool_selection_id),
+            escape_graphql_string(&tools_id),
         ),
     )
     .await?;
     assert_eq!(
-        selection_rows
-            .pointer("/data/ToolSelection")
+        tools_rows
+            .pointer("/data/Tools")
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
@@ -241,33 +239,29 @@ async fn server_apply_root_reports_post_apply_default_readiness() -> Result<()> 
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent_principal.json");
-    let mut principal = read_json_file(&principal_path)?;
-    let original_behavior_id = principal
+    let config_path = pack_root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let original_behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
         .context("exported principal missing default behavior")?
         .to_string();
     let applied_behavior_id = format!("{agent_did}:applied-default");
-    let original_behavior_dir = pack_root
-        .join("agent_behaviors")
-        .join(crate::support::document_handle(&original_behavior_id));
-    let applied_behavior_dir = pack_root
-        .join("agent_behaviors")
-        .join(crate::support::document_handle(&applied_behavior_id));
-    fs::create_dir_all(&applied_behavior_dir)?;
-    for entry in fs::read_dir(&original_behavior_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            fs::copy(entry.path(), applied_behavior_dir.join(entry.file_name()))?;
-        }
-    }
-    let mut applied_behavior = read_json_file(&original_behavior_dir.join("object.json"))?;
+    let mut applied_behavior = config["agent_behaviors"]
+        .as_array()
+        .context("agent_behaviors is not an array")?
+        .iter()
+        .find(|behavior| behavior["behavior_id"] == original_behavior_id)
+        .context("exported default behavior is missing")?
+        .clone();
     applied_behavior["behavior_id"] = Value::String(applied_behavior_id.clone());
     applied_behavior["display_name"] = Value::String("Applied default".to_string());
-    write_json_file(&applied_behavior_dir.join("object.json"), &applied_behavior)?;
-    principal["default_behavior_id"] = Value::String(applied_behavior_id.clone());
-    write_json_file(&principal_path, &principal)?;
+    config["agent_behaviors"]
+        .as_array_mut()
+        .context("agent_behaviors is not an array")?
+        .push(applied_behavior);
+    config["agent_principal"]["default_behavior_id"] = Value::String(applied_behavior_id.clone());
+    write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
     let pack_root_arg = pack_root.to_str().context("pack root utf8")?;
@@ -341,10 +335,10 @@ async fn server_apply_root_accepts_metadata_only_change_without_generation_advan
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal_path = pack_root.join("agent_principal.json");
-    let mut principal = read_json_file(&principal_path)?;
-    principal["display_name"] = Value::String("Metadata-only rename".to_string());
-    write_json_file(&principal_path, &principal)?;
+    let config_path = pack_root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    config["agent_principal"]["display_name"] = Value::String("Metadata-only rename".to_string());
+    write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
     let (serve, readiness) = spawn_server_with_ready_json(
@@ -407,27 +401,27 @@ async fn server_apply_root_waits_for_task_only_runtime_generation() -> Result<()
             pack_root.to_str().context("pack root utf8")?,
         ],
     )?;
-    let principal = read_json_file(&pack_root.join("agent_principal.json"))?;
-    let behavior_id = principal
+    let config_path = pack_root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let behavior_id = config["agent_principal"]
         .get("default_behavior_id")
         .and_then(Value::as_str)
-        .context("exported principal missing default behavior")?;
+        .context("exported principal missing default behavior")?
+        .to_string();
     let task_id = format!("post-apply-task-{}", Uuid::new_v4().simple());
-    write_json_file(
-        &pack_root
-            .join("tasks")
-            .join(crate::support::document_handle(&task_id))
-            .join("object.json"),
-        &serde_json::json!({
+    config["tasks"]
+        .as_array_mut()
+        .context("tasks is not an array")?
+        .push(serde_json::json!({
             "task_id": task_id,
-            "name": "Post-apply task",
+            "display_name": "Post-apply task",
             "description": null,
             "behavior_id": behavior_id,
             "prompt_template": "Exercise the post-apply runtime generation.",
             "enabled": true,
             "output_schema_ref": null,
-        }),
-    )?;
+        }));
+    write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
     let (serve, readiness) = spawn_server_with_ready_json(
@@ -494,7 +488,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
     );
     let agent_did = agent_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -509,7 +503,7 @@ async fn init_supports_provider_auth_backend_fields() -> Result<()> {
         Some(raw_api_key),
         None,
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadOnly",
         "ReadOnly",
         "read-only operating mode",
@@ -772,7 +766,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         ],
     )?;
     let agent_did = agent_did_from_init(&init)?;
-    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did);
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
@@ -786,7 +780,7 @@ async fn init_accepts_explicit_backend_and_model_together() -> Result<()> {
         None,
         None,
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadOnly",
         "ReadOnly",
         "read-only operating mode",
@@ -865,7 +859,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
     );
     let agent_did = agent_did_from_init(&init)?;
     let backend_id = generated_backend_id_for_agent(&agent_did);
-    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did);
 
     let mut serve = spawn_server(&home_dir, port)?;
     wait_for_port(port, &mut serve)?;
@@ -880,7 +874,7 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         None,
         None,
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadWrite",
         "Unrestricted",
         "write-capable local tools",
@@ -890,29 +884,29 @@ async fn init_with_write_tools_bootstraps_write_defaults() -> Result<()> {
         &graphql,
         &format!(
             r#"{{
-                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     command_execution_policy
                     backgroundable_tool_names
                 }}
             }}"#,
-            escape_graphql_string(&tool_selection_id)
+            escape_graphql_string(&tools_id)
         ),
     )
     .await?;
-    let tool_selection = first_graphql_row(&response, "ToolSelection")?;
+    let tools = first_graphql_row(&response, "Tools")?;
     let expected_command_policy = if cfg!(target_os = "macos") {
         Some("workspace_write")
     } else {
         Some("unrestricted")
     };
     assert_eq!(
-        tool_selection
+        tools
             .get("command_execution_policy")
             .and_then(Value::as_str),
         expected_command_policy
     );
     assert_eq!(
-        tool_selection
+        tools
             .get("backgroundable_tool_names")
             .and_then(Value::as_array)
             .map(|values| { values.iter().filter_map(Value::as_str).collect::<Vec<_>>() }),

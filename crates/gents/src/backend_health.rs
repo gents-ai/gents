@@ -26,7 +26,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::backend_registry::{
-    list_enabled_backends, set_backend_probe_status_with_last_probe, InferenceBackend,
+    list_enabled_backends_for_agent, set_backend_probe_status_with_last_probe, InferenceBackend,
     UNKNOWN_PROBE_STATUS,
 };
 use crate::oauth_credential::OAuthRefreshKind;
@@ -514,11 +514,8 @@ pub async fn run_backend_probe_cycle(
     options: &BackendProberOptions,
     principal_did: &str,
 ) -> ProbeCycleOutcome {
-    let backends = match list_enabled_backends(node.as_ref()).await {
-        Ok(backends) => backends
-            .into_iter()
-            .filter(|backend| backend.agent_did == principal_did)
-            .collect::<Vec<_>>(),
+    let backends = match list_enabled_backends_for_agent(node.as_ref(), principal_did).await {
+        Ok(backends) => backends,
         Err(error) => {
             tracing::warn!(error = %error, "backend probe: could not list backends");
             return ProbeCycleOutcome::default();
@@ -706,10 +703,15 @@ mod tests {
             let port = listener.local_addr().expect("local addr").port();
             let listener =
                 tokio::net::TcpListener::from_std(listener).expect("build async models listener");
-            let app = Router::new().route(
-                "/v1/models",
-                get(|| async { Json(serde_json::json!({"data": [{"id": "test-model"}]})) }),
-            );
+            let models = || async {
+                Json(serde_json::json!({
+                    "data": [{"id": "test-model"}],
+                    "models": [{"model": "test-model", "name": "Test model"}]
+                }))
+            };
+            let app = Router::new()
+                .route("/v1/models", get(models))
+                .route("/v1/models-v2", get(models));
             let (shutdown_tx, shutdown_rx) = oneshot::channel();
             let handle = tokio::spawn(async move {
                 axum::serve(listener, app)
@@ -1065,6 +1067,8 @@ mod tests {
         );
         let mut claude = claude_backend();
         claude.agent_did = did.to_string();
+        let models = ModelsListener::start();
+        claude.endpoint = models.endpoint();
         seed_backend_observation(&node, &claude, "unknown").await;
         let outcome = probe_backends_cycle(
             &node,
@@ -1086,14 +1090,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oauth_kinds_stale_credential_with_refresh_token_stays_healthy_and_promotes() {
+    async fn oauth_kinds_fresh_grok_credential_stays_healthy_and_promotes() {
         let node = Arc::new(test_node().await);
         let did = "did:key:z6MkProbe";
         seed_credential(
             &node,
             did,
             crate::xai_grok_oauth::XAI_OAUTH_PROVIDER,
-            Utc::now() - chrono::Duration::minutes(1),
+            Utc::now() + chrono::Duration::hours(8),
         )
         .await;
         let (options, client, health_map) = (
@@ -1107,6 +1111,8 @@ mod tests {
             "https://cli-chat-proxy.grok.com/v1",
         );
         grok.agent_did = did.to_string();
+        let models = ModelsListener::start();
+        grok.endpoint = models.endpoint();
         seed_backend_observation(&node, &grok, "unknown").await;
         for _ in 0..3 {
             let outcome = probe_backends_cycle(

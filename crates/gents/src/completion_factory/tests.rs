@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::config::SamplingConfig;
-use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
+use crate::identity::{AgentIdentity, KeyIdentity, RuntimePrincipal};
 use crate::tool_surface::BehaviorToolConfig;
 use crate::watcher::AgentRequest;
 
@@ -376,7 +376,7 @@ fn profile_seed_rejects_provider_paths_without_seed_support() {
         .is_err());
 }
 
-fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentBehavior {
+fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> ResolvedBehavior {
     let identity = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("completion-factory-{}.key", uuid::Uuid::new_v4())),
@@ -384,7 +384,7 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
         )
         .unwrap(),
     );
-    let principal = Arc::new(AgentPrincipal {
+    let principal = Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: "general".to_string(),
@@ -392,7 +392,7 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
         enabled: true,
     });
 
-    AgentBehavior {
+    ResolvedBehavior {
         behavior_id: "general".to_string(),
         principal,
         backend_id: Some("backend-general".to_string()),

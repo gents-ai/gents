@@ -16,17 +16,18 @@ use crate::backend_provider::BackendProviderKind;
 use crate::backend_registry::lookup_backend;
 use crate::compaction::CompactionStrategy;
 use crate::config::{
-    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    ResolvedBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
     DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{AgentIdentity, AgentPrincipal};
+use crate::identity::{AgentIdentity, RuntimePrincipal};
 use crate::mcp_pool::McpPool;
 use crate::retry::RetryPolicy;
 use crate::tool_surface::{
-    BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling, ToolSelection,
+    BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ResolvedToolSelection,
+    ToolCeiling,
 };
 
 #[cfg(test)]
@@ -198,9 +199,9 @@ impl GentsBuilder {
         let mut behavior_factories: Vec<
             Box<
                 dyn FnOnce(
-                        Arc<AgentPrincipal>,
+                        Arc<RuntimePrincipal>,
                     )
-                        -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                        -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
                     + Send,
             >,
         > = Vec::with_capacity(self.behaviors.len());
@@ -216,7 +217,7 @@ impl GentsBuilder {
             behavior_factories.push(factory);
         }
 
-        let principal_data = AgentPrincipal {
+        let principal_data = RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity: identity.clone(),
             default_behavior_id: default_behavior_id.clone(),
@@ -484,7 +485,7 @@ pub(crate) struct PendingAgentBehavior {
     max_output_tokens: usize,
     max_turns: usize,
     system_prompt: String,
-    tool_selection: ToolSelection,
+    tool_selection: ResolvedToolSelection,
     custom_tools: Vec<CustomToolFactory>,
     compaction_threshold: f64,
     compaction_strategy: CompactionStrategy,
@@ -507,7 +508,7 @@ impl PendingAgentBehavior {
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,
             system_prompt: String::new(),
-            tool_selection: ToolSelection::default(),
+            tool_selection: ResolvedToolSelection::default(),
             custom_tools: Vec::new(),
             compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
             compaction_strategy: CompactionStrategy::StripThenSummarize,
@@ -528,8 +529,8 @@ impl PendingAgentBehavior {
     ) -> Result<
         Box<
             dyn FnOnce(
-                    Arc<AgentPrincipal>,
-                ) -> std::result::Result<AgentBehavior, BehaviorBuildError>
+                    Arc<RuntimePrincipal>,
+                ) -> std::result::Result<ResolvedBehavior, BehaviorBuildError>
                 + Send,
         >,
     > {
@@ -583,10 +584,10 @@ impl PendingAgentBehavior {
 
     fn build_with_resolved_backend(
         self,
-        principal: Arc<AgentPrincipal>,
+        principal: Arc<RuntimePrincipal>,
         backend_fields: crate::backend_registry::BackendFields,
         tool_ceiling: &ToolCeiling,
-    ) -> Result<AgentBehavior> {
+    ) -> Result<ResolvedBehavior> {
         let behavior_name = self.name.clone();
         self.sampling.validate_for_provider(
             backend_fields.backend_provider_kind,
@@ -607,7 +608,7 @@ impl PendingAgentBehavior {
             tags: Vec::new(),
         };
         compaction.validate()?;
-        Ok(AgentBehavior {
+        Ok(ResolvedBehavior {
             behavior_id: self.name,
             principal,
             backend_id: backend_fields.backend_id,
@@ -641,7 +642,7 @@ impl PendingAgentBehavior {
 
 #[cfg(test)]
 impl PendingAgentBehavior {
-    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> AgentBehavior
+    pub(crate) fn build_with_identity_for_test<I>(self, identity: I) -> ResolvedBehavior
     where
         I: AgentIdentity + 'static,
     {
@@ -649,7 +650,7 @@ impl PendingAgentBehavior {
         let backend_endpoint = self.backend_endpoint.clone();
         let behavior_name = self.name.clone();
         let identity: Arc<dyn AgentIdentity> = Arc::new(identity);
-        let principal = Arc::new(AgentPrincipal {
+        let principal = Arc::new(RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity,
             default_behavior_id: behavior_name.clone(),

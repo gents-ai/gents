@@ -108,18 +108,20 @@ struct ChildRow {
     #[serde(rename = "_docID")]
     doc_id: String,
     request_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
     session_id: String,
     behavior_id: Option<String>,
     caused_by_parent_request_id: Option<String>,
     caused_by_trigger_id: Option<String>,
     caused_by_trigger_kind: Option<String>,
-    metadata: Option<String>,
+    input: Option<serde_json::Value>,
     lifecycle_state: Option<String>,
     retry_key: Option<String>,
     subagent_depth: Option<i64>,
     workspace_id: Option<String>,
     workspace_authority: Option<String>,
-    workspace_owner_deployment_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     workspace_seal_hash: Option<String>,
 }
 
@@ -129,10 +131,10 @@ async fn goal_children(db: &TestDb) -> Vec<ChildRow> {
         .execute(
             r#"{
                 AgentRequest(filter: { caused_by_trigger_kind: { _eq: "goal" } }) {
-                    _docID request_id session_id behavior_id caused_by_parent_request_id
-                    caused_by_trigger_id caused_by_trigger_kind metadata lifecycle_state
+                    _docID request_id agent_did requester_did session_id behavior_id caused_by_parent_request_id
+                    caused_by_trigger_id caused_by_trigger_kind input lifecycle_state
                     retry_key subagent_depth workspace_id workspace_authority
-                    workspace_owner_deployment_id workspace_seal_hash
+                    workspace_owner_agent_did workspace_seal_hash
                 }
             }"#,
         )
@@ -174,7 +176,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     parent.caused_by_parent_tool_call_doc_id = Some("grandparent-tool-call-doc".to_string());
     parent.workspace_id = Some("workspace-goal".to_string());
     parent.workspace_authority = Some("readOnly".to_string());
-    parent.workspace_owner_deployment_id = Some("deployment-owner".to_string());
+    parent.workspace_owner_agent_did = Some(did.to_string());
     parent.workspace_seal_hash = Some("seal-hash".to_string());
     gents::sign_agent_request_create_as_registered_target(&mut parent)
         .await
@@ -235,10 +237,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     assert_eq!(child.subagent_depth, Some(2));
     assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
     assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-    assert_eq!(
-        child.workspace_owner_deployment_id.as_deref(),
-        Some("deployment-owner")
-    );
+    assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(did));
     assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
     let child_identity = (
         child.doc_id.clone(),
@@ -277,10 +276,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         assert_eq!(child.subagent_depth, Some(2));
         assert_eq!(child.workspace_id.as_deref(), Some("workspace-goal"));
         assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-        assert_eq!(
-            child.workspace_owner_deployment_id.as_deref(),
-            Some("deployment-owner")
-        );
+        assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(did));
         assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-hash"));
         assert_eq!(
             load_canonical_goal(db.node.as_ref(), did, SESSION)
@@ -642,10 +638,8 @@ async fn restart_materializes_claimed_wrapup_retry_without_charging_it_twice() {
     assert_eq!(recovered.infrastructure_retry_count, Some(1));
     let children = goal_children(&db).await;
     assert_eq!(children.len(), 1);
-    let metadata: serde_json::Value =
-        serde_json::from_str(children[0].metadata.as_deref().expect("goal metadata"))
-            .expect("decode goal metadata");
-    assert_eq!(metadata["goal"]["wrapup"], true);
+    let input = children[0].input.as_ref().expect("goal continuation input");
+    assert_eq!(input["goal_continuation"]["wrapup"], true);
 }
 
 #[tokio::test]
@@ -979,7 +973,10 @@ async fn goal_backed_retry_rejects_changed_logical_request_fields() {
     .expect("initial goal submission");
 
     let mut changed = create.clone();
-    changed.metadata = Some(r#"{"changed":true}"#.to_string());
+    changed.input = serde_json::from_value(serde_json::json!({
+        "queue": {"source": "goal", "policy": "coalesce", "key": "changed"}
+    }))
+    .unwrap();
     gents::sign_agent_request_create_as_registered_target(&mut changed)
         .await
         .expect("re-sign changed request");
@@ -1330,9 +1327,8 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             children[0].caused_by_parent_request_id.as_deref(),
             Some(parent)
         );
-        let metadata: serde_json::Value =
-            serde_json::from_str(children[0].metadata.as_deref().unwrap()).unwrap();
-        assert_eq!(metadata["goal"]["wrapup"], true, "{terminal}");
+        let input = children[0].input.as_ref().unwrap();
+        assert_eq!(input["goal_continuation"]["wrapup"], true, "{terminal}");
         let history = gents::load_history(
             &db.node,
             &children[0].session_id,
@@ -1446,11 +1442,9 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
         .expect("wrapup intent");
     let children = goal_children(&db).await;
     assert_eq!(children.len(), 1);
-    let metadata: serde_json::Value =
-        serde_json::from_str(children[0].metadata.as_deref().expect("goal metadata"))
-            .expect("valid goal metadata");
+    let input = children[0].input.as_ref().expect("goal continuation input");
     assert_eq!(
-        metadata.pointer("/goal/wrapup"),
+        input.pointer("/goal_continuation/wrapup"),
         Some(&serde_json::json!(true))
     );
 
@@ -1937,7 +1931,7 @@ async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
     parent.caused_by_parent_tool_call_doc_id = Some("upstream-tool-document".into());
     parent.workspace_id = Some("resume-workspace".into());
     parent.workspace_authority = Some("readOnly".into());
-    parent.workspace_owner_deployment_id = Some("resume-deployment".into());
+    parent.workspace_owner_agent_did = Some(did.to_string());
     parent.workspace_seal_hash = Some("resume-seal".into());
     gents::sign_agent_request_create(db.node_identity.as_ref(), &mut parent)
         .await
@@ -1962,13 +1956,13 @@ async fn operator_resume_child_row(db: &TestDb, doc_id: &str) -> serde_json::Val
     let query = format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
         _docID request_id agent_did requester_did session_id behavior_id lifecycle_state
-        content created_at execution_origin retry_key metadata admission_kind admission_signer_did
+        content created_at execution_origin retry_key input admission_kind admission_signer_did
         admission_signature runtime_issuer_did runtime_source_request_id runtime_source_kind
         caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind
         caused_by_correlation caused_by_source_doc_id caused_by_trigger_context
         caused_by_parent_request_id caused_by_parent_request_doc_id
         caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-        subagent_depth workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash
+        subagent_depth workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash
     }} }}"#,
         gents::graphql::escape_graphql_string(doc_id)
     );
@@ -2060,7 +2054,7 @@ async fn operator_resume_publishes_one_lineage_child_and_fences_old_pause() {
     assert_eq!(child["subagent_depth"], 2);
     assert_eq!(child["workspace_id"], "resume-workspace");
     assert_eq!(child["workspace_authority"], "readOnly");
-    assert_eq!(child["workspace_owner_deployment_id"], "resume-deployment");
+    assert_eq!(child["workspace_owner_agent_did"], did);
     assert_eq!(child["workspace_seal_hash"], "resume-seal");
     assert!(
         !update_goal_fields_if_status(
@@ -2368,7 +2362,7 @@ async fn operator_resume_rejects_corrupted_child_receipt_without_reactivation() 
     // input by replacing the fixture row while retaining its original signature.
     let original = db.node.execute(&format!(
         r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{
-            request_id agent_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind runtime_bridge_author_did behavior_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content temperature top_p top_k seed max_tokens max_total_tokens metadata execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_deployment_id workspace_seal_hash lifecycle_state
+            request_id agent_did requester_did admission_kind admission_signer_did admission_signature enrollment_request_id enrollment_request_digest enrollment_admin_did enrollment_authorization_sequence enrollment_authorization_expires_at runtime_issuer_did runtime_source_request_id runtime_source_kind runtime_bridge_author_did behavior_id session_id retry_parent_request retry_parent_request_doc_id retry_root_request retry_key content max_total_tokens input execution_origin caused_by_trigger_id caused_by_trigger_doc_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id created_at retry_count max_retries valid_until subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash lifecycle_state
         }} }}"#, gents::graphql::escape_graphql_string(&first.doc_id),
     )).await;
     assert!(!original.has_errors(), "{:?}", original.errors);
@@ -2528,11 +2522,10 @@ async fn operator_resume_preserves_pending_wrapup_in_child_policy() {
     assert_eq!(goal.wrapup_requested, Some(true));
     assert_eq!(goal.wrapup_completed, Some(false));
     let child = operator_resume_child_row(&db, &receipt.doc_id).await;
-    let metadata: serde_json::Value =
-        serde_json::from_str(child["metadata"].as_str().unwrap()).unwrap();
+    let input = &child["input"];
     assert_eq!(
-        metadata
-            .pointer("/goal/wrapup")
+        input
+            .pointer("/goal_continuation/wrapup")
             .and_then(serde_json::Value::as_bool),
         Some(true)
     );
@@ -2649,19 +2642,14 @@ async fn seed_same_second_canonical_goal_child(
         ..Default::default()
     });
     spec.retry_key = Some(format!("goal-continuation:{suffix}"));
-    spec.metadata = Some(
-        serde_json::json!({
-            "queue": {
-                "source": "goal", "policy": "coalesce", "key": format!("goal:{suffix}"),
-                "queued_after_request_id": parent_id
-            },
-            "goal": {
-                "goal_id": goal.goal_id, "parent_request_id": parent_id,
-                "continuation_sequence": 1, "wrapup": false
-            }
-        })
-        .to_string(),
-    );
+    spec.input = serde_json::from_value(serde_json::json!({
+        "queue": {
+            "source": "goal", "policy": "coalesce", "key": format!("goal:{suffix}"),
+            "queued_after_request_id": parent_id
+        },
+        "goal_continuation": {"sequence": 1, "wrapup": false}
+    }))
+    .unwrap();
     let child = gents::build_signed_request(
         spec,
         gents::RequestSigner::Identity(db.node_identity.as_ref()),

@@ -26,6 +26,7 @@ pub(super) fn resolve_automation(
     let mut unavailable_schedules = HashSet::new();
     let mut event_triggers = HashMap::new();
     let mut unavailable_event_triggers = HashSet::new();
+    let mut unavailable_triggers = HashSet::new();
 
     // Trigger -> Task -> behavior is the shared entrance. First resolve every
     // enabled trigger's task reference, then resolve schedule/event sources
@@ -36,38 +37,36 @@ pub(super) fn resolve_automation(
         let trigger_id = trigger.trigger_id.clone();
 
         if !trigger.enabled {
-            unavailable_event_triggers.insert(trigger_id.clone());
-            // Schedules referenced by a disabled trigger are not active; the
-            // schedule resolver below re-checks the referencing trigger.
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
 
         let task_id = trigger.task_id.as_str();
         if task_id.is_empty() {
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
         let Some(task_record) = view.tasks.get(task_id) else {
             // Missing references fail; the trigger is quarantined.
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
         let task = &task_record.value;
         if !task.enabled {
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
         let behavior_id = task.behavior_id.as_str();
         let Some(behavior_record) = view.behaviors.get(behavior_id) else {
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         };
         if !behavior_record.value.enabled {
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
         if unavailable_behaviors.contains_key(behavior_id) {
-            unavailable_event_triggers.insert(trigger_id.clone());
+            unavailable_triggers.insert(trigger_id.clone());
             continue;
         }
         trigger_tasks.insert(trigger_id, resolved_task_from(task));
@@ -76,7 +75,15 @@ pub(super) fn resolve_automation(
     for trigger_record in view.triggers.values() {
         let trigger = &trigger_record.value;
         let trigger_id = trigger.trigger_id.clone();
-        if unavailable_event_triggers.contains(&trigger_id) {
+        if unavailable_triggers.contains(&trigger_id) {
+            match &trigger.source {
+                crate::document_config::TriggerSource::Schedule { .. } => {
+                    unavailable_schedules.insert(trigger_id);
+                }
+                crate::document_config::TriggerSource::Event { .. } => {
+                    unavailable_event_triggers.insert(trigger_id);
+                }
+            }
             continue;
         }
         let Some(task) = trigger_tasks.get(&trigger_id) else {
@@ -231,7 +238,6 @@ fn resolve_schedule_trigger(
     );
 }
 
-
 #[allow(clippy::too_many_arguments)]
 fn resolve_event_trigger(
     view: &DocumentRuntimeView,
@@ -355,7 +361,6 @@ fn group_projection(
         group_min_count,
     )
 }
-
 
 fn task_template_references_group(template: &str) -> bool {
     crate::template::parse_template_for_validation(template).is_ok_and(|refs| {

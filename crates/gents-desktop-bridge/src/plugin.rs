@@ -2,7 +2,7 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
 
 use crate::config::BridgeConfig;
-use crate::state::{DesktopAppState, resolve_policy};
+use crate::state::{resolve_policy, DesktopAppState};
 use crate::tauri_commands;
 
 pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
@@ -47,7 +47,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::chat::desktop_request_timeline,
             tauri_commands::tools_explain::desktop_tool_surface_explain,
             tauri_commands::chat::desktop_chat_send,
-            tauri_commands::chat::desktop_conversation_rename,
+            tauri_commands::chat::desktop_session_rename,
             tauri_commands::chat::desktop_request_resend,
             tauri_commands::chat::desktop_request_retry,
             tauri_commands::mailbox::desktop_mailbox_list,
@@ -61,7 +61,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::config::desktop_skill_delete,
             tauri_commands::config::desktop_task_delete,
             tauri_commands::config::desktop_schedule_delete,
-            tauri_commands::config::desktop_event_trigger_delete,
+            tauri_commands::config::desktop_trigger_delete,
             tauri_commands::config::desktop_backend_delete,
             tauri_commands::config::desktop_inference_profile_delete,
             tauri_commands::config::desktop_tools_delete,
@@ -82,7 +82,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::tasks::desktop_task_save,
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,
-            tauri_commands::tasks::desktop_event_trigger_save,
+            tauri_commands::tasks::desktop_trigger_save,
             tauri_commands::tasks::desktop_event_source_save,
             tauri_commands::tasks::desktop_event_source_delete,
             tauri_commands::tasks::desktop_task_run,

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::BackendAuth;
 use gents::{ensure_runtime_schemas, BackendProviderKind};
 
 use crate::support::fixtures::test_behavior;
@@ -19,7 +20,7 @@ async fn live_openrouter_oneshot_succeeds() -> Result<()> {
     let mut behavior = test_behavior("openrouter-live", "backend-openrouter-live", None);
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = "https://openrouter.ai/api/v1".to_string();
-    behavior.backend_api_key = Some(api_key);
+    behavior.backend_auth = BackendAuth::ApiKey { key: api_key };
     behavior.model_name = model_name;
 
     let result = gents::run_openai_oneshot(

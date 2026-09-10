@@ -131,7 +131,7 @@ impl BackgroundToolConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolSelection {
+pub struct ResolvedToolSelection {
     pub file_tools: FileToolMode,
     pub file_tool_root: Option<PathBuf>,
     pub bash: BashMode,
@@ -170,7 +170,7 @@ pub struct ToolSelection {
     pub remote_background_names: Vec<String>,
 }
 
-impl Default for ToolSelection {
+impl Default for ResolvedToolSelection {
     fn default() -> Self {
         Self {
             file_tools: FileToolMode::Off,
@@ -205,7 +205,7 @@ impl Default for ToolSelection {
     }
 }
 
-impl ToolSelection {
+impl ResolvedToolSelection {
     /// Project the canonical `document_config::Tools` nested groups.
     ///
     /// Disabled-by-absence: an omitted group or unset flag grants nothing. There

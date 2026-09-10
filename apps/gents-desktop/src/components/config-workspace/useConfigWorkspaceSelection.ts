@@ -21,9 +21,10 @@ export function useConfigWorkspaceSelection(
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedScheduleId, setSelectedScheduleId] = useState<string | null>(null);
-  const [selectedEventTriggerId, setSelectedEventTriggerId] = useState<string | null>(
+  const [selectedEventSourceId, setSelectedEventSourceId] = useState<string | null>(
     null,
   );
+  const [selectedTriggerId, setSelectedTriggerId] = useState<string | null>(null);
   const [savedStatus, setSavedStatus] = useState<string | null>(null);
 
   const selectedBehavior = useMemo(() => {
@@ -55,7 +56,8 @@ export function useConfigWorkspaceSelection(
       setSelectedSkillId(null);
       setSelectedTaskId(null);
       setSelectedScheduleId(null);
-      setSelectedEventTriggerId(null);
+      setSelectedEventSourceId(null);
+      setSelectedTriggerId(null);
       return;
     }
 
@@ -96,7 +98,7 @@ export function useConfigWorkspaceSelection(
     );
     ensureSelection(
       selectedToolServiceId,
-      selectedDeployment.toolServiceRegistries[0]?.serviceId ?? null,
+      selectedDeployment.toolServiceRegistries[0]?.service_id ?? null,
       (id) =>
         selectedDeployment.toolServiceRegistries.some(
           (service) => service.service_id === id,
@@ -117,17 +119,24 @@ export function useConfigWorkspaceSelection(
     );
     ensureSelection(
       selectedScheduleId,
-      selectedDeployment.schedules[0]?.scheduleId ?? null,
+      selectedDeployment.schedules[0]?.schedule_id ?? null,
       (id) =>
-        selectedDeployment.schedules.some((schedule) => schedule.scheduleId === id),
+        selectedDeployment.schedules.some((schedule) => schedule.schedule_id === id),
       setSelectedScheduleId,
     );
     ensureSelection(
-      selectedEventTriggerId,
-      selectedDeployment.eventTriggers[0]?.triggerId ?? null,
+      selectedEventSourceId,
+      selectedDeployment.eventSources[0]?.event_source_id ?? null,
       (id) =>
-        selectedDeployment.eventTriggers.some((trigger) => trigger.triggerId === id),
-      setSelectedEventTriggerId,
+        selectedDeployment.eventSources.some((source) => source.event_source_id === id),
+      setSelectedEventSourceId,
+    );
+    ensureSelection(
+      selectedTriggerId,
+      selectedDeployment.triggers[0]?.config.trigger_id ?? null,
+      (id) =>
+        selectedDeployment.triggers.some((trigger) => trigger.config.trigger_id === id),
+      setSelectedTriggerId,
     );
   }, [
     selectedBackendId,
@@ -135,13 +144,14 @@ export function useConfigWorkspaceSelection(
     selectedBehaviorId,
     selectedConfigBehaviorId,
     selectedDeployment,
-    selectedEventTriggerId,
+    selectedEventSourceId,
     selectedProfileId,
     selectedScheduleId,
     selectedSkillId,
     selectedTaskId,
     selectedToolsId,
     selectedToolServiceId,
+    selectedTriggerId,
   ]);
 
   function selectConfigBehavior(behaviorId: string | null) {
@@ -187,23 +197,25 @@ export function useConfigWorkspaceSelection(
     selectedBackendId,
     selectedBehavior,
     selectedConfigBehaviorId,
-    selectedEventTriggerId,
+    selectedEventSourceId,
     selectedProfileId,
     selectedScheduleId,
     selectedSkillId,
     selectedTaskId,
     selectedToolsId,
     selectedToolServiceId,
+    selectedTriggerId,
     setActiveTab,
     setSavedStatus,
     setSelectedBackendId,
     setSelectedConfigBehaviorId,
-    setSelectedEventTriggerId,
+    setSelectedEventSourceId,
     setSelectedProfileId,
     setSelectedScheduleId,
     setSelectedSkillId,
     setSelectedTaskId,
     setSelectedToolsId,
     setSelectedToolServiceId,
+    setSelectedTriggerId,
   };
 }

@@ -1,12 +1,12 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::Tools;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::ToolServiceRegistry;
+use gents::Tools;
 
 pub async fn upsert_tools(node: &EmbeddedNode, document: &Tools) -> Result<()> {
     let value = serde_json::to_value(document)?;

@@ -1,7 +1,7 @@
-use super::{DesiredStateManifest, DesiredToolServiceRegistry};
+use super::DesiredStateManifest;
 use crate::shared::ConfigExportBundle;
 use anyhow::{Context, Result};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 pub(crate) fn manifest_from_export_bundle(
     bundle: &ConfigExportBundle,
@@ -43,32 +43,6 @@ pub(crate) fn export_bundle_from_manifest(
     };
     manifest_from_export_bundle(&bundle)?;
     Ok(super::DesiredApplyBundle::from_trusted_bundle(bundle))
-}
-
-pub(crate) fn tool_service_registry_from_live_value(
-    value: &Value,
-) -> Result<DesiredToolServiceRegistry> {
-    let (_, row) = gents::config_client::config_projection(
-        gents::Collection::ToolServiceRegistry,
-        Some(value),
-    )?;
-    serde_json::from_value(row.context("canonical service projection missing")?)
-        .context("decode canonical tool service")
-}
-
-pub(crate) fn normalize_tool_service_registry_storage_fields(
-    object: &mut Map<String, Value>,
-) -> Result<()> {
-    let (_, row) = gents::config_client::config_projection(
-        gents::Collection::ToolServiceRegistry,
-        Some(&Value::Object(object.clone())),
-    )?;
-    *object = row
-        .context("canonical service projection missing")?
-        .as_object()
-        .context("service must be an object")?
-        .clone();
-    Ok(())
 }
 
 #[cfg(test)]

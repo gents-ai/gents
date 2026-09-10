@@ -56,8 +56,8 @@ fn resolved_event_trigger_with_filter(
     }
 }
 
-fn event_test_behavior() -> Arc<AgentBehavior> {
-    static BEHAVIOR: std::sync::OnceLock<Arc<AgentBehavior>> = std::sync::OnceLock::new();
+fn event_test_behavior() -> Arc<ResolvedBehavior> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<ResolvedBehavior>> = std::sync::OnceLock::new();
     BEHAVIOR
         .get_or_init(|| integration_test_behavior("general"))
         .clone()
@@ -153,7 +153,7 @@ async fn event_source_reconciles_subscriptions_on_generation_bump() {
 /// 1. Registers a custom `WebhookEvent` schema on the embedded node so the
 ///    bus has a collection to emit events from (separate from the runtime
 ///    control collections so reconciliation is forced to walk the cache).
-/// 2. Publishes a snapshot with one active `EventTrigger` on `WebhookEvent`.
+/// 2. Publishes a snapshot with one active event-source trigger on `WebhookEvent`.
 /// 3. Opens the subscription (via `reconcile_subscriptions`) BEFORE creating
 ///    the document — `events::Bus` only buffers messages for already-
 ///    subscribed consumers, so a pre-subscription mutation is silently
@@ -182,7 +182,7 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
         .await
         .expect("add_schema for WebhookEvent");
 
-    // Build a snapshot with exactly one active EventTrigger on WebhookEvent.
+    // Build a snapshot with exactly one active event-source trigger on WebhookEvent.
     // The trigger_id is what the returned FireIntent should carry.
     let task = ResolvedTask {
         task_id: "task-webhook".to_string(),
@@ -1126,7 +1126,7 @@ async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_js
 }
 
 /// Task 22: a Fired result dispatched through the `on_result` callback must
-/// write the runtime-owned bookkeeping fields back onto the `EventTrigger`
+/// write the runtime-owned bookkeeping fields back onto the canonical `Trigger`
 /// document: `last_status = "fired"`, `fire_count += 1`,
 /// `last_fired_source_doc_id` set to the source doc id that caused the fire,
 /// and `last_attempt_at` populated. Apply-owned fields (`enabled`, `task_id`,

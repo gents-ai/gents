@@ -9,7 +9,7 @@ use crate::admission::{AdmissionRegistry, AdmittedCompletionClient};
 use crate::agent::completion_retry::CompletionRetryPolicy;
 use crate::agent::loop_stream::{AggregateTokenBudget, LoopConfig};
 use crate::backend_provider::BackendProviderKind;
-use crate::config::{AgentBehavior, ReasoningEffort};
+use crate::config::{ReasoningEffort, ResolvedBehavior};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::ExecutionOrigin;
 use crate::openai_wire::OpenAiWireApi;
@@ -24,7 +24,7 @@ fn effective_max_tokens(max_output_tokens: usize, sampling_max_tokens: Option<u6
 pub(crate) fn build_admitted_model<C>(
     client: C,
     admission: AdmissionRegistry,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
 ) -> <AdmittedCompletionClient<C> as CompletionClient>::CompletionModel
 where
     C: CompletionClient,
@@ -46,7 +46,7 @@ where
 /// makes capture the default for all of them instead of a privilege of the
 /// inference path (#840).
 pub(crate) fn loop_config(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     preamble: String,
     tool_count: usize,
     capture_scope: CaptureScopeKind,
@@ -94,7 +94,7 @@ pub(crate) fn loop_config(
 }
 
 pub(crate) fn loop_config_for_request(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     preamble: String,
     request: &AgentRequest,
     aggregate_token_budget: Option<AggregateTokenBudget>,
@@ -328,7 +328,7 @@ fn provider_additional_params(kind: BackendProviderKind) -> Option<serde_json::V
 }
 
 fn request_additional_params(
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     request: &AgentRequest,
 ) -> Option<serde_json::Value> {
     match behavior.backend_provider_kind {
@@ -358,7 +358,7 @@ mod tests;
 /// ordinary inference. The enclosing request later supplies deadline and ledger.
 pub(crate) async fn build_compaction_engine(
     node: std::sync::Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     admission: AdmissionRegistry,
     build_timeout: std::time::Duration,
 ) -> anyhow::Result<Option<std::sync::Arc<dyn crate::compaction::ReductionEngine>>> {

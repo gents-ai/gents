@@ -4,7 +4,7 @@ use std::time::Duration;
 use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
 
 use crate::support::fixtures::bind_default_behavior_backend;
-use crate::support::snapshots::{RuntimeSnapshot, fetch_runtime_snapshot};
+use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
 use crate::support::test_db;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -178,7 +178,7 @@ async fn schedule_insert_bumps_active_generation() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn event_trigger_insert_bumps_active_generation() {
+async fn event_source_trigger_insert_bumps_active_generation() {
     let db = test_db("event-trigger-snapshot-reconcile").await;
     let identity = Arc::new(test_identity("event-trigger-snapshot-reconcile"));
     bind_default_behavior_backend(
@@ -251,12 +251,12 @@ async fn event_trigger_insert_bumps_active_generation() {
     );
     assert!(
         reconciled.active_generation > initial_generation,
-        "active_generation should bump after Task+EventTrigger insert (initial={initial_generation}, observed={})",
+        "active_generation should bump after Task+EventSource+Trigger insert (initial={initial_generation}, observed={})",
         reconciled.active_generation
     );
     assert_eq!(
         reconciled.last_reconcile_result, "applied",
-        "last_reconcile_result should be 'applied' after EventTrigger insert"
+        "last_reconcile_result should be 'applied' after EventSource+Trigger insert"
     );
 
     let _ = shutdown_tx.send(true);

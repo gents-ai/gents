@@ -5,13 +5,13 @@ use std::fs;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use gents::{default_behavior_id_for_agent, default_tool_selection_id_for_behavior};
+use gents::default_behavior_id_for_agent;
 use serde_json::Value;
 use uuid::Uuid;
 
-fn generated_tool_selection_id_for_agent(agent_did: &str) -> String {
+fn generated_tools_id_for_agent(agent_did: &str) -> String {
     let default_behavior_id = default_behavior_id_for_agent(agent_did);
-    default_tool_selection_id_for_behavior(&default_behavior_id)
+    format!("{default_behavior_id}-tools")
 }
 
 fn find_snapshot_row<'a>(
@@ -243,46 +243,34 @@ async fn fresh_home_apply_root_precedes_grok_behavior_binding() -> Result<()> {
     // runtime's recurring prober takes its immediate startup tick. Its
     // exported runtime-owned health fields are deliberately absent, so the
     // post-apply path must probe and promote it before readiness can publish.
-    let backends_dir = root.join("inference_backends");
-    let existing_backend = fs::read_dir(&backends_dir)
-        .context("reading exported backend directory")?
-        .next()
-        .ok_or_else(|| anyhow!("exported pack has no backend"))??;
-    let applied_backend_dir = backends_dir.join(crate::support::document_handle(&APPLIED_BACKEND));
-    fs::create_dir_all(&applied_backend_dir)?;
-    for entry in fs::read_dir(existing_backend.path()).context("reading exported backend")? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            fs::copy(entry.path(), applied_backend_dir.join(entry.file_name()))?;
-        }
-    }
-    let backend_path = applied_backend_dir.join("object.json");
-    let mut backend = read_json_file(&backend_path)?;
+    let config_path = root.join("pack_config.json");
+    let mut config = read_json_file(&config_path)?;
+    let mut backend = config["inference_backends"][0].clone();
     backend["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
     if let Some(object) = backend.as_object_mut() {
         object.remove("probe_status");
         object.remove("last_probe");
     }
-    write_json_file(&backend_path, &backend)?;
-
-    let behaviors_dir = root.join("agent_behaviors");
-    let existing = fs::read_dir(&behaviors_dir)
-        .context("reading exported behavior directory")?
-        .next()
-        .ok_or_else(|| anyhow!("exported pack has no behavior"))??;
-    let grok_behavior_dir = behaviors_dir.join(crate::support::document_handle(&GROK_BEHAVIOR));
-    fs::create_dir_all(&grok_behavior_dir)?;
-    for entry in fs::read_dir(existing.path()).context("reading exported behavior")? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            fs::copy(entry.path(), grok_behavior_dir.join(entry.file_name()))?;
-        }
-    }
-    let behavior_path = grok_behavior_dir.join("object.json");
-    let mut behavior = read_json_file(&behavior_path)?;
+    config["inference_backends"]
+        .as_array_mut()
+        .context("inference_backends is not an array")?
+        .push(backend);
+    let mut profile = config["inference_profiles"][0].clone();
+    let applied_profile = format!("{APPLIED_BACKEND}:profile");
+    profile["profile_id"] = Value::String(applied_profile.clone());
+    profile["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
+    config["inference_profiles"]
+        .as_array_mut()
+        .context("inference_profiles is not an array")?
+        .push(profile);
+    let mut behavior = config["agent_behaviors"][0].clone();
     behavior["behavior_id"] = Value::String(GROK_BEHAVIOR.to_string());
-    behavior["backend_id"] = Value::String(APPLIED_BACKEND.to_string());
-    write_json_file(&behavior_path, &behavior)?;
+    behavior["inference_profile_id"] = Value::String(applied_profile);
+    config["agent_behaviors"]
+        .as_array_mut()
+        .context("agent_behaviors is not an array")?
+        .push(behavior);
+    write_json_file(&config_path, &config)?;
 
     let port = allocate_port()?;
     let socket_path = tempdir.path().join("grok.sock");
@@ -1663,7 +1651,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("init output missing backend_id: {init}"))?
         .to_string();
-    let tool_selection_id = generated_tool_selection_id_for_agent(&agent_did);
+    let tools_id = generated_tools_id_for_agent(&agent_did);
 
     let (_serve, readiness) = spawn_server_with_ready_json(
         &home_dir,
@@ -1686,7 +1674,7 @@ async fn init_and_server_use_backend_specific_api_key_env_var() -> Result<()> {
         None,
         Some("GENTS_TEST_CLI_BACKEND_KEY"),
         &model_name,
-        &tool_selection_id,
+        &tools_id,
         "ReadOnly",
         "ReadOnly",
         "read-only operating mode",

@@ -2,13 +2,12 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
 use gents::llm::ToolCallHookAction;
-use gents::{
-    upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook,
-    FailurePolicy, ToolSelectionDocument,
-};
+use gents::{DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
-use crate::support::fixtures::spawn_subagent_source;
+use crate::support::fixtures::{
+    configure_subagent_behavior, spawn_subagent_source, subagent_target,
+};
 use crate::support::test_db;
 
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
@@ -22,73 +21,33 @@ async fn setup_db(
 ) {
     let db = test_db(name).await;
     let agent_did = db.node_identity.did().to_string();
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4c-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                &agent_did,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        CHILD_BEHAVIOR_ID,
+        "r4c-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
+    .await;
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4c parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some("r4c-parent-tools".to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4c-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4c child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    .await;
     let source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
@@ -124,6 +83,7 @@ async fn create_parent_hook(
         session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -162,7 +122,6 @@ async fn create_parent_request(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",

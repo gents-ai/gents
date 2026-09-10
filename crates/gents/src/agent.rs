@@ -8,20 +8,20 @@ use defra_node::EmbeddedNode;
 use tokio::sync::{watch, OnceCell};
 
 use crate::backend_health::{BackendHealthMap, BackendProberOptions};
-use crate::compaction::CompactionStrategy;
 use crate::config::{
-    AgentBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
-    DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    ResolvedBehavior, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
-use crate::identity::{AgentIdentity, AgentPrincipal};
+use crate::identity::{AgentIdentity, RuntimePrincipal};
 use crate::mcp_pool::McpPool;
 use crate::migration;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::{ResolvedRuntimeSnapshot, UnavailableBehavior};
-use crate::tool_surface::{BehaviorToolConfig, SubagentToolConfig, ToolCeiling, ToolSelection};
+use crate::tool_surface::{
+    BehaviorToolConfig, ResolvedToolSelection, SubagentToolConfig, ToolCeiling,
+};
 use crate::trigger_engine::manual_source::ManualTriggerHandle;
 
 mod builder;
@@ -117,8 +117,8 @@ pub(crate) struct DocumentResolveContext {
 #[derive(Clone)]
 pub struct Gents {
     node: Arc<EmbeddedNode>,
-    principal: Arc<AgentPrincipal>,
-    behaviors: Vec<Arc<AgentBehavior>>,
+    principal: Arc<RuntimePrincipal>,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
     unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     document_runtime_context: Option<DocumentResolveContext>,
     mcp_pool: McpPool,
@@ -168,23 +168,10 @@ impl Gents {
         };
         let resolved_snapshot =
             resolve_document_runtime_snapshot(node.as_ref(), &document_runtime_context).await?;
-        debug_assert!(
-            resolved_snapshot.principal.is_some(),
-            "from_default_behavior_documents called with a snapshot lacking a principal; \
-             the production loader always sets principal: Some(...) — a None snapshot \
-             means a non-production path bypassed the loader and would produce a \
-             Gents.principal that's NOT Arc::ptr_eq to the snapshot's behavior principals",
-        );
-        let principal = resolved_snapshot.principal.clone().unwrap_or_else(|| {
-            let default_behavior_id = resolved_snapshot.default_behavior_id.clone();
-            Arc::new(AgentPrincipal {
-                agent_did: identity.did().to_string(),
-                identity: identity.clone(),
-                default_behavior_id,
-                display_name: None,
-                enabled: true,
-            })
-        });
+        let principal = resolved_snapshot
+            .principal
+            .clone()
+            .context("resolved document runtime snapshot is missing its principal owner")?;
         let default_behavior_id = principal.default_behavior_id.clone();
         let mut behaviors = resolved_snapshot
             .behaviors
@@ -242,21 +229,21 @@ impl Gents {
         self.backend_health.clone()
     }
 
-    pub fn behaviors(&self) -> &[Arc<AgentBehavior>] {
+    pub fn behaviors(&self) -> &[Arc<ResolvedBehavior>] {
         &self.behaviors
     }
 
-    /// Returns the deployment principal record.
+    /// Returns the resolved agent principal and signing permission boundary.
     ///
     /// DefraDB ops issued by this `Gents` are signed by the node identity
     /// configured on its `EmbeddedNode`. That signer may differ from the
-    /// deployment principal identity: the node is the durable write author,
+    /// resolved agent principal identity: the node is the durable write author,
     /// while the principal remains the permission boundary for its behaviors.
-    pub fn principal(&self) -> &AgentPrincipal {
+    pub fn principal(&self) -> &RuntimePrincipal {
         &self.principal
     }
 
-    pub(crate) fn principal_arc(&self) -> Arc<AgentPrincipal> {
+    pub(crate) fn principal_arc(&self) -> Arc<RuntimePrincipal> {
         Arc::clone(&self.principal)
     }
 
@@ -318,17 +305,17 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 }
 
 pub(crate) fn behavior_config_from_documents(
-    principal: Arc<AgentPrincipal>,
+    principal: Arc<RuntimePrincipal>,
     behavior: &crate::document_config::AgentBehavior,
     context: Option<&crate::document_config::AgentContext>,
     compaction: Option<crate::document_config::CompactionConfig>,
     compaction_inference: Option<crate::config::ResolvedInference>,
     inference: &crate::config::ResolvedInference,
-    tool_selection: ToolSelection,
+    tool_selection: ResolvedToolSelection,
     subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
     skills: Vec<crate::skills::Skill>,
-) -> anyhow::Result<AgentBehavior> {
+) -> anyhow::Result<ResolvedBehavior> {
     let execution = inference.execution.clone().unwrap_or_default();
     let retry = inference.retry_policy.clone().unwrap_or_default();
     let stream_batch_ms = positive_duration_secs_or_default(
@@ -361,7 +348,7 @@ pub(crate) fn behavior_config_from_documents(
         config.validate()?;
     }
     let backend = inference.backend.backend_fields();
-    Ok(AgentBehavior {
+    Ok(ResolvedBehavior {
         behavior_id: behavior.behavior_id.clone(),
         principal,
         backend_id: backend.backend_id,
@@ -414,21 +401,8 @@ fn positive_duration_secs_or_default(
     }
 }
 
-fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
 pub(crate) fn tool_selection_from_document(
     selection: &crate::document_config::Tools,
-) -> anyhow::Result<ToolSelection> {
-    ToolSelection::from_document(selection)
-}
-
-pub(crate) fn subagent_tool_config_from_document(
-    selection: &crate::document_config::Tools,
-) -> anyhow::Result<SubagentToolConfig> {
-    SubagentToolConfig::from_document(selection)
+) -> anyhow::Result<ResolvedToolSelection> {
+    ResolvedToolSelection::from_document(selection)
 }

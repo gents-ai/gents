@@ -113,7 +113,9 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let mut behavior = test_behavior("openrouter-oneshot", "backend-openrouter", None);
     behavior.backend_provider_kind = BackendProviderKind::OpenRouter;
     behavior.backend_endpoint = mock_endpoint.endpoint().to_string();
-    behavior.backend_api_key = Some("openrouter-key".to_string());
+    behavior.backend_auth = gents::document_config::BackendAuth::ApiKey {
+        key: "openrouter-key".to_string(),
+    };
     behavior.model_name = "openai/gpt-4o-mini".to_string();
 
     let result =

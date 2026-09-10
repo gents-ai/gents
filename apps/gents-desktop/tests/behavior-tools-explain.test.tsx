@@ -17,8 +17,7 @@ describe("behavior tool surface", () => {
     const api = withExplanation({
       behaviorId: "default",
       enabled: true,
-      toolSelectionSource: "document",
-      toolPolicySemantics: "tool-policy/v1",
+      toolsSource: "document",
       ceilingSource: "init_json",
       mcpServicesOnline: false,
       surface: {

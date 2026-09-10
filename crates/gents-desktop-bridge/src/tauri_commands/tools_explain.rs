@@ -1,8 +1,9 @@
+use crate::commands::mcp_health::load_mcp_services_with_health_for_agent;
 use crate::error::BridgeError;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use gents::{BehaviorToolConfig, ToolCeiling, ToolPolicyVersion, ToolSelection};
+use gents::{BehaviorToolConfig, ToolCeiling};
 use serde_json::{json, Value};
 use tauri::State;
 
@@ -23,19 +24,20 @@ pub async fn desktop_tool_surface_explain(
     let behavior = snapshot
         .behaviors
         .iter()
-        .find(|row| row.behavior_id == behavior_id && row.agent_did.as_deref() == Some(&agent_did))
+        .find(|row| row.behavior_id == behavior_id && row.agent_did == agent_did)
         .ok_or_else(|| format!("behavior {behavior_id} not found for {agent_did}"))?;
 
     let agent_home = require_agent_home(&state)?;
     let (ceiling, ceiling_source) = resolve_desktop_tool_ceiling(&agent_home)?;
-    let mcp_services_online = snapshot
-        .tool_service_registries
+    let mcp_services_online = load_mcp_services_with_health_for_agent(core.as_ref(), &agent_did)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?
         .iter()
-        .any(|row| row.status.as_deref() == Some("online"));
+        .any(|row| matches!(row.status.as_deref(), Some("healthy" | "stale")));
     let active_behavior_ids = snapshot
         .behaviors
         .iter()
-        .filter(|row| row.agent_did.as_deref() == Some(&agent_did) && row.enabled.unwrap_or(true))
+        .filter(|row| row.agent_did == agent_did && row.enabled)
         .map(|row| row.behavior_id.clone())
         .collect::<HashSet<_>>();
     let datastore_tool_surfaces = gents::list_datastore_tool_surfaces(core.node(), &agent_did)
@@ -53,62 +55,56 @@ pub async fn desktop_tool_surface_explain(
             ))
         })?;
 
-    let tool_selection_id = behavior
-        .tool_selection_id
+    let context_id = behavior
+        .context_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let (tool_selection_source, config, tool_policy_version) = match tool_selection_id.as_deref() {
-        Some(selection_id) => {
-            let row = snapshot
-                .tool_selections
+    let context = match context_id.as_deref() {
+        Some(context_id) => Some(
+            snapshot
+                .contexts
                 .iter()
-                .find(|row| row.selection_id == selection_id)
-                .ok_or_else(|| format!("referenced ToolSelection {selection_id} is missing"))?;
-            let document: gents::ToolSelectionDocument = serde_json::to_value(row)
-                .and_then(serde_json::from_value)
-                .map_err(|error| {
-                    BridgeError::untyped(format!("decoding ToolSelection {selection_id}: {error}"))
-                })?;
-            let config = BehaviorToolConfig::from_tool_selection_document_with_surfaces(
+                .find(|row| row.context_id == context_id && row.agent_did == agent_did)
+                .ok_or_else(|| format!("referenced AgentContext {context_id} is missing"))?,
+        ),
+        None => None,
+    };
+    let tools_id = context
+        .and_then(|context| context.tools_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    let (tools_source, config) = match tools_id.as_deref() {
+        Some(tools_id) => {
+            let document = snapshot
+                .tools
+                .iter()
+                .find(|row| row.tools_id == tools_id && row.agent_did == agent_did)
+                .ok_or_else(|| format!("referenced Tools {tools_id} is missing"))?;
+            let config = BehaviorToolConfig::from_tools_document_with_surfaces(
                 &behavior.behavior_id,
-                &document,
+                document,
                 &datastore_tool_surfaces,
                 &eth_tools,
                 &ceiling,
                 Vec::new(),
             )
             .map_err(|error| BridgeError::untyped(error.to_string()))?;
-            ("document", config, document.tool_policy_version.clone())
+            ("document", config)
         }
-        None => (
-            "default_missing_tool_selection_id",
-            BehaviorToolConfig::from_selection(
-                &behavior.behavior_id,
-                ToolSelection::default(),
-                &ceiling,
-                Vec::new(),
-            )
-            .map_err(|error| BridgeError::untyped(error.to_string()))?,
-            None,
-        ),
+        None => ("default_missing_tools_id", BehaviorToolConfig::meta_only()),
     };
 
     let explanation =
         config.explain_with_runtime(mcp_services_online, &agent_did, &active_behavior_ids);
-    let tool_policy_semantics = match ToolPolicyVersion::parse(tool_policy_version.as_deref()) {
-        Ok(ToolPolicyVersion::V1) => "tool-policy/v1",
-        Err(_) => "invalid",
-    };
-
     Ok(json!({
         "behaviorId": behavior.behavior_id,
-        "enabled": behavior.enabled.unwrap_or(true),
-        "toolSelectionId": tool_selection_id,
-        "toolSelectionSource": tool_selection_source,
-        "toolPolicyVersion": tool_policy_version,
-        "toolPolicySemantics": tool_policy_semantics,
+        "enabled": behavior.enabled,
+        "contextId": context_id,
+        "toolsId": tools_id,
+        "toolsSource": tools_source,
         "ceilingSource": ceiling_source,
         "mcpServicesOnline": mcp_services_online,
         "surface": serde_json::to_value(&explanation).map_err(|error| BridgeError::untyped(error.to_string()))?,

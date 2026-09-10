@@ -46,11 +46,12 @@ use std::time::Duration;
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{BackendAuth, InferenceBackend};
 use gents::graphql::escape_graphql_string;
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
-    DocumentRuntimeOptions, Gents, ToolCeiling,
+    ensure_agent_principal, load_inference_profile, upsert_inference_profile, AgentIdentity,
+    BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, OpenAiWireApi, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
@@ -85,68 +86,60 @@ pub async fn bind_d4f_backend(
     let bootstrap = ensure_agent_principal(node, &agent_did)
         .await
         .expect("ensure principal");
-    let behavior_id = bootstrap.default_behavior.behavior_id.clone();
+    let behavior_id = bootstrap
+        .default_behavior_id
+        .clone()
+        .expect("principal has a default behavior");
 
-    upsert_d4f_backend(node).await;
+    upsert_d4f_backend(node, &agent_did).await;
 
-    let mut behavior = load_agent_behavior(node, &behavior_id)
+    let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
+    let mut profile = load_inference_profile(node, &agent_did, &profile_id)
         .await
-        .expect("load default behavior")
-        .expect("default behavior document exists after bootstrap");
-    behavior.backend_id = Some(D4F_BACKEND_ID.to_string());
-    behavior.model_name = Some(d4f_model());
-    behavior.inference_profile_id = Some(default_inference_profile_id_for_behavior(&behavior_id));
-    behavior.enabled = true;
-    upsert_agent_behavior(node, &behavior)
+        .expect("load default inference profile")
+        .expect("default inference profile exists after bootstrap");
+    profile.backend_id = D4F_BACKEND_ID.to_string();
+    profile.model_name = d4f_model();
+    upsert_inference_profile(node, &profile)
         .await
-        .expect("point default behavior at d4f");
+        .expect("point default inference profile at d4f");
 
     debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)
 }
 
-async fn upsert_d4f_backend(node: &EmbeddedNode) {
-    let escaped_backend_id = escape_graphql_string(D4F_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(&d4f_endpoint());
-    let escaped_model = escape_graphql_string(&d4f_model());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert d4f backend failed: {:?}",
-        response.errors
-    );
+async fn upsert_d4f_backend(node: &EmbeddedNode, agent_did: &str) {
+    use gents::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    let backend = InferenceBackend {
+        agent_did: agent_did.to_string(),
+        backend_id: D4F_BACKEND_ID.to_string(),
+        name: D4F_BACKEND_ID.to_string(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+        endpoint: d4f_endpoint(),
+        auth: BackendAuth::Unauthenticated,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(4),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    };
+    let value = serde_json::to_value(backend).expect("serialize d4f backend");
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceBackend,
+        add: value.clone(),
+        update: value,
+    }])
+    .expect("build d4f backend plan");
+    gents::ConfigAccess::transact_local(node, None, "test.upsert_d4f_backend", |txn| {
+        let plan = &plan;
+        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+    })
+    .await
+    .expect("upsert d4f backend");
 }
 
 pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {

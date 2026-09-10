@@ -35,6 +35,7 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     caused_by_correlation
                     caused_by_trigger_context
                     workspace_id
+                    workspace_owner_agent_did
                     workspace_authority
                     workspace_seal_hash
 "#;

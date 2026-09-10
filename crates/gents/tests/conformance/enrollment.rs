@@ -55,9 +55,7 @@ fn generated_agent_request_admission_cases_match_shared_projector() {
             target_policy_allows: case.target_policy_allows,
             bridge_author_binding_current: case.bridge_author_binding_current,
             bridge_author_authorization_fresh: case.bridge_author_authorization_fresh,
-            // Lean's contract field is cross-principal DID policy; the runtime
-            // observation field retains its old name until the runtime layer migrates.
-            target_cross_deployment_policy_allows: case.target_cross_principal_policy_allows,
+            target_cross_principal_policy_allows: case.target_cross_principal_policy_allows,
         };
         let actual = gents::final_claim_admission_disposition(true, observation)
             == AgentRequestAdmissionDisposition::Admit;

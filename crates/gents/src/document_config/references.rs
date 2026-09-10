@@ -210,29 +210,46 @@ impl ConfigReferences {
             Collection::Tools => {
                 let doc: Tools = decode(value)?;
                 doc.validate()?;
-                let surfaces = self.documents.iter()
+                let surfaces = self
+                    .documents
+                    .iter()
                     .filter(|((collection, _), _)| *collection == Collection::DatastoreToolSurface)
                     .map(|(_, value)| decode::<DatastoreToolSurfaceDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
                 let merged = merge_datastore_tool_surfaces(&doc, &surfaces)?;
-                let cli_names = doc.host.as_ref().into_iter()
+                let cli_names = doc
+                    .host
+                    .as_ref()
+                    .into_iter()
                     .flat_map(|host| host.cli.iter().map(|tool| tool.name.clone()))
                     .collect::<Vec<_>>();
-                let eth_tools = self.documents.iter()
+                let eth_tools = self
+                    .documents
+                    .iter()
                     .filter(|((collection, _), _)| *collection == Collection::EthTool)
                     .map(|(_, value)| decode::<EthToolDocument>(value))
                     .collect::<Result<Vec<_>>>()?;
-                for tool_id in doc.integrations.as_ref()
-                    .and_then(|group| group.eth_tool_ids.as_deref()).unwrap_or(&[])
+                for tool_id in doc
+                    .integrations
+                    .as_ref()
+                    .and_then(|group| group.eth_tool_ids.as_deref())
+                    .unwrap_or(&[])
                 {
                     require(Collection::EthTool, tool_id, "integrations.eth_tool_ids")?;
                 }
-                let expanded = crate::agent::document_view::expand_eth_tools_from_docs(&doc, &eth_tools)?;
-                let eth_names = expanded.queries.iter().map(|query| query.tool_name())
+                let expanded =
+                    crate::agent::document_view::expand_eth_tools_from_docs(&doc, &eth_tools)?;
+                let eth_names = expanded
+                    .queries
+                    .iter()
+                    .map(|query| query.tool_name())
                     .chain(expanded.calls.iter().map(|call| call.tool_name.clone()))
                     .collect::<Vec<_>>();
                 validate_surface_tool_names(
-                    &merged.write_tools, &merged.query_tools, &cli_names, &eth_names,
+                    &merged.write_tools,
+                    &merged.query_tools,
+                    &cli_names,
+                    &eth_names,
                 )?;
                 if let Some(remote) = doc.remote {
                     for service in remote.services {
@@ -325,28 +342,51 @@ impl ConfigReferences {
             Collection::Trigger => {
                 let doc: Trigger = decode(value)?;
                 require(Collection::Task, &doc.task_id, "task_id")?;
-                let task: Task = decode(self.documents.get(&(Collection::Task, doc.task_id.clone()))
-                    .context("trigger task missing")?)?;
+                let task: Task = decode(
+                    self.documents
+                        .get(&(Collection::Task, doc.task_id.clone()))
+                        .context("trigger task missing")?,
+                )?;
                 let forbidden: &[&str] = match &doc.source {
                     TriggerSource::Schedule { schedule_id } => {
                         require(Collection::Schedule, schedule_id, "source.schedule_id")?;
                         &["doc", "args", "group"]
                     }
                     TriggerSource::Event { event_source_id } => {
-                        require(Collection::EventSource, event_source_id, "source.event_source_id")?;
-                        let source: EventSource = decode(self.documents
-                            .get(&(Collection::EventSource, event_source_id.clone()))
-                            .context("trigger event source missing")?)?;
-                        if source.group.is_some() { &["args"] } else { &["args", "group"] }
+                        require(
+                            Collection::EventSource,
+                            event_source_id,
+                            "source.event_source_id",
+                        )?;
+                        let source: EventSource = decode(
+                            self.documents
+                                .get(&(Collection::EventSource, event_source_id.clone()))
+                                .context("trigger event source missing")?,
+                        )?;
+                        if source.group.is_some() {
+                            &["args"]
+                        } else {
+                            &["args", "group"]
+                        }
                     }
                 };
-                for (field, template) in std::iter::once(("prompt_template", task.prompt_template.as_str()))
-                    .chain(task.goal_objective_template.as_deref().map(|value| ("goal_objective_template", value)))
+                for (field, template) in
+                    std::iter::once(("prompt_template", task.prompt_template.as_str())).chain(
+                        task.goal_objective_template
+                            .as_deref()
+                            .map(|value| ("goal_objective_template", value)),
+                    )
                 {
                     for reference in crate::template::parse_template_for_validation(template)? {
-                        ensure!(!reference.root().is_some_and(|root| forbidden.contains(&root)),
+                        ensure!(
+                            !reference
+                                .root()
+                                .is_some_and(|root| forbidden.contains(&root)),
                             "trigger {} task {} {field} references unavailable source scope {}",
-                            doc.trigger_id, task.task_id, reference.path.join("."));
+                            doc.trigger_id,
+                            task.task_id,
+                            reference.path.join(".")
+                        );
                     }
                 }
             }
@@ -363,11 +403,15 @@ impl ConfigReferences {
                     &doc.event_source_id,
                     "event_source_id",
                 )?;
-                let source: EventSource = decode(self.documents
-                    .get(&(Collection::EventSource, doc.event_source_id.clone()))
-                    .context("callback event source missing")?)?;
+                let source: EventSource = decode(
+                    self.documents
+                        .get(&(Collection::EventSource, doc.event_source_id.clone()))
+                        .context("callback event source missing")?,
+                )?;
                 crate::callback::reject_secret_bearing_callback_fields(
-                    &doc.binding_id, source.filter.as_deref(), None,
+                    &doc.binding_id,
+                    source.filter.as_deref(),
+                    None,
                 )?;
                 require(Collection::Callback, &doc.callback_id, "callback_id")?;
             }
@@ -377,9 +421,7 @@ impl ConfigReferences {
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
             // Skill tool_refs name tools, not config documents. Schema names,
             // ACP policy IDs, hook commands and tags keep their existing owners.
-            Collection::Skill
-            | Collection::CallbackModule
-            | Collection::GraphDefinition => {}
+            Collection::Skill | Collection::CallbackModule | Collection::GraphDefinition => {}
         }
         Ok(())
     }

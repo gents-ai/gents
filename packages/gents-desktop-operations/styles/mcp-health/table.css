@@ -114,10 +114,6 @@
     color: var(--color-info);
   }
 
-  .mcp-health-status-stuck {
-    color: var(--color-error-strong);
-  }
-
   .mcp-health-status-unknown {
     color: var(--color-text-muted);
   }
@@ -144,10 +140,6 @@
   .mcp-health-dot-blue {
     background: var(--color-info);
     animation: mcp-health-pulse var(--motion-pulse) ease-in-out infinite;
-  }
-
-  .mcp-health-dot-stuck {
-    box-shadow: 0 0 0 3px rgb(var(--color-warning-rgb) / 0.35);
   }
 
   @keyframes mcp-health-pulse {

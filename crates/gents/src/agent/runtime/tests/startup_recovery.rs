@@ -295,13 +295,14 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     // This test exercises startup handling for corrupt persisted configuration.
     // The public writer correctly rejects the dangling reference, so inject the
     // invalid row through the storage boundary instead.
-    let escaped_behavior_id = escape_graphql_string(&default_behavior_id);
-    let escaped_tool_selection_id = escape_graphql_string("missing-tool-selection");
+    let context_id = format!("{default_behavior_id}:context");
+    let escaped_context_id = escape_graphql_string(&context_id);
+    let escaped_tools_id = escape_graphql_string("missing-tools");
     let mutation = format!(
         r#"mutation {{
-            update_AgentBehavior(
-                filter: {{ behavior_id: {{ _eq: "{escaped_behavior_id}" }} }},
-                input: {{ tool_selection_id: "{escaped_tool_selection_id}" }}
+            update_AgentContext(
+                filter: {{ context_id: {{ _eq: "{escaped_context_id}" }} }},
+                input: {{ tools_id: "{escaped_tools_id}" }}
             ) {{ _docID }}
         }}"#
     );
@@ -325,9 +326,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         .get(&default_behavior_id)
         .expect("default behavior should be unavailable");
     assert!(
-        unavailable_reason
-            .diagnostic
-            .contains("references missing tool selection missing-tool-selection"),
+        unavailable_reason.diagnostic.contains("missing-tools"),
         "unexpected unavailable reason: {}",
         unavailable_reason.diagnostic
     );
@@ -347,7 +346,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
         "unexpected startup error: {error_text}"
     );
     assert!(
-        !error_text.contains("missing-tool-selection"),
+        !error_text.contains("missing-tools"),
         "private configuration diagnostics leaked through startup error: {error_text}"
     );
 
@@ -359,9 +358,7 @@ async fn run_agent_fails_when_all_behaviors_are_unavailable_due_to_invalid_confi
     assert!(status
         .last_reconcile_error
         .contains("tool configuration is invalid"));
-    assert!(!status
-        .last_reconcile_error
-        .contains("missing-tool-selection"));
+    assert!(!status.last_reconcile_error.contains("missing-tools"));
     let readiness = fetch_behavior_readiness(node.as_ref(), identity.did()).await;
     assert_eq!(
         readiness.process_state,

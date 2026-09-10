@@ -58,11 +58,12 @@ test.describe("desktop responsive layout guardrails", () => {
       "behavior",
       "backends",
       "profiles",
-      "toolSelections",
+      "tools",
       "metaTools",
       "tasks",
-      "timerTriggers",
-      "eventTriggers",
+      "schedules",
+      "eventSources",
+      "triggers",
     ]) {
       await openConfigTab(page, tabId);
       await expect(page.locator(".config-editor").first()).toBeVisible();
@@ -120,7 +121,7 @@ test.describe("desktop responsive layout guardrails", () => {
     }
 
     await page.getByTestId("agent-tab-sessions").click();
-    await page.getByTestId("conversation-session-intro").click();
+    await page.getByTestId("session-session-intro").click();
     await expect(page.locator(".chat-column")).toBeVisible();
     await expect(page.locator(".sidebar")).toBeHidden();
   });

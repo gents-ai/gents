@@ -134,7 +134,7 @@ fn generated_operator_base_freeze_cases_drive_real_git_executor() {
                 docs.workspaces.get_mut("workspace-1").unwrap().seal_hash =
                     Some("other-tree".into());
             }
-            "cleaning_replay_denied" => {}
+            "cleaning_replay_denied" | "cleaned_replay_denied" => {}
             other => panic!("unmapped emitted operator-freeze case {other}"),
         }
         assert_eq!(case["base_tree"], "base-tree");

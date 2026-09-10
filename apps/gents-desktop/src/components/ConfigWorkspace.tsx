@@ -6,7 +6,7 @@ import type {
   BootstrapSummary,
   DeploymentView,
   DesktopApiAdapter,
-  EventTriggerSaveRequest,
+  EventSourceSaveRequest,
   ConfigComponentsApplyRequest,
   ScheduleSaveRequest,
   SkillDeleteRequest,
@@ -18,7 +18,9 @@ import type {
   ToolServiceTestResult,
   TaskDeleteRequest,
   ScheduleDeleteRequest,
-  EventTriggerDeleteRequest,
+  EventSourceDeleteRequest,
+  TriggerSaveRequest,
+  TriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
   ToolsDeleteRequest,
@@ -31,7 +33,7 @@ import {
   AgentConfigPanel,
   BackendConfigPanel,
   BehaviorConfigPanel,
-  EventTriggerConfigPanel,
+  EventSourceConfigPanel,
   InferenceProfileConfigPanel,
   ProviderAccountsPanel,
   ScheduleConfigPanel,
@@ -39,6 +41,7 @@ import {
   TaskConfigPanel,
   ToolsConfigPanel,
   ToolServiceConfigPanel,
+  TriggerConfigPanel,
 } from "./config";
 import { ConfigNavigationGuardProvider } from "./config/ConfigNavigationGuard";
 import sourceMarkUrl from "../assets/source-mark-light.png";
@@ -66,7 +69,8 @@ type ConfigWorkspaceProps = {
   onDeleteSkillConfig: (request: SkillDeleteRequest) => Promise<unknown>;
   onDeleteTaskConfig: (request: TaskDeleteRequest) => Promise<unknown>;
   onDeleteScheduleConfig: (request: ScheduleDeleteRequest) => Promise<unknown>;
-  onDeleteEventTriggerConfig: (request: EventTriggerDeleteRequest) => Promise<unknown>;
+  onDeleteEventSourceConfig: (request: EventSourceDeleteRequest) => Promise<unknown>;
+  onDeleteTriggerConfig: (request: TriggerDeleteRequest) => Promise<unknown>;
   onDeleteBackendConfig: (request: BackendDeleteRequest) => Promise<unknown>;
   onDeleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
@@ -78,7 +82,8 @@ type ConfigWorkspaceProps = {
   onSaveTaskConfig: (request: TaskSaveRequest) => Promise<unknown>;
   onSaveScheduleConfig: (request: ScheduleSaveRequest) => Promise<unknown>;
   onRunSchedule: (request: { scheduleId: string }) => Promise<TaskRunResult>;
-  onSaveEventTriggerConfig: (request: EventTriggerSaveRequest) => Promise<unknown>;
+  onSaveEventSourceConfig: (request: EventSourceSaveRequest) => Promise<unknown>;
+  onSaveTriggerConfig: (request: TriggerSaveRequest) => Promise<unknown>;
   onRunTask: (request: { taskId: string; args?: unknown }) => Promise<TaskRunResult>;
 };
 
@@ -103,7 +108,8 @@ export function ConfigWorkspace({
   onDeleteSkillConfig,
   onDeleteTaskConfig,
   onDeleteScheduleConfig,
-  onDeleteEventTriggerConfig,
+  onDeleteEventSourceConfig,
+  onDeleteTriggerConfig,
   onDeleteBackendConfig,
   onDeleteInferenceProfileConfig,
   onDeleteToolsConfig,
@@ -113,7 +119,8 @@ export function ConfigWorkspace({
   onSaveTaskConfig,
   onSaveScheduleConfig,
   onRunSchedule,
-  onSaveEventTriggerConfig,
+  onSaveEventSourceConfig,
+  onSaveTriggerConfig,
   onRunTask,
 }: ConfigWorkspaceProps) {
   const {
@@ -123,24 +130,26 @@ export function ConfigWorkspace({
     selectedBackendId,
     selectedBehavior,
     selectedConfigBehaviorId,
-    selectedEventTriggerId,
+    selectedEventSourceId,
     selectedProfileId,
     selectedScheduleId,
     selectedSkillId,
     selectedTaskId,
     selectedToolsId,
     selectedToolServiceId,
+    selectedTriggerId,
     setActiveTab,
     setSavedStatus,
     setSelectedBackendId,
     setSelectedConfigBehaviorId,
-    setSelectedEventTriggerId,
+    setSelectedEventSourceId,
     setSelectedProfileId,
     setSelectedScheduleId,
     setSelectedSkillId,
     setSelectedTaskId,
     setSelectedToolsId,
     setSelectedToolServiceId,
+    setSelectedTriggerId,
   } = useConfigWorkspaceSelection(selectedDeployment, selectedBehaviorId, initialTab);
 
   const navigationGuard = useMemo(
@@ -419,7 +428,7 @@ export function ConfigWorkspace({
             />
           ) : null}
 
-          {activeTab === "timerTriggers" ? (
+          {activeTab === "schedules" ? (
             <ScheduleConfigPanel
               onDeleteScheduleConfig={onDeleteScheduleConfig}
               onDeletedSchedule={() => setSelectedScheduleId(null)}
@@ -428,7 +437,6 @@ export function ConfigWorkspace({
               savedStatus={savedStatus}
               saving={saving}
               selectedScheduleId={selectedScheduleId}
-              selectedTaskId={selectedTaskId}
               onCreateSchedule={() => setSelectedScheduleId(NEW_DOCUMENT_ID)}
               onRunSchedule={onRunSchedule}
               onSaveScheduleConfig={onSaveScheduleConfig}
@@ -437,19 +445,33 @@ export function ConfigWorkspace({
             />
           ) : null}
 
-          {activeTab === "eventTriggers" ? (
-            <EventTriggerConfigPanel
-              onDeleteEventTriggerConfig={onDeleteEventTriggerConfig}
-              onDeletedEventTrigger={() => setSelectedEventTriggerId(null)}
+          {activeTab === "eventSources" ? (
+            <EventSourceConfigPanel
+              onDeleteEventSourceConfig={onDeleteEventSourceConfig}
+              onDeletedEventSource={() => setSelectedEventSourceId(null)}
               deployment={selectedDeployment}
               savedStatus={savedStatus}
               saving={saving}
-              selectedEventTriggerId={selectedEventTriggerId}
-              selectedTaskId={selectedTaskId}
-              onCreateEventTrigger={() => setSelectedEventTriggerId(NEW_DOCUMENT_ID)}
-              onSaveEventTriggerConfig={onSaveEventTriggerConfig}
+              selectedEventSourceId={selectedEventSourceId}
+              onCreateEventSource={() => setSelectedEventSourceId(NEW_DOCUMENT_ID)}
+              onSaveEventSourceConfig={onSaveEventSourceConfig}
               onSavedStatusChange={setSavedStatus}
-              onSelectEventTrigger={setSelectedEventTriggerId}
+              onSelectEventSource={setSelectedEventSourceId}
+            />
+          ) : null}
+
+          {activeTab === "triggers" ? (
+            <TriggerConfigPanel
+              onDeleteTriggerConfig={onDeleteTriggerConfig}
+              onDeletedTrigger={() => setSelectedTriggerId(null)}
+              deployment={selectedDeployment}
+              savedStatus={savedStatus}
+              saving={saving}
+              selectedTriggerId={selectedTriggerId}
+              onCreateTrigger={() => setSelectedTriggerId(NEW_DOCUMENT_ID)}
+              onSaveTriggerConfig={onSaveTriggerConfig}
+              onSavedStatusChange={setSavedStatus}
+              onSelectTrigger={setSelectedTriggerId}
             />
           ) : null}
         </section>

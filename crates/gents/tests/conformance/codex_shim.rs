@@ -304,7 +304,7 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
 
     let behavior_cases = lean_codex_shim_behavior_selection_cases();
     assert_eq!(behavior_cases.len(), 5);
-    for case in &behavior_cases {
+    for case in behavior_cases {
         let exact_scope = case.selected_owner == case.actual_owner
             && case.projected_behavior_id == case.actual_behavior;
         if !exact_scope || case.resolved_model.is_none() {

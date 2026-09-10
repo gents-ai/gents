@@ -21,7 +21,7 @@ pub struct PortSpec {
     pub collection: String,
     /// Stable schema reference used for compile-time compatibility checks.
     pub schema: String,
-    /// Existing field used by EventTrigger correlation and fan-in.
+    /// Source field used by event-trigger correlation and fan-in.
     pub correlation_field: String,
     pub cardinality: PortCardinality,
     #[serde(default)]
@@ -116,7 +116,10 @@ pub struct GraphEdge {
     #[cfg_attr(feature = "typescript", ts(as = "Option<crate::document_config::EventGroup>", optional = nullable))]
     pub delivery: DeliveryMode,
     #[serde(default)]
-    #[cfg_attr(feature = "typescript", ts(as = "Option<DeliveryConcurrency>", optional))]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<DeliveryConcurrency>", optional)
+    )]
     pub concurrency: DeliveryConcurrency,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]

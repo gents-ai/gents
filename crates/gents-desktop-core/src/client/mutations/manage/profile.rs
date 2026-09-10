@@ -1,11 +1,11 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::InferenceProfile;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::InferenceProfile;
 
 pub async fn upsert_inference_profile(
     node: &EmbeddedNode,

@@ -1,5 +1,5 @@
 use super::*;
-use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection};
+use crate::tool_surface::{BehaviorToolConfig, FileToolMode, ResolvedToolSelection, ToolCeiling};
 use crate::toolset::shared::ToolContext;
 use crate::toolset::{CommandConstraints, CommandExecutionMode, CommandNetworkMode};
 
@@ -154,7 +154,7 @@ fn tool_surface_includes_lsp_when_policy_allows() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = true;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());
@@ -168,7 +168,7 @@ fn tool_surface_includes_lsp_when_policy_allows() {
 #[test]
 fn tool_surface_omits_lsp_when_disabled() {
     let root = tempfile::tempdir().unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = false;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());
@@ -894,7 +894,7 @@ fn readonly_surface_uses_file_tool_root_not_cwd() {
         "[package]\nname=\"x\"\nversion=\"0.1.0\"\n",
     )
     .unwrap();
-    let mut selection = ToolSelection::default();
+    let mut selection = ResolvedToolSelection::default();
     selection.enable_lsp = true;
     selection.file_tools = FileToolMode::ReadOnly;
     selection.file_tool_root = Some(root.path().to_path_buf());

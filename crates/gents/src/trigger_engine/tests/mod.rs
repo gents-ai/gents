@@ -7,20 +7,19 @@ use std::task::Poll;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Duration as ChronoDuration, SecondsFormat, Utc};
-use tokio::sync::{Notify, mpsc, watch};
+use tokio::sync::{mpsc, watch, Notify};
 use tokio_util::sync::CancellationToken;
 
 use super::*;
-use crate::BackendProviderKind;
-use crate::config::{AgentBehavior, SamplingConfig};
+use crate::config::{ResolvedBehavior, SamplingConfig};
 use crate::document_config::load_trigger_next_run_at;
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
-use crate::identity::{AgentPrincipal, KeyIdentity};
+use crate::identity::{KeyIdentity, RuntimePrincipal};
 use crate::lean_vocab_test::{
-    LeanTriggerDispatchCase, LeanVocabulary, assert_lean_to_defradb_vocabulary_matches,
-    lean_event_group_case_count, lean_event_group_cases, lean_trigger_dispatch_case_count,
-    lean_trigger_dispatch_cases,
+    assert_lean_to_defradb_vocabulary_matches, lean_event_group_case_count, lean_event_group_cases,
+    lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases, LeanTriggerDispatchCase,
+    LeanVocabulary,
 };
 use crate::runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedEventTrigger, ResolvedRuntimeSnapshot,
@@ -30,9 +29,10 @@ use crate::tool_surface::BehaviorToolConfig;
 use crate::trigger_engine::event_source::EventSource;
 use crate::trigger_engine::manual_source::ManualSource;
 use crate::trigger_engine::production_materializer::{
-    ProductionMaterializer, execution_origin_for_trigger_kind,
+    execution_origin_for_trigger_kind, ProductionMaterializer,
 };
 use crate::trigger_engine::schedule_source::ScheduleSource;
+use crate::BackendProviderKind;
 
 /// Recorded `materialize` invocation: `(trigger_id, trigger_kind, rendered_prompt)`.
 type MaterializeCall = (Option<String>, TriggerKind, String);
@@ -59,10 +59,10 @@ fn remove_except<K: Clone + Eq + std::hash::Hash>(
     removed
 }
 
-/// Build a minimal `Arc<AgentPrincipal>` for tests that need to satisfy the
+/// Build a minimal `Arc<RuntimePrincipal>` for tests that need to satisfy the
 /// principal invariant enforced by `ResolvedRuntimeSnapshot::activate`'s
 /// `debug_assert!`. Does not exercise signing.
-fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
+fn stub_principal() -> Arc<crate::identity::RuntimePrincipal> {
     let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("stub-principal-{}.key", uuid::Uuid::new_v4())),
@@ -70,7 +70,7 @@ fn stub_principal() -> Arc<crate::identity::AgentPrincipal> {
         )
         .unwrap(),
     );
-    Arc::new(crate::identity::AgentPrincipal {
+    Arc::new(crate::identity::RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: String::new(),
@@ -579,12 +579,12 @@ fn snapshot_from_trigger_contract(
     Arc::new(resolved.activate(1, HashMap::new()))
 }
 
-/// Build a minimal `AgentBehavior` suitable for the production materializer
+/// Build a minimal `ResolvedBehavior` suitable for the production materializer
 /// integration test. The behavior has a backend binding (required — the
 /// materializer rejects tasks whose behavior is not backend-bound) but does
 /// not drive any inference: the integration test asserts lineage on the
 /// persisted `AgentRequest` doc only, not execution.
-fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
+fn integration_test_behavior(behavior_name: &str) -> Arc<ResolvedBehavior> {
     let identity: Arc<dyn crate::identity::AgentIdentity> = Arc::new(
         KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("{behavior_name}-{}.key", uuid::Uuid::new_v4())),
@@ -592,14 +592,14 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
         )
         .unwrap(),
     );
-    let principal = Arc::new(AgentPrincipal {
+    let principal = Arc::new(RuntimePrincipal {
         agent_did: identity.did().to_string(),
         identity,
         default_behavior_id: String::new(),
         display_name: None,
         enabled: true,
     });
-    Arc::new(AgentBehavior {
+    Arc::new(ResolvedBehavior {
         skills: Vec::new(),
         behavior_id: behavior_name.to_string(),
         principal,
@@ -632,7 +632,7 @@ fn integration_test_behavior(behavior_name: &str) -> Arc<AgentBehavior> {
 /// hand the ProductionMaterializer a snapshot where `behavior_id` resolution
 /// succeeds.
 fn snapshot_with_behavior_and_schedules(
-    behavior: Arc<AgentBehavior>,
+    behavior: Arc<ResolvedBehavior>,
     schedules: HashMap<String, ResolvedSchedule>,
 ) -> Arc<ActiveRuntimeSnapshot> {
     let principal = behavior.principal.clone();

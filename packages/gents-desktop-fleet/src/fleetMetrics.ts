@@ -87,34 +87,32 @@ export function needsInferenceSetup(deployment: DeploymentView): boolean {
 }
 
 export function toolCeilingIcons(
-  selections: Tools[],
-  selectedToolSelectionId?: string | null,
+  toolsDocuments: Tools[],
+  selectedToolsId?: string | null,
   serverCeiling?: string | null,
 ): ToolIcon[] {
-  const source = selectedToolSelectionId
-    ? selections.filter(
-        (selection) => selection.tools_id === selectedToolSelectionId,
-      )
+  const source = selectedToolsId
+    ? toolsDocuments.filter((tools) => tools.tools_id === selectedToolsId)
     : [];
   const icons: ToolIcon[] = [];
   const ceilingSuffix = serverCeiling
     ? ` Server ceiling: ${displayToolCeiling(serverCeiling)}.`
     : "";
   const bestFileMode = strongestMode(
-    source.map((selection) => selection.host?.files?.mode),
+    source.map((tools) => tools.host?.files?.mode),
   );
   const bestBashMode = strongestMode(
-    source.map((selection) => selection.host?.bash?.mode),
+    source.map((tools) => tools.host?.bash?.mode),
   );
   const allowedMetaServices = uniqueValues(
     source
-      .flatMap((selection) => selection.remote?.services ?? [])
+      .flatMap((tools) => tools.remote?.services ?? [])
       .filter((service) => (service.tool_names ?? []).length > 0)
       .map((service) => service.mcp_service_id),
   );
   const cliTools = uniqueValues(
-    source.flatMap((selection) =>
-      (selection.host?.cli ?? []).map((tool) => tool.name),
+    source.flatMap((tools) =>
+      (tools.host?.cli ?? []).map((tool) => tool.name),
     ),
   );
 

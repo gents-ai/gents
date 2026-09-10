@@ -9,11 +9,12 @@ use crate::commands::config::task_run::{config_task_run, resolve_task_id_for};
 use crate::config_writes::ConfigAccess;
 use crate::{print_json, resolve_config_access};
 
-const TASK_FIELDS: &str =
-    "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
-const BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description summary backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled created_at";
-const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
-const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter correlation_field fire_mode expected_count expected_count_field group_timeout_secs group_min_count workspace_authority enabled concurrency last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at";
+const TASK_FIELDS: &str = "task_id agent_did display_name description behavior_id prompt_template goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+const BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at updated_at";
+const TRIGGER_FIELDS: &str = "trigger_id agent_did display_name description task_id source enabled concurrency next_run_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count created_at updated_at tags";
+const SCHEDULE_FIELDS: &str =
+    "schedule_id agent_did display_name cadence created_at updated_at tags";
+const EVENT_SOURCE_FIELDS: &str = "event_source_id agent_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
 
 pub(crate) async fn dispatch(command: TaskCommand) -> Result<()> {
     match command {
@@ -52,8 +53,9 @@ pub(crate) async fn task_show(args: TaskShowArgs) -> Result<()> {
 struct TaskInventory {
     tasks: Vec<Value>,
     behaviors_by_id: BTreeMap<String, Value>,
-    schedules: Vec<Value>,
-    event_triggers: Vec<Value>,
+    triggers: Vec<Value>,
+    schedules_by_id: BTreeMap<String, Value>,
+    event_sources_by_id: BTreeMap<String, Value>,
 }
 
 impl TaskInventory {
@@ -70,13 +72,12 @@ impl TaskInventory {
         let behavior = behavior_id
             .as_deref()
             .and_then(|id| self.behaviors_by_id.get(id));
-        let schedules = self.schedules_for_task(&task_id);
-        let event_triggers = self.event_triggers_for_task(&task_id);
+        let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, behavior);
 
         json!({
             "task_id": task_id,
-            "name": task.get("name").cloned().unwrap_or(Value::Null),
+            "display_name": task.get("display_name").cloned().unwrap_or(Value::Null),
             "description": task.get("description").cloned().unwrap_or(Value::Null),
             "behavior_id": behavior_id,
             "goal_objective_template": task.get("goal_objective_template").cloned().unwrap_or(Value::Null),
@@ -85,10 +86,8 @@ impl TaskInventory {
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,
             "behavior": behavior.and_then(behavior_summary).unwrap_or(Value::Null),
-            "schedule_count": schedules.len(),
-            "schedule_ids": schedules.iter().filter_map(|row| string_field(row, "schedule_id")).collect::<Vec<_>>(),
-            "event_trigger_count": event_triggers.len(),
-            "event_trigger_ids": event_triggers.iter().filter_map(|row| string_field(row, "trigger_id")).collect::<Vec<_>>(),
+            "trigger_count": triggers.len(),
+            "trigger_ids": triggers.iter().filter_map(|row| string_field(row, "trigger_id")).collect::<Vec<_>>(),
         })
     }
 
@@ -97,8 +96,7 @@ impl TaskInventory {
         let behavior = string_field(task, "behavior_id")
             .as_deref()
             .and_then(|id| self.behaviors_by_id.get(id));
-        let schedules = self.schedules_for_task(&task_id);
-        let event_triggers = self.event_triggers_for_task(&task_id);
+        let triggers = self.triggers_for_task(&task_id);
         let (runnable, unavailable_reason) = runnable_status(task, behavior);
 
         json!({
@@ -106,33 +104,42 @@ impl TaskInventory {
             "behavior": behavior.cloned().unwrap_or(Value::Null),
             "runnable": runnable,
             "unavailable_reason": unavailable_reason,
-            "schedule_count": schedules.len(),
-            "schedules": schedules,
-            "event_trigger_count": event_triggers.len(),
-            "event_triggers": event_triggers,
+            "trigger_count": triggers.len(),
+            "triggers": triggers,
         })
     }
 
-    fn schedules_for_task(&self, task_id: &str) -> Vec<Value> {
+    fn triggers_for_task(&self, task_id: &str) -> Vec<Value> {
         let mut rows = self
-            .schedules
+            .triggers
             .iter()
             .filter(|row| string_field(row, "task_id").as_deref() == Some(task_id))
-            .cloned()
-            .collect::<Vec<_>>();
-        sort_rows_by_string_field(&mut rows, "schedule_id");
-        rows
-    }
-
-    fn event_triggers_for_task(&self, task_id: &str) -> Vec<Value> {
-        let mut rows = self
-            .event_triggers
-            .iter()
-            .filter(|row| string_field(row, "task_id").as_deref() == Some(task_id))
-            .cloned()
+            .map(|row| self.enrich_trigger(row))
             .collect::<Vec<_>>();
         sort_rows_by_string_field(&mut rows, "trigger_id");
         rows
+    }
+
+    fn enrich_trigger(&self, row: &Value) -> Value {
+        let mut trigger = row.clone();
+        let source_config = match row.pointer("/source/kind").and_then(Value::as_str) {
+            Some("schedule") => row
+                .pointer("/source/schedule_id")
+                .and_then(Value::as_str)
+                .and_then(|id| self.schedules_by_id.get(id)),
+            Some("event") => row
+                .pointer("/source/event_source_id")
+                .and_then(Value::as_str)
+                .and_then(|id| self.event_sources_by_id.get(id)),
+            _ => None,
+        };
+        if let Some(object) = trigger.as_object_mut() {
+            object.insert(
+                "source_config".into(),
+                source_config.cloned().unwrap_or(Value::Null),
+            );
+        }
+        trigger
     }
 }
 
@@ -152,17 +159,23 @@ async fn load_task_inventory(
         .filter_map(|row| string_field(&row, "behavior_id").map(|id| (id, row)))
         .collect::<BTreeMap<_, _>>();
 
-    let mut schedules = rows(&response, "Schedule");
-    sort_rows_by_string_field(&mut schedules, "schedule_id");
-
-    let mut event_triggers = rows(&response, "EventTrigger");
-    sort_rows_by_string_field(&mut event_triggers, "trigger_id");
+    let mut triggers = rows(&response, "Trigger");
+    sort_rows_by_string_field(&mut triggers, "trigger_id");
+    let schedules_by_id = rows(&response, "Schedule")
+        .into_iter()
+        .filter_map(|row| string_field(&row, "schedule_id").map(|id| (id, row)))
+        .collect();
+    let event_sources_by_id = rows(&response, "EventSource")
+        .into_iter()
+        .filter_map(|row| string_field(&row, "event_source_id").map(|id| (id, row)))
+        .collect();
 
     Ok(TaskInventory {
         tasks,
         behaviors_by_id,
-        schedules,
-        event_triggers,
+        triggers,
+        schedules_by_id,
+        event_sources_by_id,
     })
 }
 
@@ -175,7 +188,7 @@ fn task_inventory_query(task_id_filter: Option<&str>) -> String {
             )
         })
         .unwrap_or_default();
-    let related_args = task_id_filter
+    let trigger_args = task_id_filter
         .map(|task_id| {
             format!(
                 r#"(filter: {{ task_id: {{ _eq: "{}" }} }})"#,
@@ -192,11 +205,14 @@ fn task_inventory_query(task_id_filter: Option<&str>) -> String {
             AgentBehavior {{
                 {BEHAVIOR_FIELDS}
             }}
-            Schedule{related_args} {{
+            Trigger{trigger_args} {{
+                {TRIGGER_FIELDS}
+            }}
+            Schedule {{
                 {SCHEDULE_FIELDS}
             }}
-            EventTrigger{related_args} {{
-                {EVENT_TRIGGER_FIELDS}
+            EventSource {{
+                {EVENT_SOURCE_FIELDS}
             }}
         }}"#
     )
@@ -248,8 +264,8 @@ fn behavior_summary(behavior: &Value) -> Option<Value> {
         "agent_did": behavior.get("agent_did").cloned().unwrap_or(Value::Null),
         "display_name": behavior.get("display_name").cloned().unwrap_or(Value::Null),
         "enabled": bool_field(behavior, "enabled").unwrap_or(false),
-        "backend_id": behavior.get("backend_id").cloned().unwrap_or(Value::Null),
-        "model_name": behavior.get("model_name").cloned().unwrap_or(Value::Null),
+        "context_id": behavior.get("context_id").cloned().unwrap_or(Value::Null),
+        "inference_profile_id": behavior.get("inference_profile_id").cloned().unwrap_or(Value::Null),
     }))
 }
 
@@ -278,7 +294,7 @@ mod tests {
             tasks: vec![
                 json!({
                     "task_id": "disabled",
-                    "name": "Disabled",
+                    "display_name": "Disabled",
                     "description": null,
                     "behavior_id": "default",
                     "prompt_template": "noop",
@@ -289,7 +305,7 @@ mod tests {
                 }),
                 json!({
                     "task_id": "host-check",
-                    "name": "Host check",
+                    "display_name": "Host check",
                     "description": "Sweep host status",
                     "behavior_id": "default",
                     "prompt_template": "check",
@@ -308,40 +324,16 @@ mod tests {
                     "agent_did": "did:key:z-test",
                     "display_name": "Default",
                     "description": null,
-                    "summary": null,
-                    "backend_id": "local",
-                    "model_name": "model",
-                    "tool_selection_id": "default",
-                    "inference_profile_id": null,
-                    "compaction_strategy": null,
-                    "compaction_threshold": null,
+                    "context_id": "default-context",
+                    "inference_profile_id": "default-profile",
                     "enabled": true,
                     "created_at": null
                 }),
             )]),
-            schedules: vec![json!({
-                "schedule_id": "every-six-hours",
-                "task_id": "host-check",
-                "interval_secs": 21600,
-                "cron": null,
-                "timezone": null,
-                "missed_run_policy": "skip",
-                "enabled": true,
-                "concurrency": "skip",
-                "next_run_at": "2026-06-10T00:00:00Z",
-                "last_attempt_at": null,
-                "last_status": null,
-                "last_error": null,
-                "fire_count": 0,
-                "created_at": null,
-                "updated_at": null
-            })],
-            event_triggers: vec![json!({
+            triggers: vec![json!({
                 "trigger_id": "host-doc-created",
                 "task_id": "host-check",
-                "source_collection": "Host",
-                "event_kind": "created",
-                "filter": null,
+                "source": {"kind": "event", "event_source_id": "host-created"},
                 "enabled": true,
                 "concurrency": "parallel",
                 "last_attempt_at": null,
@@ -352,6 +344,16 @@ mod tests {
                 "created_at": null,
                 "updated_at": null
             })],
+            schedules_by_id: BTreeMap::new(),
+            event_sources_by_id: BTreeMap::from([(
+                "host-created".to_string(),
+                json!({
+                    "event_source_id": "host-created",
+                    "source_collection": "Host",
+                    "event_kind": "created",
+                    "filter": null
+                }),
+            )]),
         }
     }
 
@@ -379,18 +381,14 @@ mod tests {
             .get("unavailable_reason")
             .is_some_and(Value::is_null));
         assert_eq!(
-            summary.get("schedule_count").and_then(Value::as_u64),
-            Some(1)
-        );
-        assert_eq!(
-            summary.get("event_trigger_count").and_then(Value::as_u64),
+            summary.get("trigger_count").and_then(Value::as_u64),
             Some(1)
         );
         assert_eq!(
             summary
-                .pointer("/behavior/model_name")
+                .pointer("/behavior/context_id")
                 .and_then(Value::as_str),
-            Some("model")
+            Some("default-context")
         );
     }
 
@@ -415,7 +413,8 @@ mod tests {
         assert!(query.contains("Task(filter:"));
         assert!(query.contains(r#"task_id: { _eq: "host-check" }"#));
         assert!(query.contains("limit: 1"));
-        assert!(query.contains("Schedule(filter:"));
-        assert!(query.contains("EventTrigger(filter:"));
+        assert!(query.contains("Trigger(filter:"));
+        assert!(query.contains("Schedule {"));
+        assert!(query.contains("EventSource {"));
     }
 }

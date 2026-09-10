@@ -30,7 +30,7 @@ mod tools;
 mod trigger;
 mod write_tool;
 
-pub use principal::{AgentPrincipal, load_agent_principal, upsert_agent_principal};
+pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,
@@ -45,12 +45,10 @@ pub use installation::{
 pub use pack_config::PackConfig;
 pub use references::ConfigReferences;
 
-pub use behavior::{
-    AgentBehavior, list_agent_behaviors, load_agent_behavior, upsert_agent_behavior,
-};
 #[allow(unused_imports)]
-pub(crate) use behavior::{
-    list_agent_behavior_records, load_agent_behavior_record,
+pub(crate) use behavior::{list_agent_behavior_records, load_agent_behavior_record};
+pub use behavior::{
+    list_agent_behaviors, load_agent_behavior, upsert_agent_behavior, AgentBehavior,
 };
 
 pub use inference_backend::{
@@ -63,49 +61,47 @@ pub use inference_sampling::InferenceSampling;
 #[allow(unused_imports)]
 pub(crate) use inference_profile::load_inference_profile_record;
 pub use inference_profile::{
-    InferenceProfile, default_inference_profile_id_for_behavior, list_inference_profile_records,
-    load_inference_profile, upsert_inference_profile,
+    default_inference_profile_id_for_behavior, list_inference_profile_records,
+    load_inference_profile, upsert_inference_profile, InferenceProfile,
 };
 
 pub(crate) use serde_helpers::deserialize_default_on_null;
 pub use serde_helpers::deserialize_dual_shape;
-pub use surface_tool::{
-    MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl, merge_datastore_tool_surfaces,
-};
 #[allow(unused_imports)]
 pub(crate) use surface_tool::{
     deserialize_optional_surface_tools, validate_query_tool_declarations,
     validate_surface_tool_names,
+};
+pub use surface_tool::{
+    merge_datastore_tool_surfaces, MergedSurfaceTools, QueryToolDecl, SurfaceToolDecl,
 };
 pub use tools::{
     BashTools, BuiltInTools, CliTool, DatastoreTools, FileTools, HostTools, IntegrationTools,
     LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
     Tools,
 };
-pub(crate) use write_tool::validate_write_tool_declarations;
 pub use write_tool::{
-    OutputObligationDecision, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope, is_reserved_builtin_tool_name,
+    is_reserved_builtin_tool_name, OutputObligationDecision, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 
 pub use subagent_target::SubagentTargetDocument;
 
 pub use chain_key_binding::{
-    ChainKeyBindingDocument, chain_key_binding_by_id_query, create_chain_key_binding_mutation,
+    chain_key_binding_by_id_query, create_chain_key_binding_mutation,
     delete_chain_key_binding_mutation, list_chain_key_binding_records,
     list_chain_key_bindings_query, load_chain_key_binding_by_doc_id, upsert_chain_key_binding,
-    upsert_chain_key_binding_mutation,
+    upsert_chain_key_binding_mutation, ChainKeyBindingDocument,
 };
-pub use datastore_tool_surface::{DatastoreToolSurfaceDocument, list_datastore_tool_surfaces};
-pub use eth_tool::{EthToolDocument, eth_tool_by_id_query, list_eth_tools};
-pub(crate) use eth_tool::list_eth_tool_records;
+pub use datastore_tool_surface::{list_datastore_tool_surfaces, DatastoreToolSurfaceDocument};
+pub use eth_tool::{eth_tool_by_id_query, list_eth_tools, EthToolDocument};
 pub use skill::SkillDocument;
 
-pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 #[allow(unused_imports)]
 pub(crate) use event_trigger::{
-    TriggerRuntimeUpdate, load_trigger_next_run_at, update_trigger_runtime_fields,
+    load_trigger_next_run_at, update_trigger_runtime_fields, TriggerRuntimeUpdate,
 };
+pub use event_trigger::{EventGroup, EventGroupCount, EventSource};
 pub use schedule::{Schedule, ScheduleCadence, ScheduleObservation};
 #[allow(unused_imports)]
 pub use task::{Task, TaskHook, TaskHookPhase};

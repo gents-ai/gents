@@ -1137,10 +1137,10 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     let db = test_db("interrupt-drain-wakeups").await;
     let session_id = "interrupt-drain-session";
     let foreign_did = "did:test:foreign-drain";
-    let wakeup_metadata = format!(
+    let wakeup_input = format!(
         r#"{{"queue":{{"source":"background_completion","policy":"coalesce","key":"background_completion:{session_id}","queued_after_request_id":null}}}}"#
     );
-    let non_wakeup_metadata = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
+    let non_wakeup_input = r#"{"queue":{"source":"user","policy":"append","key":null,"queued_after_request_id":null}}"#;
 
     create_request(
         &db.node,
@@ -1159,7 +1159,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         session_id,
         AGENT_DID,
         "scheduled",
-        &wakeup_metadata,
+        &wakeup_input,
     )
     .await;
     // Same session, same row shape, foreign principal: the drain's
@@ -1170,7 +1170,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         session_id,
         foreign_did,
         "scheduled",
-        &wakeup_metadata,
+        &wakeup_input,
     )
     .await;
     // Owner principal but interactive origin: a user-turn queue row is not an
@@ -1181,10 +1181,10 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         session_id,
         AGENT_DID,
         "interactive",
-        &wakeup_metadata,
+        &wakeup_input,
     )
     .await;
-    // Scheduled origin but user/append queue metadata: the wakeup predicate
+    // Scheduled origin but user/append queue input: the wakeup predicate
     // (background_completion + coalesce + non-empty key) must reject it.
     create_pending_queue_row(
         &db.node,
@@ -1192,7 +1192,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
         session_id,
         AGENT_DID,
         "scheduled",
-        non_wakeup_metadata,
+        non_wakeup_input,
     )
     .await;
 
@@ -1240,7 +1240,7 @@ async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     assert_eq!(
         scheduled_user.lifecycle_state,
         RequestLifecycleState::Pending,
-        "scheduled rows without background-completion wake metadata must survive the drain"
+        "scheduled rows without background-completion wake input must survive the drain"
     );
 }
 
@@ -1250,13 +1250,15 @@ async fn create_pending_queue_row(
     session_id: &str,
     agent_did: &str,
     execution_origin: &str,
-    metadata: &str,
+    input: &str,
 ) {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_origin = escape_graphql_string(execution_origin);
-    let escaped_metadata = escape_graphql_string(metadata);
+    let input = serde_json::from_str::<Value>(input).expect("request input JSON");
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -1268,7 +1270,7 @@ async fn create_pending_queue_row(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "queued wake-up",
-                metadata: "{escaped_metadata}",
+                input: {input},
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_origin}",

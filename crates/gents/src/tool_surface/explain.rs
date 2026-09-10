@@ -517,7 +517,7 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
 mod target_scope_tests {
     use super::*;
     use crate::document_config::SubagentTargetDocument;
-    use crate::tool_surface::{SubagentToolConfig, ToolCeiling, ToolSelection};
+    use crate::tool_surface::{ResolvedToolSelection, SubagentToolConfig, ToolCeiling};
 
     #[test]
     fn remote_target_explanation_uses_destination_principal() {
@@ -536,7 +536,7 @@ mod target_scope_tests {
         ] {
             let config = BehaviorToolConfig::from_selection_with_subagent_tools(
                 "coordinator",
-                ToolSelection::default(),
+                ResolvedToolSelection::default(),
                 &ToolCeiling::meta_only(),
                 SubagentToolConfig {
                     targets: vec![target.clone()],

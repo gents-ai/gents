@@ -20,50 +20,40 @@ impl ClientStore {
         }
         let enabled = behaviors
             .iter()
-            .filter(|row| row.enabled.unwrap_or(true))
+            .filter(|row| row.enabled)
             .collect::<Vec<_>>();
         (enabled.len() == 1).then_some(enabled[0].behavior_id.as_str())
     }
 
-    pub fn behavior_rows(&self, agent_did: &str) -> Vec<&AgentBehaviorRow> {
+    pub fn behavior_rows(&self, agent_did: &str) -> Vec<&AgentBehavior> {
         self.behaviors
             .iter()
-            .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+            .filter(|row| row.agent_did == agent_did)
             .collect()
     }
 
-    pub fn behavior_row(&self, agent_did: &str, behavior_id: &str) -> Option<&AgentBehaviorRow> {
-        self.behaviors.iter().find(|row| {
-            row.agent_did.as_deref() == Some(agent_did) && row.behavior_id == behavior_id
-        })
+    pub fn behavior_row(&self, agent_did: &str, behavior_id: &str) -> Option<&AgentBehavior> {
+        self.behaviors
+            .iter()
+            .find(|row| row.agent_did == agent_did && row.behavior_id == behavior_id)
     }
 
     pub fn session_behavior_id(&self, session_id: &str, agent_did: Option<&str>) -> Option<String> {
-        self.conversations
+        self.sessions
             .iter()
             .find(|row| {
                 row.session_id == session_id
-                    && agent_did.is_none_or(|agent_did| row.agent_did.as_deref() == Some(agent_did))
+                    && agent_did.is_none_or(|agent_did| row.agent_did == agent_did)
             })
-            .and_then(|row| clean_string(row.behavior_id.as_deref()))
-            .or_else(|| {
-                self.sessions
-                    .iter()
-                    .find(|row| row.session_id == session_id)
-                    .and_then(|row| clean_string(row.behavior_id.as_deref()))
-            })
+            .and_then(|row| clean_string(Some(&row.behavior_id)))
     }
 
-    pub fn conversations_for_behavior(
-        &self,
-        agent_did: &str,
-        behavior_id: &str,
-    ) -> Vec<&AgentConversationRow> {
-        self.conversations
+    pub fn sessions_for_behavior(&self, agent_did: &str, behavior_id: &str) -> Vec<&AgentSession> {
+        self.sessions
             .iter()
             .filter(|row| {
-                row.agent_did.as_deref() == Some(agent_did)
-                    && clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id)
+                row.agent_did == agent_did
+                    && clean_string(Some(&row.behavior_id)).as_deref() == Some(behavior_id)
             })
             .collect()
     }
@@ -84,57 +74,29 @@ impl ClientStore {
 
     /// Return every `Task` bound to the given behavior.
     ///
-    /// `Task` rows are not scoped by `agent_did` — they carry a single
-    /// `behavior_id` and are addressed globally by `task_id`. The
-    /// `_agent_did` parameter is kept so call sites that pass an agent scope
-    /// (today's behavior-diagnostics view, for example) stay ergonomic; the
-    /// filter is intentionally behavior-scoped only.
-    pub fn tasks_for_behavior(&self, _agent_did: &str, behavior_id: &str) -> Vec<&TaskRow> {
+    pub fn tasks_for_behavior(&self, agent_did: &str, behavior_id: &str) -> Vec<&Task> {
         self.tasks
             .iter()
-            .filter(|row| clean_string(row.behavior_id.as_deref()).as_deref() == Some(behavior_id))
+            .filter(|row| row.agent_did == agent_did && row.behavior_id == behavior_id)
             .collect()
     }
 
-    /// Return every `Schedule` whose `task_id` matches one of the provided
-    /// tasks. Useful for listing the schedules attached to a behavior
-    /// indirectly (via its tasks).
-    pub fn schedules_for_tasks(&self, task_ids: &[&str]) -> Vec<&ScheduleRow> {
+    /// Return every `Trigger` whose `task_id` matches one of the
+    /// provided tasks.
+    pub fn triggers_for_tasks(&self, task_ids: &[&str]) -> Vec<&Trigger> {
         if task_ids.is_empty() {
             return Vec::new();
         }
-        self.schedules
+        self.triggers
             .iter()
-            .filter(|row| {
-                row.task_id
-                    .as_deref()
-                    .is_some_and(|task_id| task_ids.contains(&task_id))
-            })
+            .filter(|row| task_ids.contains(&row.task_id.as_str()))
             .collect()
     }
 
-    /// Return every `EventTrigger` whose `task_id` matches one of the
-    /// provided tasks. Mirrors `schedules_for_tasks` so manage views can
-    /// list the triggers attached to a behavior indirectly (via its
-    /// tasks).
-    pub fn event_triggers_for_tasks(&self, task_ids: &[&str]) -> Vec<&EventTriggerRow> {
-        if task_ids.is_empty() {
-            return Vec::new();
-        }
-        self.event_triggers
-            .iter()
-            .filter(|row| {
-                row.task_id
-                    .as_deref()
-                    .is_some_and(|task_id| task_ids.contains(&task_id))
-            })
-            .collect()
-    }
-
-    /// Roll up the trigger-engine bookkeeping for a `Task` across every
-    /// `Schedule` and `EventTrigger` that references it.
+    /// Roll up trigger-engine bookkeeping for a `Task` across every
+    /// canonical `Trigger` that references it.
     ///
-    /// Both trigger kinds carry their own independent `fire_count`,
+    /// Each trigger has independent `fire_count`,
     /// `last_attempt_at`, `last_status`, and `last_error` fields. This
     /// helper sums the fires and picks the most recent `last_attempt_at`
     /// (lexicographic max on the ISO-8601 timestamp strings -- the
@@ -145,54 +107,51 @@ impl ClientStore {
     /// rolled-up "Recent Runs" summary instead of forcing them to click
     /// into each individual trigger.
     pub fn recent_runs_for_task(&self, task_id: &str) -> TaskRecentRuns {
-        let schedules: Vec<&ScheduleRow> = self
-            .schedules
+        let triggers: Vec<&Trigger> = self
+            .triggers
             .iter()
-            .filter(|s| s.task_id.as_deref() == Some(task_id))
+            .filter(|trigger| trigger.task_id == task_id)
             .collect();
-        let events: Vec<&EventTriggerRow> = self
-            .event_triggers
+        let observations = triggers
             .iter()
-            .filter(|t| t.task_id.as_deref() == Some(task_id))
-            .collect();
+            .filter_map(|trigger| {
+                self.trigger_observations
+                    .iter()
+                    .enumerate()
+                    .find(|(index, observation)| {
+                        observation.trigger_id == trigger.trigger_id
+                            && source_agent_matches(
+                                &self.trigger_observation_source_agent_dids,
+                                *index,
+                                &trigger.agent_did,
+                            )
+                    })
+                    .map(|(_, observation)| observation)
+            })
+            .collect::<Vec<_>>();
 
-        let total_fires = schedules
+        let total_fires = observations
             .iter()
-            .map(|s| s.fire_count.unwrap_or(0).max(0) as u64)
-            .sum::<u64>()
-            + events
-                .iter()
-                .map(|t| t.fire_count.unwrap_or(0).max(0) as u64)
-                .sum::<u64>();
+            .map(|observation| observation.fire_count.unwrap_or(0).max(0) as u64)
+            .sum::<u64>();
 
         // Find the most recent attempt_at across all triggers.
-        let all_attempts: Vec<&str> = schedules
+        let all_attempts: Vec<&str> = observations
             .iter()
-            .filter_map(|s| s.last_attempt_at.as_deref())
-            .chain(events.iter().filter_map(|t| t.last_attempt_at.as_deref()))
+            .filter_map(|observation| observation.last_attempt_at.as_deref())
             .collect();
         let last_attempt_at = all_attempts.iter().max().map(ToString::to_string);
 
-        // Resolve status + error from the trigger whose timestamp
-        // equals the max. Ties (two triggers firing in the same second
-        // on the same task) resolve in favor of the first schedule
-        // found, then the first event trigger found -- rare in
-        // practice, and the operator still sees the aggregate
-        // fire-count.
+        // Resolve status + error from the trigger whose timestamp equals the max.
         let (last_status, last_error) = if let Some(ref target_ts) = last_attempt_at {
             let mut pair = None;
-            for s in &schedules {
-                if s.last_attempt_at.as_deref() == Some(target_ts.as_str()) {
-                    pair = Some((s.last_status.clone(), s.last_error.clone()));
+            for observation in &observations {
+                if observation.last_attempt_at.as_deref() == Some(target_ts.as_str()) {
+                    pair = Some((
+                        observation.last_status.clone(),
+                        observation.last_error.clone(),
+                    ));
                     break;
-                }
-            }
-            if pair.is_none() {
-                for t in &events {
-                    if t.last_attempt_at.as_deref() == Some(target_ts.as_str()) {
-                        pair = Some((t.last_status.clone(), t.last_error.clone()));
-                        break;
-                    }
                 }
             }
             pair.unwrap_or((None, None))
@@ -205,17 +164,31 @@ impl ClientStore {
             last_attempt_at,
             last_status,
             last_error,
-            schedule_count: schedules.len(),
-            event_trigger_count: events.len(),
+            schedule_count: triggers
+                .iter()
+                .filter(|trigger| {
+                    matches!(
+                        trigger.source,
+                        gents::document_config::TriggerSource::Schedule { .. }
+                    )
+                })
+                .count(),
+            event_count: triggers
+                .iter()
+                .filter(|trigger| {
+                    matches!(
+                        trigger.source,
+                        gents::document_config::TriggerSource::Event { .. }
+                    )
+                })
+                .count(),
         }
     }
 
-    pub fn conversation_rows(&self, agent_did: &str) -> Vec<&AgentConversationRow> {
-        self.conversations_by_agent_did
-            .get(agent_did)
-            .into_iter()
-            .flat_map(|indexes| indexes.iter())
-            .map(|index| &self.conversations[*index])
+    pub fn session_rows(&self, agent_did: &str) -> Vec<&AgentSession> {
+        self.sessions
+            .iter()
+            .filter(|session| session.agent_did == agent_did)
             .collect()
     }
 }

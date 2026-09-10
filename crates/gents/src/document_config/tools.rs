@@ -1,4 +1,4 @@
-//! One tool configuration document with typed nested groups (structural draft).
+//! Canonical tool configuration with typed nested capability groups.
 //!
 //! Optional timeout fields use the documented owner default when unset. Configured
 //! Tool enable/allow/background flags default false; presence or references alone
@@ -418,8 +418,8 @@ pub struct IntegrationTools {
     pub eth_tool_ids: Option<Vec<String>>,
 }
 
-/// Language-server settings embedded in IntegrationTools.
-/// Retains the existing operator payload and its validator for this draft.
+/// Language-server settings embedded in `IntegrationTools`.
+/// The operator payload is validated with the rest of the tool document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -863,11 +863,9 @@ mod tests {
             let before = serde_json::to_value(&tools).unwrap();
             assert!(tools.validate().is_ok());
             assert_eq!(serde_json::to_value(&tools).unwrap(), before);
-            assert!(
-                tools.remote.as_ref().unwrap().services[0]
-                    .tool_names
-                    .is_empty()
-            );
+            assert!(tools.remote.as_ref().unwrap().services[0]
+                .tool_names
+                .is_empty());
             assert_eq!(tools.built_ins.as_ref().unwrap().enable_goal_tools, None);
         }
     }
@@ -971,11 +969,9 @@ mod tests {
             assert!(document(value).validate().is_err());
         }
         assert!(document(json!({"host":{"bash":{"timeout_secs":5,"max_timeout_secs":5,"wait_timeout_secs":700,"max_wait_timeout_secs":700}}})).validate().is_ok());
-        assert!(
-            document(json!({"host":{"bash":{"timeout_secs":500}}}))
-                .validate()
-                .is_ok()
-        );
+        assert!(document(json!({"host":{"bash":{"timeout_secs":500}}}))
+            .validate()
+            .is_ok());
         assert!(document(json!({"remote":{"services":[{"mcp_service_id":"remote","timeout_secs":1,"stale_timeout_secs":120,"background_timeout_secs":36000}]}})).validate().is_ok());
     }
 

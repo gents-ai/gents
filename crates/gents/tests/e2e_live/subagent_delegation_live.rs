@@ -51,19 +51,22 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{
+    AgentBehavior, AgentContext, BackendAuth, BashTools, HostTools, InferenceBackend,
+    InferenceProfile, SubagentTools, Tools,
+};
 use gents::graphql::escape_graphql_string;
 use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
-    default_inference_profile_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    resolve_descendant_graph, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
-    AgentIdentity, DescendantGraphAccess, DescendantMaterializationState, DescendantPage,
-    DescendantQuery, DocumentRuntimeOptions, Gents, SubagentTarget, ToolCeiling,
-    ToolSelectionDocument,
+    default_inference_profile_id_for_behavior, ensure_agent_principal, resolve_descendant_graph,
+    AgentIdentity, BackendProviderKind, BashMode, Collection, DescendantGraphAccess,
+    DescendantMaterializationState, DescendantPage, DescendantQuery, DocumentRuntimeOptions, Gents,
+    OpenAiWireApi, SubagentTargetDocument, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
-use crate::support::fixtures::test_identity;
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::{first_optional_row, test_db, test_p2p_db, TestDb};
 
@@ -135,7 +138,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         .await
         .expect("ensure principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
 
     // Orchestrator behavior: system prompt instructs delegation to the
     // researcher subagent (foreground is fine locally).
@@ -168,11 +171,14 @@ async fn live_local_subagent_delegation() -> Result<()> {
         db.node.as_ref(),
         &agent_did,
         &orchestrator_behavior_id,
-        vec![SubagentTarget {
-            name: RESEARCHER_TARGET_NAME.to_string(),
+        vec![SubagentTargetDocument {
+            target_id: RESEARCHER_TARGET_NAME.to_string(),
             agent_did: agent_did.clone(),
+            target_agent_did: agent_did.clone(),
+            name: RESEARCHER_TARGET_NAME.to_string(),
             behavior_id: RESEARCHER_BEHAVIOR_ID.to_string(),
             description: Some("Researches factual questions.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -378,7 +384,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         .await
         .expect("ensure backgrounding principal");
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
     configure_behavior(
         db.node.as_ref(),
         &orchestrator_behavior_id,
@@ -424,7 +430,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     let agent = boot_loaded_document_agent(&db, loaded_agent).await;
 
     // Lane 1: the model invokes spawn_subagent without await_mode. The
-    // ToolSelection default must make the standard path background.
+    // Tools default must make the standard path background.
     let agent_request_id = "req-live-standard-background-agent";
     let agent_session_id = "session-live-standard-background-agent";
     create_runtime_request(
@@ -920,7 +926,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         .expect("ensure principal B");
     let profile_b =
         default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db_b.node.as_ref(), &did_b, &endpoint).await;
     configure_behavior(
         db_b.node.as_ref(),
         FAST_WORKER_BEHAVIOR_ID,
@@ -945,11 +951,14 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         db_b.node.as_ref(),
         &did_b,
         FAST_WORKER_BEHAVIOR_ID,
-        vec![SubagentTarget {
-            name: REVIEWER_TARGET_NAME.to_string(),
+        vec![SubagentTargetDocument {
+            target_id: REVIEWER_TARGET_NAME.to_string(),
             agent_did: did_b.clone(),
+            target_agent_did: did_b.clone(),
+            name: REVIEWER_TARGET_NAME.to_string(),
             behavior_id: REVIEWER_BEHAVIOR_ID.to_string(),
             description: Some("Reviews the fast worker's answer.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -962,7 +971,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         .await
         .expect("ensure principal A");
     let profile_a = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db_a.node.as_ref(), &endpoint, &model).await;
+    upsert_live_backend(db_a.node.as_ref(), &did_a, &endpoint).await;
     configure_behavior(
         db_a.node.as_ref(),
         &orchestrator_behavior_id,
@@ -982,11 +991,14 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         db_a.node.as_ref(),
         &did_a,
         &orchestrator_behavior_id,
-        vec![SubagentTarget {
+        vec![SubagentTargetDocument {
+            target_id: FAST_WORKER_TARGET_NAME.to_string(),
+            agent_did: did_a.clone(),
+            target_agent_did: did_b.clone(),
             name: FAST_WORKER_TARGET_NAME.to_string(),
-            agent_did: did_b.clone(),
             behavior_id: FAST_WORKER_BEHAVIOR_ID.to_string(),
             description: Some("Produces a reviewed factual answer.".to_string()),
+            tags: Vec::new(),
         }],
         /* spawn */ true,
         /* background */ true,
@@ -1445,48 +1457,30 @@ fn assert_standard_backgrounding_tool_surfaces(
 }
 
 /// Upsert the live inference backend document (OpenAI-compatible vLLM).
-async fn upsert_live_backend(node: &EmbeddedNode, endpoint: &str, model: &str) {
-    let escaped_backend_id = escape_graphql_string(LIVE_BACKEND_ID);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_model = escape_graphql_string(model);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    api_key: "",
-                    api_key_env_var: "",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert live backend failed: {:?}",
-        response.errors
-    );
+async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &str) {
+    let backend = InferenceBackend {
+        agent_did: agent_did.to_string(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        name: LIVE_BACKEND_ID.to_string(),
+        provider_kind: BackendProviderKind::OpenAiCompatible,
+        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+        endpoint: endpoint.to_string(),
+        auth: BackendAuth::Unauthenticated,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(4),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    };
+    apply_fixture_documents(
+        node,
+        vec![(
+            Collection::InferenceBackend,
+            serde_json::to_value(backend).expect("serialize live backend"),
+        )],
+    )
+    .await;
 }
 
 /// Upsert an `AgentBehavior` document backed by the live backend, with an
@@ -1500,83 +1494,128 @@ async fn configure_behavior(
     system_prompt: &str,
     description: Option<&str>,
 ) {
-    let mut behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .expect("load behavior")
-        .unwrap_or_else(|| AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some(behavior_id.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-06-02T00:00:00Z".to_string()),
-        });
-    behavior.agent_did = agent_did.to_string();
-    behavior.backend_id = Some(LIVE_BACKEND_ID.to_string());
-    behavior.model_name = Some(model.to_string());
-    behavior.inference_profile_id = Some(inference_profile_id.to_string());
-    behavior.system_prompt = Some(system_prompt.to_string());
-    behavior.description = description.map(ToOwned::to_owned);
-    behavior.enabled = true;
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("upsert behavior");
+    let context_id = format!("{behavior_id}:context");
+    let profile = InferenceProfile {
+        agent_did: agent_did.to_string(),
+        profile_id: inference_profile_id.to_string(),
+        backend_id: LIVE_BACKEND_ID.to_string(),
+        model_name: model.to_string(),
+        ..Default::default()
+    };
+    let context = AgentContext {
+        context_id: context_id.clone(),
+        agent_did: agent_did.to_string(),
+        display_name: None,
+        description: None,
+        system_prompt: Some(system_prompt.to_string()),
+        tools_id: None,
+        compaction_id: None,
+        skill_ids: Vec::new(),
+        tags: Vec::new(),
+    };
+    let behavior = AgentBehavior {
+        behavior_id: behavior_id.to_string(),
+        agent_did: agent_did.to_string(),
+        display_name: Some(behavior_id.to_string()),
+        description: description.map(ToOwned::to_owned),
+        context_id: Some(context_id),
+        inference_profile_id: inference_profile_id.to_string(),
+        enabled: true,
+        tags: Vec::new(),
+        created_at: Some("2026-06-02T00:00:00Z".to_string()),
+    };
+    apply_fixture_documents(
+        node,
+        vec![
+            (
+                Collection::InferenceProfile,
+                serde_json::to_value(profile).expect("serialize live inference profile"),
+            ),
+            (
+                Collection::AgentContext,
+                serde_json::to_value(context).expect("serialize live agent context"),
+            ),
+            (
+                Collection::AgentBehavior,
+                serde_json::to_value(behavior).expect("serialize live behavior"),
+            ),
+        ],
+    )
+    .await;
 }
 
-/// Upsert a ToolSelectionDocument enabling subagent spawning and link it to
-/// `behavior_id`.
+async fn apply_fixture_documents(
+    node: &EmbeddedNode,
+    documents: Vec<(Collection, serde_json::Value)>,
+) {
+    use gents::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .expect("build live fixture plan");
+    gents::ConfigAccess::transact_local(node, None, "test.live_subagent_fixture", |txn| {
+        let plan = &plan;
+        Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
+    })
+    .await
+    .expect("apply live fixture documents");
+}
+
+/// Publish canonical tools enabling subagent spawning for `behavior_id`.
 async fn authorize_subagents(
     node: &EmbeddedNode,
     agent_did: &str,
     behavior_id: &str,
-    subagent_targets: Vec<SubagentTarget>,
+    subagent_targets: Vec<SubagentTargetDocument>,
     spawn_enabled: bool,
     background_enabled: bool,
     allow_cross_deployment: bool,
 ) {
-    let selection_id = format!("{behavior_id}-subagent-tools");
-    let target_entries = subagent_targets
+    let tools_id = format!("{behavior_id}-subagent-tools");
+    let target_ids = subagent_targets
         .iter()
-        .map(SubagentTarget::to_entry)
+        .map(|target| target.target_id.clone())
         .collect();
-    upsert_tool_selection(
+    let referenced_documents = subagent_targets
+        .into_iter()
+        .map(|target| {
+            (
+                Collection::SubagentTarget,
+                serde_json::to_value(target).expect("serialize subagent target"),
+            )
+        })
+        .collect();
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+        agent_did,
+        behavior_id,
+        None,
+        Tools {
+            tools_id,
             agent_did: agent_did.to_string(),
-            subagent_targets: Some(target_entries),
-            subagent_spawn_enabled: Some(spawn_enabled),
-            subagent_background_enabled: Some(background_enabled),
-            subagent_allow_cross_deployment: Some(allow_cross_deployment),
-            // Keep the orchestrator's toolset focused on delegation so the live
-            // model reliably reaches for spawn_subagent rather than defra_query.
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            subagents: Some(SubagentTools {
+                target_ids,
+                spawn_enabled: Some(spawn_enabled),
+                steering_enabled: Some(true),
+                background_enabled: Some(background_enabled),
+                allow_cross_principal: Some(allow_cross_deployment),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        referenced_documents,
     )
-    .await
-    .expect("upsert tool selection");
-
-    let mut behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .expect("load behavior for tool-selection link")
-        .expect("behavior must exist before linking tool selection");
-    behavior.tool_selection_id = Some(selection_id);
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("link tool selection");
+    .await;
 }
 
 /// Configure the parent with both standard background lanes and the child with
@@ -1588,64 +1627,73 @@ async fn configure_standard_backgrounding_tools(
     parent_behavior_id: &str,
     workspace: &Path,
 ) {
-    let parent_selection_id = format!("{parent_behavior_id}-standard-background-tools");
-    let parent_target = SubagentTarget {
-        name: BACKGROUND_WORKER_TARGET_NAME.to_string(),
+    let parent_tools_id = format!("{parent_behavior_id}-standard-background-tools");
+    let parent_target = SubagentTargetDocument {
+        target_id: BACKGROUND_WORKER_TARGET_NAME.to_string(),
         agent_did: agent_did.to_string(),
+        target_agent_did: agent_did.to_string(),
         behavior_id: BACKGROUND_WORKER_BEHAVIOR_ID.to_string(),
+        name: BACKGROUND_WORKER_TARGET_NAME.to_string(),
         description: Some("Runs a deliberately blocked background job.".to_string()),
+        tags: Vec::new(),
     };
-    upsert_tool_selection(
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: parent_selection_id.clone(),
+        agent_did,
+        parent_behavior_id,
+        None,
+        Tools {
+            tools_id: parent_tools_id,
             agent_did: agent_did.to_string(),
-            enable_bash: Some(true),
-            bash_mode: Some("Unrestricted".to_string()),
-            file_tool_root: Some(workspace.display().to_string()),
-            backgroundable_tool_names: Some(vec!["bash_unrestricted".to_string()]),
-            subagent_targets: Some(vec![parent_target.to_entry()]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_default_await_mode: Some("background".to_string()),
-            subagent_allow_cross_deployment: Some(false),
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                bash: Some(BashTools {
+                    mode: BashMode::Unrestricted,
+                    background_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            subagents: Some(SubagentTools {
+                target_ids: vec![parent_target.target_id.clone()],
+                spawn_enabled: Some(true),
+                steering_enabled: Some(true),
+                background_enabled: Some(true),
+                default_await_mode: Some("background".to_string()),
+                allow_cross_principal: Some(false),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        vec![(
+            Collection::SubagentTarget,
+            serde_json::to_value(parent_target).expect("serialize background worker target"),
+        )],
     )
-    .await
-    .expect("upsert parent standard backgrounding selection");
-    link_tool_selection(node, parent_behavior_id, &parent_selection_id).await;
+    .await;
 
-    let child_selection_id = format!("{BACKGROUND_WORKER_BEHAVIOR_ID}-foreground-bash-tools");
-    upsert_tool_selection(
+    let child_tools_id = format!("{BACKGROUND_WORKER_BEHAVIOR_ID}-foreground-bash-tools");
+    configure_behavior_tools(
         node,
-        &ToolSelectionDocument {
-            selection_id: child_selection_id.clone(),
+        agent_did,
+        BACKGROUND_WORKER_BEHAVIOR_ID,
+        None,
+        Tools {
+            tools_id: child_tools_id,
             agent_did: agent_did.to_string(),
-            enable_bash: Some(true),
-            bash_mode: Some("Unrestricted".to_string()),
-            file_tool_root: Some(workspace.display().to_string()),
-            enable_meta_tools: Some(false),
-            enable_defra_query: Some(false),
+            host: Some(HostTools {
+                root: Some(workspace.display().to_string()),
+                bash: Some(BashTools {
+                    mode: BashMode::Unrestricted,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .expect("upsert child foreground bash selection");
-    link_tool_selection(node, BACKGROUND_WORKER_BEHAVIOR_ID, &child_selection_id).await;
-}
-
-async fn link_tool_selection(node: &EmbeddedNode, behavior_id: &str, selection_id: &str) {
-    let mut behavior = load_agent_behavior(node, behavior_id)
-        .await
-        .expect("load behavior for tool-selection link")
-        .expect("behavior must exist before linking tool selection");
-    behavior.tool_selection_id = Some(selection_id.to_string());
-    upsert_agent_behavior(node, &behavior)
-        .await
-        .expect("link tool selection");
+    .await;
 }
 
 #[derive(Debug, Clone, Deserialize)]

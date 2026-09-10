@@ -10,9 +10,7 @@ use serde_json::Value;
 
 use crate::cli::ManifestAgentDidBindingArg;
 use crate::config_writes::ConfigAccess;
-use crate::desired_state::{
-    self, DesiredStateManifest, DesiredStateValidationReport,
-};
+use crate::desired_state::{self, DesiredStateManifest, DesiredStateValidationReport};
 use crate::print_json;
 
 pub(crate) struct ManifestBindingOptions<'a> {
@@ -74,7 +72,17 @@ pub(crate) async fn load_bound_manifest(
     options: ManifestBindingOptions<'_>,
 ) -> Result<BoundManifestLoad> {
     let root_display = options.root.display().to_string();
-    let (manifest, initial_report) = desired_state::load_manifest_root(options.root);
+    let bind_mode = ManifestBindMode::from_cli(options.bind_agent_did);
+    let (mut manifest, mut initial_report) = desired_state::load_manifest_root(options.root);
+    let mut decoded_for_target = None;
+    if manifest.is_none() && bind_mode != ManifestBindMode::Manifest {
+        let target =
+            resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access)
+                .await?;
+        (manifest, initial_report) =
+            desired_state::load_manifest_root_for_owner(options.root, Some(&target));
+        decoded_for_target = Some(target);
+    }
     let Some(mut manifest) = manifest else {
         return Ok(BoundManifestLoad {
             bound: None,
@@ -82,7 +90,6 @@ pub(crate) async fn load_bound_manifest(
         });
     };
 
-    let bind_mode = ManifestBindMode::from_cli(options.bind_agent_did);
     let source_manifest_dids = manifest_agent_dids(&manifest)?;
 
     if bind_mode == ManifestBindMode::Manifest {
@@ -100,8 +107,11 @@ pub(crate) async fn load_bound_manifest(
         });
     }
 
-    let target_did =
-        resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access).await?;
+    let target_did = if let Some(target) = decoded_for_target {
+        target
+    } else {
+        resolve_bound_agent_did(bind_mode, options.home, options.graphql, options.access).await?
+    };
     enforce_manifest_rebind_safety(&manifest, &target_did, options.force_rebind_concrete_did)?;
     rebind_manifest_agent_did(&mut manifest, &target_did)?;
 

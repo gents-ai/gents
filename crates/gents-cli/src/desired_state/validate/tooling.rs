@@ -3,10 +3,7 @@ use super::super::DesiredStateManifest;
 // Offline checks validate authored values only. The existing apply transaction
 // validates references, expansion, collisions and obligations against the full
 // retained candidate; packs may refer to documents already installed there.
-pub(super) fn validate_surfaces(
-    manifest: &DesiredStateManifest,
-    errors: &mut Vec<String>,
-) {
+pub(super) fn validate_surfaces(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for surface in &manifest.datastore_tool_surfaces {
         for entry in surface.entries.as_deref().unwrap_or(&[]) {
             if let Err(error) = entry.validate() {
@@ -19,10 +16,7 @@ pub(super) fn validate_surfaces(
     }
 }
 
-pub(super) fn validate_eth_tools(
-    manifest: &DesiredStateManifest,
-    errors: &mut Vec<String>,
-) {
+pub(super) fn validate_eth_tools(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for binding in &manifest.chain_key_bindings {
         if let Err(error) = binding.validate() {
             errors.push(format!("ChainKeyBinding {}: {error:#}", binding.binding_id));
@@ -35,10 +29,7 @@ pub(super) fn validate_eth_tools(
     }
 }
 
-pub(super) fn validate_tools(
-    manifest: &DesiredStateManifest,
-    errors: &mut Vec<String>,
-) {
+pub(super) fn validate_tools(manifest: &DesiredStateManifest, errors: &mut Vec<String>) {
     for tools in &manifest.tools {
         if let Err(error) = tools.validate() {
             errors.push(format!("{error:#}"));

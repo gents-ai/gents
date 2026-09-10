@@ -265,7 +265,9 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
     use crate::document_config::{
         WriteToolDecl, WriteToolField, WriteToolOutputObligation, WriteToolOutputObligationScope,
     };
-    use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolRuntimeContext, ToolSelection};
+    use crate::tool_surface::{
+        BehaviorToolConfig, ResolvedToolSelection, ToolCeiling, ToolRuntimeContext,
+    };
 
     for request_scoped in [true, false] {
         let dir = tempfile::tempdir().unwrap();
@@ -288,7 +290,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         behavior.model_name = "scripted".into();
         behavior.stream_liveness_timeout = Duration::from_secs(60);
         behavior.deadline_duration = Duration::from_secs(120);
-        let mut selection = ToolSelection::default();
+        let mut selection = ResolvedToolSelection::default();
         selection.write_tools = vec![WriteToolDecl {
             tool_name: "write_oneshot_result".into(),
             collection: "OneshotOutput".into(),

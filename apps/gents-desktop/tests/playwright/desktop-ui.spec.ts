@@ -37,7 +37,7 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByTestId("backend-endpoint")).toBeVisible();
   });
 
-  test("mobile conversation pins the title and composer to the viewport", async ({
+  test("mobile session pins the title and composer to the viewport", async ({
     page,
   }) => {
     test.skip((page.viewportSize()?.width ?? 761) > 760, "mobile viewport only");
@@ -155,7 +155,7 @@ test.describe("desktop UI harness", () => {
     ).toBeVisible();
   });
 
-  test("chat sends a message, creates a new conversation, renames, and avoids duplicate adjacent messages", async ({
+  test("chat sends a message, creates a new session, renames, and avoids duplicate adjacent messages", async ({
     page,
   }) => {
     await gotoHarness(page);
@@ -189,33 +189,33 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByRole("heading", { name: "manual ops check" })).toBeVisible();
   });
 
-  test("chat drafts stay scoped to their conversation or new-chat context", async ({
+  test("chat drafts stay scoped to their session or new-chat context", async ({
     page,
   }) => {
     await gotoHarness(page);
     await openChat(page);
 
-    await page.getByTestId("composer-input").fill("existing conversation draft");
+    await page.getByTestId("composer-input").fill("existing session draft");
     await openChatNavigation(page);
     await page.getByTestId("agent-tab-behaviors").click();
     await page.getByTestId("sidebar-new-chat-ops").click();
     await expect(page.getByTestId("composer-input")).toHaveValue("");
 
-    await page.getByTestId("composer-input").fill("new ops conversation draft");
+    await page.getByTestId("composer-input").fill("new ops session draft");
     await openChatNavigation(page);
     await page.getByTestId("agent-tab-behaviors").click();
     await page.getByTestId("sidebar-behavior-default").click();
     await page.getByTestId("agent-tab-sessions").click();
-    await page.getByTestId("conversation-session-intro").click();
+    await page.getByTestId("session-session-intro").click();
     await expect(page.getByTestId("composer-input")).toHaveValue(
-      "existing conversation draft",
+      "existing session draft",
     );
 
     await openChatNavigation(page);
     await page.getByTestId("agent-tab-behaviors").click();
     await page.getByTestId("sidebar-new-chat-ops").click();
     await expect(page.getByTestId("composer-input")).toHaveValue(
-      "new ops conversation draft",
+      "new ops session draft",
     );
   });
 
@@ -235,7 +235,7 @@ test.describe("desktop UI harness", () => {
     await openConfigTab(page, "backends");
     await page.getByTestId("backend-name").fill("OpenAI Harness Edited");
     await page.getByTestId("backend-endpoint").fill("http://127.0.0.1:9000/v1");
-    await page.getByTestId("backend-models").fill("gpt-4.1-mini, gpt-4.1");
+    await expect(page.getByTestId("backend-models")).toHaveAttribute("readonly");
     await saveConfig(page, "backend-save");
 
     await openConfigTab(page, "profiles");
@@ -243,10 +243,9 @@ test.describe("desktop UI harness", () => {
     await page.getByTestId("profile-context-window").fill("64000");
     await saveConfig(page, "profile-save");
 
-    await openConfigTab(page, "toolSelections");
-    await page.getByTestId("tool-selection-display-name").fill("Playwright tools");
-    await page.getByTestId("tool-command-allowed-argv-prefixes").fill("rg\ngit status");
-    await saveConfig(page, "tool-selection-save");
+    await openConfigTab(page, "tools");
+    await page.getByTestId("tools-display-name").fill("Playwright tools");
+    await saveConfig(page, "tools-save");
 
     await openConfigTab(page, "metaTools");
     await page.getByTestId("tool-service-display-name").fill("Observability MCP");
@@ -264,19 +263,27 @@ test.describe("desktop UI harness", () => {
     await expect(page.getByTestId("task-run-status")).toContainText("request-");
     await expect(page.getByTestId("task-run-history")).toContainText("completed");
 
-    await openConfigTab(page, "timerTriggers");
+    await openConfigTab(page, "schedules");
     await page.getByTestId("schedule-interval-secs").fill("120");
     await saveConfig(page, "schedule-save");
+
+    await openConfigTab(page, "triggers");
+    await page.getByTestId("trigger-new").click();
+    await page.getByTestId("trigger-id").fill("playwright-trigger");
+    await page.getByTestId("trigger-task-id").selectOption("host-check");
+    await page
+      .getByTestId("trigger-source-schedule")
+      .selectOption("host-check-every-6h");
+    await saveConfig(page, "trigger-save");
+
+    // A schedule run resolves through a trigger that selects the task, so the
+    // trigger must exist before the manual run succeeds.
+    await openConfigTab(page, "schedules");
     await page.getByTestId("schedule-run").click();
     await expect(page.getByTestId("schedule-run-status")).toContainText("request-");
-
-    await openConfigTab(page, "eventTriggers");
-    await page.getByTestId("event-trigger-new").click();
-    await page.getByTestId("event-trigger-id").fill("playwright-trigger");
-    await saveConfig(page, "event-trigger-save");
   });
 
-  test("conversation does not expose the operations drawer", async ({ page }) => {
+  test("session does not expose the operations drawer", async ({ page }) => {
     await gotoHarness(page);
     await openChat(page);
     await expect(
@@ -340,7 +347,7 @@ test.describe("desktop UI harness", () => {
       .fill("This save intentionally fails in the harness.");
     await page.getByTestId("behavior-save").click();
     await expect(page.getByTestId("error-banner")).toContainText(
-      "Harness rejected behavior save",
+      "Harness rejected config apply for sad-path coverage",
     );
 
     await page.getByTestId("error-banner-dismiss").click();

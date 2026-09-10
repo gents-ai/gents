@@ -11,7 +11,7 @@ use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
 use gents_protocol::client_protocol::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 use crate::cli::args::{SubagentCancelArgs, SubagentCommand, SubagentListArgs};
 use crate::cli::output_format::OutputFormat;
@@ -450,7 +450,7 @@ async fn cancel_bridge_local_by_doc_id(
     }
     // Load by physical docID within the exact session scope; a logical tool ID
     // collision can never substitute a different bridge for cancellation.
-    let Some(mut lifecycle) = ToolCallLifecycle::load_by_doc_id(
+    let Some(lifecycle) = ToolCallLifecycle::load_by_doc_id(
         node.clone(),
         bridge_doc_id,
         agent_did,
@@ -836,35 +836,6 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
         .join(", ")
 }
 
-async fn fetch_request_row_local(node: &EmbeddedNode, request_id: &str) -> Result<AgentRequestRow> {
-    let query = request_row_query(request_id);
-    let response = execute_node_json(node, &query).await?;
-    request_row_from_response(&response, request_id)
-}
-
-fn request_row_query(request_id: &str) -> String {
-    format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                limit: 2
-            ) {{
-                request_id
-                agent_did
-                requester_did
-                session_id
-                lifecycle_state
-                interrupt_requested_at
-                caused_by_parent_request_id
-                caused_by_parent_request_doc_id
-                caused_by_parent_tool_call_id
-                caused_by_parent_tool_call_doc_id
-            }}
-        }}"#,
-        request_id = escape_graphql_string(request_id),
-    )
-}
-
 fn request_row_from_response(response: &Value, request_id: &str) -> Result<AgentRequestRow> {
     let rows = response
         .pointer("/data/AgentRequest")
@@ -881,6 +852,7 @@ fn request_row_from_response(response: &Value, request_id: &str) -> Result<Agent
         .with_context(|| format!("decoding AgentRequest {request_id}"))
 }
 
+#[cfg(test)]
 fn bridge_rows_from_response(response: &Value) -> Result<Vec<BridgeRow>> {
     let rows = response
         .pointer("/data/AgentToolCall")
@@ -969,6 +941,7 @@ fn request_cancel_snapshot(row: AgentRequestRow) -> RequestCancelSnapshot {
 }
 
 #[derive(Debug, Clone)]
+#[cfg(test)]
 struct BridgeRow {
     doc_id: Option<String>,
     tool_call_id: String,

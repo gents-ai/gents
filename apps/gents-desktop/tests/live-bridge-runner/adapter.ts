@@ -87,8 +87,8 @@ export function createBridgeHttpAdapter(
       observers.onChatResult?.(result);
       return result;
     },
-    renameConversation: async (request) => {
-      await client.postJson("/desktop/conversation/rename", request);
+    renameSession: async (request) => {
+      await client.postJson("/desktop/session/rename", request);
     },
     saveAgentConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/agent/save", request),
@@ -119,8 +119,16 @@ export function createBridgeHttpAdapter(
       observers.onTaskRunResult?.(result);
       return result;
     },
-    saveEventTriggerConfig: async (request) =>
-      client.postJson<DesktopClientSnapshot>("/desktop/event-trigger/save", request),
+    saveTriggerConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/trigger/save", request),
+    deleteEventSourceConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/event-source/delete", request),
+    deleteTriggerConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/trigger/delete", request),
+    deleteScheduleConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/schedule/delete", request),
+    deleteToolsConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/tools/delete", request),
     runTask: async (request) => {
       const result = await client.postJson<TaskRunResult>("/desktop/task/run", request);
       observers.onTaskRunResult?.(result);

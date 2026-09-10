@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
+import type { Dispatch, FormEvent, SetStateAction } from "react";
 
 import type {
   BehaviorView,
@@ -15,9 +15,19 @@ import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrom
 import {
   ignoreHandledActionError,
   isOptionalInt,
+  linesToArray,
   optionalString,
   parseOptionalInt,
 } from "./formUtils";
+
+type TaskHookPhase = "before" | "after_success" | "after_failure" | "finally";
+
+type TaskHookDraft = {
+  hookId: string;
+  phase: TaskHookPhase;
+  command: string;
+  timeoutSecs: string;
+};
 
 export type TaskConfigPanelProps = {
   deployment: DeploymentView;
@@ -145,7 +155,9 @@ export function TaskConfigEditor({
   const [promptTemplate, setPromptTemplate] = useState("");
   const [goalObjectiveTemplate, setGoalObjectiveTemplate] = useState("");
   const [goalTokenBudget, setGoalTokenBudget] = useState("");
+  const [hooks, setHooks] = useState<TaskHookDraft[]>([]);
   const [outputSchemaRef, setOutputSchemaRef] = useState("");
+  const [tags, setTags] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [runArgs, setRunArgs] = useState("{}");
   const [runStatus, setRunStatus] = useState<TaskRunResult | null>(null);
@@ -161,7 +173,9 @@ export function TaskConfigEditor({
     setPromptTemplate(b.promptTemplate);
     setGoalObjectiveTemplate(b.goalObjectiveTemplate);
     setGoalTokenBudget(b.goalTokenBudget);
+    setHooks(b.hooks);
     setOutputSchemaRef(b.outputSchemaRef);
+    setTags(b.tags);
     setEnabled(b.enabled);
     setSaveError(null);
   }, [selectedBehavior?.behaviorId, task?.taskId]);
@@ -171,21 +185,32 @@ export function TaskConfigEditor({
   }, [selectedBehavior?.behaviorId, task?.taskId]);
 
   const runArgsValid = isJsonObject(runArgs);
+  const hooksValid = areTaskHooksValid(hooks);
 
   async function submitTask(event: FormEvent) {
     event.preventDefault();
     const nextId = taskId.trim();
     try {
       await onSaveTaskConfig({
-        taskId: nextId,
-        name,
-        description: optionalString(description),
-        behaviorId,
-        promptTemplate,
-        goalObjectiveTemplate: optionalString(goalObjectiveTemplate),
-        goalTokenBudget: parseOptionalInt(goalTokenBudget),
-        enabled,
-        outputSchemaRef: optionalString(outputSchemaRef),
+        document: {
+          agent_did: agentDid,
+          task_id: nextId,
+          display_name: name.trim() ? name : null,
+          description: optionalString(description),
+          behavior_id: behaviorId,
+          prompt_template: promptTemplate,
+          goal_objective_template: optionalString(goalObjectiveTemplate),
+          goal_token_budget: parseOptionalInt(goalTokenBudget),
+          hooks: hooks.map((hook) => ({
+            hook_id: hook.hookId.trim(),
+            phase: hook.phase,
+            command: parseHookCommand(hook.command) ?? [],
+            timeout_secs: parseOptionalInt(hook.timeoutSecs),
+          })),
+          enabled,
+          output_schema_ref: optionalString(outputSchemaRef),
+          tags: linesToArray(tags),
+        },
       });
       onSaved(nextId);
       setSaveError(null);
@@ -218,7 +243,9 @@ export function TaskConfigEditor({
             promptTemplate,
             goalObjectiveTemplate,
             goalTokenBudget,
+            hooks,
             outputSchemaRef,
+            tags,
             enabled,
           },
           taskFormValues(task, selectedBehavior?.behaviorId ?? null),
@@ -325,12 +352,149 @@ export function TaskConfigEditor({
           Enter a positive whole-number budget or leave it blank.
         </FieldHint>
       </label>
+      <section className="config-runner" data-testid="task-hooks">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Host commands</p>
+            <h3>Task hooks</h3>
+          </div>
+          <button
+            className="ghost-button"
+            data-testid="task-hook-add"
+            onClick={() =>
+              setHooks((current) => [
+                ...current,
+                {
+                  hookId: "",
+                  phase: "before",
+                  command: '["sh","-c",""]',
+                  timeoutSecs: "",
+                },
+              ])
+            }
+            type="button"
+          >
+            Add hook
+          </button>
+        </div>
+        <p className="muted">
+          Commands are JSON argument arrays. Invoke a shell explicitly when shell syntax
+          is required.
+        </p>
+        {hooks.map((hook, index) => {
+          const commandValid = parseHookCommand(hook.command) != null;
+          const timeoutValid = isOptionalInt(hook.timeoutSecs, { min: 1 });
+          return (
+            <div
+              className="config-runner"
+              data-testid={`task-hook-${index}`}
+              key={index}
+            >
+              <div className="grid-2">
+                <label className="field">
+                  <span>Hook ID</span>
+                  <input
+                    data-testid={`task-hook-id-${index}`}
+                    onChange={(event) =>
+                      updateTaskHook(setHooks, index, {
+                        hookId: event.currentTarget.value,
+                      })
+                    }
+                    value={hook.hookId}
+                  />
+                </label>
+                <label className="field">
+                  <span>Phase</span>
+                  <select
+                    data-testid={`task-hook-phase-${index}`}
+                    onChange={(event) =>
+                      updateTaskHook(setHooks, index, {
+                        phase: event.currentTarget.value as TaskHookPhase,
+                      })
+                    }
+                    value={hook.phase}
+                  >
+                    <option value="before">Before</option>
+                    <option value="after_success">After success</option>
+                    <option value="after_failure">After failure</option>
+                    <option value="finally">Finally</option>
+                  </select>
+                </label>
+              </div>
+              <div className="grid-2">
+                <label className="field">
+                  <span>Command</span>
+                  <input
+                    className="mono"
+                    data-testid={`task-hook-command-${index}`}
+                    onChange={(event) =>
+                      updateTaskHook(setHooks, index, {
+                        command: event.currentTarget.value,
+                      })
+                    }
+                    value={hook.command}
+                  />
+                  <FieldHint show={!commandValid}>
+                    Enter a non-empty JSON array of string arguments.
+                  </FieldHint>
+                </label>
+                <label className="field">
+                  <span>Timeout seconds</span>
+                  <input
+                    data-testid={`task-hook-timeout-${index}`}
+                    min="1"
+                    onChange={(event) =>
+                      updateTaskHook(setHooks, index, {
+                        timeoutSecs: event.currentTarget.value,
+                      })
+                    }
+                    placeholder="Default: 120"
+                    type="number"
+                    value={hook.timeoutSecs}
+                  />
+                  <FieldHint show={!timeoutValid}>
+                    Enter a positive whole number or leave it blank.
+                  </FieldHint>
+                </label>
+              </div>
+              <div className="config-actions">
+                <button
+                  className="ghost-button danger-button"
+                  data-testid={`task-hook-remove-${index}`}
+                  onClick={() =>
+                    setHooks((current) =>
+                      current.filter((_, hookIndex) => hookIndex !== index),
+                    )
+                  }
+                  type="button"
+                >
+                  Remove hook
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {hooks.length > 0 && hasDuplicateHookIds(hooks) ? (
+          <FieldHint show>Hook IDs must be unique within the task.</FieldHint>
+        ) : null}
+      </section>
       <label className="field">
         <span>Output schema ref</span>
         <input
           data-testid="task-output-schema-ref"
           onChange={(event) => setOutputSchemaRef(event.currentTarget.value)}
+          placeholder="Optional schema document reference"
           value={outputSchemaRef}
+        />
+      </label>
+      <label className="field">
+        <span>Tags</span>
+        <textarea
+          className="config-small-textarea"
+          data-testid="task-tags"
+          onChange={(event) => setTags(event.currentTarget.value)}
+          placeholder="One tag per line or comma-separated"
+          value={tags}
         />
       </label>
       <div className="config-actions">
@@ -367,7 +531,8 @@ export function TaskConfigEditor({
             !promptTemplate.trim() ||
             !isOptionalInt(goalTokenBudget) ||
             (goalTokenBudget.trim() !== "" &&
-              (!goalObjectiveTemplate.trim() || Number(goalTokenBudget) <= 0))
+              (!goalObjectiveTemplate.trim() || Number(goalTokenBudget) <= 0)) ||
+            !hooksValid
           }
           type="submit"
         >
@@ -489,7 +654,60 @@ function taskFormValues(task: TaskView | null, fallbackBehaviorId: string | null
     promptTemplate: task?.promptTemplate ?? "",
     goalObjectiveTemplate: task?.goalObjectiveTemplate ?? "",
     goalTokenBudget: task?.goalTokenBudget?.toString() ?? "",
+    hooks: (task?.hooks ?? []).map((hook) => ({
+      hookId: hook.hook_id,
+      phase: hook.phase,
+      command: JSON.stringify(hook.command),
+      timeoutSecs: hook.timeout_secs?.toString() ?? "",
+    })),
     outputSchemaRef: task?.outputSchemaRef ?? "",
+    tags: task?.tags?.length ? task.tags.join("\n") : "",
     enabled: task?.enabled ?? true,
   };
+}
+
+function updateTaskHook(
+  setHooks: Dispatch<SetStateAction<TaskHookDraft[]>>,
+  index: number,
+  patch: Partial<TaskHookDraft>,
+) {
+  setHooks((current) =>
+    current.map((hook, hookIndex) =>
+      hookIndex === index ? { ...hook, ...patch } : hook,
+    ),
+  );
+}
+
+function parseHookCommand(value: string): string[] | null {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length === 0 ||
+      !parsed.every((argument) => typeof argument === "string") ||
+      !parsed[0].trim()
+    ) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function hasDuplicateHookIds(hooks: TaskHookDraft[]) {
+  const ids = hooks.map((hook) => hook.hookId.trim()).filter(Boolean);
+  return new Set(ids).size !== ids.length;
+}
+
+function areTaskHooksValid(hooks: TaskHookDraft[]) {
+  return (
+    !hasDuplicateHookIds(hooks) &&
+    hooks.every(
+      (hook) =>
+        Boolean(hook.hookId.trim()) &&
+        parseHookCommand(hook.command) != null &&
+        isOptionalInt(hook.timeoutSecs, { min: 1 }),
+    )
+  );
 }

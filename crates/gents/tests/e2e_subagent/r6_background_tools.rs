@@ -195,6 +195,7 @@ async fn setup_hook(
         &session_id,
         "r6-background",
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -286,7 +287,7 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
                     session_id: {{ _eq: "{session_id}" }},
                     execution_origin: {{ _eq: "scheduled" }}
                 }}
-            ) {{ _docID request_id metadata }}
+            ) {{ _docID request_id input }}
         }}"#
     );
     let response = node.execute(&query).await;

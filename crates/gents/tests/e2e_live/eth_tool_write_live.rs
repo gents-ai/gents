@@ -20,22 +20,23 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::defra_node::EmbeddedNode;
+use gents::document_config::{IntegrationTools, Tools};
 use gents::graphql::escape_graphql_string;
 use gents::{
-    AgentIdentity, ChainKeyBindingDocument, ChainKeyMaterialStore, DocumentRuntimeOptions, Gents,
-    KEY_BACKEND_KEYRING, KeyringChainKeyStore, ToolCeiling, ToolSelectionDocument,
     address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, upsert_chain_key_binding, upsert_tool_selection,
+    generate_secp256k1_secret, upsert_chain_key_binding, AgentIdentity, ChainKeyBindingDocument,
+    ChainKeyMaterialStore, DocumentRuntimeOptions, Gents, KeyringChainKeyStore, ToolCeiling,
+    KEY_BACKEND_KEYRING,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::process::{Child, Command};
 
 use crate::eth_tool_live::{
     assert_endpoint_reachable, bind_glm_backend, fetch_tool_calls, live_enabled, live_endpoint,
 };
 use crate::steward_loop_live::wait_for_request_terminal;
-use crate::support::fixtures::test_identity;
-use crate::support::interrupt::{BootedAgent, create_runtime_request, wait_for_runtime_ready};
+use crate::support::fixtures::{configure_behavior_tools, test_identity};
+use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::test_db;
 
 const TOOL_ID: &str = "local";
@@ -399,12 +400,13 @@ async fn provision_key(node: &EmbeddedNode, identity: &dyn AgentIdentity) -> Pro
         node,
         &ChainKeyBindingDocument {
             binding_id: binding_id.clone(),
-            principal_did,
+            agent_did: principal_did,
             address: address.clone(),
             key_backend: Some(KEY_BACKEND_KEYRING.to_string()),
             attestation: Some(encode_attestation(&signature)),
             created_at: Some(created_at),
             revoked_at: None,
+            tags: Vec::new(),
         },
     )
     .await
@@ -644,28 +646,23 @@ async fn eth_tool_live_model_writes_on_local_chain() {
     )
     .await;
 
-    upsert_tool_selection(
+    configure_behavior_tools(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "eth-write-live-tools".to_string(),
+        &agent_did,
+        &behavior_id,
+        None,
+        Tools {
+            tools_id: "eth-write-live-tools".to_string(),
             agent_did: agent_did.clone(),
-            enable_file_tools: Some(false),
-            enable_bash: Some(false),
-            eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+            integrations: Some(IntegrationTools {
+                eth_tool_ids: Some(vec![TOOL_ID.to_string()]),
+                ..Default::default()
+            }),
             ..Default::default()
         },
+        Vec::new(),
     )
-    .await
-    .expect("upsert eth write tool selection");
-
-    let mut behavior = gents::load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    behavior.tool_selection_id = Some("eth-write-live-tools".to_string());
-    gents::upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .expect("bind eth write tool selection");
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),

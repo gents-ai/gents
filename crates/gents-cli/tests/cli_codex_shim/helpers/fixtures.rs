@@ -211,7 +211,7 @@ pub(super) async fn seed_authorized_subagent_link(
                 system_prompt: "",
                 backend_id: "{child_backend_id}",
                 model_name: "{child_model_name}",
-                tool_selection_id: "",
+                tools_id: "",
                 inference_profile_id: "",
                 compaction_strategy: "StripThenSummarize",
                 compaction_threshold: 0.75,
@@ -532,14 +532,14 @@ pub(super) async fn seed_background_completion_wake(
     let wake_created_at = (chrono::DateTime::parse_from_rfc3339(&source_created_at)?
         + chrono::Duration::seconds(1))
     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let metadata = serde_json::to_string(&json!({
+    let input = serde_json::from_value(json!({
         "queue": {
             "source": "background_completion",
             "policy": "coalesce",
             "key": format!("background_completion:{session_id}"),
-            "queued_after_request_id": null
-        },
-        "background_completion_wake_version": 1
+            "queued_after_request_id": null,
+            "background_completion_wake_version": 1
+        }
     }))?;
     let mut source = gents_protocol::request_admission::AgentRequestCreate::base(
         &source_request_id,
@@ -601,7 +601,7 @@ pub(super) async fn seed_background_completion_wake(
         &wake_created_at,
         admission,
     );
-    wake.metadata = Some(metadata);
+    wake.input = input;
     wake.caused_by_parent_request_id = Some(source_request_id);
     wake.caused_by_parent_request_doc_id = Some(source_doc_id.to_string());
     gents::sign_agent_request_create(identity, &mut wake).await?;

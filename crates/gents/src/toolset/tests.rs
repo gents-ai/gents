@@ -1121,7 +1121,7 @@ fn read_only_policy_allows_operator_configured_diagnostic_prefix() {
     .is_err());
 }
 
-/// The two ToolSelection knobs are not aliases: prefixes gate/extend by argv;
+/// The two ResolvedToolSelection knobs are not aliases: prefixes gate/extend by argv;
 /// the allowlist field replaces the whole-executable base.
 #[test]
 fn read_only_allowlist_knobs_match_operator_docs() {

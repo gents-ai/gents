@@ -1468,7 +1468,7 @@ impl EventSource {
         });
     }
 
-    /// Build a `FireIntent` for every active `EventTrigger` whose
+    /// Build a `FireIntent` for every active event-source trigger whose
     /// `source_collection` matches `collection_name` AND `event_kind` matches
     /// `kind`. Each candidate's operator-authored filter is probed against
     /// `source_doc_id`; candidates that miss the filter or whose probe errors

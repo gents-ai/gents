@@ -1,6 +1,6 @@
 pub(super) use crate::commands::inference_binding::load_bound_context_window;
 use crate::commands::inference_binding::load_bound_profile;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use gents::defra_node::EmbeddedNode;
 
 pub(super) const MODEL_SELECTION_SEPARATOR: &str = "::";
@@ -39,13 +39,6 @@ pub(super) async fn load_bound_model_selection_id_for_state(
 
 pub(super) fn model_selection_id(backend_id: &str, model_name: &str) -> String {
     format!("{backend_id}{MODEL_SELECTION_SEPARATOR}{model_name}")
-}
-
-pub(super) fn parse_model_selection_id(value: &str) -> Option<(&str, &str)> {
-    let (backend_id, model_name) = value.split_once(MODEL_SELECTION_SEPARATOR)?;
-    let backend_id = backend_id.trim();
-    let model_name = model_name.trim();
-    (!backend_id.is_empty() && !model_name.is_empty()).then_some((backend_id, model_name))
 }
 
 #[cfg(test)]

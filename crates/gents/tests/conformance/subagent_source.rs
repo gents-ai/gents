@@ -10,15 +10,15 @@ use gents::tool_call_lifecycle::{
     IllegalToolCallTransition, ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use gents::{
-    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
-    ToolCeiling, ToolSelectionDocument, TOOL_POLICY_V1,
+    default_behavior_id_for_agent, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{
+    bind_default_behavior_backend, configure_subagent_behavior, subagent_target, test_identity,
+};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::snapshots::{fetch_tool_call_snapshots_for_session, ToolCallSnapshot};
@@ -96,10 +96,7 @@ async fn boot_agent_with_policy(
     }
 }
 
-/// Single fixture owner for a behavior's subagent authorization: writes the
-/// ToolSelection with the requested targets (each `(name, target DID, target
-/// behavior)`) and points `behavior_id` at it, creating the behavior when
-/// absent. The cross-principal flag stays absent unless a caller opts in.
+/// Single fixture owner for a behavior's canonical subagent authorization.
 async fn ensure_subagent_authorization(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -113,49 +110,20 @@ async fn ensure_subagent_authorization(
     let target_entries = subagent_targets
         .into_iter()
         .map(|(target_name, target_did, target_behavior)| {
-            gents::subagent_target_entry(&target_name, &target_did, &target_behavior, None)
+            subagent_target(agent_did, target_name, target_did, target_behavior)
         })
         .collect();
-    upsert_tool_selection(
+    configure_subagent_behavior(
         node,
-        &ToolSelectionDocument {
-            selection_id: selection_id.to_string(),
-            agent_did: agent_did.to_string(),
-            tool_policy_version: Some(TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(target_entries),
-            subagent_spawn_enabled: Some(spawn_enabled),
-            subagent_background_enabled: Some(background_enabled),
-            subagent_allow_cross_deployment: allow_cross_principal,
-            ..Default::default()
-        },
+        agent_did,
+        behavior_id,
+        selection_id,
+        target_entries,
+        spawn_enabled,
+        background_enabled,
+        allow_cross_principal,
     )
-    .await
-    .unwrap();
-
-    let mut behavior = match load_agent_behavior(node, behavior_id).await.unwrap() {
-        Some(behavior) => behavior,
-        None => AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some(behavior_id.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
-        },
-    };
-    behavior.tool_selection_id = Some(selection_id.to_string());
-    upsert_agent_behavior(node, &behavior).await.unwrap();
+    .await;
 }
 
 async fn ensure_parent_subagent_authorization(
@@ -467,7 +435,7 @@ async fn subagent_source_materializes_child_request_from_tool_call() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
 
     let child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
@@ -541,7 +509,7 @@ async fn subagent_source_rejects_mismatched_spawn_target_did_and_args() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
 
     assert_no_child_request_for_tool(
@@ -1074,7 +1042,7 @@ async fn cascade_after_source_spawn_reaches_child_request() {
         child_request_id.to_string(),
         running.booted.agent_did.clone(),
     )
-    .with_request_doc_id(Some(parent_request_doc_id));
+    .with_request_doc_id(Some(parent_request_doc_id.clone()));
     lifecycle.start_running().await.unwrap();
     let _child = wait_for_child_request(db.node.as_ref(), child_request_id).await;
 

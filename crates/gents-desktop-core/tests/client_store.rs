@@ -11,21 +11,21 @@ use gents_desktop_core::client::{
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::{
-    AgentMessageRow, AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
-    AgentToolCallRow,
+    AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow, AgentToolCallRow,
 };
 use tokio::time::{sleep, timeout};
 
 #[test]
 fn store_indexes_sessions_and_runtimes() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        agent_principals: vec![AgentPrincipalRow {
+        agent_principals: vec![gents::document_config::AgentPrincipal {
             agent_did: "did:test:amy".to_string(),
             display_name: Some("Amy".to_string()),
             default_behavior_id: None,
-            enabled: Some(true),
+            enabled: true,
             created_at: None,
             created_by: None,
+            tags: Vec::new(),
         }],
         sessions: vec![
             AgentSession {
@@ -81,9 +81,9 @@ fn store_indexes_sessions_and_runtimes() {
         ..ClientStoreRows::default()
     });
 
-    let conversations = store.conversation_rows("did:test:amy");
-    assert_eq!(conversations.len(), 2);
-    assert_eq!(conversations[0].session_id, "session-1");
+    let sessions = store.session_rows("did:test:amy");
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions[0].session_id, "session-1");
     assert_eq!(
         store
             .latest_runtime("did:test:amy")
@@ -121,6 +121,7 @@ fn store_derives_turn_from_retry_chain_tip() {
         responses: vec![
             AgentResponseRow {
                 response_key: "resp-1".to_string(),
+                request_doc_id: None,
                 request_id: Some("req-2".to_string()),
                 agent_did: None,
                 requester_did: None,
@@ -141,6 +142,7 @@ fn store_derives_turn_from_retry_chain_tip() {
             },
             AgentResponseRow {
                 response_key: "resp-2".to_string(),
+                request_doc_id: None,
                 request_id: Some("req-2".to_string()),
                 agent_did: None,
                 requester_did: None,
@@ -217,6 +219,7 @@ fn store_derives_turn_from_session_latest_request_not_random_request_id_order() 
         ],
         responses: vec![AgentResponseRow {
             response_key: "resp-a-complete".to_string(),
+            request_doc_id: None,
             request_id: Some("req-a-complete".to_string()),
             agent_did: None,
             requester_did: None,
@@ -372,14 +375,14 @@ fn chat_patch_merge_updates_one_agent_without_dropping_other_agent_rows() {
     assert_eq!(merged.sessions.len(), 2);
     assert_eq!(
         merged
-            .conversation_rows("did:test:amy")
+            .session_rows("did:test:amy")
             .first()
             .and_then(|row| row.title.as_ref().map(|title| title.text.as_str())),
         Some("Updated title")
     );
     assert_eq!(
         merged
-            .conversation_rows("did:test:bea")
+            .session_rows("did:test:bea")
             .first()
             .and_then(|row| row.title.as_ref().map(|title| title.text.as_str())),
         Some("Other agent")
@@ -870,20 +873,15 @@ fn default_behavior_id_does_not_require_a_gossiped_agent_principal() {
     let agent_did = "did:key:z6MkAmy";
     let behavior_id = gents::default_behavior_id_for_agent(agent_did);
     let store = ClientStore::from_rows(ClientStoreRows {
-        behaviors: vec![gents_protocol::row::AgentBehaviorRow {
+        behaviors: vec![gents::document_config::AgentBehavior {
             behavior_id: behavior_id.clone(),
-            agent_did: Some(agent_did.to_string()),
+            agent_did: agent_did.to_string(),
             display_name: Some("Amy".to_string()),
-            system_prompt: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: Some(true),
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
+            description: None,
+            context_id: None,
+            inference_profile_id: "profile".to_string(),
+            enabled: true,
+            tags: Vec::new(),
             created_at: None,
         }],
         ..ClientStoreRows::default()

@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { BackendConfigEditor } from "../src/components/config/BackendConfigPanel";
-import { EventTriggerConfigEditor } from "../src/components/config/EventTriggerConfigPanel";
+import { EventSourceConfigEditor } from "../src/components/config/EventSourceConfigPanel";
 import { InferenceProfileConfigEditor } from "../src/components/config/InferenceProfileConfigPanel";
 import { ScheduleConfigEditor } from "../src/components/config/ScheduleConfigPanel";
 import { TaskConfigEditor } from "../src/components/config/TaskConfigPanel";
@@ -10,13 +10,19 @@ import { ToolsConfigEditor } from "../src/components/config/ToolsConfigPanel";
 import { ToolServiceConfigEditor } from "../src/components/config/ToolServiceConfigPanel";
 import type {
   ConfigComponentsPatchRequest,
-  EventTriggerSaveRequest,
   ConfigComponentsApplyRequest,
+  EventSourceSaveRequest,
   ScheduleSaveRequest,
   TaskSaveRequest,
   ToolServiceSaveRequest,
 } from "@source-inc/gents-desktop-client";
-import { backend, schedule, task, toolService } from "./config-panel-buttons/fixtures";
+import {
+  backend,
+  eventSource,
+  schedule,
+  task,
+  toolService,
+} from "./config-panel-buttons/fixtures";
 
 describe("config panel action buttons", () => {
   it("keeps persisted document IDs immutable when saving existing rows", async () => {
@@ -176,7 +182,9 @@ describe("config panel action buttons", () => {
     fireEvent.click(screen.getByTestId("task-save"));
     await waitFor(() =>
       expect(onSaveTaskConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ taskId: "task-a" }),
+        expect.objectContaining({
+          document: expect.objectContaining({ task_id: "task-a" }),
+        }),
       ),
     );
     expect(screen.getByTestId("task-id")).toHaveAttribute("readonly");
@@ -186,12 +194,11 @@ describe("config panel action buttons", () => {
     >(() => Promise.resolve());
     render(
       <ScheduleConfigEditor
+        agentDid="agent-a"
         runningTask={false}
         savedStatus={null}
         saving={false}
         schedule={schedule}
-        selectedTask={task}
-        tasks={[task]}
         onRunSchedule={vi.fn()}
         onSaveScheduleConfig={onSaveScheduleConfig}
         onSaved={vi.fn()}
@@ -203,43 +210,40 @@ describe("config panel action buttons", () => {
     fireEvent.click(screen.getByTestId("schedule-save"));
     await waitFor(() =>
       expect(onSaveScheduleConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ scheduleId: "timer-a" }),
+        expect.objectContaining({
+          document: expect.objectContaining({ schedule_id: "timer-a" }),
+        }),
       ),
     );
     expect(screen.getByTestId("schedule-id")).toHaveAttribute("readonly");
 
-    const onSaveEventTriggerConfig = vi.fn<
-      [(request: EventTriggerSaveRequest) => Promise<unknown>]
+    const onSaveEventSourceConfig = vi.fn<
+      [(request: EventSourceSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve());
     render(
-      <EventTriggerConfigEditor
-        eventTrigger={{
-          triggerId: "event-a",
-          taskId: "task-a",
-          sourceCollection: "AgentRequest",
-          eventKind: "created",
-          enabled: true,
-          concurrency: "serial",
-          fireCount: 0,
-        }}
+      <EventSourceConfigEditor
+        agentDid="agent-a"
+        eventSource={eventSource}
         savedStatus={null}
         saving={false}
-        selectedTask={task}
-        tasks={[task]}
-        onSaveEventTriggerConfig={onSaveEventTriggerConfig}
+        onSaveEventSourceConfig={onSaveEventSourceConfig}
         onSaved={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByTestId("event-trigger-id"), {
+    fireEvent.change(screen.getByTestId("event-source-id"), {
       target: { value: "renamed-event" },
     });
-    fireEvent.click(screen.getByTestId("event-trigger-save"));
+    fireEvent.click(screen.getByTestId("event-source-save"));
     await waitFor(() =>
-      expect(onSaveEventTriggerConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ triggerId: "event-a" }),
+      expect(onSaveEventSourceConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            event_source_id: "source-a",
+          }),
+        }),
       ),
     );
-    expect(screen.getByTestId("event-trigger-id")).toHaveAttribute("readonly");
+    expect(screen.getByTestId("event-source-id")).toHaveAttribute("readonly");
   });
 
   it("keeps all canonical command/datastore/timeouts through advanced authoring", async () => {

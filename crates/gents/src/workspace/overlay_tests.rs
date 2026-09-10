@@ -991,6 +991,7 @@ async fn generated_artifact_admission_cases_drive_live_binding_and_launch_policy
                 | "readwrite_not_artifact"
                 | "unsealed"
                 | "wrong_seal"
+                | "wrong_owner"
                 | "stale_incarnation"
         ) {
             assert!(
@@ -1192,7 +1193,11 @@ async fn artifact_alternate_owner(
     );
     if !binding.is_null() {
         create.workspace_id = Some("artifact-workspace".into());
-        create.workspace_owner_agent_did = fx.owner.request().workspace_owner_agent_did.clone();
+        create.workspace_owner_agent_did = if binding["owner_matches"] == false {
+            Some(did.to_owned())
+        } else {
+            fx.owner.request().workspace_owner_agent_did.clone()
+        };
         create.workspace_authority = Some(binding["authority"].as_str().unwrap().into());
         create.workspace_seal_hash = if binding["seal_matches"] == false {
             Some("wrong-seal".into())

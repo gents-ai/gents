@@ -4,16 +4,17 @@ use std::time::{Duration, Instant};
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{
-    AgentIdentity, Gents, RunTimeline, RunTimelineRows, TimelineInferenceCallRow,
-    TimelineRequestRow, ToolCeiling, build_run_timeline,
+    build_run_timeline, AgentIdentity, Gents, RunTimeline, RunTimelineRows,
+    TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    BootedAgent, create_runtime_request, create_runtime_request_with_execution_origin,
+    create_runtime_request, create_runtime_request_with_execution_origin,
     wait_for_request_lifecycle_state, wait_for_response_doc_id, wait_for_runtime_ready,
+    BootedAgent,
 };
 use crate::support::snapshots::{fetch_request_snapshot, fetch_response_snapshot};
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
@@ -222,12 +223,10 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         Some(progress)
     );
     assert_eq!(rows["AgentResponse"][0]["status"], "error");
-    assert!(
-        !rows["AgentResponse"][0]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("retry must not execute after lease expiry")
-    );
+    assert!(!rows["AgentResponse"][0]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("retry must not execute after lease expiry"));
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
     assert_eq!(call_states(&calls), vec!["failed"]);
     let timeline = build_timeline(db.node.as_ref(), request_id).await;

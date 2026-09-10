@@ -1,8 +1,8 @@
 use crate::config_writes::ConfigAccess;
-use crate::{CONFIG_EXPORT_FORMAT, desired_state, shared::ConfigExportBundle};
+use crate::{desired_state, shared::ConfigExportBundle, CONFIG_EXPORT_FORMAT};
 use anyhow::{Context, Result};
 use gents::graphql::escape_graphql_string;
-use gents::{Collection, config_client::config_projection};
+use gents::{config_client::config_projection, Collection};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 
@@ -130,19 +130,6 @@ pub(crate) fn sort_document_rows(rows: &mut [Value], key: &str) {
     });
 }
 
-pub(crate) fn collect_string_field_values(rows: &[Value], field: &str) -> Vec<String> {
-    let mut values = rows
-        .iter()
-        .filter_map(|row| row.get(field).and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    values.sort();
-    values.dedup();
-    values
-}
-
 pub(crate) fn select_apply_collection_docs(
     docs: &[Value],
     unique_field: &str,
@@ -192,7 +179,7 @@ pub(crate) fn select_apply_collection_docs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{DesiredStateApplyPlan, apply_desired_state_plan};
+    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use serde_json::json;
     use std::sync::Arc;
 
@@ -218,7 +205,7 @@ mod tests {
             serde_json::to_value(original.config).unwrap()
         );
         let mut unknown = encoded;
-        unknown["tool_selections"] = json!([]);
+        unknown["retired_collection"] = json!([]);
         assert!(serde_json::from_value::<ConfigExportBundle>(unknown).is_err());
     }
 
@@ -258,8 +245,8 @@ mod tests {
         assert_eq!(counts.get(Collection::InferenceProfile), 1);
         let count_json = serde_json::to_value(counts).unwrap();
         assert_eq!(count_json.as_object().unwrap().len(), Collection::ALL.len());
-        assert!(count_json.get("tool_selections").is_none());
-        assert!(count_json.get("event_triggers").is_none());
+        assert_eq!(count_json["tools"], 1);
+        assert_eq!(count_json["triggers"], 0);
 
         let encoded = serde_json::to_value(&exported).unwrap();
         assert_eq!(
@@ -295,15 +282,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            serde_json::to_value(foreign.config.tools[0].host.as_ref().unwrap()).unwrap()["bash"]["allowed_argv_prefixes"],
+            serde_json::to_value(foreign.config.tools[0].host.as_ref().unwrap()).unwrap()["bash"]
+                ["allowed_argv_prefixes"],
             json!([])
         );
-        assert!(
-            read_owned_config_bundle(&access, "absent")
-                .await
-                .unwrap()
-                .is_none()
-        );
+        assert!(read_owned_config_bundle(&access, "absent")
+            .await
+            .unwrap()
+            .is_none());
         let raw = node
             .execute(
                 r#"mutation {create_Tools(input:{agent_did:"orphan",tools_id:"unused"}){_docID}}"#,

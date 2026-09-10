@@ -3,7 +3,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::AgentPrincipal;
 
@@ -277,36 +277,30 @@ mod tests {
                 assert_eq!(principal["default_behavior_id"], "behavior");
                 assert_eq!(principal["created_by"], "did:test:creator");
                 assert_eq!(principal["tags"], json!(["keep"]));
-                assert!(
-                    read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceProfile,
-                        owner,
-                        "profile"
-                    )
-                    .await?
-                    .is_some()
-                );
-                assert!(
-                    read_desired_state_record_in_txn(
-                        txn,
-                        Collection::InferenceProfile,
-                        owner,
-                        "bad"
-                    )
-                    .await?
-                    .is_none()
-                );
-                assert!(
-                    read_desired_state_record_in_txn(
-                        txn,
-                        Collection::AgentPrincipal,
-                        "did:test:missing",
-                        "did:test:missing"
-                    )
-                    .await?
-                    .is_none()
-                );
+                assert!(read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    owner,
+                    "profile"
+                )
+                .await?
+                .is_some());
+                assert!(read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    owner,
+                    "bad"
+                )
+                .await?
+                .is_none());
+                assert!(read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    "did:test:missing",
+                    "did:test:missing"
+                )
+                .await?
+                .is_none());
                 let (_, context) = read_desired_state_record_in_txn(
                     txn,
                     Collection::AgentContext,
@@ -417,38 +411,32 @@ mod tests {
             json!({"backend_id":"retarget"}),
             json!({"models":["invented"]}),
         ] {
-            assert!(
-                patch_config_components(
-                    &node,
-                    owner,
-                    &[patch(
-                        SelfConfigTarget::InferenceBackend,
-                        " backend ",
-                        changes
-                    )]
-                )
-                .await
-                .is_err()
-            );
-        }
-        assert!(
-            patch_config_components(
+            assert!(patch_config_components(
                 &node,
                 owner,
                 &[patch(
                     SelfConfigTarget::InferenceBackend,
-                    "backend",
-                    json!({"name":"no trim"})
+                    " backend ",
+                    changes
                 )]
             )
             .await
-            .is_err()
-        );
-        assert!(
-            patch_config_components(&node, "did:test:absent", &[])
-                .await
-                .is_err()
-        );
+            .is_err());
+        }
+        assert!(patch_config_components(
+            &node,
+            owner,
+            &[patch(
+                SelfConfigTarget::InferenceBackend,
+                "backend",
+                json!({"name":"no trim"})
+            )]
+        )
+        .await
+        .is_err());
+        assert!(patch_config_components(&node, "did:test:absent", &[])
+            .await
+            .is_err());
         let duplicate = patch(
             SelfConfigTarget::InferenceBackend,
             " backend ",

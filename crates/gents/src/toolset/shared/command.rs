@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
-use crate::managed_exec::{ManagedExecOutcome, ManagedExecRequest, run_managed_exec};
-use crate::tool_call_lifecycle::FailureClass;
+use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
 use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
+use crate::tool_call_lifecycle::FailureClass;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
-use crate::truncation::{TruncationLimits, TruncationMode, truncate};
+use crate::truncation::{truncate, TruncationLimits, TruncationMode};
 
 const OUTPUT_META_PREFIX: &str = "gents_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";

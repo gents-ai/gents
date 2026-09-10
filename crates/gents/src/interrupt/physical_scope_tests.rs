@@ -1,5 +1,5 @@
 use super::*;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 async fn insert(node: &EmbeddedNode, collection: &str, value: Value) -> String {
     crate::config_client::ConfigAccess::transact_local(node, None, "test.physical_cancel_fixture", |txn| {
@@ -15,8 +15,8 @@ async fn insert(node: &EmbeddedNode, collection: &str, value: Value) -> String {
 #[tokio::test]
 async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
     use crate::descendant_graph::{
-        DescendantGraphAccess, DescendantQuery, resolve_descendant_graph,
-        resolve_descendant_graph_by_doc_id,
+        resolve_descendant_graph, resolve_descendant_graph_by_doc_id, DescendantGraphAccess,
+        DescendantQuery,
     };
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
@@ -50,39 +50,33 @@ async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
         ("owner", Some("requester")),
         ("owner", Some("")),
     ] {
-        assert!(
-            resolve_descendant_graph_by_doc_id(
-                DescendantGraphAccess::Local(&node),
-                &query,
-                &parent,
-                owner,
-                requester
-            )
-            .await
-            .is_err()
-        );
-        assert!(
-            interrupt_request_by_doc_id_with_access(
-                &crate::config_client::ConfigAccess::Local(node.clone()),
-                &parent,
-                owner,
-                requester
-            )
-            .await
-            .is_err()
-        );
-    }
-    assert!(
-        resolve_descendant_graph_by_doc_id(
+        assert!(resolve_descendant_graph_by_doc_id(
             DescendantGraphAccess::Local(&node),
-            &DescendantQuery::all("different-label"),
+            &query,
             &parent,
-            "owner",
-            None
+            owner,
+            requester
         )
         .await
-        .is_err()
-    );
+        .is_err());
+        assert!(interrupt_request_by_doc_id_with_access(
+            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &parent,
+            owner,
+            requester
+        )
+        .await
+        .is_err());
+    }
+    assert!(resolve_descendant_graph_by_doc_id(
+        DescendantGraphAccess::Local(&node),
+        &DescendantQuery::all("different-label"),
+        &parent,
+        "owner",
+        None
+    )
+    .await
+    .is_err());
     let access = crate::config_client::ConfigAccess::Local(node.clone());
     interrupt_request_by_doc_id_with_access(&access, &parent, "owner", None)
         .await

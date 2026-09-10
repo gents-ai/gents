@@ -30,24 +30,24 @@ pub fn doc_id_from_create(response: &Value, field: &str) -> Result<String> {
         .with_context(|| format!("missing _docID in {field} response: {response}"))
 }
 
-pub async fn doc_id_for_selection(graphql: &str, selection_id: &str) -> Result<String> {
+pub async fn doc_id_for_tools(graphql: &str, tools_id: &str) -> Result<String> {
     let response = graphql_query(
         graphql,
         &format!(
             r#"{{
-                ToolSelection(filter: {{ selection_id: {{ _eq: "{}" }} }}, limit: 1) {{
+                Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}, limit: 1) {{
                     _docID
                 }}
             }}"#,
-            escape_graphql_string(selection_id),
+            escape_graphql_string(tools_id),
         ),
     )
     .await?;
-    first_graphql_row(&response, "ToolSelection")?
+    first_graphql_row(&response, "Tools")?
         .get("_docID")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-        .ok_or_else(|| anyhow!("ToolSelection row missing _docID for {selection_id}"))
+        .ok_or_else(|| anyhow!("Tools row missing _docID for {tools_id}"))
 }
 
 pub async fn exec(node: &gents::defra_node::EmbeddedNode, query: &str) -> Result<()> {

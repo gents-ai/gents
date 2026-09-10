@@ -493,16 +493,6 @@ mod tests {
             .await
             .context("skill did not replicate to the agent node after create")?;
 
-        bind_skill_to_behavior(fixture, &agent_did, &behavior_id, skill_id, true).await?;
-        wait_for_remote_behavior_skill_refs(
-            fixture.remote_core().as_ref(),
-            &behavior_id,
-            &[skill_id],
-            &[skill_id],
-        )
-        .await
-        .context("behavior skill refs did not replicate to the agent node")?;
-
         delete_skill_config(
             fixture.desktop_core().as_ref(),
             SkillDeleteRequest {
@@ -514,10 +504,6 @@ mod tests {
         wait_for_remote_skill_absent(fixture.remote_core().as_ref(), skill_id)
             .await
             .context("skill remained queryable on the agent node after delete")?;
-        wait_for_remote_behavior_skill_refs(fixture.remote_core().as_ref(), &behavior_id, &[], &[])
-            .await
-            .context("behavior skill refs were not pruned on the agent node")?;
-
         Ok(())
     }
 
@@ -541,12 +527,11 @@ mod tests {
             wait_for_remote_runtime_generation(fixture.remote_core().as_ref(), &agent_did)
                 .await
                 .context("runtime status missing before skill binding")?;
-        bind_skill_to_behavior(fixture, &agent_did, &behavior_id, skill_id, false).await?;
-        wait_for_remote_behavior_skill_refs(
+        bind_skill_to_behavior_context(fixture, &agent_did, &behavior_id, skill_id).await?;
+        wait_for_remote_context_skill_ids(
             fixture.remote_core().as_ref(),
             &behavior_id,
             &[skill_id],
-            &[],
         )
         .await?;
         wait_for_remote_runtime_generation_after(
@@ -627,17 +612,16 @@ mod tests {
             .expect("live fixture test lock poisoned")
     }
 
-    async fn bind_skill_to_behavior(
+    async fn bind_skill_to_behavior_context(
         fixture: &LiveBridgeFixture,
         agent_did: &str,
         behavior_id: &str,
         skill_id: &str,
-        include_exclude: bool,
     ) -> Result<()> {
         use gents::collection::Collection;
         use gents::config_client::{
-            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
-            apply_desired_state_plan, read_desired_state_record_in_txn,
+            apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+            DesiredStateApplyDocument, DesiredStateApplyPlan,
         };
         ConfigAccess::transact_local(
             fixture.desktop_core().node(),
@@ -667,11 +651,7 @@ mod tests {
                     .context("fixture context is missing")?;
                     let mut context: gents::document_config::AgentContext =
                         serde_json::from_value(context)?;
-                    context.skill_ids = if include_exclude {
-                        Vec::new()
-                    } else {
-                        vec![skill_id.to_owned()]
-                    };
+                    context.skill_ids = vec![skill_id.to_owned()];
                     let value = serde_json::to_value(context)?;
                     let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
                         collection: Collection::AgentContext,
@@ -688,13 +668,53 @@ mod tests {
         Ok(())
     }
 
+    async fn wait_for_remote_context_skill_ids(
+        core: &ClientCore,
+        behavior_id: &str,
+        expected_skill_ids: &[&str],
+    ) -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            core.refresh_store().await?;
+            let store = core.store().snapshot();
+            let observed = store
+                .behaviors
+                .iter()
+                .find(|behavior| behavior.behavior_id == behavior_id)
+                .and_then(|behavior| behavior.context_id.as_deref())
+                .and_then(|context_id| {
+                    store
+                        .contexts
+                        .iter()
+                        .find(|context| context.context_id == context_id)
+                })
+                .map(|context| context.skill_ids.as_slice());
+            let matches = observed.is_some_and(|skill_ids| {
+                skill_ids
+                    .iter()
+                    .map(String::as_str)
+                    .eq(expected_skill_ids.iter().copied())
+            });
+            if matches {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                bail!(
+                    "remote context for behavior {behavior_id} has skill IDs {observed:?}, expected {expected_skill_ids:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
     fn skill_save_request(agent_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
         SkillSaveRequest {
             document: serde_json::from_value(serde_json::json!({
                 "skill_id": skill_id, "agent_did": agent_did, "name": skill_id,
                 "description": format!("Test skill {skill_id}"),
                 "instructions": instructions, "display_name": skill_id,
-            })).expect("canonical fixture skill"),
+            }))
+            .expect("canonical fixture skill"),
         }
     }
 

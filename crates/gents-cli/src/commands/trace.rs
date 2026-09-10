@@ -3,24 +3,24 @@ use std::fs;
 
 use anyhow::{Context, Result};
 use gents::adapter_projection::{
-    AdapterProjectionKind, ProjectionContext, ProjectionRedactionMode,
     adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
     adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
     adapter_projection_jsonl_records, adapter_projection_native_json,
     adapter_projection_native_json_schema, build_adapter_projection,
-    validate_adapter_projection_contract,
+    validate_adapter_projection_contract, AdapterProjectionKind, ProjectionContext,
+    ProjectionRedactionMode,
 };
 use gents::graphql::escape_graphql_string;
-use gents::run_timeline::{RunTimelineRows, TimelineToolCallRow, build_run_timeline};
+use gents::run_timeline::{build_run_timeline, RunTimelineRows, TimelineToolCallRow};
 use gents::run_timeline_fetch::{load_run_timeline, load_run_timeline_rows};
 use gents::tool_call_lifecycle::ToolCallState;
 use gents::trace_export::{
-    AmyToolCallTraceRecord, analyze_request_failure, analyze_tool_call_with_persisted_outcome,
-    extract_raw_tool_call_json, latency_ms, raw_message_json,
+    analyze_request_failure, analyze_tool_call_with_persisted_outcome, extract_raw_tool_call_json,
+    latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
-use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::{json, Value};
 
 use crate::cli::args::{
     TraceCaptureArgs, TraceCommand, TraceExportArgs, TraceProjectArgs, TraceProjectSchemaArgs,
@@ -667,11 +667,9 @@ mod tests {
             backend_id: Some("another-backend".into()),
             ..Default::default()
         });
-        assert!(
-            build_record(&call(), Some(&rows), &args())
-                .unwrap()
-                .backend_id
-                .is_none()
-        );
+        assert!(build_record(&call(), Some(&rows), &args())
+            .unwrap()
+            .backend_id
+            .is_none());
     }
 }

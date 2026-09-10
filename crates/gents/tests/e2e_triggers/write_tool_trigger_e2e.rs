@@ -38,10 +38,7 @@ async fn register_action_request_schema(node: &EmbeddedNode) {
 /// Publish canonical desired-state documents through the shared apply owner.
 /// Exact owner (agent_did) is authored on every document; the desired-state
 /// owner validates same-owner references before committing.
-async fn apply_documents(
-    node: &EmbeddedNode,
-    documents: Vec<(Collection, serde_json::Value)>,
-) {
+async fn apply_documents(node: &EmbeddedNode, documents: Vec<(Collection, serde_json::Value)>) {
     use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
     let plan = DesiredStateApplyPlan::new(
         documents

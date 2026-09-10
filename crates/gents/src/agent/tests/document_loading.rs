@@ -39,11 +39,9 @@ async fn document_constructor_rejects_node_without_signing_did_before_migrations
         Err(error) => error,
     };
 
-    assert!(
-        error
-            .to_string()
-            .contains("EmbeddedNode configured with a node signing DID")
-    );
+    assert!(error
+        .to_string()
+        .contains("EmbeddedNode configured with a node signing DID"));
 }
 
 #[tokio::test]
@@ -398,7 +396,7 @@ async fn upsert_tools(node: &EmbeddedNode, tools: &Tools) {
 }
 
 #[tokio::test]
-async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
+async fn from_default_behavior_documents_filters_inactive_subagent_targets() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("subagent-target-disabled"));
@@ -406,9 +404,8 @@ async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
     let default_behavior_id = default_behavior_id_for_agent(&did);
 
     install_default_behavior_chain(node.as_ref(), &did, &default_behavior_id).await;
-    // The destination behavior exists but is disabled: an enabled target pointing
-    // at an inactive behavior must quarantine the parent, not silently drop the
-    // target.
+    // The destination behavior exists but is disabled. The parent remains
+    // runnable while the inactive target is omitted from its presented surface.
     crate::test_support::install_test_behavior(node.as_ref(), &did, "disabled-researcher").await;
     let behavior: AgentBehavior = read_document(
         node.as_ref(),
@@ -455,14 +452,19 @@ async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
     )
     .await
     .unwrap();
-    assert!(!snapshot.behaviors.contains_key(&default_behavior_id));
+    assert!(snapshot.behaviors.contains_key(&default_behavior_id));
+    let surface = snapshot
+        .tool_surfaces
+        .get(&default_behavior_id)
+        .expect("parent tool surface");
+    assert!(surface.subagent_targets().is_empty());
     let unavailable = snapshot
         .unavailable_behaviors
-        .get(&default_behavior_id)
-        .expect("behavior with an inactive configured target must be unavailable");
+        .get("disabled-researcher")
+        .expect("disabled target behavior must remain unavailable");
     assert_eq!(
         unavailable.public_reason,
-        gents_protocol::row::BehaviorReadinessUnavailableReason::ToolConfigurationInvalid
+        gents_protocol::row::BehaviorReadinessUnavailableReason::BehaviorDisabled
     );
 }
 
@@ -518,13 +520,19 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     .await
     .unwrap();
 
-    assert!(agent.behaviors().is_empty());
-    assert!(
-        agent
-            .unavailable_behaviors()
-            .get(default_behavior_id.as_str())
-            .is_some_and(|message| message.diagnostic.contains("subagent_targets entry"))
+    assert!(!agent
+        .behaviors()
+        .iter()
+        .any(|behavior| behavior.behavior_id == default_behavior_id));
+    let unavailable = agent
+        .unavailable_behaviors()
+        .get(default_behavior_id.as_str())
+        .expect("parent with unresolved target must be unavailable");
+    assert_eq!(
+        unavailable.public_reason,
+        BehaviorReadinessUnavailableReason::ToolConfigurationInvalid
     );
+    assert!(unavailable.diagnostic.contains("missing-behavior"));
 }
 
 #[tokio::test]
@@ -581,10 +589,14 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         .get("broken")
         .cloned()
         .expect("missing broken behavior rejection");
+    assert_eq!(
+        broken_reason.public_reason,
+        BehaviorReadinessUnavailableReason::InferenceProfileInvalid
+    );
     assert!(
-        broken_reason
-            .diagnostic
-            .contains("references missing backend backend-missing")
+        broken_reason.diagnostic.contains("backend-missing"),
+        "missing backend diagnostic: {}",
+        broken_reason.diagnostic
     );
     let disabled_reason = agent
         .unavailable_behaviors()
@@ -601,11 +613,9 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         unhealthy_reason.public_reason,
         BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
     );
-    assert!(
-        unhealthy_reason
-            .diagnostic
-            .contains("backend unhealthy:backend is not ready")
-    );
+    assert!(unhealthy_reason
+        .diagnostic
+        .contains("backend unhealthy:backend is not ready"));
 }
 
 async fn set_probe_status(node: &EmbeddedNode, did: &str, backend_id: &str, status: &str) {

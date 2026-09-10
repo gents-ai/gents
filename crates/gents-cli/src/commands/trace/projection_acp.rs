@@ -755,13 +755,13 @@ pub(super) fn scope_value_matches<'a>(
 mod tests {
     use std::sync::Arc;
 
-    use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+    use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
     use gents::run_timeline::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
         TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
     };
     use serde::Deserialize;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
 
     use super::*;
 

@@ -245,7 +245,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let explicit = WorkspaceLineage::from_trigger_context(trigger_context.as_deref())?;
             let graph = match trigger_id.as_deref() {
                 Some(trigger) => {
-                    crate::graph_pipeline::derive_graph_workspace(
+                    crate::graph_pipeline::resolve_graph_workspace(
                         node.as_ref(),
                         trigger,
                         correlation.as_deref(),
@@ -257,17 +257,8 @@ impl MaterializerHandle for ProductionMaterializer {
                 }
                 None => None,
             };
-            let mut workspace = graph
-                .as_ref()
-                .map(|resolved| resolved.lineage.clone())
-                .unwrap_or(explicit);
+            let mut workspace = graph.map(|resolved| resolved.lineage).unwrap_or(explicit);
             workspace.require_authority_if_workspace_id()?;
-            if let Some(resolved) = graph {
-                workspace =
-                    crate::graph_pipeline::finalize_graph_workspace(node.as_ref(), resolved)
-                        .await?
-                        .lineage;
-            }
             crate::workspace::stamp_workspace_lineage(node.as_ref(), &behavior_did, &mut workspace)
                 .await?;
             let lineage = TriggerLineage {
@@ -286,8 +277,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     &task_id,
                     &durable_fire_key,
                 );
-                let conversation_title =
-                    task_goal_session_title(&task_label, &identity.retry_key);
+                let conversation_title = task_goal_session_title(&task_label, &identity.retry_key);
                 let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                     &behavior_did,
                     &behavior_name,

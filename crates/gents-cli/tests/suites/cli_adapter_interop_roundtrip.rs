@@ -12,8 +12,8 @@ use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
     import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
-    AdapterProjectionEnvelope, AdapterProjectionKind, ExternalAdapterCapture, ProjectionContext,
-    ProjectionRedactionMode, RunTimelineRows,
+    AdapterProjectionEnvelope, ExternalAdapterCapture, ProjectionContext, ProjectionRedactionMode,
+    RunTimelineRows,
 };
 use serde_json::{json, Value};
 

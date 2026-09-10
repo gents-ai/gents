@@ -120,8 +120,7 @@ fn prepare_root(root: &Path, force: bool) -> Result<(), String> {
                 root.display()
             ));
         }
-        if !root.join("agent_principal.json").is_file() && !root.join("pack_config.json").is_file()
-        {
+        if !root.join("pack_config.json").is_file() {
             return Err(format!(
                 "refusing to overwrite {}: not a manifest root",
                 root.display()

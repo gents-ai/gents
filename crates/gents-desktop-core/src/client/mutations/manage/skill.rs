@@ -3,7 +3,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    apply_desired_state_plan, ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::SkillDocument;
 
@@ -55,8 +55,8 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects()
-    -> Result<()> {
+    async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects(
+    ) -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;
         gents::ensure_runtime_schemas(&node).await?;
         for owner in ["did:test:skill-a", "did:test:skill-b"] {
@@ -81,11 +81,9 @@ mod tests {
             })
         })
         .await?;
-        assert!(
-            delete_skill(&node, "did:test:skill-a", "skill")
-                .await
-                .is_err()
-        );
+        assert!(delete_skill(&node, "did:test:skill-a", "skill")
+            .await
+            .is_err());
         assert_eq!(delete_skill(&node, "did:test:skill-b", "skill").await?, 1);
         ConfigAccess::transact_local(&node, None, "desktop.skill.verify", |txn| {
             Box::pin(async move {

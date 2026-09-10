@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents_protocol::schemas::{ALL_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES};
+use gents::agent::p2p_reconcile::templates::CLIENT_INDEX_COLLECTIONS;
+use gents_protocol::schemas::{
+    AGENT_BEHAVIOR_READINESS_NAME, ALL_COLLECTION_NAMES, RUNTIME_COLLECTION_NAMES,
+};
 
 pub async fn ensure_runtime_schemas(node: &EmbeddedNode) -> Result<()> {
     gents_migration::ensure_migrations(node)
@@ -58,6 +61,18 @@ pub fn subscribed_collection_names() -> Vec<&'static str> {
         .collect()
 }
 
+/// The small control-plane/index set eagerly recovered by paired clients.
+///
+/// Readiness travels on the signed, agent-scoped `client` route rather than
+/// the requester-scoped `client-index` grant. Pulling its branch head here is
+/// a liveness operation only; it cannot expand the route's authority.
+pub fn client_recovery_collection_names() -> [&'static str; 3] {
+    [
+        CLIENT_INDEX_COLLECTIONS[0],
+        CLIENT_INDEX_COLLECTIONS[1],
+        AGENT_BEHAVIOR_READINESS_NAME,
+    ]
+}
 #[cfg(test)]
 mod tests {
     use super::subscribed_collection_names;
@@ -83,6 +98,11 @@ mod tests {
 
     #[test]
     fn index_collections_are_the_client_index_and_are_branchable() {
+        let index = super::client_recovery_collection_names();
+        assert_eq!(
+            index,
+            ["AgentSession", "MailboxItem", "AgentBehaviorReadiness"]
+        );
         for name in CLIENT_INDEX_COLLECTIONS {
             assert!(
                 gents_protocol::schemas::BRANCHABLE_COLLECTION_NAMES.contains(&name),

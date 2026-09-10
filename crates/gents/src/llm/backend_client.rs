@@ -20,7 +20,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
 use crate::backend_provider::BackendProviderKind;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 
 /// A built provider completion client, tagged by which
 /// `BackendProviderKind` × wire-API combination produced it.
@@ -79,7 +79,7 @@ pub(crate) enum BackendClient {
 /// always applied, now shared by one-shot too (#1338).
 pub(crate) async fn build_backend_client(
     node: Arc<EmbeddedNode>,
-    behavior: &AgentBehavior,
+    behavior: &ResolvedBehavior,
     api_key: &str,
     build_timeout: Duration,
 ) -> Result<BackendClient> {
@@ -252,7 +252,10 @@ mod tests {
         Arc::new(EmbeddedNode::builder().build().await.unwrap())
     }
 
-    fn test_behavior(kind: BackendProviderKind, wire_api: crate::OpenAiWireApi) -> AgentBehavior {
+    fn test_behavior(
+        kind: BackendProviderKind,
+        wire_api: crate::OpenAiWireApi,
+    ) -> ResolvedBehavior {
         let identity = KeyIdentity::load_or_create(
             std::env::temp_dir().join(format!("backend-client-table-{}.key", uuid::Uuid::new_v4())),
             None,
@@ -303,7 +306,11 @@ mod tests {
         assert!(matches!(client, BackendClient::OpenRouter(_)));
     }
 
-    async fn seed_oauth_credential(node: &EmbeddedNode, behavior: &AgentBehavior, provider: &str) {
+    async fn seed_oauth_credential(
+        node: &EmbeddedNode,
+        behavior: &ResolvedBehavior,
+        provider: &str,
+    ) {
         let agent_did = behavior.agent_did();
         let credential = crate::oauth_credential::OAuthCredential {
             doc_id: None,

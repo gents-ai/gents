@@ -20,10 +20,33 @@ function renderWorkspace(backLabel?: string, onBack = vi.fn()) {
       onRunTask={vi.fn()}
       onSaveBackendConfig={vi.fn()}
       onSaveBehaviorConfig={vi.fn()}
-      onSaveEventTriggerConfig={vi.fn()}
-      onSaveInferenceProfileConfig={vi.fn()}
-      onSaveScheduleConfig={vi.fn()}
-      onSaveSkillConfig={vi.fn()}
+      onSaveEventSourceConfig={vi.fn()}
+      onSaveTriggerConfig={vi.fn()}
+      onDeleteEventSourceConfig={vi.fn()}
+      onDeleteTriggerConfig={vi.fn()}
+      onPatchConfigComponents={vi.fn().mockResolvedValue(undefined)}
+      onApplyConfigComponents={vi.fn().mockResolvedValue(undefined)}
+      onDeleteBackendConfig={vi.fn()}
+      onDeleteInferenceProfileConfig={vi.fn()}
+      onDeleteToolsConfig={vi.fn()}
+      onDeleteToolServiceConfig={vi.fn()}
+      onDeleteBehaviorConfig={vi.fn()}
+      onDeleteTaskConfig={vi.fn()}
+      onDeleteScheduleConfig={vi.fn()}
+      api={
+        {
+          explainToolSurface: vi.fn().mockResolvedValue({
+            behaviorId: "default",
+            enabled: true,
+            contextId: null,
+            toolsId: null,
+            toolsSource: "defaults",
+            ceilingSource: "defaults",
+            mcpServicesOnline: true,
+            surface: {},
+          }),
+        } as never
+      }
       onSaveTaskConfig={vi.fn()}
       onSaveToolsConfig={vi.fn()}
       onSaveToolServiceConfig={vi.fn()}

@@ -1,6 +1,7 @@
 // Documentation/topology fence only. Rust build.rs and pack::resolve_pack own
 // manifest validity, naming and asset admission; desired_state owns interpolation.
-// Read literal JSON here: topology identifiers must not depend on environment.
+// Read each canonical config as literal JSON: authoring and topology identifiers
+// must not depend on environment substitution.
 // --write-diagrams refreshes the generated
 // topology section; normal invocation checks it without modifying files.
 import fs from 'node:fs';
@@ -18,14 +19,16 @@ for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
  const manifest = json(manifestPath);
  const labels = new Map(), edges = [];
  const id = label => {if(!labels.has(label))labels.set(label,'n'+labels.size);return labels.get(label);};
+ const config = manifest.kind === 'assets' ? null : (() => {
+   assert.equal(typeof manifest.config, 'string', `${name}: document and graph packs need canonical config`);
+   return json(new URL(manifest.config,dir));
+ })();
  if(manifest.kind==='graph') {
-   const graph=json(new URL(manifest.intent,dir));
-   for(const node of graph.nodes)id(node.node_id);
-   for(const edge of graph.edges)edges.push(`${id(edge.from.node_id)} -->|${JSON.stringify(edge.from.port+' → '+edge.to.port)}| ${id(edge.to.node_id)}`);
- } else if(fs.existsSync(new URL('event_triggers/',dir))) {
-   for(const handle of fs.readdirSync(new URL('event_triggers/',dir))) {
-     const trigger=json(new URL('event_triggers/'+handle+'/object.json',dir));
-     edges.push(`${id(trigger.source_collection)} -->|${JSON.stringify(trigger.trigger_id)}| ${id(trigger.task_id)}`);
+   assert.ok(Array.isArray(config.graph_intents) && config.graph_intents.length > 0,
+     `${name}: graph pack config needs graph_intents`);
+   for(const graph of config.graph_intents) {
+     for(const node of graph.nodes)id(node.node_id);
+     for(const edge of graph.edges)edges.push(`${id(edge.from.node_id)} -->|${JSON.stringify(edge.from.port+' → '+edge.to.port)}| ${id(edge.to.node_id)}`);
    }
  }
  const readme = new URL('README.md',dir);

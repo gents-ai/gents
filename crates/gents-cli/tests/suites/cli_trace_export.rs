@@ -4,12 +4,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 fn adapter_schema_snapshot(snapshot_name: &str, suffix: &str) -> Result<Value> {
     read_workspace_json(&format!(
@@ -123,11 +123,9 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         failed.get("failure_class").and_then(Value::as_str),
         Some("toolReturnedError")
     );
-    assert!(
-        failed
-            .get("request_failure_class")
-            .is_some_and(Value::is_null)
-    );
+    assert!(failed
+        .get("request_failure_class")
+        .is_some_and(Value::is_null));
     assert_eq!(
         failed.get("request_id").and_then(Value::as_str),
         Some("req-1")
@@ -193,18 +191,14 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
             .and_then(Value::as_str),
         Some("serviceUnavailable")
     );
-    assert!(
-        missing_tool
-            .get("tool_error")
-            .and_then(|value| value.get("available_tools"))
-            .is_none()
-    );
-    assert!(
-        missing_tool
-            .get("tool_error")
-            .and_then(|value| value.get("requested_tool_name"))
-            .is_none()
-    );
+    assert!(missing_tool
+        .get("tool_error")
+        .and_then(|value| value.get("available_tools"))
+        .is_none());
+    assert!(missing_tool
+        .get("tool_error")
+        .and_then(|value| value.get("requested_tool_name"))
+        .is_none());
 
     assert_eq!(
         succeeded.get("tool_call_id").and_then(Value::as_str),
@@ -218,11 +212,9 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         succeeded.get("tool_result_ok").and_then(Value::as_bool),
         Some(true)
     );
-    assert!(
-        succeeded
-            .get("tool_failure_class")
-            .is_some_and(Value::is_null)
-    );
+    assert!(succeeded
+        .get("tool_failure_class")
+        .is_some_and(Value::is_null));
     assert!(succeeded.get("failure_class").is_some_and(Value::is_null));
     assert_eq!(
         succeeded.get("run_id").and_then(Value::as_str),
@@ -245,11 +237,9 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
         deadline.get("tool_result_ok").and_then(Value::as_bool),
         Some(true)
     );
-    assert!(
-        deadline
-            .get("tool_failure_class")
-            .is_some_and(Value::is_null)
-    );
+    assert!(deadline
+        .get("tool_failure_class")
+        .is_some_and(Value::is_null));
     assert_eq!(
         deadline
             .get("request_failure_class")

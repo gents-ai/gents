@@ -154,9 +154,7 @@ describe("request trace panel", () => {
         queued_at: "2026-08-07T12:00:01Z",
       }),
     ).toBe("2026-08-07T12:00:01Z");
-    expect(eventSummary({ kind: "unknown_future_kind" })).toBe(
-      "unknown_future_kind",
-    );
+    expect(eventSummary({ kind: "unknown_future_kind" })).toBe("unknown_future_kind");
     // Whitespace-only strings are not content: the summary must not render an
     // empty role/preview pair for them.
     expect(eventSummary({ kind: "message", role: "user", content: "   " })).toBe(

@@ -1,11 +1,11 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents::AgentBehaviorDocument;
 use gents::collection::Collection;
 use gents::config_client::{
-    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
-    read_desired_state_record_in_txn,
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
+use gents::AgentBehaviorDocument;
 
 pub async fn upsert_agent_behavior(
     node: &EmbeddedNode,
@@ -82,11 +82,13 @@ mod tests {
             "agent_did":"did:test:alpha","behavior_id":"review","inference_profile_id":"profile","context_id":"missing"
         }))?;
         assert!(upsert_agent_behavior(&node, &invalid).await.is_err());
-        assert!(
-            super::super::profile::delete_inference_profile(&node, "did:test:alpha", "profile")
-                .await
-                .is_err()
-        );
+        assert!(super::super::profile::delete_inference_profile(
+            &node,
+            "did:test:alpha",
+            "profile"
+        )
+        .await
+        .is_err());
         // The shared closure owns local target references; foreign destinations
         // remain governed by delegation admission, not global label lookup.
         let target = json!({
@@ -106,11 +108,9 @@ mod tests {
                 })
             })
             .await?;
-        assert!(
-            delete_agent_behavior(&node, "did:test:alpha", "review")
-                .await
-                .is_err()
-        );
+        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+            .await
+            .is_err());
         assert_eq!(
             delete_agent_behavior(&node, "did:test:beta", "review").await?,
             1
@@ -120,11 +120,9 @@ mod tests {
                 .await?,
             1
         );
-        assert!(
-            delete_agent_behavior(&node, "did:test:alpha", "review")
-                .await
-                .is_err()
-        );
+        assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+            .await
+            .is_err());
         let remove_target = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
             Collection::SubagentTarget,
             "did:test:alpha".into(),
@@ -163,11 +161,9 @@ mod tests {
                 })
                 .await?;
             if default.is_some() {
-                assert!(
-                    delete_agent_behavior(&node, "did:test:alpha", "review")
-                        .await
-                        .is_err()
-                );
+                assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
+                    .await
+                    .is_err());
             }
         }
         assert_eq!(

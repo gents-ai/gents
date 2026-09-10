@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use gents::Collection;
 use gents::graphql::escape_graphql_string;
-use serde_json::{Value, json};
+use gents::Collection;
+use serde_json::{json, Value};
 
 use crate::cli::output_format::OutputFormat;
 use crate::cli::{ConfigListArgs, ConfigShowArgs};
@@ -367,7 +367,7 @@ fn print_table_row(cells: &[&str; 3], widths: &[usize; 3]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gents::config_client::{DesiredStateApplyPlan, apply_desired_state_plan};
+    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyPlan};
     use std::sync::Arc;
 
     #[tokio::test]
@@ -397,11 +397,9 @@ mod tests {
             load_one(&access, TOOLS_SPEC, "owner-b", "same").await?["display_name"],
             "owner-b"
         );
-        assert!(
-            load_one(&access, TOOLS_SPEC, "absent", "same")
-                .await
-                .is_err()
-        );
+        assert!(load_one(&access, TOOLS_SPEC, "absent", "same")
+            .await
+            .is_err());
         node.shutdown().await;
         Ok(())
     }

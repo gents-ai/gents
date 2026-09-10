@@ -4,16 +4,15 @@ use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::{
     create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
 };
-use gents::{
-    fetch_interrupt_requested_at, upsert_agent_behavior, upsert_tool_selection,
-    AgentBehaviorDocument, DefraSessionHook, FailurePolicy, ToolSelectionDocument,
-};
+use gents::{fetch_interrupt_requested_at, DefraSessionHook, FailurePolicy};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::spawn_subagent_source;
+use crate::support::fixtures::{
+    configure_subagent_behavior, spawn_subagent_source, subagent_target,
+};
 use crate::support::test_db;
 
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
@@ -36,74 +35,33 @@ async fn setup_db(
 ) {
     let db = test_db(name).await;
     let agent_did = db.node_identity.did().to_string();
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4c-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                CHILD_BEHAVIOR_ID,
-                &agent_did,
-                CHILD_BEHAVIOR_ID,
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_steering_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        CHILD_BEHAVIOR_ID,
+        "r4c-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
+    .await;
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4c parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some("r4c-parent-tools".to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4c-parent-tools",
+        vec![subagent_target(
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+            &agent_did,
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4c child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    .await;
     let source = spawn_subagent_source(
         db.node.clone(),
         &agent_did,
@@ -139,6 +97,7 @@ async fn create_parent_hook(
         session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -177,7 +136,6 @@ async fn create_parent_request(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",
@@ -283,7 +241,7 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow
                 behavior_id
                 content
                 lifecycle_state
-                metadata
+                input
                 subagent_depth
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
@@ -344,14 +302,16 @@ async fn create_child_session_queued_request(
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
-    metadata: &str,
+    input: &str,
 ) {
     let request_id = escape_graphql_string(request_id);
     let agent_did = escape_graphql_string(agent_did);
     let behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let session_id = escape_graphql_string(session_id);
     let execution_origin = escape_graphql_string(execution_origin);
-    let metadata = escape_graphql_string(metadata);
+    let input = serde_json::from_str::<serde_json::Value>(input).expect("request input JSON");
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
     let now = chrono::Utc::now();
     let created_at = escape_graphql_string(&now.to_rfc3339());
     let deadline = escape_graphql_string(&(now + chrono::Duration::minutes(5)).to_rfc3339());
@@ -369,7 +329,7 @@ async fn create_child_session_queued_request(
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{execution_origin}",
-                metadata: "{metadata}",
+                input: {input},
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",
@@ -477,9 +437,15 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
     assert_eq!(queued.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(queued.caused_by_parent_tool_call_doc_id.as_deref(), None);
     assert_eq!(queued.lifecycle_state, Some(RequestLifecycleState::Pending));
-    let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
-    assert_eq!(metadata["queue"]["source"], "steering");
-    assert_eq!(metadata["queue"]["policy"], "append");
+    let queue = queued.input.as_ref().unwrap().queue.as_ref().unwrap();
+    assert_eq!(
+        queue.source,
+        gents_protocol::request_input::QueueSource::Steering
+    );
+    assert_eq!(
+        queue.policy,
+        gents_protocol::request_input::QueuePolicy::Append
+    );
 }
 
 #[tokio::test]
@@ -617,9 +583,9 @@ async fn steer_subagent_interrupt_latches_active_child_request() {
         result["queued_request_id"].as_str().unwrap(),
     )
     .await;
-    let metadata: Value = serde_json::from_str(queued.metadata.as_deref().unwrap()).unwrap();
+    let queue = queued.input.as_ref().unwrap().queue.as_ref().unwrap();
     assert_eq!(
-        metadata["queue"]["interrupted_request_id"].as_str(),
+        queue.interrupted_request_id.as_deref(),
         Some(child_request_id)
     );
 }

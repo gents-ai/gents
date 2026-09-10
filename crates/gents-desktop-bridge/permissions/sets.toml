@@ -51,7 +51,7 @@ identifier = "chat-write"
 description = "Chat send and rename"
 permissions = [
   "allow-desktop-chat-send",
-  "allow-desktop-conversation-rename",
+  "allow-desktop-session-rename",
 ]
 
 [[set]]
@@ -141,7 +141,7 @@ permissions = [
   "allow-desktop-skill-delete",
   "allow-desktop-task-delete",
   "allow-desktop-schedule-delete",
-  "allow-desktop-event-trigger-delete",
+  "allow-desktop-trigger-delete",
   "allow-desktop-event-source-delete",
   "allow-desktop-backend-delete",
   "allow-desktop-inference-profile-delete",
@@ -168,12 +168,12 @@ permissions = ["allow-desktop-provider-accounts-list"]
 
 [[set]]
 identifier = "tasks"
-description = "Task/schedule/event-trigger save and run"
+description = "Task, schedule, trigger, and event-source save and run"
 permissions = [
   "allow-desktop-task-save",
   "allow-desktop-schedule-save",
   "allow-desktop-schedule-run",
-  "allow-desktop-event-trigger-save",
+  "allow-desktop-trigger-save",
   "allow-desktop-event-source-save",
   "allow-desktop-task-run",
 ]

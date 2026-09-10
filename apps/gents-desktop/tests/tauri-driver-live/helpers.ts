@@ -55,11 +55,15 @@ export async function waitForBehaviorConfig(
   await waitFor(
     async () => {
       const snapshot = await runner.fetchSnapshot();
-      const behavior = snapshot.client?.deployments[0]?.behaviors.find(
+      const deployment = snapshot.client?.deployments[0];
+      const behavior = deployment?.behaviors.find(
         (candidate) => candidate.behaviorId === behaviorId,
       );
       expect(behavior?.displayName).toBe(expectedDisplayName);
-      expect(behavior?.systemPrompt).toBe(expectedSystemPrompt);
+      const context = deployment?.contexts.find(
+        (candidate) => candidate.context_id === behavior?.contextId,
+      );
+      expect(context?.system_prompt).toBe(expectedSystemPrompt);
     },
     { timeout: 30_000 },
   );
@@ -71,11 +75,12 @@ export async function waitForConfigFlowDocuments(
     backendId: string;
     profileId: string;
     toolServiceId: string;
-    toolSelectionId: string;
+    toolsId: string;
     behaviorId: string;
     taskId: string;
     scheduleId: string;
-    eventTriggerId: string;
+    eventSourceId: string;
+    triggerDocId: string;
   },
 ) {
   await waitFor(
@@ -89,37 +94,45 @@ export async function waitForConfigFlowDocuments(
       ).toBe(true);
       expect(
         deployment?.inferenceProfiles.some(
-          (profile) => profile.profileId === expected.profileId,
+          (profile) => profile.profile_id === expected.profileId,
         ),
       ).toBe(true);
       expect(
-        deployment?.toolSelections.some(
-          (selection) => selection.selectionId === expected.toolSelectionId,
-        ),
+        deployment?.tools.some((tools) => tools.tools_id === expected.toolsId),
       ).toBe(true);
       expect(
         deployment?.toolServiceRegistries.some(
-          (service) => service.serviceId === expected.toolServiceId,
+          (service) => service.service_id === expected.toolServiceId,
         ),
       ).toBe(true);
+      const context = deployment?.contexts.find(
+        (candidate) => candidate.tools_id === expected.toolsId,
+      );
+      expect(context?.context_id).toBeDefined();
       const behavior = deployment?.behaviors.find(
         (candidate) => candidate.behaviorId === expected.behaviorId,
       );
-      expect(behavior?.backendId).toBe(expected.backendId);
       expect(behavior?.inferenceProfileId).toBe(expected.profileId);
-      expect(behavior?.toolSelectionId).toBe(expected.toolSelectionId);
       const task = deployment?.tasks.find(
         (candidate) => candidate.taskId === expected.taskId,
       );
       expect(task?.behaviorId).toBe(expected.behaviorId);
       const schedule = deployment?.schedules.find(
-        (candidate) => candidate.scheduleId === expected.scheduleId,
+        (candidate) => candidate.schedule_id === expected.scheduleId,
       );
-      expect(schedule?.taskId).toBe(expected.taskId);
-      const eventTrigger = deployment?.eventTriggers.find(
-        (candidate) => candidate.triggerId === expected.eventTriggerId,
+      expect(schedule?.schedule_id).toBe(expected.scheduleId);
+      const eventSource = deployment?.eventSources.find(
+        (candidate) => candidate.event_source_id === expected.eventSourceId,
       );
-      expect(eventTrigger?.taskId).toBe(expected.taskId);
+      expect(eventSource?.event_source_id).toBe(expected.eventSourceId);
+      const trigger = deployment?.triggers.find(
+        (candidate) => candidate.config.trigger_id === expected.triggerDocId,
+      );
+      expect(trigger?.config.task_id).toBe(expected.taskId);
+      expect(trigger?.config.source).toEqual({
+        kind: "event",
+        event_source_id: expected.eventSourceId,
+      });
     },
     { timeout: 30_000 },
   );

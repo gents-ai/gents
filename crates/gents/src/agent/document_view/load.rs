@@ -63,8 +63,6 @@ pub(crate) async fn load_document_runtime_view(
                     callbacks: load_records(txn, &owner, Collection::Callback).await?,
                     callback_bindings: load_records(txn, &owner, Collection::CallbackBinding)
                         .await?,
-                    graph_definitions: load_records(txn, &owner, Collection::GraphDefinition)
-                        .await?,
                     chain_key_bindings: load_records(txn, &owner, Collection::ChainKeyBinding)
                         .await?,
                     tool_services: load_records(txn, &owner, Collection::ToolServiceRegistry)

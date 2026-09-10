@@ -42,7 +42,7 @@ pub struct StartupBarrier {
 }
 
 impl StartupBarrier {
-    pub(super) fn new(behaviors: &[Arc<crate::config::AgentBehavior>]) -> Self {
+    pub(super) fn new(behaviors: &[Arc<crate::config::ResolvedBehavior>]) -> Self {
         let pending: BTreeSet<(String, u64)> = behaviors
             .iter()
             .map(|behavior| (behavior.behavior_id.clone(), 1))
@@ -113,7 +113,7 @@ impl StartupBarrier {
 impl RuntimeContext {
     pub(super) async fn run_behavior(
         &self,
-        behavior: Arc<crate::config::AgentBehavior>,
+        behavior: Arc<crate::config::ResolvedBehavior>,
         tool_surface: Arc<ToolSurface>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         slot_generation: u64,
@@ -185,7 +185,7 @@ impl RuntimeContext {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_behavior_with_client<C>(
         &self,
-        behavior: Arc<crate::config::AgentBehavior>,
+        behavior: Arc<crate::config::ResolvedBehavior>,
         request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
         slot_generation: u64,
         shutdown: watch::Receiver<bool>,
@@ -248,7 +248,7 @@ impl RuntimeContext {
 mod startup_barrier_tests {
     use super::*;
 
-    fn behavior(behavior_id: &str) -> Arc<crate::config::AgentBehavior> {
+    fn behavior(behavior_id: &str) -> Arc<crate::config::ResolvedBehavior> {
         Arc::new(
             crate::agent::PendingAgentBehavior::new(behavior_id).build_with_identity_for_test(
                 crate::KeyIdentity::load_or_create(

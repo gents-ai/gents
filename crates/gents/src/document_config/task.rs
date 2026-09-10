@@ -60,7 +60,7 @@ pub struct Task {
     pub tags: Vec<String>,
 }
 
-/// A task-owned host command, using the behavior's HostTools.cwd (runtime cwd
+/// A task-owned host command, using the behavior's HostTools.root (runtime cwd
 /// when absent) and inherited host environment. No input projection, prompt
 /// interpolation, callback reference, or workspace-specific argument schema.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

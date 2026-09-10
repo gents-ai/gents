@@ -678,7 +678,7 @@ pub(crate) struct InitArgs {
     #[arg(
         long,
         default_value_t = false,
-        help = "Enable the feature-gated per-agent memory tool in the default ToolSelection"
+        help = "Enable the feature-gated per-agent memory tool in the default Tools"
     )]
     pub(crate) enable_memory: bool,
     #[arg(
@@ -735,7 +735,7 @@ pub(crate) struct ServeArgs {
     #[arg(
         long,
         value_enum,
-        help = "Operator safety cap that clamps document tool selection at runtime"
+        help = "Operator safety cap that clamps the selected Tools document at runtime"
     )]
     pub(crate) tool_ceiling: Option<ToolCeilingArg>,
     #[arg(
@@ -1491,7 +1491,7 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: BehaviorCommand,
     },
-    #[command(about = "Write a ToolSelection document")]
+    #[command(about = "Write a Tools document")]
     Tools {
         #[command(subcommand)]
         command: ToolsConfigCommand,
@@ -1501,7 +1501,7 @@ pub(crate) enum ConfigCommand {
         #[command(subcommand)]
         command: InferenceProfileCommand,
     },
-    #[command(about = "Inspect EventTrigger documents")]
+    #[command(about = "Inspect Trigger documents")]
     Trigger {
         #[command(subcommand)]
         command: ConfigTriggerCommand,
@@ -1689,10 +1689,6 @@ pub(crate) struct SkillAddArgs {
     pub(crate) skill_id: String,
     #[arg(long)]
     pub(crate) name: Option<String>,
-    /// Activation scope: "principal" (inherited by all the agent's behaviors)
-    /// or "behavior" (only where a behavior opts in via skill_refs).
-    #[arg(long, default_value = "behavior")]
-    pub(crate) scope: String,
     #[arg(long)]
     pub(crate) description: Option<String>,
     /// Inline skill instructions (the body composed into the prompt).
@@ -1721,9 +1717,6 @@ pub(crate) struct SkillImportArgs {
     /// `<dir>/<skill-name>/SKILL.md` + optional `agents/openai.yaml`).
     #[arg(value_name = "DIR")]
     pub(crate) dir: PathBuf,
-    /// Scope applied to every imported skill: "principal" or "behavior".
-    #[arg(long, default_value = "behavior")]
-    pub(crate) scope: String,
     /// Import skills as disabled.
     #[arg(long)]
     pub(crate) disabled: bool,
@@ -2154,7 +2147,7 @@ pub(crate) struct ConfigApplyArgs {
     #[arg(
         long,
         value_name = "ROOT",
-        help = "Desired-state pack root. If ROOT/schemas/ exists, SDL/patches there are applied first (pack-scoped), then agent config (surfaces, selections, triggers, …)"
+        help = "Desired-state pack root. If ROOT/schemas/ exists, SDL/patches there are applied first (pack-scoped), then agent config (surfaces, Tools, triggers, …)"
     )]
     pub(crate) root: PathBuf,
     #[arg(long)]

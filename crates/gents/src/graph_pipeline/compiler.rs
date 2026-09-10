@@ -321,7 +321,7 @@ pub fn compile_graph(
         resolved.insert(node.node_id.as_str(), *capability);
     }
 
-    // EventTrigger routes by physical collection, not producer node. Reusing
+    // Event-source triggers route by physical collection, not producer node. Reusing
     // one output collection for two graph nodes would make `from.node_id`
     // decorative, so v1 rejects that ambiguity instead of approximating it.
     let mut output_collections = BTreeMap::new();

@@ -6,17 +6,17 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
-    DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use gents::document_config::{
-    AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools, HostTools,
-    InferenceBackend, Tools,
+    AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
+    HostTools, InferenceBackend, Tools,
 };
 use gents::{
-    AgentIdentity, BashMode, Collection, CommandExecutionMode, FileToolMode, InferenceProfile,
-    KeyIdentity, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    load_agent_behavior, load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal,
+    default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
+    load_agent_principal, load_or_create_macos_keychain_identity,
+    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, AgentIdentity, BashMode,
+    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -25,9 +25,9 @@ use crate::cli::*;
 use crate::config_writes::ConfigAccess;
 use crate::shared::*;
 use crate::{
-    BackendResolutionMode, DEFAULT_HTTP_PORT, clear_runtime_state, dangerously_overwrite_home,
-    default_data_dir, default_key_path, format_tool_ceiling, format_tool_package,
-    normalize_optional_string, print_json, resolve_home_dir, write_init_config,
+    clear_runtime_state, dangerously_overwrite_home, default_data_dir, default_key_path,
+    format_tool_ceiling, format_tool_package, normalize_optional_string, print_json,
+    resolve_home_dir, write_init_config, BackendResolutionMode, DEFAULT_HTTP_PORT,
 };
 
 const STANDARD_READONLY_SYSTEM_PROMPT: &str = r#"You are a terminal-native engineering and operations agent running for the user inside a local DefraDB runtime.
@@ -202,7 +202,7 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         "keychain_label": initialized_identity.keychain_label,
         "secure_enclave_label": initialized_identity.secure_enclave_label,
         "default_behavior_id": summary.default_behavior_id,
-        "tool_selection_id": summary.tool_selection_id,
+        "tools_id": summary.tools_id,
         "wide_open_preset_id": summary.wide_open_preset_id,
         "inference_profile_id": summary.inference_profile_id,
         "tool_package": format_tool_package(summary.tool_package),
@@ -746,7 +746,7 @@ async fn initialize_runtime_home(
     // Canonical chain: behavior -> context (system prompt, tools, compaction)
     // and behavior -> inference profile. No backend/model copies on the
     // behavior.
-    let behavior = AgentBehaviorDocument {
+    let behavior = AgentBehavior {
         behavior_id: default_behavior_id.clone(),
         agent_did: agent_did.to_string(),
         display_name: Some("Default".to_string()),
@@ -800,9 +800,7 @@ async fn initialize_runtime_home(
         max_concurrent: args.max_concurrent,
         max_queue_depth: args.max_queue_depth,
         default_behavior_id,
-        // `tool_selection_id` keeps its shared.rs field name but now carries
-        // the canonical `Tools` logical id selected by the default context.
-        tool_selection_id: tools_id.clone(),
+        tools_id: tools_id.clone(),
         wide_open_preset_id,
         inference_profile_id,
         tool_package,
@@ -1194,7 +1192,7 @@ mod tests {
     use super::*;
     use gents::BackendProviderKind;
 
-    /// Compile-only guard that the retired flat-tool-selection vocabulary is
+    /// Compile-only guard that the retired flat Tools vocabulary is
     /// gone from the init test surface: preset classification now goes through
     /// the shared `persona_presets::classify_tools` owner against the
     /// canonical nested `Tools` document.
@@ -1225,7 +1223,7 @@ mod tests {
             max_concurrent: 2,
             max_queue_depth: 16,
             default_behavior_id: "default".to_string(),
-            tool_selection_id: "default-tools".to_string(),
+            tools_id: "default-tools".to_string(),
             wide_open_preset_id: "wide-open".to_string(),
             inference_profile_id: "default-profile".to_string(),
             tool_package: ToolPackageArg::Readonly,
@@ -1421,7 +1419,7 @@ mod tests {
     /// mislabeling directory rows.
     #[test]
     fn init_minted_selections_classify_as_their_persona_preset() {
-        use gents::agent::persona_presets::{PRESET_READONLY, PRESET_WRITE, classify_tools};
+        use gents::agent::persona_presets::{classify_tools, PRESET_READONLY, PRESET_WRITE};
 
         fn classify(package: ToolPackageArg) -> Option<&'static str> {
             let tools = tools_for_package(

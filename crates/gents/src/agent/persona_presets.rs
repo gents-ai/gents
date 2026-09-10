@@ -6,12 +6,11 @@
 //! hand-tuned ("custom") selections, not enough to fully MINT one. Root (a
 //! filesystem dimension, not a permission) and `display_name` are excluded
 //! on principle. Also deliberately excluded, though they DO vary across
-//! init's packages: `command_execution_policy`, `backgroundable_tool_names`,
+//! init's packages: execution policy, background tool settings,
 //! `enable_meta_tools`, and `enable_defra_query`. A materializer that mints
-//! a `ToolSelectionDocument` from a preset name must source those
-//! init-parity extras from `init.rs`'s package profiles separately —
-//! `PresetFields` alone under-provisions a `write` selection (missing exec
-//! policy + backgroundable bash). Conversely, a hand-tuned change to one of
+//! a canonical `Tools` document from a preset name must source those
+//! init-parity extras from the package profile separately. `PresetFields`
+//! alone under-provisions a write configuration. Conversely, a hand-tuned change to one of
 //! the excluded fields keeps its preset badge: the classifier is a
 //! permissions label, not a byte-identity check over the whole document.
 //!
@@ -32,7 +31,7 @@ pub fn builtin_preset_names() -> &'static [&'static str] {
     &[PRESET_READONLY, PRESET_WRITE]
 }
 
-/// The discriminating permission fields of a `ToolSelectionDocument` —
+/// The discriminating permission fields of a canonical `Tools` document —
 /// everything a preset determines. Root is deliberately absent (a
 /// dimension, not a permission).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

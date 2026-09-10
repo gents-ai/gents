@@ -824,6 +824,7 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
                 retry_count: 0,
                 max_retries: 0,
                 workspace_id: "ws-1",
+                workspace_owner_agent_did: "{agent_did}",
                 workspace_authority: "readWrite"
             }}) {{ _docID }}
         }}"#
@@ -841,6 +842,24 @@ async fn pending_requests_are_scoped_by_principal_without_host_identity() {
             .map(|request| request.request_id.as_str())
             .collect::<Vec<_>>(),
         vec!["req-owned"]
+    );
+    assert_eq!(
+        pending[0].workspace_owner_agent_did.as_deref(),
+        Some(agent_did)
+    );
+    let continuation = crate::lifecycle::queue::prepare_goal_continuation(
+        &pending[0],
+        "behavior".to_string(),
+        "goal-workspace-owner",
+        "continue",
+        1,
+        false,
+        "2026-08-21T00:00:01Z",
+    )
+    .expect("workspace-bound parent produces a coherent goal continuation");
+    assert_eq!(
+        continuation.workspace_owner_agent_did.as_deref(),
+        Some(agent_did)
     );
 }
 

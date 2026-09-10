@@ -615,10 +615,10 @@ if [ -z "${profile_id}" ]; then
   exit 1
 fi
 agent_did=$(sed -n 's/^[[:space:]]*"agent_did": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-tool_selection_id=$(sed -n 's/^[[:space:]]*"tool_selection_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
+tools_id=$(sed -n 's/^[[:space:]]*"tools_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
 behavior_id=$(sed -n 's/^[[:space:]]*"default_behavior_id": "\([^"]*\)",*$/\1/p' "${init_log}" | head -1)
-if [ -z "${agent_did}" ] || [ -z "${tool_selection_id}" ] || [ -z "${behavior_id}" ]; then
-  echo "Gents init output did not contain agent_did, default_behavior_id, and tool_selection_id" >&2
+if [ -z "${agent_did}" ] || [ -z "${tools_id}" ] || [ -z "${behavior_id}" ]; then
+  echo "Gents init output did not contain agent_did, default_behavior_id, and tools_id" >&2
   exit 1
 fi
 
@@ -659,26 +659,30 @@ configure_profile() {
 }
 
 configure_tools() {
+  tools_config="${GENTS_HOME}/harbor-tools.json"
+  python3 - "${tools_config}" "${agent_did}" "${tools_id}" "${GENTS_TOOL_ROOT}" <<'PY'
+import json
+import sys
+
+path, agent_did, tools_id, root = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as output:
+    json.dump({
+        "agent_did": agent_did,
+        "tools_id": tools_id,
+        "host": {
+            "root": root,
+            "files": {"mode": "ReadWrite"},
+            "bash": {
+                "mode": "Unrestricted",
+                "execution_mode": "unrestricted",
+                "background_enabled": True,
+            },
+        },
+    }, output)
+PY
   "${GENTS_BINARY}" config tools set \
     --graphql http://127.0.0.1:9191/api/v0/graphql \
-    --agent-did "${agent_did}" \
-    --selection-id "${tool_selection_id}" \
-    --enable-file-tools true \
-    --file-tools-mode ReadWrite \
-    --file-tool-root "${GENTS_TOOL_ROOT}" \
-    --enable-bash true \
-    --bash-mode Unrestricted \
-    --command-execution-policy unrestricted \
-    --enable-meta-tools false \
-    --backgroundable-tool-name bash_unrestricted \
-    --enable-memory false \
-    --enable-session-history-tool false \
-    --enable-context-budget false \
-    --enable-defra-query false \
-    --subagent-spawn-enabled false \
-    --subagent-steering-enabled false \
-    --subagent-background-enabled false \
-    --subagent-allow-cross-deployment false \
+    --file "${tools_config}" \
     >"${tools_log}"
 }
 

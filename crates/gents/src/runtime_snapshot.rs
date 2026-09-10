@@ -9,11 +9,11 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
-use crate::config::AgentBehavior;
+use crate::config::ResolvedBehavior;
 pub use crate::document_config::ConcurrencyMode;
 pub use crate::document_config::ScheduleCadence;
 use crate::document_config::TaskHook;
-use crate::identity::AgentPrincipal;
+use crate::identity::RuntimePrincipal;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
 use crate::watcher::AgentRequest;
@@ -208,10 +208,10 @@ pub(crate) fn advance_schedule_next_run_at(
 
 #[derive(Clone, Debug)]
 pub(crate) struct ResolvedRuntimeSnapshot {
-    pub(crate) principal: Option<Arc<AgentPrincipal>>,
+    pub(crate) principal: Option<Arc<RuntimePrincipal>>,
     pub(crate) local_did: String,
     pub(crate) default_behavior_id: String,
-    pub(crate) behaviors: HashMap<String, Arc<AgentBehavior>>,
+    pub(crate) behaviors: HashMap<String, Arc<ResolvedBehavior>>,
     pub(crate) tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub(crate) backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub(crate) unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -272,7 +272,7 @@ impl ResolvedRuntimeSnapshot {
     #[allow(dead_code)]
     pub(crate) fn from_parts(
         default_behavior_id: String,
-        behaviors: Vec<Arc<AgentBehavior>>,
+        behaviors: Vec<Arc<ResolvedBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         unavailable_behaviors: HashMap<String, UnavailableBehavior>,
     ) -> Self {
@@ -287,7 +287,7 @@ impl ResolvedRuntimeSnapshot {
 
     pub(crate) fn from_parts_with_admission_configs(
         default_behavior_id: String,
-        behaviors: Vec<Arc<AgentBehavior>>,
+        behaviors: Vec<Arc<ResolvedBehavior>>,
         tool_surfaces: HashMap<String, Arc<ToolSurface>>,
         backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
         unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -311,7 +311,7 @@ impl ResolvedRuntimeSnapshot {
         }
     }
 
-    pub(crate) fn with_principal(mut self, principal: Arc<AgentPrincipal>) -> Self {
+    pub(crate) fn with_principal(mut self, principal: Arc<RuntimePrincipal>) -> Self {
         self.principal = Some(principal);
         self
     }
@@ -407,10 +407,10 @@ impl ResolvedRuntimeSnapshot {
 #[derive(Clone, Debug)]
 pub struct ActiveRuntimeSnapshot {
     pub generation: u64,
-    pub principal: Option<Arc<AgentPrincipal>>,
+    pub principal: Option<Arc<RuntimePrincipal>>,
     pub local_did: String,
     pub default_behavior_id: String,
-    pub behaviors: HashMap<String, Arc<AgentBehavior>>,
+    pub behaviors: HashMap<String, Arc<ResolvedBehavior>>,
     pub tool_surfaces: HashMap<String, Arc<ToolSurface>>,
     pub backend_admission_configs: HashMap<String, BackendAdmissionConfig>,
     pub unavailable_behaviors: HashMap<String, UnavailableBehavior>,
@@ -432,7 +432,7 @@ pub(crate) struct BehaviorExecutorStatus {
 }
 
 impl ActiveRuntimeSnapshot {
-    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<AgentBehavior>> {
+    pub(crate) fn behavior(&self, behavior_id: &str) -> Option<&Arc<ResolvedBehavior>> {
         self.behaviors.get(behavior_id)
     }
 
@@ -540,7 +540,7 @@ pub(crate) fn refresh_active_snapshot(
 fn configuration_fingerprint(
     default_behavior_id: &str,
     local_did: &str,
-    behaviors: &HashMap<String, Arc<AgentBehavior>>,
+    behaviors: &HashMap<String, Arc<ResolvedBehavior>>,
     tool_surfaces: &HashMap<String, Arc<ToolSurface>>,
     backend_admission_configs: &HashMap<String, BackendAdmissionConfig>,
     unavailable_behaviors: &HashMap<String, UnavailableBehavior>,

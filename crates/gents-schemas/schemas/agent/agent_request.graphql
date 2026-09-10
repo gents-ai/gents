@@ -1,6 +1,5 @@
-# Canonical request document. RequestInput (JSON) replaces the arbitrary
-# metadata bag; per-request sampling scalars and max_tokens are retired —
-# sampling and output limits belong to InferenceProfile, and the aggregate
+# Canonical request document. RequestInput (JSON) contains invocation facts.
+# Sampling and output limits belong to InferenceProfile, and the aggregate
 # budget belongs to the InferenceExecution runtime owner. The execution-owner
 # budget remains pinned on the physical request by the execution owner.
 #
@@ -8,8 +7,8 @@
 # InferenceExecution at claim and rehydrated from InferenceCall records;
 # deadline and lease fields stay excluded from requester signatures.
 #
-# workspace_owner_deployment_id is retired; the owner resolves from
-# IsolatedWorkspace.owner_agent_did. Workspace-bound requests keep the signed
+# The workspace owner resolves from IsolatedWorkspace.owner_agent_did.
+# Workspace-bound requests keep the signed
 # workspace_id / workspace_authority / workspace_seal_hash triple.
 type AgentRequest @branchable {
     request_id: String @index @immutable

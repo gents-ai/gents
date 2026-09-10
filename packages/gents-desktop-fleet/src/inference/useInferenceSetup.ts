@@ -223,7 +223,7 @@ export function useInferenceSetup({
         providerKind: PROVIDER_CODEX,
         endpoint: CODEX_ENDPOINT,
         modelName: CODEX_DEFAULT_MODEL,
-        auth: { kind: "principal_o_auth" },
+        auth: { kind: "principal_oauth" },
       });
       setDone(`ChatGPT / Codex · ${CODEX_DEFAULT_MODEL}`);
     } catch (caught) {
@@ -255,7 +255,7 @@ export function useInferenceSetup({
         providerKind: PROVIDER_GROK,
         endpoint: GROK_ENDPOINT,
         modelName: GROK_DEFAULT_MODEL,
-        auth: { kind: "principal_o_auth" },
+        auth: { kind: "principal_oauth" },
       });
       setDone(`Grok · ${GROK_DEFAULT_MODEL}`);
     } catch (caught) {

@@ -184,11 +184,8 @@ struct ToolLinkRow {
 
 #[derive(Clone, Debug, Deserialize)]
 struct ResponseRow {
-    request_id: String,
     #[serde(default)]
     status: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -404,7 +401,7 @@ async fn attach_canonical_request_heads(
                 let Some(head) = gents::session::load_latest_request_in_txn(txn,&owner,&session,Some(requester.as_deref())).await? else { return Ok(None); };
                 let scope = gents::session::session_scope_filter(&owner,&session,requester.as_deref());
                 let physical = escape_graphql_string(&head.observed.request_doc_id);
-                let response = txn.execute(&format!(r#"{{AgentRequest(filter:{{{scope},_docID:{{_eq:"{physical}"}}}}){{{REQUEST_ROW_FIELDS}}} AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{request_id status created_at}}}}"#)).await?;
+                let response = txn.execute(&format!(r#"{{AgentRequest(filter:{{{scope},_docID:{{_eq:"{physical}"}}}}){{{REQUEST_ROW_FIELDS}}} AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{status}}}}"#)).await?;
                 let mut requests = decode_request_rows(&response)?;
                 let responses = decode_rows::<ResponseRow>(&response,"AgentResponse")?;
                 anyhow::ensure!(requests.len()==1 && responses.len()<=1,"ambiguous subagent physical head");

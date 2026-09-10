@@ -351,14 +351,6 @@ pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeS
         .collect())
 }
 
-pub async fn load_binding(
-    node: &EmbeddedNode,
-    binding_id: &str,
-    owner: &str,
-) -> Result<Option<CallbackBindingDoc>> {
-    load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
-}
-
 pub async fn load_invocation(
     node: &EmbeddedNode,
     invocation_id: &str,

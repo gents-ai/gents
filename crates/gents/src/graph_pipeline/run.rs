@@ -25,8 +25,10 @@ use super::{
 
 #[path = "workspace_lineage.rs"]
 mod workspace_lineage;
+#[cfg(test)]
+pub(crate) use workspace_lineage::derive_graph_workspace;
 pub(super) use workspace_lineage::fence_root_workspace_in_txn;
-pub(crate) use workspace_lineage::{derive_graph_workspace, finalize_graph_workspace};
+pub(crate) use workspace_lineage::resolve_graph_workspace;
 
 const GRAPH_RUN_VIEW_VERSION: u32 = 1;
 

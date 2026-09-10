@@ -24,6 +24,7 @@ fn session_snapshot_projects_durable_goal_state() {
             session_id: "session-goal".to_string(),
             agent_did: "did:test:amy".to_string(),
             objective: Some("Ship the durable controller".to_string()),
+            tags: Vec::new(),
             status: Some("active".to_string()),
             token_budget: Some(50_000),
             tokens_used: Some(1_200),
@@ -98,6 +99,7 @@ fn session_snapshot_uses_canonical_session_without_materialized_observation() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -187,6 +189,7 @@ fn session_snapshot_prefers_tracked_request_over_stale_session_latest_request() 
         responses: vec![AgentResponseRow {
             response_key: "resp-2".to_string(),
             request_id: Some("req-2".to_string()),
+            request_doc_id: Some("req-2".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -736,6 +739,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -808,6 +812,7 @@ fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -907,6 +912,7 @@ fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -1060,6 +1066,7 @@ fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_pol
         responses: vec![AgentResponseRow {
             response_key: "resp-child".to_string(),
             request_id: Some("req-child".to_string()),
+            request_doc_id: Some("req-child".to_string()),
             agent_did: Some("did:test:amy".to_string()),
             requester_did: None,
             behavior_id: Some("amy-default".to_string()),
@@ -1518,6 +1525,7 @@ fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
         if let Some(response_status) = response_status_for_turn(turn_state) {
             rows.responses.push(AgentResponseRow {
                 response_key: format!("resp-{request_id}"),
+                request_doc_id: Some(request_id.clone()),
                 request_id: Some(request_id),
                 agent_did: Some("did:test:contract-agent".to_string()),
                 requester_did: None,
@@ -1613,6 +1621,7 @@ fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> Clien
         responses: vec![AgentResponseRow {
             response_key: "resp-1".to_string(),
             request_id: Some("req-1".to_string()),
+            request_doc_id: Some("req-1".to_string()),
             agent_did: Some("did:test:contract-agent".to_string()),
             requester_did: None,
             behavior_id: Some("contract-behavior".to_string()),

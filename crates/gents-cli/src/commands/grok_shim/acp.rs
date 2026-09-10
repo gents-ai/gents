@@ -860,9 +860,9 @@ impl AcpService {
     /// `cwd` and `mcpServers` are accepted and deliberately not persisted:
     /// `AgentSession` has no cwd field and the runtime serves from its own
     /// working directory, so fabricating either would be a schema violation.
-    /// No `AgentConversation` and no `AgentRequest` rows are created here;
-    /// the runtime materializes those through normal request execution, and
-    /// fabricating them would desynchronize the durable timeline.
+    /// No `AgentRequest` row is created here; the runtime materializes requests
+    /// through normal execution, and fabricating one would desynchronize the
+    /// durable timeline.
     ///
     /// Mode capabilities are **connection-scoped, not request-scoped**: the
     /// registering client advertised `yolo_mode`/`auto_mode`/`terminal` in

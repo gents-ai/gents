@@ -6,13 +6,13 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
 use gents::{
-    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DocumentRuntimeOptions, Gents,
-    ToolCeiling, ToolSelectionDocument,
+    default_behavior_id_for_agent, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use gents_protocol::row::AgentRequestRow;
 
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{
+    bind_default_behavior_backend, configure_subagent_behavior, subagent_target, test_identity,
+};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::{first_optional_row, test_db};
@@ -38,55 +38,22 @@ async fn boot_self_spawn_agent(db: &crate::support::TestDb, test_name: &str) -> 
     .await;
 
     let selection_id = format!("{behavior_id}-e2e-spawn-tools");
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                behavior_id.clone(),
-                &agent_did,
-                behavior_id.clone(),
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
+        &agent_did,
+        &behavior_id,
+        &selection_id,
+        vec![subagent_target(
+            &agent_did,
+            behavior_id.clone(),
+            agent_did.clone(),
+            behavior_id.clone(),
+        )],
+        true,
+        true,
+        None,
     )
-    .await
-    .unwrap();
-
-    let mut behavior = match load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .unwrap()
-    {
-        Some(b) => b,
-        None => AgentBehaviorDocument {
-            behavior_id: behavior_id.clone(),
-            agent_did: agent_did.clone(),
-            display_name: Some(behavior_id.clone()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-22T00:00:00Z".to_string()),
-        },
-    };
-    behavior.tool_selection_id = Some(selection_id);
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .unwrap();
+    .await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),

@@ -1,18 +1,19 @@
-use std::collections::{BTreeSet, hash_map::DefaultHasher};
+use std::collections::{hash_map::DefaultHasher, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::{Arc, RwLock as StdRwLock};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
+use gents::document_config::{Schedule, Task};
 use gents::identity::AgentIdentity;
 use gents_protocol::request_admission::AgentRequestAdmissionRecord;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::{AgentRequestRow, ScheduleRow, TaskRow};
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session_hydration::{
-    SESSION_HYDRATION_RECEIPT_VERSION, SessionHydrationDocumentKey, SessionHydrationReceipt,
-    decode_manifest_json,
+    decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
+    SESSION_HYDRATION_RECEIPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -21,11 +22,11 @@ use super::super::observe::ObservedStore;
 use super::super::peer_directory::PeerRecord;
 use super::super::query::load_chat_patch;
 use super::super::store::{ClientStore, ClientStoreRows};
+use super::bootstrap::normalize_required;
+use super::p2p_ops;
 use super::ClientCore;
 #[cfg(test)]
 use super::ClientPeerStatus;
-use super::bootstrap::normalize_required;
-use super::p2p_ops;
 
 const REQUEST_PATCH_SIGNATURE_CAPACITY: usize = 2_048;
 
@@ -427,14 +428,14 @@ impl ClientCore {
         Ok(Some(version))
     }
 
-    pub async fn rename_conversation(
+    pub async fn rename_session(
         &self,
         agent_did: &str,
         session_id: &str,
         title: &str,
     ) -> Result<()> {
         let snapshot = self.store.snapshot();
-        let result = mutations::rename_conversation(
+        let result = mutations::rename_session(
             self.node.as_ref(),
             snapshot.as_ref(),
             agent_did,
@@ -457,7 +458,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("rename conversation", error)),
+            Err(error) => Err(self.record_mutation_error("rename session", error)),
         }
     }
 
@@ -549,30 +550,26 @@ impl ClientCore {
         .await
     }
 
-    pub async fn delete_event_trigger(
-        &self,
-        trigger_id: &str,
-        source_agent_did: &str,
-    ) -> Result<()> {
+    pub async fn delete_trigger(&self, trigger_id: &str, source_agent_did: &str) -> Result<()> {
         let result = async {
             let deleted =
                 mutations::delete_trigger(self.node.as_ref(), source_agent_did, trigger_id).await?;
             if deleted == 0 {
-                bail!("no EventTrigger document with trigger_id {trigger_id:?}");
+                bail!("no Trigger document with trigger_id {trigger_id:?}");
             }
             Ok(())
         }
         .await;
         self.finish_automation_delete(
             result,
-            "delete event trigger",
-            "config_event_trigger_delete",
+            "delete trigger",
+            "config_trigger_delete",
             trigger_id,
             source_agent_did,
             |rows| {
                 retain_sourced_rows(
-                    &mut rows.event_triggers,
-                    &mut rows.event_trigger_source_agent_dids,
+                    &mut rows.triggers,
+                    &mut rows.trigger_source_agent_dids,
                     source_agent_did,
                     false,
                     |row| row.trigger_id == trigger_id,
@@ -656,27 +653,25 @@ impl ClientCore {
         .await
     }
 
-    pub async fn delete_tools(&self, selection_id: &str, source_agent_did: &str) -> Result<()> {
+    pub async fn delete_tools(&self, tools_id: &str, source_agent_did: &str) -> Result<()> {
         let result = async {
             let deleted =
-                mutations::delete_tools(self.node.as_ref(), source_agent_did, selection_id).await?;
+                mutations::delete_tools(self.node.as_ref(), source_agent_did, tools_id).await?;
             if deleted == 0 {
-                bail!("no ToolSelection document with selection_id {selection_id:?}");
+                bail!("no Tools document with tools_id {tools_id:?}");
             }
             Ok(())
         }
         .await;
         self.finish_automation_delete(
             result,
-            "delete tool selection",
-            "config_tool_selection_delete",
-            selection_id,
+            "delete tools",
+            "config_tools_delete",
+            tools_id,
             source_agent_did,
             |rows| {
-                rows.tool_selections.retain(|row| {
-                    row.selection_id != selection_id
-                        || row.agent_did.as_deref() != Some(source_agent_did)
-                });
+                rows.tools
+                    .retain(|row| row.tools_id != tools_id || row.agent_did != source_agent_did);
             },
         )
         .await
@@ -738,8 +733,7 @@ impl ClientCore {
             source_agent_did,
             |rows| {
                 rows.behaviors.retain(|row| {
-                    row.behavior_id != behavior_id
-                        || row.agent_did.as_deref() != Some(source_agent_did)
+                    row.behavior_id != behavior_id || row.agent_did != source_agent_did
                 });
             },
         )
@@ -1095,7 +1089,7 @@ impl ClientCore {
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("save tool selection", error)),
+            Err(error) => Err(self.record_mutation_error("save tools", error)),
         }
     }
 
@@ -1187,20 +1181,20 @@ impl ClientCore {
         }
     }
 
-    pub async fn save_event_trigger(&self, row: &gents::document_config::Trigger) -> Result<()> {
+    pub async fn save_trigger(&self, row: &gents::document_config::Trigger) -> Result<()> {
         match mutations::upsert_trigger(self.node.as_ref(), row).await {
             Ok(()) => {
                 self.refresh_store().await?;
                 self.clear_mutation_error();
                 tracing::info!(
                     target: "gents_desktop_core::writes",
-                    doc_type = "event_trigger",
+                    doc_type = "trigger",
                     row_id = %row.trigger_id,
                     "desktop write saved"
                 );
                 Ok(())
             }
-            Err(error) => Err(self.record_mutation_error("save event trigger", error)),
+            Err(error) => Err(self.record_mutation_error("save trigger", error)),
         }
     }
 
@@ -1233,11 +1227,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn fire_task_now(
-        &self,
-        task_row: &TaskRow,
-        args: serde_json::Value,
-    ) -> Result<String> {
+    pub async fn fire_task_now(&self, task_row: &Task, args: serde_json::Value) -> Result<String> {
         match mutations::fire_task_now(self.node.as_ref(), task_row, args).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -1255,7 +1245,7 @@ impl ClientCore {
         }
     }
 
-    pub async fn fire_schedule_now(&self, row: &ScheduleRow) -> Result<String> {
+    pub async fn fire_schedule_now(&self, row: &Schedule) -> Result<String> {
         match mutations::fire_schedule_now(self.node.as_ref(), row).await {
             Ok(doc_id) => {
                 self.refresh_store().await?;
@@ -1697,7 +1687,7 @@ fn retain_rows_with_sources<T>(
 
 fn prune_deleted_skill_rows(rows: &mut ClientStoreRows, agent_did: &str, skill_id: &str) {
     retain_rows_with_sources(&mut rows.skills, &mut rows.skill_source_agent_dids, |row| {
-        !(row.skill_id == skill_id && row.agent_did.as_deref() == Some(agent_did))
+        !(row.skill_id == skill_id && row.agent_did == agent_did)
     });
 }
 
@@ -1917,8 +1907,14 @@ mod delete_source_tests {
         assert!(query.contains(r#"agent_did: { _eq: "did:key:agent\"escaped" }"#));
     }
 
-    fn task(task_id: &str) -> TaskRow {
-        serde_json::from_value(json!({ "task_id": task_id })).expect("task row")
+    fn task(task_id: &str) -> Task {
+        serde_json::from_value(json!({
+            "task_id": task_id,
+            "agent_did": "did:key:amy",
+            "behavior_id": "default",
+            "prompt_template": "run"
+        }))
+        .expect("task")
     }
 
     fn peer_record(source: Option<&str>) -> PeerRecord {

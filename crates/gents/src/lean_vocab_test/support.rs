@@ -165,8 +165,6 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
-    /// Renamed from `r5_cross_deployment_cases`: HostDeployment retirement
-    /// makes cross-**principal** routing the sampled domain.
     pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
@@ -314,8 +312,6 @@ pub(crate) struct LeanWorkspaceBindingRef {
     pub(crate) workspace_id: String,
     pub(crate) request_id: String,
     pub(crate) authority: String,
-    /// Emitted as `agent_did` (was `deployment_id` before HostDeployment
-    /// retirement); principals are DefraDB DIDs.
     pub(crate) agent_did: String,
     pub(crate) seal_hash: Option<String>,
     pub(crate) state: String,
@@ -327,8 +323,6 @@ pub(crate) struct LeanWorkspaceBindingCase {
     pub(crate) workspace_id: String,
     pub(crate) workspace_state: String,
     pub(crate) workspace_seal_hash: Option<String>,
-    /// Emitted as `owner_agent_did` (was `owner_deployment_id` before
-    /// HostDeployment retirement).
     pub(crate) owner_agent_did: String,
     pub(crate) creation_policy: String,
     pub(crate) existing: Vec<LeanWorkspaceBindingRef>,
@@ -343,8 +337,6 @@ pub(crate) struct LeanCallbackCase {
     pub(crate) journal_prefix_legal: bool,
     pub(crate) name: String,
     pub(crate) invocation_id: String,
-    /// Emitted as `owner_agent_did` (was `owner_deployment_id` before
-    /// HostDeployment retirement).
     pub(crate) owner_agent_did: String,
     pub(crate) state: String,
     pub(crate) journal: Vec<String>,
@@ -762,8 +754,6 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) target_policy_allows: bool,
     pub(crate) bridge_author_binding_current: bool,
     pub(crate) bridge_author_authorization_fresh: bool,
-    /// Emitted as `target_cross_principal_policy_allows` (was
-    /// `target_cross_deployment_policy_allows` before HostDeployment retirement).
     pub(crate) target_cross_principal_policy_allows: bool,
     pub(crate) expected_admitted: bool,
     pub(crate) expected_disposition: String,

@@ -7,20 +7,20 @@ use std::{io, io::IsTerminal as _, io::Write as _};
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::graph_package::{
-    GraphPackageInstallBindings, load_installed_package_plan, default_bundled_graph_package_install_bindings,
-    install_bundled_graph_package, load_bundled_graph_package,
+    default_bundled_graph_package_install_bindings, install_bundled_graph_package,
+    load_bundled_graph_package, load_installed_package_plan, GraphPackageInstallBindings,
 };
 use gents::graph_pipeline::{
-    GraphRunView, activate_graph_revision_with_access, load_active_graph_plan_with_access,
+    activate_graph_revision_with_access, load_active_graph_plan_with_access,
     load_graph_run_result_view_with_access, load_graph_run_view_with_access,
     request_graph_run_cancellation_with_access, set_graph_enabled_with_access,
-    start_graph_run_with_access,
+    start_graph_run_with_access, GraphRunView,
 };
 use gents::run_timeline::{RunActivityRows, TimelineInferenceCallRow, TimelineToolCallRow};
 use gents::run_timeline_fetch::load_run_activity_rows;
 use gents_protocol::graphql::graphql_input_literal;
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::cli::output_format::OutputFormat;
@@ -1033,11 +1033,9 @@ mod tests {
         let value = format!("{}{}", "a".repeat(1_750_000), "é日".repeat(2_000));
         let chunks = split_evidence_packet(&value);
         assert_eq!(chunks.concat(), value);
-        assert!(
-            chunks
-                .iter()
-                .all(|chunk| chunk.len() <= CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES)
-        );
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.len() <= CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES));
         assert!(CODE_REVIEW_EVIDENCE_CHUNK_MAX_BYTES < 2_000);
         let sha256 = format!("{:x}", Sha256::digest(value.as_bytes()));
         let pages = code_review_evidence_page_inputs("evidence-1", &sha256, value.len(), &chunks);

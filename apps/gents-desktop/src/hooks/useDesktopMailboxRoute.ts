@@ -33,7 +33,7 @@ export function useDesktopMailboxRoute({
   setSelectedSessionId,
   setSession,
 }: MailboxRouteOptions) {
-  const newConversationAgentRef = useRef<string | null>(null);
+  const newSessionAgentRef = useRef<string | null>(null);
   const pendingMailboxRouteRef = useRef<{
     itemId: string;
     agentDid: string;
@@ -58,14 +58,14 @@ export function useDesktopMailboxRoute({
       route.sessionId !== selectedSessionId
     ) {
       pendingMailboxRouteRef.current = null;
-      newConversationAgentRef.current = null;
+      newSessionAgentRef.current = null;
       setPendingMailboxCauseId(null);
     }
   }, [pendingMailboxCauseId, selectedAgentDid, selectedBehaviorId, selectedSessionId]);
 
   function clearPendingMailboxCause() {
     pendingMailboxRouteRef.current = null;
-    newConversationAgentRef.current = null;
+    newSessionAgentRef.current = null;
     setPendingMailboxCauseId(null);
   }
 
@@ -78,7 +78,7 @@ export function useDesktopMailboxRoute({
         behaviorId: item.targetBehaviorId,
         sessionId: item.sessionId ?? null,
       };
-      newConversationAgentRef.current = item.targetAgentDid;
+      newSessionAgentRef.current = item.targetAgentDid;
       setSelectedAgentDid(item.targetAgentDid);
       setSelectedBehaviorId(item.targetBehaviorId);
       setSelectedSessionId(item.sessionId ?? null);
@@ -123,7 +123,7 @@ export function useDesktopMailboxRoute({
   }
 
   return {
-    newConversationAgentRef,
+    newSessionAgentRef,
     pendingMailboxCauseId,
     setPendingMailboxCauseId,
     clearPendingMailboxCause,

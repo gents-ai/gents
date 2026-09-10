@@ -10,7 +10,7 @@ const deployment: DeploymentView = {
   displayName: "test",
   defaultBehaviorId: "default",
   behaviors: [{ behaviorId: "default", displayName: "default" }],
-  conversations: [],
+  sessions: [],
   process: null,
   runtime: null,
   inbox: { hasUnread: false, count: 0 },

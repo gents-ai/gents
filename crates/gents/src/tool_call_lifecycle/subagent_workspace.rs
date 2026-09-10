@@ -52,10 +52,6 @@ impl ParentWorkspaceStamp {
         nonempty(self.workspace_id.as_deref()).is_some()
     }
 
-    pub(crate) fn spawn_is_workspace_bound(&self, arg: Option<&SpawnWorkspaceArg>) -> bool {
-        self.has_workspace_id() || arg.is_some()
-    }
-
     fn workspace_owner(&self) -> Result<&str, SpawnWorkspaceError> {
         self.workspace_owner_agent_did
             .as_deref()
@@ -766,19 +762,6 @@ mod tests {
             unique_child_branch("topic", "spawn-ws-a"),
             unique_child_branch("topic", "spawn-ws-b")
         );
-    }
-
-    #[test]
-    fn spawn_is_workspace_bound_when_parent_or_arg_is_set() {
-        let unbound = ParentWorkspaceStamp::default();
-        assert!(!unbound.spawn_is_workspace_bound(None));
-        assert!(unbound.spawn_is_workspace_bound(Some(&SpawnWorkspaceArg::Inherit)));
-        assert!(
-            unbound.spawn_is_workspace_bound(Some(&SpawnWorkspaceArg::Provision { policy: None }))
-        );
-        let bound =
-            ParentWorkspaceStamp::from_fields("owner", Some("ws-1"), Some("owner"), None, None);
-        assert!(bound.spawn_is_workspace_bound(None));
     }
 
     #[test]

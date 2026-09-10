@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Timelike, Utc};
 use chrono_tz::Tz;
 

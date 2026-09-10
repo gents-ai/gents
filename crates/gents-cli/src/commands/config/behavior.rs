@@ -3,11 +3,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::agent::persona_presets;
+use gents::document_config::AgentBehavior;
 use gents::graphql::escape_graphql_string;
-use gents::{
-    default_behavior_id_for_agent, AgentBehaviorDocument as AgentBehavior, AgentIdentity,
-    Collection,
-};
+use gents::{default_behavior_id_for_agent, AgentIdentity, Collection};
 use gents_protocol::persona::{LocalPersonaRequestRecord, PERSONA_AUTHORITY_LOCAL_SELF};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -442,7 +440,13 @@ mod tests {
         );
         let response = node.execute(&query).await;
         anyhow::ensure!(!response.has_errors(), "query {collection} failed");
-        let rows = gents_protocol::graphql::graphql_rows_from_response(&response, collection);
+        let rows = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get(collection))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
         anyhow::ensure!(
             rows.len() <= 1,
             "ambiguous {collection} {id:?} under {owner:?}"

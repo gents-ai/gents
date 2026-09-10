@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use gents::agent::p2p_reconcile::{
-    PairingActual as RuntimePairingActual, compute_owned_pairing_diff, to_replication_filters,
+    compute_owned_pairing_diff, to_replication_filters, PairingActual as RuntimePairingActual,
 };
 
 use super::{PairingActual, PairingApplied, PairingDesired};

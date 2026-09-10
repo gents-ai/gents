@@ -1,23 +1,25 @@
-use std::collections::HashSet;
-
 use anyhow::{anyhow, bail, Context, Result};
 use defra_node::EmbeddedNode;
+use gents::document_config::{
+    AgentBehavior, AgentContext, AgentPrincipal, ChainKeyBindingDocument, CompactionConfig,
+    DatastoreToolSurfaceDocument, EventSource, InferenceBackend, InferenceBackendObservation,
+    InferenceExecution, InferenceProfile, InferenceSampling, Schedule, ScheduleObservation,
+    SkillDocument, SubagentTargetDocument, Task, ToolServiceRegistry, Tools, Trigger,
+    TriggerObservation,
+};
 use gents_protocol::graphql::escape_graphql_string;
 use gents_protocol::row::{
-    AgentBehaviorReadinessRow, AgentBehaviorRow, AgentConversationRow, AgentMessageRow,
-    AgentPrincipalRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow, AgentSessionRow,
-    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, EventTriggerRow, GoalRow,
-    InferenceBackendRow, InferenceProfileRow, MailboxItemRow, ScheduleRow, SkillRow, TaskRow,
-    ToolSelectionRow, ToolServiceRegistryRow,
+    AgentBehaviorReadinessRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
+    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, GoalRow, MailboxItemRow,
 };
 use gents_protocol::schemas::{
-    AGENT_BEHAVIOR_NAME, AGENT_BEHAVIOR_READINESS_NAME, AGENT_CONVERSATION_NAME,
-    AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME, AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME,
-    AGENT_RUNTIME_NAME, AGENT_SESSION_NAME, AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME,
-    COMPACTION_ENTRY_NAME, EVENT_TRIGGER_NAME, GOAL_NAME, INFERENCE_BACKEND_NAME,
-    INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME, SKILL_NAME, TASK_NAME,
-    TOOL_SELECTION_NAME, TOOL_SERVICE_REGISTRY_NAME,
+    AGENT_BEHAVIOR_NAME, AGENT_BEHAVIOR_READINESS_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
+    AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
+    AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
+    INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME, SKILL_NAME,
+    TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
 };
+use gents_protocol::session::AgentSession;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
@@ -63,34 +65,49 @@ pub(super) struct TranscriptCursorRow {
 }
 
 pub(super) const AGENT_PRINCIPAL_FIELDS: &str =
-    "agent_did display_name default_behavior_id enabled created_at created_by";
-pub(super) const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name system_prompt backend_id model_name tool_selection_id inference_profile_id compaction_strategy compaction_threshold enabled skill_refs skill_excludes created_at";
+    "agent_did display_name default_behavior_id enabled created_at created_by tags";
+pub(super) const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const AGENT_RUNTIME_FIELDS: &str = "agent_did reconcile_phase behavior_executor_capacity behavior_executor_queue_depth behavior_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const AGENT_BEHAVIOR_READINESS_FIELDS: &str = "agent_did snapshot_json updated_at";
-pub(super) const AGENT_CONVERSATION_FIELDS: &str = "session_id agent_name agent_did requester_did behavior_id title title_source preview_text status created_at updated_at latest_request_id";
-pub(super) const AGENT_REQUEST_FIELDS: &str = "request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
-pub(super) const AGENT_RESPONSE_FIELDS: &str = "response_key request_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
+pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
+pub(super) const AGENT_RESPONSE_FIELDS: &str = "response_key request_id request_doc_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq reasoning_progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
 pub(super) const AGENT_MESSAGE_FIELDS: &str =
     "message_key session_id request_id requester_did sequence role content reasoning timestamp";
-pub(super) const AGENT_SESSION_FIELDS: &str =
-    "session_id agent_name requester_did behavior_id started ended status";
+pub(super) const AGENT_SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id created_at closed_at title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id agent_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
 pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state child_request_id await_mode cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
-pub(super) const AGENT_TOOL_RESULT_FIELDS: &str = "agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata conversation_doc_id created_at discarded_because_interrupted";
+pub(super) const AGENT_TOOL_RESULT_FIELDS: &str = "_docID agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata tool_call_doc_id created_at discarded_because_interrupted";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
-pub(super) const TASK_FIELDS: &str = "task_id name description behavior_id prompt_template goal_objective_template goal_token_budget enabled output_schema_ref created_at updated_at";
-pub(super) const SKILL_FIELDS: &str = "skill_id agent_did scope name description instructions tool_refs display_name interface_json enabled created_at";
-pub(super) const SCHEDULE_FIELDS: &str = "schedule_id task_id interval_secs cron timezone missed_run_policy enabled concurrency next_run_at last_attempt_at last_status last_error fire_count created_at updated_at";
-pub(super) const EVENT_TRIGGER_FIELDS: &str = "trigger_id task_id source_collection event_kind filter correlation_field fire_mode expected_count expected_count_field group_timeout_secs group_min_count workspace_authority enabled concurrency created_at updated_at last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
-pub(super) const TOOL_SELECTION_FIELDS: &str = "selection_id agent_did display_name enable_file_tools file_tools_mode file_tool_root enable_bash bash_mode command_execution_policy command_allowed_argv_prefixes command_forbidden_argv_prefixes command_network_mode cli_tool_names enable_meta_tools enable_goal_tools enable_goal_creation allowed_mcp_service_ids required_mcp_service_ids backgroundable_tool_names enable_memory enable_session_history_tool enable_context_budget enable_defra_query defra_query_collections subagent_targets subagent_spawn_enabled subagent_steering_enabled subagent_background_enabled subagent_allow_cross_deployment cross_deployment_spawn_timeout_seconds tool_policy_version write_tools datastore_tool_surface_ids eth_tool_ids subagent_default_await_mode enable_self_config self_config_categories self_config_no_lockout self_config_dry_run enable_lsp lsp_config";
-pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id name provider_kind openai_wire_api endpoint api_key api_key_env_var max_concurrent max_queue_depth enabled models last_probe probe_status";
-pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id display_name context_window max_output_tokens max_turns temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty reasoning_effort stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_max_transport retry_backoff_ms retry_max_resample retry_allow_repair retry_interactive_max";
-pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id display_name description hostname tailscale_ip lan_ip mcp_port mcp_path status version updated_at";
+pub(super) const TASK_FIELDS: &str = "task_id agent_did display_name description behavior_id prompt_template goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
+pub(super) const SKILL_FIELDS: &str = "skill_id agent_did name description instructions tool_refs display_name interface_json enabled created_at tags";
+pub(super) const SCHEDULE_FIELDS: &str =
+    "schedule_id agent_did display_name cadence created_at updated_at tags";
+pub(super) const SCHEDULE_OBSERVATION_FIELDS: &str = "trigger_id next_run_at";
+pub(super) const TRIGGER_FIELDS: &str = "agent_did trigger_id display_name description task_id source enabled concurrency created_at updated_at tags";
+pub(super) const TRIGGER_OBSERVATION_FIELDS: &str =
+    "trigger_id last_attempt_at last_fired_source_doc_id last_status last_error fire_count";
+pub(super) const TOOLS_FIELDS: &str = "tools_id agent_did display_name host remote subagents built_ins datastore integrations self_config tags";
+pub(super) const AGENT_CONTEXT_FIELDS: &str = "context_id agent_did display_name description system_prompt tools_id compaction_id skill_ids tags";
+pub(super) const COMPACTION_CONFIG_FIELDS: &str = "compaction_id agent_did display_name strategy threshold keep_recent_tokens tool_result_max_chars summary_max_output_tokens summary_file_list_max inference_profile_id tags";
+pub(super) const INFERENCE_BACKEND_FIELDS: &str = "backend_id agent_did name provider_kind openai_wire_api endpoint auth connect_timeout_secs discovery_timeout_secs max_concurrent max_queue_depth enabled tags";
+pub(super) const INFERENCE_BACKEND_OBSERVATION_FIELDS: &str =
+    "backend_id catalogs last_probe probe_status";
+pub(super) const INFERENCE_PROFILE_FIELDS: &str = "profile_id agent_did display_name description backend_id model_name reasoning_effort context_window max_output_tokens sampling_id execution_id tags";
+pub(super) const INFERENCE_SAMPLING_FIELDS: &str = "sampling_id agent_did display_name temperature top_p top_k seed min_p frequency_penalty presence_penalty repetition_penalty tags";
+pub(super) const INFERENCE_EXECUTION_FIELDS: &str = "execution_id agent_did display_name max_turns max_total_tokens stream_batch_ms stream_liveness_timeout_secs deadline_duration_secs retry_policy_id tags";
+pub(super) const TOOL_SERVICE_REGISTRY_FIELDS: &str = "service_id agent_did display_name description hostname tailscale_ip lan_ip mcp_port mcp_path send_agent_did enabled tags";
+pub(super) const EVENT_SOURCE_FIELDS: &str = "event_source_id agent_did display_name source_collection event_kind filter correlation_field group workspace_authority created_at updated_at tags";
+pub(super) const SUBAGENT_TARGET_FIELDS: &str =
+    "target_id agent_did target_agent_did behavior_id name description tags";
+pub(super) const DATASTORE_TOOL_SURFACE_FIELDS: &str =
+    "surface_id agent_did display_name enabled entries created_at tags";
+pub(super) const CHAIN_KEY_BINDING_FIELDS: &str =
+    "binding_id agent_did address key_backend attestation created_at revoked_at tags";
 pub(super) const MAILBOX_ITEM_FIELDS: &str = "_docID item_key requester_did agent_did status kind action title summary payload source_kind source_id session_id request_id graph_run_id cause_doc_id target_agent_did target_behavior_id expected_collection parent_item_id deadline_at created_at updated_at resolved_at resolved_doc_id";
 
-/// Load only the selected request's conversation slice from the embedded
+/// Load only the selected request's session transcript slice from the embedded
 /// replica. This is the bounded polling fallback for a dropped/coalesced
-/// observer event; it does not reload every conversation for the agent.
+/// observer event; it does not reload every session for the agent.
 pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<ClientStore> {
     let request_id = request_id.trim();
     if request_id.is_empty() {
@@ -122,7 +139,6 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
 
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
-        conversations: parse_query_rows(&data, "AgentConversation")?,
         requests: parse_query_rows(&data, "AgentRequest")?,
         responses: parse_query_rows(&data, "AgentResponse")?,
         sessions: parse_query_rows(&data, "AgentSession")?,
@@ -233,7 +249,6 @@ fn remote_chat_patch_query(session_id: &str) -> String {
     format!(
         r#"
 query DesktopRemoteChatPatch {{
-  AgentConversation(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_CONVERSATION_FIELDS} }}
   AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
   AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_SESSION_FIELDS} }}

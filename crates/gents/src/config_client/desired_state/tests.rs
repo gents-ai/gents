@@ -24,9 +24,14 @@ async fn register_config_schemas_with_legacy_duplicates(
     node: &EmbeddedNode,
     duplicate_collections: &[Collection],
 ) -> Result<()> {
-    for (name, schema) in gents_protocol::schemas::ALL_COLLECTION_NAMES
+    for (name, schema) in gents_protocol::schemas::RUNTIME_COLLECTION_NAMES
         .iter()
-        .zip(gents_protocol::schemas::ALL)
+        .zip(gents_protocol::schemas::RUNTIME_ALL)
+        .chain(
+            gents_protocol::schemas::ALL_COLLECTION_NAMES
+                .iter()
+                .zip(gents_protocol::schemas::ALL),
+        )
     {
         if Collection::ALL
             .iter()
@@ -84,20 +89,16 @@ fn plans_reject_unknown_fields_sparse_updates_and_scope_changes() {
     let mut doc = document(backend("did:key:owner", "local"));
     doc.update["agent_did"] = "did:key:other".into();
     assert!(DesiredStateApplyPlan::new(vec![doc]).is_err());
-    assert!(
-        DesiredStateApplyPlan::new(vec![
-            document(backend("did:key:a", "same")),
-            document(backend("did:key:b", "same"))
-        ])
-        .is_ok()
-    );
-    assert!(
-        DesiredStateApplyPlan::new(vec![
-            document(backend("did:key:a", "same")),
-            document(backend("did:key:a", "same"))
-        ])
-        .is_err()
-    );
+    assert!(DesiredStateApplyPlan::new(vec![
+        document(backend("did:key:a", "same")),
+        document(backend("did:key:b", "same"))
+    ])
+    .is_ok());
+    assert!(DesiredStateApplyPlan::new(vec![
+        document(backend("did:key:a", "same")),
+        document(backend("did:key:a", "same"))
+    ])
+    .is_err());
 }
 
 #[test]
@@ -106,6 +107,34 @@ fn commitments_do_not_reinterpret_authored_strings_as_json() {
         desired_state_document_digest(&json!({"value":["{\"a\":1}"]})).unwrap(),
         desired_state_document_digest(&json!({"value":[{"a":1}]})).unwrap()
     );
+}
+
+#[test]
+fn task_projection_excludes_runtime_updated_at_and_normalizes_defaults() {
+    let desired = json!({
+        "agent_did": "did:key:owner",
+        "task_id": "run-once",
+        "behavior_id": "operator",
+        "prompt_template": "Run once"
+    });
+    let mut observed = desired.clone();
+    observed["updated_at"] = "2026-09-10T18:16:43.843636Z".into();
+    observed["enabled"] = true.into();
+    observed["hooks"] = Value::Null;
+    observed["tags"] = Value::Null;
+
+    let desired = config_projection(Collection::Task, Some(&desired))
+        .unwrap()
+        .1
+        .unwrap();
+    let observed = config_projection(Collection::Task, Some(&observed))
+        .unwrap()
+        .1
+        .unwrap();
+
+    assert_eq!(desired, observed);
+    assert_eq!(desired["enabled"], true);
+    assert!(desired.get("updated_at").is_none());
 }
 
 #[tokio::test]
@@ -169,21 +198,19 @@ async fn ambiguous_scope_aborts_transaction_including_prior_staged_writes() -> R
             "test.desired.duplicate",
             &format!(
                 "mutation {{ create_InferenceBackend(input:{}){{_docID}} }}",
-                graphql_input_literal(&duplicate)?
+                gents_protocol::graphql::graphql_input_literal(&duplicate)?
             ),
         )
         .await?;
-    assert!(
-        apply(
-            &access,
-            vec![
-                document(backend("did:key:owner", "a_staged")),
-                document(backend("did:key:owner", "z_duplicate"))
-            ]
-        )
-        .await
-        .is_err()
-    );
+    assert!(apply(
+        &access,
+        vec![
+            document(backend("did:key:owner", "a_staged")),
+            document(backend("did:key:owner", "z_duplicate"))
+        ]
+    )
+    .await
+    .is_err());
     let response = node.execute("{InferenceBackend{backend_id name}}").await;
     assert!(!response.has_errors());
     let rows = response.data.unwrap();
@@ -336,12 +363,10 @@ async fn replacement_checks_actual_update_and_unchanged_duplicate_rows() -> Resu
 
 #[test]
 fn removals_require_unique_scoped_identities() {
-    assert!(
-        DesiredStateApplyPlan::new(Vec::new())
-            .unwrap()
-            .with_removals(vec![(Collection::Tools, "".into(), "tools".into())])
-            .is_err()
-    );
+    assert!(DesiredStateApplyPlan::new(Vec::new())
+        .unwrap()
+        .with_removals(vec![(Collection::Tools, "".into(), "tools".into())])
+        .is_err());
     assert!(
         DesiredStateApplyPlan::new(vec![document(backend("owner", "backend"))])
             .unwrap()
@@ -352,15 +377,13 @@ fn removals_require_unique_scoped_identities() {
             )])
             .is_err()
     );
-    assert!(
-        DesiredStateApplyPlan::new(Vec::new())
-            .unwrap()
-            .with_removals(vec![
-                (Collection::Tools, "owner".into(), "tools".into()),
-                (Collection::Tools, "owner".into(), "tools".into())
-            ])
-            .is_err()
-    );
+    assert!(DesiredStateApplyPlan::new(Vec::new())
+        .unwrap()
+        .with_removals(vec![
+            (Collection::Tools, "owner".into(), "tools".into()),
+            (Collection::Tools, "owner".into(), "tools".into())
+        ])
+        .is_err());
 }
 
 #[tokio::test]
@@ -376,29 +399,25 @@ async fn read_only_preflight_uses_actual_replacements_and_retained_inbound_links
         .unwrap();
     replacement.update["context_id"] = "absent".into();
     let plan = DesiredStateApplyPlan::new(vec![replacement])?;
-    assert!(
-        access
-            .transact("test.preview.replacement", |txn| {
-                let plan = &plan;
-                Box::pin(async move { validate_desired_state_plan(txn, plan).await })
-            })
-            .await
-            .is_err()
-    );
+    assert!(access
+        .transact("test.preview.replacement", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .is_err());
     let removal = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
         Collection::AgentContext,
         owner.into(),
         "context".into(),
     )])?;
-    assert!(
-        access
-            .transact("test.preview.removal", |txn| {
-                let plan = &removal;
-                Box::pin(async move { validate_desired_state_plan(txn, plan).await })
-            })
-            .await
-            .is_err()
-    );
+    assert!(access
+        .transact("test.preview.removal", |txn| {
+            let plan = &removal;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .is_err());
     let addition = DesiredStateApplyPlan::new(vec![document(backend(owner, "preview-only"))])?;
     access
         .transact("test.preview.addition", |txn| {
@@ -411,19 +430,17 @@ async fn read_only_preflight_uses_actual_replacements_and_retained_inbound_links
     let data = state.data.unwrap();
     assert_eq!(data["AgentBehavior"][0]["context_id"], "context");
     assert_eq!(data["AgentContext"].as_array().unwrap().len(), 1);
-    assert!(
-        !data["InferenceBackend"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|row| row["backend_id"] == "preview-only")
-    );
+    assert!(!data["InferenceBackend"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["backend_id"] == "preview-only"));
     Ok(())
 }
 
 #[tokio::test]
 async fn canonical_replacement_preserves_revocation_and_attested_creation() {
-    use crate::config_client::{ConfigAccess, DesiredStateApplyPlan, apply_desired_state_plan};
+    use crate::config_client::{apply_desired_state_plan, ConfigAccess, DesiredStateApplyPlan};
     use std::sync::Arc;
     let node = Arc::new(
         crate::defra_node::EmbeddedNode::builder()
@@ -435,7 +452,7 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
     let access = ConfigAccess::Local(node.clone());
     let original: crate::document_config::PackConfig = serde_json::from_value(serde_json::json!({
         "agent_principal":{"agent_did":"binding-owner"},
-        "chain_key_bindings":[{"agent_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
+        "chain_key_bindings":[{"agent_did":"binding-owner","binding_id":"signing","address":"0x1111111111111111111111111111111111111111","key_backend":"keyring","attestation":"signed-owner-binding","created_at":"2026-01-01T00:00:00Z","revoked_at":"2026-01-02T00:00:00Z"}]
     })).unwrap();
     let plan = DesiredStateApplyPlan::from_pack_config(&original).unwrap();
     access

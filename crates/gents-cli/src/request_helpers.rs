@@ -327,32 +327,6 @@ pub(crate) async fn create_agent_request(
     submit_prepared_agent_request_committed(graphql, &prepared).await
 }
 
-/// Create one stable, signed request mutation and retry transient submission
-/// failures without minting a new request identity. After every ambiguous
-/// failure, a request-id read proves whether the mutation committed before it
-/// is sent again.
-pub(crate) async fn create_agent_request_retrying_transient(
-    graphql: &str,
-    agent_did: &str,
-    content: &str,
-    session_id: Option<&str>,
-    behavior_id: Option<&str>,
-    request_id: String,
-    options: RequestSubmitOptions,
-) -> Result<SubmittedRequest> {
-    let prepared = prepare_agent_request(
-        graphql,
-        agent_did,
-        content,
-        session_id,
-        behavior_id,
-        Some(request_id),
-        options,
-    )
-    .await?;
-    submit_prepared_agent_request_committed(graphql, &prepared).await
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct PreparedAgentRequest {
     pub(crate) create: AgentRequestCreate,

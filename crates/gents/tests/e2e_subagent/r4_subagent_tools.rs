@@ -12,16 +12,16 @@ use gents::tool_call_lifecycle::{
     ToolCallLifecycle, MAX_SUBAGENT_DEPTH,
 };
 use gents::{
-    fetch_interrupt_requested_at, interrupt_request, load_history, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, DefraSessionHook, FailurePolicy,
-    ToolSelectionDocument,
+    fetch_interrupt_requested_at, interrupt_request, load_history, DefraSessionHook, FailurePolicy,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::support::fixtures::{spawn_subagent_source, SubagentSourceGuard};
+use crate::support::fixtures::{
+    configure_subagent_behavior, spawn_subagent_source, subagent_target, SubagentSourceGuard,
+};
 use crate::support::{first_optional_row, first_row, test_db};
 
 const PARENT_BEHAVIOR_ID: &str = "r4-parent";
@@ -122,75 +122,31 @@ async fn setup_spawn_fixture_with_parent_fields(
     let db = test_db(test_name).await;
     let agent_did = db.node_identity.did().to_string();
 
-    upsert_tool_selection(
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: "r4-parent-tools".to_string(),
-            agent_did: agent_did.clone(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(
-                targets
-                    .into_iter()
-                    .map(|behavior_id| {
-                        gents::subagent_target_entry(behavior_id, &agent_did, behavior_id, None)
-                    })
-                    .collect(),
-            ),
-            subagent_spawn_enabled: Some(spawn_enabled),
-            subagent_background_enabled: Some(background_enabled),
-            ..Default::default()
-        },
+        &agent_did,
+        CHILD_BEHAVIOR_ID,
+        "r4-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
+    .await;
+    configure_subagent_behavior(
         db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: PARENT_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4 parent".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some("r4-parent-tools".to_string()),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:00Z".to_string()),
-        },
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4-parent-tools",
+        targets
+            .into_iter()
+            .map(|behavior_id| subagent_target(&agent_did, behavior_id, &agent_did, behavior_id))
+            .collect(),
+        spawn_enabled,
+        background_enabled,
+        None,
     )
-    .await
-    .unwrap();
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: CHILD_BEHAVIOR_ID.to_string(),
-            agent_did: agent_did.clone(),
-            display_name: Some("R4 child".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-12T00:00:01Z".to_string()),
-        },
-    )
-    .await
-    .unwrap();
+    .await;
 
     let source = spawn_subagent_source(
         db.node.clone(),
@@ -224,6 +180,7 @@ async fn setup_spawn_fixture_with_parent_fields(
         &session_id,
         PARENT_BEHAVIOR_ID,
         &agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -293,7 +250,6 @@ async fn create_parent_request_with_extra_fields(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",
@@ -653,14 +609,16 @@ async fn create_child_session_queued_request(
     request_id: &str,
     session_id: &str,
     execution_origin: &str,
-    metadata: &str,
+    input: &str,
 ) {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
     let escaped_session_id = escape_graphql_string(session_id);
     let escaped_execution_origin = escape_graphql_string(execution_origin);
-    let escaped_metadata = escape_graphql_string(metadata);
+    let input = serde_json::from_str::<serde_json::Value>(input).expect("request input JSON");
+    let input_literal =
+        gents_protocol::graphql::graphql_input_literal(&input).expect("request input GraphQL");
     let now = chrono::Utc::now();
     let escaped_created_at = escape_graphql_string(&now.to_rfc3339());
     let escaped_deadline =
@@ -679,7 +637,7 @@ async fn create_child_session_queued_request(
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
-                metadata: "{escaped_metadata}",
+                input: {input_literal},
                 failure_reason: "",
                 created_at: "{escaped_created_at}",
                 deadline: "{escaped_deadline}",

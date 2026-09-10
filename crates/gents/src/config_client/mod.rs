@@ -41,7 +41,6 @@ pub(crate) fn is_classified_transaction_conflict(error: &anyhow::Error) -> bool 
 
 pub mod patch;
 
-pub(crate) use agent_behavior::load_agent_behavior_in_txn;
 pub use agent_behavior::write_agent_behavior_document;
 pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub use desired_state::read_record as read_desired_state_record_in_txn;

@@ -4,40 +4,23 @@ pub(crate) mod diff;
 pub(crate) mod interpolate;
 pub(crate) mod load;
 pub(crate) mod prune;
-#[cfg(test)]
-mod tests;
 pub(crate) mod validate;
 pub(crate) mod write;
 
 pub(crate) use apply_bundle::DesiredApplyBundle;
-pub(crate) use convert::{
-    export_bundle_from_manifest, manifest_from_export_bundle,
-    normalize_tool_service_registry_storage_fields,
-};
+pub(crate) use convert::{export_bundle_from_manifest, manifest_from_export_bundle};
 pub(crate) use diff::diff_manifests;
-pub(crate) use load::load_manifest_root;
+pub(crate) use load::{load_manifest_root, load_manifest_root_for_owner};
 pub(crate) use write::write_manifest_root;
 
 mod document_handle;
 pub(crate) use document_handle::document_handle;
 
-use serde::Serialize;
 use gents::Collection;
+use serde::Serialize;
 
-pub(crate) const TOOL_SERVICE_ADDRESS_FIELDS: &[&str] = &["hostname", "tailscale_ip", "lan_ip"];
-// One canonical configuration model for CLI, packs, graph installation, and
-// runtime resolution. Legacy readers/writers below migrate in the implementation
-// phase; these aliases do not preserve old fields or old pack formats.
 pub(crate) use gents::document_config::{
-    AgentBehavior as DesiredAgentBehavior, AgentPrincipal as DesiredAgentPrincipal,
-    CallbackBinding as DesiredCallbackBinding, ChainKeyBindingDocument as DesiredChainKeyBinding,
-    DatastoreToolSurfaceDocument as DesiredDatastoreToolSurface, EthToolDocument as DesiredEthTool,
-    EventSource as DesiredEventTrigger, InferenceBackend as DesiredInferenceBackend,
-    InferenceProfile as DesiredInferenceProfile, PackConfig as DesiredStateManifest,
-    ProjectionAcpBinding as DesiredProjectionAcpBinding,
-    RepositoryPlacement as DesiredRepositoryPlacement, Schedule as DesiredSchedule,
-    SkillDocument as DesiredSkill, Task as DesiredTask,
-    ToolServiceRegistry as DesiredToolServiceRegistry, Tools as DesiredToolSelection,
+    AgentPrincipal as DesiredAgentPrincipal, PackConfig as DesiredStateManifest,
 };
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -99,6 +82,7 @@ impl DesiredStateDiffCollections {
     pub(crate) fn get(&self, collection: Collection) -> &DesiredStateCollectionDiff {
         &self.0[collection.dir_name().unwrap_or("agent_principal")]
     }
+
     fn get_mut(&mut self, collection: Collection) -> &mut DesiredStateCollectionDiff {
         self.0
             .get_mut(collection.dir_name().unwrap_or("agent_principal"))
@@ -133,6 +117,8 @@ impl DesiredStateDiffCollectionsCounts {
     pub(crate) fn iter(&self) -> impl Iterator<Item = &DesiredStateDiffCounts> {
         self.0.values()
     }
+
+    #[cfg(test)]
     pub(crate) fn get(&self, collection: Collection) -> &DesiredStateDiffCounts {
         &self.0[collection.dir_name().unwrap_or("agent_principal")]
     }

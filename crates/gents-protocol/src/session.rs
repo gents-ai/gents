@@ -1,5 +1,6 @@
-//! Canonical durable session document. Replaces AgentSession/AgentConversation row copies.
-//! Schema, writers, readers and execution adapters migrate after Lean and conformance.
+//! Canonical durable session document for identity, presentation, provenance,
+//! and compact request observation. Request execution authority remains on
+//! `AgentRequest`.
 
 use serde::{Deserialize, Serialize};
 

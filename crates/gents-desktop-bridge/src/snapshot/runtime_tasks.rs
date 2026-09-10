@@ -14,7 +14,7 @@ fn recent_runs_view(runs: &TaskRecentRuns) -> TaskRecentRunsView {
         last_status: normalize_optional(runs.last_status.as_deref()),
         last_error: normalize_optional(runs.last_error.as_deref()),
         schedule_count: runs.schedule_count,
-        event_trigger_count: runs.event_trigger_count,
+        event_count: runs.event_count,
     }
 }
 
@@ -70,7 +70,7 @@ pub(super) fn recent_runs_for_task_views(
                 )
             })
             .count(),
-        event_trigger_count: matching
+        event_count: matching
             .iter()
             .filter(|trigger| {
                 matches!(
@@ -227,7 +227,7 @@ pub(super) fn task_run_history(
             agent_did: agent_did.to_owned(),
             requester_did: request.requester_did.clone(),
             session_id: normalize_optional(request.session_id.as_deref()),
-            behavior_id: Some(request.behavior_id.clone()),
+            behavior_id: request.behavior_id.clone(),
             lifecycle_state: request
                 .lifecycle_state
                 .map(|state| state.as_str().to_string()),
@@ -300,7 +300,7 @@ mod trigger_recent_runs_tests {
         let result = recent_runs_for_task_views(&rows, "owner", "task");
         assert_eq!(result.total_fires, 9);
         assert_eq!(result.schedule_count, 2);
-        assert_eq!(result.event_trigger_count, 1);
+        assert_eq!(result.event_count, 1);
         assert_eq!(
             result.last_attempt_at.as_deref(),
             Some("2026-09-03T00:00:00Z")

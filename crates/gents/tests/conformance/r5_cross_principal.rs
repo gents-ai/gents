@@ -11,9 +11,8 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
 use gents::{
-    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior,
-    upsert_tool_selection, AgentBehaviorDocument, AgentIdentity, DefraSessionHook,
-    DocumentRuntimeOptions, FailurePolicy, Gents, ToolCeiling, ToolSelectionDocument,
+    default_behavior_id_for_agent, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
+    DefraSessionHook, DocumentRuntimeOptions, FailurePolicy, Gents, ToolCeiling,
 };
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -21,7 +20,9 @@ use serde_json::{json, Value};
 
 use crate::lean_vocab_test::{lean_r5_cross_principal_cases, LeanR5CrossPrincipalCase};
 use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
-use crate::support::fixtures::{bind_default_behavior_backend, test_identity};
+use crate::support::fixtures::{
+    bind_default_behavior_backend, configure_subagent_behavior, subagent_target, test_identity,
+};
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::mock_endpoint::MockModelEndpoint;
 use crate::support::p2p_waits::{wait_for_connected_peer, wait_for_listen_addr};
@@ -302,80 +303,36 @@ async fn setup_parent_hook_on_db(
             .to_string()
     };
 
-    upsert_tool_selection(
-        db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: parent_agent_did.to_string(),
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_targets: Some(vec![gents::subagent_target_entry(
-                case.target_behavior_id.clone(),
-                target_owner_did,
-                case.target_behavior_id.clone(),
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(true),
-            cross_deployment_spawn_timeout_seconds: Some(60),
-            enable_defra_query: None,
-            defra_query_collections: None,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("parent tool selection");
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: parent_behavior_id.clone(),
-            agent_did: parent_agent_did.to_string(),
-            display_name: Some(parent_behavior_id.clone()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-20T00:00:00Z".to_string()),
-        },
-    )
-    .await
-    .expect("parent behavior");
-
     if target_is_local {
-        upsert_agent_behavior(
+        configure_subagent_behavior(
             db.node.as_ref(),
-            &AgentBehaviorDocument {
-                behavior_id: case.target_behavior_id.clone(),
-                agent_did: parent_agent_did.to_string(),
-                display_name: Some(case.target_behavior_id.clone()),
-                description: None,
-                summary: None,
-                system_prompt: None,
-                request_context_template: None,
-                backend_id: None,
-                model_name: None,
-                tool_selection_id: None,
-                inference_profile_id: None,
-                compaction_strategy: None,
-                compaction_threshold: None,
-                skill_refs: Vec::new(),
-                skill_excludes: Vec::new(),
-                enabled: true,
-                created_at: Some("2026-05-20T00:00:01Z".to_string()),
-            },
+            parent_agent_did,
+            &case.target_behavior_id,
+            &format!("{}-child-tools", case.target_behavior_id),
+            Vec::new(),
+            false,
+            false,
+            None,
         )
-        .await
-        .expect("local child behavior");
+        .await;
     }
+
+    configure_subagent_behavior(
+        db.node.as_ref(),
+        parent_agent_did,
+        &parent_behavior_id,
+        &selection_id,
+        vec![subagent_target(
+            parent_agent_did,
+            case.target_behavior_id.clone(),
+            target_owner_did,
+            case.target_behavior_id.clone(),
+        )],
+        true,
+        true,
+        Some(true),
+    )
+    .await;
 
     create_parent_request(
         db.node.as_ref(),
@@ -398,6 +355,7 @@ async fn setup_parent_hook_on_db(
         &parent_session_id,
         &parent_behavior_id,
         parent_agent_did,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -468,27 +426,22 @@ async fn upsert_active_child_behavior_from_default(
         .expect("default child behavior");
     let child_agent_did = behavior.agent_did.clone();
     let selection_id = format!("{target_behavior_id}-r5-cross-principal-tools");
-    upsert_tool_selection(
-        node,
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: child_agent_did,
-            tool_policy_version: Some(gents::TOOL_POLICY_V1.to_string()),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            subagent_allow_cross_deployment: Some(true),
-            cross_deployment_spawn_timeout_seconds: Some(60),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("upsert target child tool selection");
     behavior.behavior_id = target_behavior_id.to_string();
     behavior.display_name = Some(target_behavior_id.to_string());
-    behavior.tool_selection_id = Some(selection_id);
     upsert_agent_behavior(node, &behavior)
         .await
         .expect("upsert target child behavior");
+    configure_subagent_behavior(
+        node,
+        &child_agent_did,
+        target_behavior_id,
+        &selection_id,
+        Vec::new(),
+        true,
+        true,
+        Some(true),
+    )
+    .await;
 }
 
 async fn create_parent_request(
@@ -518,7 +471,6 @@ async fn create_parent_request(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "interactive",
-                metadata: "",
                 failure_reason: "",
                 created_at: "{created_at}",
                 deadline: "{deadline}",

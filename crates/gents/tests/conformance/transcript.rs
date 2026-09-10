@@ -69,6 +69,7 @@ async fn transcript_hook_fixture(test_name: &str) -> (support::TestDb, DefraSess
         &session_id,
         AGENT_NAME,
         AGENT_DID,
+        None,
         FailurePolicy::default(),
     )
     .await
@@ -772,6 +773,7 @@ pub(super) async fn generated_transcript_cases_drive_agent_message_ordering_cont
         &session_id,
         AGENT_NAME,
         AGENT_DID,
+        None,
         FailurePolicy::default(),
     )
     .await

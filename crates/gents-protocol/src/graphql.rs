@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::client_protocol::{
-    AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState, RequestSnapshot,
-    ResponseSnapshot, ResponseStatus, project_attempt,
+    project_attempt, AttemptView, ClientHeadProjection, ClientTurnState, RequestLifecycleState,
+    RequestSnapshot, ResponseSnapshot, ResponseStatus,
 };
 use crate::row::{
     AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentToolCallRow, AgentToolResultRow,
@@ -212,7 +212,7 @@ pub fn validate_graphql_name(name: &str) -> Result<()> {
 }
 
 /// Validate a value used as a **collection name** in identifier position
-/// (e.g. `EventTrigger.source_collection`). On top of the Name grammar this
+/// (e.g. an event source's collection name). On top of the Name grammar this
 /// rejects the `__` prefix, which the GraphQL spec reserves for
 /// introspection — a "collection" of `__Type` or `__schema` would aim a
 /// query at the introspection surface instead of a document collection.
@@ -227,7 +227,7 @@ pub fn validate_collection_identifier(name: &str) -> Result<()> {
 }
 
 /// Validate a caller-supplied GraphQL **filter-object fragment** — a value
-/// spliced into a query whole, as `EventTrigger.filter` is.
+/// spliced into a query whole, as an event-source filter is.
 ///
 /// This is the third interpolation position, and neither of the other two
 /// defenses reaches it: escaping would destroy the object syntax, and the
@@ -690,17 +690,16 @@ pub fn graphql_string_list_literal(values: &[String]) -> String {
 /// DefraDB document mutations (create/update/upsert payloads).
 ///
 /// This is the generic renderer used by the apply and import code paths
-/// (and the direct writers for `Task`, `Schedule`, and `EventTrigger`) when
+/// (and direct canonical configuration writers) when
 /// materializing desired-state documents as GraphQL `input:` arguments.
 ///
 /// # Empty list handling
 ///
 /// An empty `Value::Array` is rendered as the literal `null`, never `[]`.
 /// DefraDB types a bare `[]` as `JsonArray([])`. This is incompatible with
-/// `NillableStringArray` (`[String]`) columns (used for `cli_tool_names`,
-/// `subagent_targets`, `tool_refs`, `skill_refs`, `models`, `allowed_mcp_service_ids`,
-/// `required_mcp_service_ids`,
-/// etc.). A create may appear to succeed while storing the wrong type; any
+/// `NillableStringArray` (`[String]`) columns (used for tags, skill IDs,
+/// subagent target IDs, and similar canonical lists). A create may appear to
+/// succeed while storing the wrong type; any
 /// subsequent update then fails re-validation.
 ///
 /// This behaviour matches the dedicated helpers (`string_list_field`,
@@ -756,7 +755,11 @@ pub fn nullable_string_field(name: &str, value: Option<&str>) -> String {
 }
 
 pub fn graphql_bool_literal(value: bool) -> &'static str {
-    if value { "true" } else { "false" }
+    if value {
+        "true"
+    } else {
+        "false"
+    }
 }
 
 pub fn normalize_optional_rfc3339(value: Option<&str>) -> Result<Option<String>> {
@@ -1233,11 +1236,9 @@ mod tests {
 
         // Well-formed nested keys still render.
         let ok = serde_json::json!({ "outer": { "inner_1": "v" } });
-        assert!(
-            graphql_input_literal(&ok)
-                .expect("valid Name keys render")
-                .contains("inner_1: \"v\"")
-        );
+        assert!(graphql_input_literal(&ok)
+            .expect("valid Name keys render")
+            .contains("inner_1: \"v\""));
     }
 
     #[test]
@@ -1247,27 +1248,27 @@ mod tests {
             "null",
         );
         let value = serde_json::json!({
-            "skill_id": "s",
-            "tool_refs": [],
-            "skill_refs": [],
+            "context_id": "c",
+            "skill_ids": [],
+            "target_ids": [],
         });
         let rendered = graphql_input_literal(&value).expect("render literal");
-        assert!(rendered.contains("tool_refs: null"), "rendered: {rendered}");
         assert!(
-            rendered.contains("skill_refs: null"),
+            rendered.contains("target_ids: null"),
             "rendered: {rendered}"
         );
+        assert!(rendered.contains("skill_ids: null"), "rendered: {rendered}");
         // Field-specific checks are stronger than a generic !contains("[]")
         // (the latter could be defeated by unrelated substrings in complex values).
-        assert!(!rendered.contains("tool_refs: []"), "rendered: {rendered}");
-        assert!(!rendered.contains("skill_refs: []"), "rendered: {rendered}");
+        assert!(!rendered.contains("target_ids: []"), "rendered: {rendered}");
+        assert!(!rendered.contains("skill_ids: []"), "rendered: {rendered}");
     }
 }
 
 #[cfg(test)]
 mod tx_tests {
     use super::*;
-    use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+    use axum::{extract::State, http::HeaderMap, routing::post, Json, Router};
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
@@ -1400,11 +1401,9 @@ mod tx_tests {
         )
         .await
         .expect_err("public transport is query-only");
-        assert!(
-            error
-                .to_string()
-                .contains("GraphQL read transport requires a query document")
-        );
+        assert!(error
+            .to_string()
+            .contains("GraphQL read transport requires a query document"));
     }
 
     #[test]
@@ -1415,11 +1414,9 @@ mod tx_tests {
             GraphqlRequestOptions::default(),
         )
         .expect_err("public transport is query-only");
-        assert!(
-            error
-                .to_string()
-                .contains("GraphQL read transport requires a query document")
-        );
+        assert!(error
+            .to_string()
+            .contains("GraphQL read transport requires a query document"));
     }
 
     #[test]

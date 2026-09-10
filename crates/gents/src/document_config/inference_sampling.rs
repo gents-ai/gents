@@ -48,8 +48,8 @@ pub struct InferenceSampling {
 }
 
 impl InferenceSampling {
-    /// Sampling bounds moved here from the legacy flat InferenceProfile fields
-    /// (#1331 rules, #1430 owner split). Reports every violated rule at once.
+    /// Validate the sampling bounds owned by this document and report every
+    /// violated rule at once.
     pub fn validation_violations(&self) -> Vec<String> {
         let sampling_id = self.sampling_id.trim();
         let mut violations: Vec<String> = Vec::new();
