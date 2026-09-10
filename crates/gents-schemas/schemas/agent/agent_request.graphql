@@ -82,7 +82,5 @@ type AgentRequest @branchable {
     # Signed principal scope of workspace_id, not host/deployment identity.
     workspace_owner_agent_did: String @index @immutable
     workspace_authority: String @immutable
-    # Signed principal scope of workspace_id, not host/deployment identity.
-    workspace_owner_agent_did: String @index @immutable
     workspace_seal_hash: String @immutable
 }
