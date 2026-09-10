@@ -392,18 +392,48 @@ async fn quiesced_pinned_route_group_becomes_durable_failure_evidence() {
     execute_fixture(
         &node,
         format!(
-            r#"mutation {{ create_EventTriggerGroupState(input: {{
-                group_key: "pinned-entry-group", trigger_id: "{}",
-                correlation: "{}", trigger_config_key: "pinned-entry-group-v1",
+            r#"mutation {{ create_EventGroupState(input: {{
+                group_key: "pinned-entry-group", agent_did: "{}", consumer: {{ kind: "trigger", trigger_id: "{}" }},
+                correlation: "{}", consumer_config_key: "pinned-entry-group-v1",
                 first_seen_at: "2026-09-05T00:00:00Z",
                 quiesced_at: "2026-09-05T00:01:00Z",
                 quiesced_reason: "operator timeout"
             }}) {{ _docID }} }}"#,
+            escape_graphql_string(graph_test_owner()),
             escape_graphql_string(&trigger),
             escape_graphql_string(&run.correlation),
         ),
     )
     .await;
+    for (key, owner, consumer) in [
+        (
+            "foreign-owner",
+            "did:key:foreign-owner",
+            format!(
+                r#"{{kind: "trigger", trigger_id: "{}"}}"#,
+                escape_graphql_string(&trigger)
+            ),
+        ),
+        (
+            "callback",
+            graph_test_owner(),
+            r#"{kind: "callback_binding", binding_id: "other"}"#.to_string(),
+        ),
+    ] {
+        execute_fixture(
+            &node,
+            format!(
+                r#"mutation {{ create_EventGroupState(input: {{
+            group_key: "{key}", agent_did: "{}", consumer: {consumer}, correlation: "{}",
+            consumer_config_key: "unrelated", first_seen_at: "2026-09-04T00:00:00Z",
+            quiesced_at: "2026-09-04T00:01:00Z", quiesced_reason: "foreign failure"
+        }}) {{_docID}} }}"#,
+                escape_graphql_string(owner),
+                escape_graphql_string(&run.correlation)
+            ),
+        )
+        .await;
+    }
     let observed = load_graph_run_view(&node, graph_test_owner(), &run.run_id)
         .await
         .unwrap();

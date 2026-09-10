@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
 use crate::backend_provider::BackendProviderKind;
@@ -45,17 +45,19 @@ pub struct AgentBehavior {
     pub backend_provider_kind: BackendProviderKind,
     pub openai_wire_api: OpenAiWireApi,
     pub backend_endpoint: String,
-    pub backend_api_key: Option<String>,
-    pub backend_api_key_env_var: Option<String>,
+    pub backend_auth: crate::document_config::BackendAuth,
     pub model_name: String,
     pub context_window: usize,
     pub max_output_tokens: usize,
     pub max_turns: usize,
     pub system_prompt: String,
-    pub request_context_template: Option<String>,
     pub tools: BehaviorToolConfig,
-    pub compaction_threshold: f64,
-    pub compaction_strategy: CompactionStrategy,
+    /// Canonical compaction selection; absence uses runtime defaults.
+    pub compaction: Option<crate::document_config::CompactionConfig>,
+    /// Optional summary inference resolved through the same profile chain.
+    pub compaction_inference: Option<ResolvedInference>,
+    /// Aggregate budget pinned by the physical request execution owner.
+    pub max_total_tokens: Option<u64>,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
     pub deadline_duration: Duration,
@@ -68,8 +70,85 @@ pub struct AgentBehavior {
     pub skills: Vec<crate::skills::Skill>,
 }
 
+/// Selected canonical documents after one owner-scoped reference resolution.
+/// Shared by user inference and optional compaction inference; no alternate
+/// model selection or independently authored provider configuration exists.
+#[derive(Debug, Clone)]
+pub struct ResolvedInference {
+    pub backend: crate::document_config::InferenceBackend,
+    pub profile: crate::document_config::InferenceProfile,
+    pub sampling: Option<crate::document_config::InferenceSampling>,
+    pub execution: Option<crate::document_config::InferenceExecution>,
+    pub retry_policy: Option<crate::document_config::InferenceRetryPolicy>,
+    pub advertised_model: Option<crate::document_config::AdvertisedModel>,
+}
+
+impl ResolvedInference {
+    pub fn context_window(&self) -> Result<usize> {
+        positive_inference_limit(
+            self.profile.context_window.or_else(|| {
+                self.advertised_model
+                    .as_ref()
+                    .and_then(|model| model.context_window)
+            }),
+            DEFAULT_CONTEXT_WINDOW,
+            "context_window",
+        )
+    }
+
+    pub fn max_output_tokens(&self) -> Result<usize> {
+        positive_inference_limit(
+            self.profile.max_output_tokens.or_else(|| {
+                self.advertised_model
+                    .as_ref()
+                    .and_then(|model| model.max_output_tokens)
+            }),
+            DEFAULT_MAX_OUTPUT_TOKENS,
+            "max_output_tokens",
+        )
+    }
+
+    pub fn max_turns(&self) -> Result<usize> {
+        positive_inference_limit(
+            self.execution
+                .as_ref()
+                .and_then(|execution| execution.max_turns),
+            DEFAULT_MAX_TURNS,
+            "max_turns",
+        )
+    }
+
+    pub fn sampling_config(&self) -> Result<SamplingConfig> {
+        let sampling = self.sampling.clone().unwrap_or_default();
+        let result = SamplingConfig {
+            temperature: sampling.temperature,
+            top_p: sampling.top_p,
+            top_k: sampling.top_k,
+            seed: sampling.seed,
+            min_p: sampling.min_p,
+            frequency_penalty: sampling.frequency_penalty,
+            presence_penalty: sampling.presence_penalty,
+            repetition_penalty: sampling.repetition_penalty,
+            reasoning_effort: self.profile.reasoning_effort,
+            max_tokens: Some(u64::try_from(self.max_output_tokens()?)?),
+        };
+        let backend = self.backend.backend_fields();
+        result.validate_for_provider(backend.backend_provider_kind, backend.openai_wire_api)?;
+        Ok(result)
+    }
+}
+
+fn positive_inference_limit(value: Option<i64>, default: usize, field: &str) -> Result<usize> {
+    match value {
+        None => Ok(default),
+        Some(value) if value > 0 => Ok(usize::try_from(value)?),
+        Some(_) => anyhow::bail!("{field} must be positive"),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ReasoningEffort {
     None,
     Minimal,
@@ -224,20 +303,16 @@ impl std::fmt::Debug for AgentBehavior {
             .field("backend_provider_kind", &self.backend_provider_kind)
             .field("openai_wire_api", &self.openai_wire_api)
             .field("backend_endpoint", &self.backend_endpoint)
-            .field(
-                "backend_api_key",
-                &self.backend_api_key.as_ref().map(|_| "<redacted>"),
-            )
-            .field("backend_api_key_env_var", &self.backend_api_key_env_var)
+            .field("backend_auth", &self.backend_auth)
             .field("model_name", &self.model_name)
             .field("context_window", &self.context_window)
             .field("max_output_tokens", &self.max_output_tokens)
             .field("max_turns", &self.max_turns)
             .field("system_prompt", &self.system_prompt)
-            .field("request_context_template", &self.request_context_template)
             .field("tools", &self.tools)
-            .field("compaction_threshold", &self.compaction_threshold)
-            .field("compaction_strategy", &self.compaction_strategy)
+            .field("compaction", &self.compaction)
+            .field("compaction_inference", &self.compaction_inference)
+            .field("max_total_tokens", &self.max_total_tokens)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
             .field("deadline_duration", &self.deadline_duration)
@@ -252,6 +327,20 @@ impl std::fmt::Debug for AgentBehavior {
 }
 
 impl AgentBehavior {
+    pub fn compaction_threshold(&self) -> f64 {
+        self.compaction
+            .as_ref()
+            .and_then(|config| config.threshold)
+            .unwrap_or(DEFAULT_COMPACTION_THRESHOLD)
+    }
+
+    pub fn compaction_strategy(&self) -> CompactionStrategy {
+        self.compaction
+            .as_ref()
+            .map(|config| config.strategy.clone())
+            .unwrap_or(CompactionStrategy::StripThenSummarize)
+    }
+
     /// Returns the principal's agent_did.
     pub fn agent_did(&self) -> &str {
         &self.principal.agent_did
@@ -268,22 +357,16 @@ impl AgentBehavior {
         &self.principal.identity
     }
 
-    /// Resolve this behavior's backend API key. Delegates to
-    /// [`resolve_api_key`], the single owner of the resolution and
-    /// hard-error-on-missing-env-var semantics; a missing or empty
-    /// `backend_api_key_env_var` names both the backend and the behavior in
-    /// the error, since a behavior's own binding (not just the backend
-    /// document) is what's unusable.
+    /// Resolve the explicitly selected shared credential. Principal OAuth is
+    /// handled by its existing credential owner, never an unauthenticated fallback.
     pub fn resolve_backend_api_key(&self) -> Result<Option<String>> {
-        resolve_api_key(
-            &format!(
-                "backend {} for behavior {}",
+        self.backend_auth.resolve_api_key().map_err(|error| {
+            anyhow::anyhow!(
+                "backend {} for behavior {}: {error:#}",
                 self.backend_id.as_deref().unwrap_or("<unbound>"),
                 self.behavior_id
-            ),
-            self.backend_api_key.as_deref(),
-            self.backend_api_key_env_var.as_deref(),
-        )
+            )
+        })
     }
 
     pub fn completion_client_api_key(&self) -> Result<String> {
@@ -293,66 +376,15 @@ impl AgentBehavior {
     }
 }
 
-/// Resolve an [`crate::backend_registry::InferenceBackend`]'s API key
-/// independent of any behavior binding — used by the startup and periodic
-/// backend probers, which check reachability before any behavior claims the
-/// backend. Delegates to [`resolve_api_key`]; a missing or empty
-/// `api_key_env_var` is a hard error naming the backend, exactly as
-/// [`AgentBehavior::resolve_backend_api_key`] errors for a bound behavior —
-/// a backend whose configured env var isn't set must fail loudly, not probe
-/// silently with no key (previously [`InferenceBackend::resolved_api_key`]
-/// swallowed this into `None`).
+/// Resolve a backend's explicitly selected shared credential, retaining backend
+/// identity in configuration errors. OAuth uses the principal credential owner.
 pub fn resolve_backend_api_key(
     backend: &crate::backend_registry::InferenceBackend,
 ) -> Result<Option<String>> {
-    resolve_api_key(
-        &format!("backend {}", backend.backend_id),
-        backend.api_key.as_deref(),
-        backend.api_key_env_var.as_deref(),
-    )
-}
-
-/// Single owner of "resolve an API key from a raw value or an environment
-/// variable name": prefer the raw value; otherwise, if an env var name is
-/// configured, its value must be set and non-blank or this hard-errors
-/// naming `subject` — a configured-but-unusable credential is a
-/// misconfiguration, not a silent no-key fallback. No env var configured at
-/// all is a legitimate no-key backend (e.g. an unauthenticated local
-/// endpoint) and resolves to `None`.
-fn resolve_api_key(
-    subject: &str,
-    api_key: Option<&str>,
-    api_key_env_var: Option<&str>,
-) -> Result<Option<String>> {
-    if let Some(api_key) = normalize_optional_secret(api_key) {
-        return Ok(Some(api_key.to_string()));
-    }
-
-    if let Some(env_var) = normalize_optional_env_var(api_key_env_var) {
-        let value = std::env::var(env_var)
-            .with_context(|| format!("{subject} requires environment variable {env_var}"))?;
-        let value = value.trim();
-        if value.is_empty() {
-            anyhow::bail!("{subject} resolved empty API key from environment variable {env_var}");
-        }
-        return Ok(Some(value.to_string()));
-    }
-
-    Ok(None)
-}
-
-fn normalize_optional_env_var(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
-}
-
-fn normalize_optional_secret(value: Option<&str>) -> Option<&str> {
-    value.and_then(|value| {
-        let trimmed = value.trim();
-        (!trimmed.is_empty()).then_some(trimmed)
-    })
+    backend
+        .auth
+        .resolve_api_key()
+        .map_err(|error| anyhow::anyhow!("backend {}: {error:#}", backend.backend_id))
 }
 
 #[cfg(test)]
@@ -385,17 +417,16 @@ mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_api_key: None,
-            backend_api_key_env_var: None,
+            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: DEFAULT_MODEL_NAME.to_string(),
             context_window: DEFAULT_CONTEXT_WINDOW,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             max_turns: DEFAULT_MAX_TURNS,
             system_prompt: "system".to_string(),
-            request_context_template: None,
             tools: BehaviorToolConfig::meta_only(),
-            compaction_threshold: DEFAULT_COMPACTION_THRESHOLD,
-            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            compaction: None,
+            compaction_inference: None,
+            max_total_tokens: None,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
@@ -405,7 +436,7 @@ mod tests {
         }
     }
 
-    /// A behavior bound to a backend whose `backend_api_key_env_var` names an
+    /// A behavior bound to a backend whose environment authentication names an
     /// environment variable that isn't actually set in the process must fail
     /// loudly, naming both the backend and the behavior — never silently
     /// build/run with no key (#1338).
@@ -416,8 +447,9 @@ mod tests {
         // backend id) so the two assertions below can't pass vacuously off
         // one shared match.
         behavior.behavior_id = "behavior-alpha".to_string();
-        behavior.backend_api_key_env_var =
-            Some("GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".to_string());
+        behavior.backend_auth = crate::document_config::BackendAuth::Environment {
+            variable: "GENTS_CONFIG_TEST_KEY_MISSING_1338_NEVER_SET".into(),
+        };
 
         let error = behavior
             .resolve_backend_api_key()

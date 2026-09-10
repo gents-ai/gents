@@ -528,7 +528,7 @@ pub struct ToolResultSnapshot {
     pub tool_input: String,
     pub output_text: String,
     pub truncated: bool,
-    pub truncation_metadata: String,
+    pub truncation_metadata: Option<String>,
     pub tool_call_doc_id: Option<String>,
     pub created_at: String,
 }

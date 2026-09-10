@@ -21,7 +21,6 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolCallState {
     Pending,
-    AwaitingApproval,
     Running,
     Completed,
     Failed,
@@ -31,9 +30,8 @@ pub enum ToolCallState {
 
 impl ToolCallState {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Pending,
-        Self::AwaitingApproval,
         Self::Running,
         Self::Completed,
         Self::Failed,
@@ -44,7 +42,6 @@ impl ToolCallState {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
-            Self::AwaitingApproval => "awaitingApproval",
             Self::Running => "running",
             Self::Completed => "completed",
             Self::Failed => "failed",
@@ -56,7 +53,6 @@ impl ToolCallState {
     pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
-            "awaitingApproval" => Some(Self::AwaitingApproval),
             "running" => Some(Self::Running),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
@@ -75,14 +71,13 @@ impl ToolCallState {
 
     #[cfg(test)]
     pub(crate) const fn is_cancellable(self) -> bool {
-        matches!(self, Self::Pending | Self::AwaitingApproval | Self::Running)
+        matches!(self, Self::Pending | Self::Running)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum FailureClass {
-    ApprovalDenied,
     ArgumentInvalid,
     ServiceUnavailable,
     Transport,
@@ -92,8 +87,7 @@ pub enum FailureClass {
 }
 
 impl FailureClass {
-    pub const ALL: [Self; 7] = [
-        Self::ApprovalDenied,
+    pub const ALL: [Self; 6] = [
         Self::ArgumentInvalid,
         Self::ServiceUnavailable,
         Self::Transport,
@@ -104,7 +98,6 @@ impl FailureClass {
 
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::ApprovalDenied => "approvalDenied",
             Self::ArgumentInvalid => "argumentInvalid",
             Self::ServiceUnavailable => "serviceUnavailable",
             Self::Transport => "transport",
@@ -116,7 +109,6 @@ impl FailureClass {
 
     pub fn from_persisted(value: &str) -> Option<Self> {
         match value {
-            "approvalDenied" => Some(Self::ApprovalDenied),
             "argumentInvalid" => Some(Self::ArgumentInvalid),
             "serviceUnavailable" => Some(Self::ServiceUnavailable),
             "transport" => Some(Self::Transport),
@@ -255,7 +247,10 @@ pub struct CascadeIntent {
 
 #[derive(Clone, Debug)]
 pub enum CascadeDispatch {
-    Local(CascadeIntent),
+    Local {
+        intent: CascadeIntent,
+        child: gents_protocol::row::AgentRequestRow,
+    },
     RemoteIntentWritten,
 }
 
@@ -522,6 +517,10 @@ impl ToolCallLifecycle {
 
     pub(crate) fn state(&self) -> ToolCallState {
         self.state
+    }
+
+    pub(crate) fn request_doc_id(&self) -> Option<&str> {
+        self.request_doc_id.as_deref()
     }
 
     pub(crate) fn request_id(&self) -> &str {

@@ -2,15 +2,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::Serialize;
 
 use super::context::{ToolContext, ToolError};
-use crate::managed_exec::{run_managed_exec, ManagedExecOutcome, ManagedExecRequest};
-use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
+use crate::managed_exec::{ManagedExecOutcome, ManagedExecRequest, run_managed_exec};
 use crate::tool_call_lifecycle::FailureClass;
+use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use crate::toolset::{CommandPolicyDenial, DenialReason};
-use crate::truncation::{truncate, TruncationLimits, TruncationMode};
+use crate::truncation::{TruncationLimits, TruncationMode, truncate};
 
 const OUTPUT_META_PREFIX: &str = "gents_exec: ";
 const FALLBACK_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -37,6 +37,7 @@ const CORE_ENV_VARS: &[&str] = &[
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CommandExecutionMode {
     ReadOnly,
     WorkspaceWrite,
@@ -82,6 +83,7 @@ impl CommandExecutionMode {
 /// never Unrestricted. Integrate is inspect-only (no bash writes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum WorkspaceAuthority {
     ReadOnly,
     ReadWrite,
@@ -193,6 +195,7 @@ pub(crate) fn effective_command_policy(policy: &CommandExecutionPolicy) -> Comma
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CommandNetworkMode {
     Inherit,
     Disabled,
@@ -641,7 +644,7 @@ pub(crate) async fn run_command(
         // polled first and resolves the call to `ToolOutcome::Cancelled`.
         ManagedExecOutcome::Cancelled { .. } => return Ok("command was cancelled".to_string()),
         ManagedExecOutcome::SpawnFailed { error } => {
-            return Err(anyhow!("spawning managed command failed: {error}").into())
+            return Err(anyhow!("spawning managed command failed: {error}").into());
         }
     };
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
@@ -785,13 +788,6 @@ fn validate_command_policy_inner(
     Ok(())
 }
 
-pub(crate) fn parse_argv_prefixes(values: &[String]) -> Result<Vec<Vec<String>>> {
-    values
-        .iter()
-        .map(|value| parse_argv_prefix(value))
-        .collect::<Result<Vec<_>>>()
-}
-
 pub(crate) fn build_shell_env() -> HashMap<String, String> {
     build_shell_env_from_vars(std::env::vars())
 }
@@ -882,31 +878,6 @@ fn validate_read_only_command_inner(
     }
 
     Ok(())
-}
-
-fn parse_argv_prefix(value: &str) -> Result<Vec<String>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        bail!("argv prefix cannot be empty");
-    }
-
-    if trimmed.starts_with('[') {
-        let prefix = serde_json::from_str::<Vec<String>>(trimmed)
-            .with_context(|| format!("parsing argv prefix JSON {trimmed}"))?;
-        if prefix.is_empty() || prefix.iter().any(|token| token.trim().is_empty()) {
-            bail!("argv prefix must contain non-empty tokens");
-        }
-        return Ok(prefix);
-    }
-
-    let prefix = trimmed
-        .split_ascii_whitespace()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    if prefix.is_empty() {
-        bail!("argv prefix cannot be empty");
-    }
-    Ok(prefix)
 }
 
 fn first_matching_prefix<'a>(
@@ -1022,7 +993,9 @@ pub(crate) fn select_sandbox_for_policy(
             if cfg!(target_os = "macos") {
                 bail!("macOS sandbox-exec is required for workspace_write bash but was not found")
             } else {
-                bail!("workspace_write bash requires macOS seatbelt sandbox enforcement on this build")
+                bail!(
+                    "workspace_write bash requires macOS seatbelt sandbox enforcement on this build"
+                )
             }
         }
     }

@@ -346,15 +346,26 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         .await
         .unwrap()
         .expect("cascade dispatch");
-    let CascadeDispatch::Local(intent) = dispatch else {
+    let CascadeDispatch::Local { intent, child } = dispatch else {
         panic!("local child should use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
     assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
-    interrupt_request(db.node.as_ref(), &intent.child_request_id)
-        .await
-        .unwrap();
+    gents::interrupt_request_by_doc_id(
+        db.node.as_ref(),
+        child
+            .doc_id
+            .as_deref()
+            .expect("verified physical cascade child"),
+        child
+            .agent_did
+            .as_deref()
+            .expect("verified local child principal"),
+        child.requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
 
     let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
     assert!(

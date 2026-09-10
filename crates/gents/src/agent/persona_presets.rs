@@ -85,9 +85,79 @@ pub fn preset_name(fields: &PresetFields) -> Option<&'static str> {
         .find(|name| preset_fields(name).as_ref() == Some(fields))
 }
 
+/// Classify canonical tools after the common datastore surface resolver has
+/// expanded selected declarations. Callers keep document loading and scope checks.
+pub fn classify_tools(
+    tools: &crate::document_config::Tools,
+    merged: &crate::document_config::MergedSurfaceTools,
+) -> anyhow::Result<Option<&'static str>> {
+    use crate::tool_surface::{BashMode, FileToolMode};
+    let host = tools.host.as_ref();
+    let files = host
+        .and_then(|h| h.files.as_ref())
+        .map(|f| f.mode)
+        .unwrap_or_default();
+    let bash = host.and_then(|h| h.bash.as_ref());
+    let mode = bash.map(|b| b.mode).unwrap_or_default();
+    let prefixes = |values: Option<&Vec<Vec<String>>>| -> anyhow::Result<Vec<String>> {
+        values
+            .into_iter()
+            .flatten()
+            .map(|v| serde_json::to_string(v).map_err(Into::into))
+            .collect()
+    };
+    Ok(preset_name(&PresetFields {
+        enable_file_tools: files != FileToolMode::Off,
+        file_tools_mode: format!("{files:?}"),
+        enable_bash: mode != BashMode::Off,
+        bash_mode: format!("{mode:?}"),
+        command_allowed_argv_prefixes: prefixes(
+            bash.and_then(|b| b.allowed_argv_prefixes.as_ref()),
+        )?,
+        command_forbidden_argv_prefixes: prefixes(
+            bash.and_then(|b| b.forbidden_argv_prefixes.as_ref()),
+        )?,
+        read_only_command_allowlist: bash
+            .and_then(|b| b.read_only_commands.clone())
+            .unwrap_or_default(),
+        enable_self_config: tools
+            .self_config
+            .as_ref()
+            .and_then(|c| c.enable_self_config)
+            .unwrap_or(false),
+        write_tools: merged
+            .write_tools
+            .iter()
+            .map(|tool| tool.tool_name.clone())
+            .collect(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_classifier_includes_expanded_datastore_writes() {
+        let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+            "agent_did":"owner", "tools_id":"tools", "host":{
+                "files":{"mode":"ReadWrite"}, "bash":{"mode":"Unrestricted"}
+            }
+        }))
+        .unwrap();
+        let mut merged = crate::document_config::MergedSurfaceTools::default();
+        assert_eq!(classify_tools(&tools, &merged).unwrap(), Some(PRESET_WRITE));
+        merged
+            .write_tools
+            .push(crate::document_config::WriteToolDecl {
+                tool_name: "record_finding".into(),
+                collection: "Finding".into(),
+                description: "Record a finding".into(),
+                fields: vec![],
+                output_obligation: None,
+            });
+        assert_eq!(classify_tools(&tools, &merged).unwrap(), None);
+    }
 
     #[test]
     fn readonly_mirrors_init_readonly_package() {

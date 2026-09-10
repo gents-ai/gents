@@ -5,12 +5,13 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
     let db = test_db("coalesce").await;
     let session_id = "session-coalesced-wakeup";
     let parent = parent_request(db.agent_did(), session_id);
-    let hints = QueueHints {
+    let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     };
 
     let first = persist_background_completion_with_message(
@@ -66,7 +67,11 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
     );
     assert_eq!(row.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(row.caused_by_parent_tool_call_doc_id.as_deref(), None);
-    assert!(is_automated_wakeup(row.metadata.as_deref()));
+    assert!(row
+        .input
+        .as_ref()
+        .and_then(|input| input.queue.as_ref())
+        .is_some_and(|queue| queue_is_automated_wakeup(queue)));
     let notifications = db
         .node
         .execute("{ AgentMessage { request_id request_doc_id } }")
@@ -90,22 +95,23 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
     let db = test_db("coalesce-ignores-append").await;
     let session_id = "session-coalesce-ignores-append";
     let parent = parent_request(db.agent_did(), session_id);
-    let append_hints = QueueHints {
+    let append_hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
         key: Some(format!("background_completion:{session_id}")),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     };
     insert_raw_queue_request(
         &db.node,
         db.agent_did(),
         "req-existing-append-same-key",
         session_id,
-        &queue_metadata_json(&append_hints),
+        &wake_queue_input(append_hints.clone()),
     )
     .await;
-    let coalesce_hints = QueueHints {
+    let coalesce_hints = RequestQueue {
         policy: QueuePolicy::Coalesce,
         ..append_hints
     };
@@ -139,12 +145,13 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let db = test_db("coalesce-race-reconcile").await;
     let session_id = "session-coalesce-race-reconcile";
     let parent = parent_request(db.agent_did(), session_id);
-    let hints = QueueHints {
+    let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     };
     let key = hints.key.clone().unwrap();
     let survivor = persist_background_completion_with_message(
@@ -165,7 +172,7 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         db.agent_did(),
         "req-coalesce-race-duplicate",
         session_id,
-        &queue_metadata_json(&hints),
+        &wake_queue_input(hints.clone()),
     )
     .await;
 
@@ -214,19 +221,20 @@ async fn atomic_background_completion_reuses_reconciled_duplicate_rows() {
     let db = test_db("coalesce-preexisting-duplicates").await;
     let session_id = "session-coalesce-preexisting-duplicates";
     let parent = parent_request(db.agent_did(), session_id);
-    let hints = QueueHints {
+    let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: Some(format!("background_completion:{session_id}")),
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     };
     let survivor_doc_id = insert_raw_queue_request(
         &db.node,
         db.agent_did(),
         "req-preexisting-coalesce-a-survivor",
         session_id,
-        &queue_metadata_json(&hints),
+        &wake_queue_input(hints.clone()),
     )
     .await;
     let duplicate_doc_id = insert_raw_queue_request(
@@ -234,7 +242,7 @@ async fn atomic_background_completion_reuses_reconciled_duplicate_rows() {
         db.agent_did(),
         "req-preexisting-coalesce-b-duplicate",
         session_id,
-        &queue_metadata_json(&hints),
+        &wake_queue_input(hints.clone()),
     )
     .await;
 
@@ -296,12 +304,13 @@ async fn atomic_background_completion_without_key_rejects_without_persisting_inp
     let db = test_db("coalesce-without-key").await;
     let session_id = "session-unkeyed-wakeup";
     let parent = parent_request(db.agent_did(), session_id);
-    let hints = QueueHints {
+    let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
         key: None,
         queued_after_request_id: Some(parent.request_id.clone()),
         interrupted_request_id: None,
+        background_completion_wake_version: None,
     };
     let result = persist_background_completion_with_message(
         &db.node,

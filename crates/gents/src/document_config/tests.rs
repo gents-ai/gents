@@ -1,189 +1,177 @@
 use super::*;
+use crate::config_client::write_tools_document;
+
+/// The implicit wide-open preset builder was retired with ToolSelection; the
+/// preset is now an authored nested `Tools` document. Pin its explicit
+/// permissive surface: meta dispatch and DefraDB query capabilities on, every
+/// privilege-bearing host capability absent (absence grants nothing).
+fn wide_open_tools_document(agent_did: &str) -> Tools {
+    serde_json::from_value(serde_json::json!({
+        "tools_id": "wide-open",
+        "agent_did": agent_did,
+        "built_ins": {"enable_context_budget": true},
+        "datastore": {"enable_defra_query": true},
+    }))
+    .unwrap()
+}
 
 #[test]
-fn wide_open_preset_is_permissive_and_versioned() {
+fn wide_open_preset_is_permissive_and_explicit() {
     let did = "did:test:amy";
-    let id = wide_open_tool_selection_id_for_agent(did);
-    assert_eq!(id, "did:test:amy:wide-open");
-
-    let preset = wide_open_tool_selection_document(did);
-    // Canonical, per-principal id (passes the agent_did hydration filter).
-    assert_eq!(preset.selection_id, id);
+    let preset = wide_open_tools_document(did);
+    // Owner-scoped logical id; `agent_did` passes the per-principal filter.
+    assert_eq!(preset.tools_id, "wide-open");
     assert_eq!(preset.agent_did, did);
-    // Stamped at the current version so its explicit permissive values are NOT
-    // re-decoded under secure-minimal defaults.
+    // Two capabilities are explicitly enabled by this preset.
     assert_eq!(
-        preset.tool_policy_version.as_deref(),
-        Some(crate::tool_surface::TOOL_POLICY_V1)
+        preset.built_ins.as_ref().unwrap().enable_context_budget,
+        Some(true)
     );
-    // Pin the explicit permissive surface instead of recomputing expectations
-    // from the preset builder. Meta and DefraDB query are on; every other
-    // privilege-bearing capability is explicitly false.
-    assert_eq!(preset.enable_meta_tools, Some(true));
-    assert_eq!(preset.enable_goal_tools, None);
-    assert_eq!(preset.enable_goal_creation, None);
-    assert_eq!(preset.enable_defra_query, Some(true));
-    // Context budget is the third capability explicitly enabled by this preset.
-    assert_eq!(preset.enable_context_budget, Some(true));
-    assert_eq!(preset.enable_file_tools, Some(false));
-    assert_eq!(preset.enable_bash, Some(false));
-    assert_eq!(preset.subagent_spawn_enabled, Some(false));
-    assert_eq!(preset.subagent_steering_enabled, Some(false));
-    assert_eq!(preset.subagent_background_enabled, Some(false));
-    assert_eq!(preset.subagent_allow_cross_deployment, Some(false));
-    assert_eq!(preset.enable_memory, Some(false));
-    assert_eq!(preset.enable_session_history_tool, Some(false));
-}
-
-#[test]
-fn tool_selection_document_accepts_empty_string_arrays() {
-    let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
-        "selection_id": "default-tools",
-        "agent_did": "did:test:test",
-        "display_name": "Tools",
-        "enable_file_tools": true,
-        "file_tools_mode": "ReadOnly",
-        "file_tool_root": null,
-        "enable_bash": false,
-        "bash_mode": "disabled",
-        "cli_tool_names": "",
-        "enable_meta_tools": false,
-        "allowed_mcp_service_ids": ""
-    }))
-    .expect("empty string arrays should deserialize");
-
-    assert_eq!(document.cli_tool_names, Some(Vec::new()));
-    assert_eq!(document.allowed_mcp_service_ids, Some(Vec::new()));
-    assert_eq!(document.enable_goal_tools, None);
-    assert_eq!(document.enable_goal_creation, None);
-}
-
-#[test]
-fn tool_selection_document_accepts_string_array_values() {
-    let document: ToolSelectionDocument = serde_json::from_value(serde_json::json!({
-        "selection_id": "default-tools",
-        "agent_did": "did:test:test",
-        "display_name": "Tools",
-        "enable_file_tools": true,
-        "file_tools_mode": "ReadOnly",
-        "file_tool_root": null,
-        "enable_bash": false,
-        "bash_mode": "disabled",
-        "cli_tool_names": ["rg"],
-        "enable_meta_tools": false,
-        "allowed_mcp_service_ids": ["x-data"]
-    }))
-    .expect("string arrays should deserialize");
-
-    assert_eq!(document.cli_tool_names, Some(vec!["rg".to_string()]));
     assert_eq!(
-        document.allowed_mcp_service_ids,
-        Some(vec!["x-data".to_string()])
+        preset.datastore.as_ref().unwrap().enable_defra_query,
+        Some(true)
+    );
+    // No host tools, remote services (hence no meta dispatch), subagents,
+    // integrations, or self-config: the permissive surface is explicit, never
+    // implied by a policy version — the canonical document has no historical
+    // re-interpretation contract.
+    assert!(preset.host.is_none());
+    assert!(preset.remote.is_none());
+    assert!(preset.subagents.is_none());
+    assert!(preset.integrations.is_none());
+    assert!(preset.self_config.is_none());
+    assert!(preset.validate().is_ok());
+}
+
+#[test]
+fn tools_document_accepts_empty_string_arrays_and_null_groups() {
+    let document: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "default-tools",
+        "agent_did": "did:test:test",
+        "display_name": "Tools",
+        "host": {
+            "files": {"mode": "ReadOnly"},
+            "bash": {"mode": null},
+            "cli": null
+        },
+        "built_ins": null,
+        "remote": {"services": null}
+    }))
+    .expect("null groups and empty-string arrays should deserialize");
+
+    // Null/empty list forms (DefraDB empty-list transport) decode to the
+    // canonical empty defaults, never an implicit grant.
+    assert!(document.host.as_ref().unwrap().cli.is_empty());
+    assert!(document.remote.as_ref().unwrap().services.is_empty());
+    // Goal capabilities are opt-in only; unset means disabled.
+    assert!(document.built_ins.is_none());
+    assert_eq!(
+        document.host.as_ref().unwrap().files.as_ref().unwrap().mode,
+        crate::tool_surface::FileToolMode::ReadOnly
     );
 }
 
 #[test]
-fn required_mcp_services_are_explicit_callable_dependencies() {
-    let mut selection = ToolSelectionDocument {
-        selection_id: "required-mcp".to_string(),
-        agent_did: "did:key:test".to_string(),
-        enable_meta_tools: Some(false),
-        allowed_mcp_service_ids: Some(vec!["research".to_string()]),
-        required_mcp_service_ids: Some(vec!["research".to_string()]),
-        ..Default::default()
-    };
-    assert!(selection
-        .validate()
-        .unwrap_err()
-        .to_string()
-        .contains("enable_meta_tools=true"));
-    selection.enable_meta_tools = Some(true);
-    selection.allowed_mcp_service_ids = Some(vec!["other".to_string()]);
-    assert!(selection
-        .validate()
-        .unwrap_err()
-        .to_string()
-        .contains("not permitted"));
-    selection.allowed_mcp_service_ids = Some(vec!["research".to_string()]);
-    selection.validate().unwrap();
+fn tools_document_accepts_explicit_selections() {
+    let document: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "default-tools",
+        "agent_did": "did:test:test",
+        "remote": {"services": [{"mcp_service_id": "x-data", "tool_names": ["search"]}]},
+        "host": {"cli": [{"name": "rg"}]}
+    }))
+    .expect("explicit selections should deserialize");
+
+    assert_eq!(
+        document.remote.as_ref().unwrap().services[0].tool_names,
+        vec!["search".to_string()]
+    );
+    assert_eq!(document.host.as_ref().unwrap().cli[0].name, "rg");
 }
 
 #[test]
-fn validate_rejects_empty_string_in_subagent_targets() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
+fn required_mcp_service_selection_is_explicit_and_unique() {
+    // Required is authored on the same explicit service selection. This test
+    // checks its local shape; runtime readiness remains the admission owner.
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "required-mcp",
+        "agent_did": "did:key:test",
+        "remote": {"services": [{"mcp_service_id": "research", "tool_names": ["search"], "required": true}]},
+    }))
+    .unwrap();
+    tools.validate().unwrap();
+    // A duplicate service id stays invalid regardless of required status.
+    let tools: Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "required-mcp",
+        "agent_did": "did:key:test",
+        "remote": {"services": [
+            {"mcp_service_id": "research", "required": true},
+            {"mcp_service_id": "research"}
+        ]},
+    }))
+    .unwrap();
+    let error = tools.validate().unwrap_err().to_string();
+    assert!(
+        error.contains("remote.services") && error.contains("duplicate name"),
+        "duplicate service ids must be rejected: {error}"
+    );
+}
+
+#[test]
+fn validate_rejects_blank_subagent_target_ids() {
+    let doc = Tools {
+        tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
-        subagent_targets: Some(vec!["".to_string()]),
-        subagent_spawn_enabled: Some(true),
+        subagents: Some(SubagentTools {
+            target_ids: vec!["".to_string()],
+            spawn_enabled: Some(true),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let result = doc.validate();
     assert!(result.is_err());
     assert!(
-        format!("{}", result.unwrap_err()).contains("subagent_targets"),
-        "error message must mention subagent_targets"
+        format!("{}", result.unwrap_err()).contains("subagents.target_ids"),
+        "error message must mention subagents.target_ids"
     );
 }
 
-#[test]
-fn validate_rejects_empty_string_in_backgroundable_tool_names() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        backgroundable_tool_names: Some(vec!["".to_string()]),
-        ..Default::default()
-    };
-    let result = doc.validate();
-    assert!(result.is_err());
-    assert!(
-        format!("{}", result.unwrap_err()).contains("backgroundable_tool_names"),
-        "error message must mention backgroundable_tool_names"
-    );
+/// Validate write-tool declarations through the shared registration owner used
+/// by every write path (`document_config::write_tool`); `cli_tool_names` and
+/// additional runtime tools are empty unless a collision test provides them.
+fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
+    super::validate_write_tool_declarations(decls, &[], &[])
 }
 
 #[test]
 fn validate_rejects_write_tool_with_empty_tool_name() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "   ".to_string(),
-            collection: "ActionRequest".to_string(),
-            description: String::new(),
-            fields: Vec::new(),
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
+    let decls = vec![WriteToolDecl {
+        tool_name: "   ".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
     assert!(result.is_err(), "empty tool_name must be rejected");
+    let err = format!("{}", result.unwrap_err());
     assert!(
-        format!("{}", result.unwrap_err()).contains("write_tools"),
-        "error message must mention write_tools"
+        err.contains("write_tools") && err.contains("malformed"),
+        "error message must mention write_tools and the malformed declaration: {err}"
     );
 }
 
 #[test]
 fn validate_rejects_invalid_write_tool_collection_identifiers() {
     for collection in ["  ", "ActionRequest) { _docID } mutation {"] {
-        let doc = ToolSelectionDocument {
-            selection_id: "test-tools".to_string(),
-            agent_did: "did:test:test".to_string(),
-            write_tools: Some(vec![WriteToolDecl {
-                tool_name: "request_action".to_string(),
-                collection: collection.to_string(),
-                description: String::new(),
-                fields: Vec::new(),
-                output_obligation: None,
-            }]),
-            datastore_tool_surface_ids: None,
-            eth_tool_ids: None,
-            ..Default::default()
-        };
-        let err = doc
-            .validate()
+        let decls = vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: collection.to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+            output_obligation: None,
+        }];
+        let err = validate_write_tools(&decls)
             .expect_err("invalid collection identifier must be rejected")
             .to_string();
         assert!(
@@ -198,26 +186,18 @@ fn validate_rejects_invalid_write_tool_collection_identifiers() {
 #[test]
 fn validate_rejects_invalid_write_tool_field_identifiers() {
     for field_name in ["  ", "title: \"escaped\""] {
-        let doc = ToolSelectionDocument {
-            selection_id: "test-tools".to_string(),
-            agent_did: "did:test:test".to_string(),
-            write_tools: Some(vec![WriteToolDecl {
-                tool_name: "request_action".to_string(),
-                collection: "ActionRequest".to_string(),
-                description: String::new(),
-                fields: vec![WriteToolField {
-                    name: field_name.to_string(),
-                    required: true,
-                    fill: None,
-                }],
-                output_obligation: None,
-            }]),
-            datastore_tool_surface_ids: None,
-            eth_tool_ids: None,
-            ..Default::default()
-        };
-        let err = doc
-            .validate()
+        let decls = vec![WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: String::new(),
+            fields: vec![WriteToolField {
+                name: field_name.to_string(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        }];
+        let err = validate_write_tools(&decls)
             .expect_err("invalid field identifier must be rejected")
             .to_string();
         assert!(
@@ -242,11 +222,12 @@ fn validate_rejects_model_provided_requester_identity() {
         }],
         output_obligation: None,
     };
-    assert!(decl
-        .validate()
-        .expect_err("models must not choose requester identity")
-        .to_string()
-        .contains("must be runtime-filled"));
+    assert!(
+        decl.validate()
+            .expect_err("models must not choose requester identity")
+            .to_string()
+            .contains("must be runtime-filled")
+    );
 
     decl.fields[0].required = false;
     decl.fields[0].fill = Some(WriteToolFieldFill::SourceField("requester_did".to_string()));
@@ -262,15 +243,8 @@ fn validate_rejects_duplicate_write_tool_names() {
         fields: Vec::new(),
         output_obligation: None,
     };
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![decl("ActionRequest"), decl("OtherCollection")]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
+    let decls = vec![decl("ActionRequest"), decl("OtherCollection")];
+    let result = validate_write_tools(&decls);
     assert!(result.is_err(), "duplicate tool_name must be rejected");
     let err = format!("{}", result.unwrap_err());
     assert!(
@@ -281,35 +255,28 @@ fn validate_rejects_duplicate_write_tool_names() {
 
 #[test]
 fn validate_accepts_well_formed_write_tools() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![
-            WriteToolDecl {
-                tool_name: "request_action".to_string(),
-                collection: "ActionRequest".to_string(),
-                description: "Request an action".to_string(),
-                fields: vec![WriteToolField {
-                    name: "title".to_string(),
-                    required: true,
-                    fill: None,
-                }],
-                output_obligation: None,
-            },
-            WriteToolDecl {
-                tool_name: "log_note".to_string(),
-                collection: "Note".to_string(),
-                description: String::new(),
-                fields: Vec::new(),
-                output_obligation: None,
-            },
-        ]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
+    let decls = vec![
+        WriteToolDecl {
+            tool_name: "request_action".to_string(),
+            collection: "ActionRequest".to_string(),
+            description: "Request an action".to_string(),
+            fields: vec![WriteToolField {
+                name: "title".to_string(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        },
+        WriteToolDecl {
+            tool_name: "log_note".to_string(),
+            collection: "Note".to_string(),
+            description: String::new(),
+            fields: Vec::new(),
+            output_obligation: None,
+        },
+    ];
     assert!(
-        doc.validate().is_ok(),
+        validate_write_tools(&decls).is_ok(),
         "well-formed, uniquely-named write_tools must validate"
     );
 }
@@ -330,24 +297,16 @@ fn write_tool_output_obligation_round_trips_and_rejects_zero_minimum() {
     let decl: WriteToolDecl = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(serde_json::to_value(&decl).unwrap(), value);
 
-    let doc = ToolSelectionDocument {
-        selection_id: "obligated-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            output_obligation: Some(WriteToolOutputObligation {
-                scope: WriteToolOutputObligationScope::Trigger,
-                minimum_writes: 0,
-                expected_count_field: None,
-            }),
-            ..decl
-        }]),
-        ..Default::default()
-    };
-    assert!(doc
-        .validate()
-        .unwrap_err()
-        .to_string()
-        .contains("minimum_writes"));
+    let decls = vec![WriteToolDecl {
+        output_obligation: Some(WriteToolOutputObligation {
+            scope: WriteToolOutputObligationScope::Trigger,
+            minimum_writes: 0,
+            expected_count_field: None,
+        }),
+        ..decl
+    }];
+    let error = validate_write_tools(&decls).unwrap_err().to_string();
+    assert!(error.contains("minimum_writes"));
 }
 
 #[test]
@@ -366,27 +325,23 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
             )),
         }],
     ] {
-        let doc = ToolSelectionDocument {
-            selection_id: "dynamic-obligation-tools".to_string(),
-            agent_did: "did:test:test".to_string(),
-            write_tools: Some(vec![WriteToolDecl {
-                tool_name: "write_result".to_string(),
-                collection: "Result".to_string(),
-                description: String::new(),
-                fields,
-                output_obligation: Some(WriteToolOutputObligation {
-                    scope: WriteToolOutputObligationScope::Trigger,
-                    minimum_writes: 1,
-                    expected_count_field: Some("expected_total".to_string()),
-                }),
-            }]),
-            ..Default::default()
-        };
-        assert!(doc
-            .validate()
-            .unwrap_err()
-            .to_string()
-            .contains("expected_count_field"));
+        let decls = vec![WriteToolDecl {
+            tool_name: "write_result".to_string(),
+            collection: "Result".to_string(),
+            description: String::new(),
+            fields,
+            output_obligation: Some(WriteToolOutputObligation {
+                scope: WriteToolOutputObligationScope::Trigger,
+                minimum_writes: 1,
+                expected_count_field: Some("expected_total".to_string()),
+            }),
+        }];
+        assert!(
+            validate_write_tools(&decls)
+                .unwrap_err()
+                .to_string()
+                .contains("expected_count_field")
+        );
     }
 }
 
@@ -394,25 +349,18 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
 fn validate_rejects_write_tool_name_colliding_with_builtin() {
     // `read_file` is a native tool; reusing it as a write-tool name would
     // silently shadow the native impl at registration.
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "read_file".to_string(),
-            collection: "AuditLog".to_string(),
-            description: String::new(),
-            fields: vec![WriteToolField {
-                name: "path".to_string(),
-                required: true,
-                fill: None,
-            }],
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
+    let decls = vec![WriteToolDecl {
+        tool_name: "read_file".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "path".to_string(),
+            required: true,
+            fill: None,
+        }],
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
     assert!(
         result.is_err(),
         "collision with a native tool must be rejected"
@@ -426,85 +374,64 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_defra_query() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "defra_query".to_string(),
-            collection: "AuditLog".to_string(),
-            description: String::new(),
-            fields: Vec::new(),
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
+    let decls = vec![WriteToolDecl {
+        tool_name: "defra_query".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
     assert!(
-        doc.validate().is_err(),
+        validate_write_tools(&decls).is_err(),
         "collision with the built-in defra_query tool must be rejected"
     );
 }
 
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
-    // A cli_tool_names entry is advertised as its own tool in the same
-    // selection, so a write tool reusing that name is a dispatch collision.
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        cli_tool_names: Some(vec!["rg".to_string()]),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "rg".to_string(),
-            collection: "AuditLog".to_string(),
-            description: String::new(),
-            fields: Vec::new(),
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
+    // A host.cli entry is advertised as its own tool in the same Tools
+    // document, so a write tool reusing that name is a dispatch collision.
+    let decls = vec![WriteToolDecl {
+        tool_name: "rg".to_string(),
+        collection: "AuditLog".to_string(),
+        description: String::new(),
+        fields: Vec::new(),
+        output_obligation: None,
+    }];
+    let cli_tool_names = vec!["rg".to_string()];
+    let result = super::validate_write_tool_declarations(&decls, &cli_tool_names, &[]);
     assert!(
         result.is_err(),
-        "collision with a cli_tool_names entry must be rejected"
+        "collision with a host.cli entry must be rejected"
     );
     let err = format!("{}", result.unwrap_err());
     assert!(
-        err.contains("rg") && err.contains("cli_tool_names"),
+        err.contains("rg") && err.contains("CLI entry"),
         "error must name the colliding tool and the category: {err}"
     );
 }
 
 #[test]
 fn validate_rejects_duplicate_field_names_within_decl() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "request_action".to_string(),
-            collection: "ActionRequest".to_string(),
-            description: String::new(),
-            fields: vec![
-                WriteToolField {
-                    name: "summary".to_string(),
-                    required: true,
-                    fill: None,
-                },
-                WriteToolField {
-                    name: "summary".to_string(),
-                    required: false,
-                    fill: None,
-                },
-            ],
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
-        ..Default::default()
-    };
-    let result = doc.validate();
+    let decls = vec![WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: String::new(),
+        fields: vec![
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: false,
+                fill: None,
+            },
+        ],
+        output_obligation: None,
+    }];
+    let result = validate_write_tools(&decls);
     assert!(result.is_err(), "duplicate field names must be rejected");
     let err = format!("{}", result.unwrap_err());
     assert!(
@@ -588,55 +515,79 @@ fn memory_tool_name_is_reserved() {
 fn write_tools_deserialize_trims_whitespace() {
     // Padded tool_name / collection / field name would otherwise survive to
     // verbatim GraphQL interpolation and corrupt the mutation.
-    let json = serde_json::json!({
-        "selection_id": "sel-1",
-        "agent_did": "did:test:test",
-        "write_tools": [{
-            "tool_name": "  request_action  ",
-            "collection": " ActionRequest ",
-            "fields": [{ "name": "  summary  ", "required": true }]
-        }]
-    });
-    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
-    let decl = &loaded.write_tools.as_ref().unwrap()[0];
+    let json = serde_json::json!([{
+        "tool_name": "  request_action  ",
+        "collection": " ActionRequest ",
+        "fields": [{ "name": "  summary  ", "required": true }]
+    }]);
+    let loaded = super::deserialize_dual_shape::<WriteToolDecl>(Some(json), "write_tools").unwrap();
+    let decl = &loaded[0];
     assert_eq!(decl.tool_name, "request_action");
     assert_eq!(decl.collection, "ActionRequest");
     assert_eq!(decl.fields[0].name, "summary");
 }
 
 #[tokio::test]
-async fn tool_selection_document_round_trips_defra_query_fields() {
+async fn tools_document_round_trips_defra_query_fields() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let doc = ToolSelectionDocument {
-        selection_id: "amy-general-tools".to_string(),
+    let doc = Tools {
+        tools_id: "amy-general-tools".to_string(),
         agent_did: "did:key:z-test".to_string(),
-        tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
-        enable_session_history_tool: Some(true),
-        enable_defra_query: Some(false),
-        defra_query_collections: Some(vec![
-            "AgentRequest".to_string(),
-            "AgentResponse".to_string(),
-        ]),
+        built_ins: Some(BuiltInTools {
+            enable_session_history_tool: Some(true),
+            ..Default::default()
+        }),
+        datastore: Some(DatastoreTools {
+            enable_defra_query: Some(false),
+            defra_query_collections: Some(vec![
+                "AgentRequest".to_string(),
+                "AgentResponse".to_string(),
+            ]),
+            ..Default::default()
+        }),
         ..Default::default()
     };
-    upsert_tool_selection(&node, &doc)
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    write_tools_document(&access, &doc)
         .await
-        .expect("upsert should persist the defra_query fields");
+        .expect("write should persist the defra_query fields");
 
-    let loaded = load_tool_selection(&node, "amy-general-tools")
+    let loaded: Tools = access
+        .transact("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.agent_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
         .await
-        .expect("load should succeed")
-        .expect("selection should exist");
+        .expect("read should succeed")
+        .expect("tools should exist");
     assert_eq!(
-        loaded.tool_policy_version,
-        Some(crate::tool_surface::TOOL_POLICY_V1.to_string())
+        loaded
+            .built_ins
+            .as_ref()
+            .unwrap()
+            .enable_session_history_tool,
+        Some(true)
     );
-    assert_eq!(loaded.enable_session_history_tool, Some(true));
-    assert_eq!(loaded.enable_defra_query, Some(false));
     assert_eq!(
-        loaded.defra_query_collections,
+        loaded.datastore.as_ref().unwrap().enable_defra_query,
+        Some(false)
+    );
+    assert_eq!(
+        loaded.datastore.as_ref().unwrap().defra_query_collections,
         Some(vec![
             "AgentRequest".to_string(),
             "AgentResponse".to_string()
@@ -645,203 +596,385 @@ async fn tool_selection_document_round_trips_defra_query_fields() {
 }
 
 #[tokio::test]
-async fn tool_selection_update_can_clear_lsp_config() {
+async fn tools_update_can_clear_lsp_config() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let mut doc = ToolSelectionDocument {
-        selection_id: "lsp-config-clear".to_string(),
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let lsp = |config: Option<String>| Tools {
+        tools_id: "lsp-config-clear".to_string(),
         agent_did: "did:key:z-lsp-config-clear".to_string(),
-        enable_lsp: Some(true),
-        lsp_config: Some(r#"{"idle_timeout_ms":1000}"#.to_string()),
+        integrations: Some(IntegrationTools {
+            lsp: config.map(|config| LspTools {
+                config: Some(config),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
         ..Default::default()
     };
-    upsert_tool_selection(&node, &doc).await.unwrap();
-    let loaded = load_tool_selection(&node, &doc.selection_id)
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(loaded.lsp_config, doc.lsp_config);
 
-    doc.lsp_config = None;
-    upsert_tool_selection(&node, &doc).await.unwrap();
-    let cleared = load_tool_selection(&node, &doc.selection_id)
-        .await
+    let doc = lsp(Some(r#"{"idle_timeout_ms":1000}"#.to_string()));
+    write_tools_document(&access, &doc).await.unwrap();
+    async fn read(access: &crate::config_client::ConfigAccess) -> anyhow::Result<Option<Tools>> {
+        access
+            .transact("test.tools.read", |txn| {
+                Box::pin(async move {
+                    crate::config_client::read_desired_state_record_in_txn(
+                        txn,
+                        crate::Collection::Tools,
+                        "did:key:z-lsp-config-clear",
+                        "lsp-config-clear",
+                    )
+                    .await?
+                    .map(|(_, value)| {
+                        serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                    })
+                    .transpose()
+                })
+            })
+            .await
+    }
+    let loaded: Tools = read(&access).await.unwrap().unwrap();
+    assert_eq!(
+        loaded
+            .integrations
+            .as_ref()
+            .unwrap()
+            .lsp
+            .as_ref()
+            .unwrap()
+            .config,
+        Some(r#"{"idle_timeout_ms":1000}"#.to_string())
+    );
+
+    write_tools_document(&access, &lsp(None)).await.unwrap();
+    let cleared: Tools = read(&access).await.unwrap().unwrap();
+    let cleared_config = cleared
+        .integrations
+        .as_ref()
         .unwrap()
-        .unwrap();
+        .lsp
+        .as_ref()
+        .and_then(|lsp| lsp.config.as_deref());
     assert!(
-        cleared.lsp_config.as_deref().is_none_or(str::is_empty),
-        "removing lsp_config from desired state must clear the stored override: {:?}",
-        cleared.lsp_config
+        cleared_config.is_none_or(str::is_empty),
+        "removing lsp config from desired state must clear the stored override: {:?}",
+        cleared_config
     );
 }
 
 #[tokio::test]
-async fn tool_selection_document_round_trips_read_only_command_allowlist() {
+async fn tools_document_round_trips_read_only_commands() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let doc = ToolSelectionDocument {
-        selection_id: "steward-readonly-allowlist".to_string(),
+    let doc = Tools {
+        tools_id: "steward-readonly-allowlist".to_string(),
         agent_did: "did:key:z-test-allowlist".to_string(),
-        read_only_command_allowlist: Some(vec!["jq".to_string(), "echo".to_string()]),
+        host: Some(HostTools {
+            bash: Some(BashTools {
+                read_only_commands: Some(vec!["jq".to_string(), "echo".to_string()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
         ..Default::default()
     };
-    upsert_tool_selection(&node, &doc)
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    write_tools_document(&access, &doc)
         .await
-        .expect("upsert should persist the read_only_command_allowlist field");
+        .expect("write should persist the read_only_commands field");
 
-    let loaded = load_tool_selection(&node, "steward-readonly-allowlist")
+    let loaded: Tools = access
+        .transact("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.agent_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
         .await
-        .expect("load should succeed")
-        .expect("selection should exist");
+        .expect("read should succeed")
+        .expect("tools should exist");
     assert_eq!(
-        loaded.read_only_command_allowlist,
+        loaded
+            .host
+            .as_ref()
+            .unwrap()
+            .bash
+            .as_ref()
+            .unwrap()
+            .read_only_commands,
         Some(vec!["jq".to_string(), "echo".to_string()]),
-        "read_only_command_allowlist must round-trip through the GraphQL document representation"
+        "read_only_commands must round-trip through the GraphQL document representation"
     );
 }
 
 #[test]
-fn read_only_command_allowlist_absent_decodes_to_none() {
+fn read_only_commands_absent_decodes_to_none() {
     // A stored/manifest doc that omits the key must decode to None so the
     // runtime falls back to the hardcoded default_read_only_commands() list.
     let json = serde_json::json!({
-        "selection_id": "sel-1",
+        "tools_id": "sel-1",
         "agent_did": "did:test:test",
+        "host": {"bash": {}},
     });
-    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
-    assert_eq!(loaded.read_only_command_allowlist, None);
+    let loaded: Tools = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        loaded
+            .host
+            .as_ref()
+            .unwrap()
+            .bash
+            .as_ref()
+            .unwrap()
+            .read_only_commands,
+        None
+    );
 }
 
 #[test]
 fn write_tools_round_trip() {
-    let json = serde_json::json!({
-        "selection_id": "sel-1",
-        "agent_did": "did:test:test",
-        "write_tools": [{
-            "tool_name": "request_action",
-            "collection": "ActionRequest",
-            "description": "Emit one ActionRequest describing a remediable drift.",
-            "fields": [
-                { "name": "drift_sig", "required": true },
-                { "name": "summary", "required": true },
-                { "name": "target_paths", "required": false }
-            ]
-        }]
-    });
-    let loaded: ToolSelectionDocument = serde_json::from_value(json).unwrap();
-    let decls = loaded.write_tools.clone().unwrap();
-    assert_eq!(decls.len(), 1);
-    assert_eq!(decls[0].tool_name, "request_action");
-    assert_eq!(decls[0].collection, "ActionRequest");
-    assert_eq!(decls[0].fields.len(), 3);
-    assert!(decls[0].fields[0].required);
-    assert!(!decls[0].fields[2].required);
+    let decls = vec![WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: "Emit one ActionRequest describing a remediable drift.".to_string(),
+        fields: vec![
+            WriteToolField {
+                name: "drift_sig".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "target_paths".to_string(),
+                required: false,
+                fill: None,
+            },
+        ],
+        output_obligation: None,
+    }];
+    let serialized = serde_json::to_value(&decls).unwrap();
+    let parsed: Vec<WriteToolDecl> = serde_json::from_value(serialized).unwrap();
+    assert_eq!(parsed, decls);
+    assert_eq!(parsed[0].fields.len(), 3);
+    assert!(parsed[0].fields[0].required);
+    assert!(!parsed[0].fields[2].required);
+    // The DefraDB `[String]` storage form also round-trips through the
+    // dual-shape deserializer shared with surface entries.
+    let stored = serde_json::json!([serde_json::to_string(&decls[0]).unwrap()]);
+    let loaded =
+        super::deserialize_dual_shape::<WriteToolDecl>(Some(stored), "write_tools").unwrap();
+    assert_eq!(loaded, decls);
 }
 
 #[tokio::test]
-async fn tool_selection_document_round_trips_write_tools() {
+async fn tools_document_round_trips_write_tools() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let doc = ToolSelectionDocument {
-        selection_id: "steward-write-tools".to_string(),
+    let decls = vec![WriteToolDecl {
+        tool_name: "request_action".to_string(),
+        collection: "ActionRequest".to_string(),
+        description: "Emit one ActionRequest describing a remediable drift.".to_string(),
+        fields: vec![
+            WriteToolField {
+                name: "drift_sig".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "summary".to_string(),
+                required: true,
+                fill: None,
+            },
+            WriteToolField {
+                name: "target_paths".to_string(),
+                required: false,
+                fill: None,
+            },
+        ],
+        output_obligation: None,
+    }];
+    // Canonical Tools carries datastore surface references; create/query tool
+    // declarations are expanded from the referenced DatastoreToolSurface.
+    let tools = Tools {
+        tools_id: "steward-write-tools".to_string(),
         agent_did: "did:key:z-test-write".to_string(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "request_action".to_string(),
-            collection: "ActionRequest".to_string(),
-            description: "Emit one ActionRequest describing a remediable drift.".to_string(),
-            fields: vec![
-                WriteToolField {
-                    name: "drift_sig".to_string(),
-                    required: true,
-                    fill: None,
-                },
-                WriteToolField {
-                    name: "summary".to_string(),
-                    required: true,
-                    fill: None,
-                },
-                WriteToolField {
-                    name: "target_paths".to_string(),
-                    required: false,
-                    fill: None,
-                },
-            ],
-            output_obligation: None,
-        }]),
-        datastore_tool_surface_ids: None,
-        eth_tool_ids: None,
+        datastore: Some(DatastoreTools {
+            datastore_tool_surface_ids: Some(vec!["surface".to_string()]),
+            ..Default::default()
+        }),
         ..Default::default()
     };
-    upsert_tool_selection(&node, &doc)
+    let surface: DatastoreToolSurfaceDocument = serde_json::from_value(serde_json::json!({
+        "surface_id": "surface",
+        "agent_did": "did:key:z-test-write",
+        "entries": decls,
+    }))
+    .unwrap();
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::DatastoreToolSurface,
+            add: serde_json::to_value(&surface).unwrap(),
+            update: serde_json::to_value(&surface).unwrap(),
+        },
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: serde_json::to_value(&tools).unwrap(),
+            update: serde_json::to_value(&tools).unwrap(),
+        },
+    ])
+    .unwrap();
+    access
+        .transact("test.tools.write", |txn| {
+            let plan = &plan;
+            let tools = &tools;
+            let surface = &surface;
+            let decls = &decls;
+            Box::pin(async move {
+                crate::config_client::apply_desired_state_plan(txn, plan).await?;
+                let merged = super::merge_datastore_tool_surfaces(tools, [surface])?;
+                assert_eq!(
+                    merged.write_tools, *decls,
+                    "write_tools must expand from the referenced surface through the desired-state owner"
+                );
+                Ok(())
+            })
+        })
         .await
-        .expect("upsert should persist the write_tools field");
-
-    let loaded = load_tool_selection(&node, "steward-write-tools")
-        .await
-        .expect("load should succeed")
-        .expect("selection should exist");
-    assert_eq!(
-        loaded.write_tools, doc.write_tools,
-        "write_tools must round-trip through the GraphQL document representation"
-    );
+        .unwrap();
 }
 
 #[tokio::test]
-async fn tool_selection_document_round_trips_subagent_default_await_mode() {
+async fn tools_document_round_trips_subagent_default_await_mode() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
-    let doc = ToolSelectionDocument {
-        selection_id: "amy-background-tools".to_string(),
+    let doc = Tools {
+        tools_id: "amy-background-tools".to_string(),
         agent_did: "did:key:z-test-background".to_string(),
-        subagent_background_enabled: Some(true),
-        subagent_default_await_mode: Some("background".to_string()),
+        subagents: Some(SubagentTools {
+            background_enabled: Some(true),
+            default_await_mode: Some("background".to_string()),
+            ..Default::default()
+        }),
         ..Default::default()
     };
-    upsert_tool_selection(&node, &doc)
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    write_tools_document(&access, &doc)
         .await
-        .expect("upsert should persist the subagent default await mode");
+        .expect("write should persist the subagent default await mode");
 
-    let loaded = load_tool_selection(&node, "amy-background-tools")
+    let loaded: Tools = access
+        .transact("test.tools.read", |txn| {
+            let doc = &doc;
+            Box::pin(async move {
+                crate::config_client::read_desired_state_record_in_txn(
+                    txn,
+                    crate::Collection::Tools,
+                    &doc.agent_did,
+                    &doc.tools_id,
+                )
+                .await?
+                .map(|(_, value)| {
+                    serde_json::from_value::<Tools>(value).map_err(anyhow::Error::from)
+                })
+                .transpose()
+            })
+        })
         .await
-        .expect("load should succeed")
-        .expect("selection should exist");
+        .expect("read should succeed")
+        .expect("tools should exist");
     assert_eq!(
-        loaded.subagent_default_await_mode.as_deref(),
+        loaded
+            .subagents
+            .as_ref()
+            .unwrap()
+            .default_await_mode
+            .as_deref(),
         Some("background")
     );
 }
 
 #[tokio::test]
-async fn agent_behavior_description_and_summary_round_trip() {
+async fn agent_behavior_description_round_trip_with_explicit_owner_fixture() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
+    // Canonical AgentBehavior(context_id, inference_profile_id, tags) carries
+    // UI text and references only. Literal instructions, skill selection, tools,
+    // and compaction live on AgentContext; model selection lives on
+    // InferenceProfile — the retired parallel behavior fields (summary,
+    // system_prompt, backend/model, compaction, skill lists) must not return.
+    // install_test_behavior provides the explicit context/tools/profile/backend
+    // chain; the principal bootstrap itself creates no executable configuration.
+    let agent_did = "did:key:z-test-desc";
+    crate::test_support::install_test_behavior(&node, agent_did, "amy-general").await;
+
+    // Compact authored document. `tags: null` is the DefraDB empty-list form and
+    // must decode to the empty default; an omitted context_id decodes to None
+    // (no instructions, skills, or tools; runtime-default compaction).
+    let authored = serde_json::json!({
+        "behavior_id": "amy-general",
+        "agent_did": agent_did,
+        "display_name": "Amy General",
+        "description": "A general-purpose assistant for research and writing.",
+        "context_id": null,
+        "inference_profile_id": "amy-general:inference",
+        "tags": null,
+    });
+    let sparse: AgentBehavior = serde_json::from_value(authored.clone()).unwrap();
+    assert_eq!(
+        sparse.context_id, None,
+        "null context_id must decode to None"
+    );
+    assert!(
+        sparse.tags.is_empty(),
+        "null tags must decode to the empty default"
+    );
+    assert!(sparse.enabled, "omitted enabled must default to true");
+    // Compact roundtrip: no disabled/empty boilerplate is re-emitted.
+    assert_eq!(
+        serde_json::to_value(&sparse).unwrap(),
+        serde_json::json!({
+            "behavior_id": "amy-general",
+            "agent_did": agent_did,
+            "display_name": "Amy General",
+            "description": "A general-purpose assistant for research and writing.",
+            "inference_profile_id": "amy-general:inference",
+        })
+    );
+
     let doc = AgentBehavior {
         behavior_id: "amy-general".to_string(),
-        agent_did: "did:key:z-test-desc".to_string(),
+        agent_did: agent_did.to_string(),
         display_name: Some("Amy General".to_string()),
         description: Some("A general-purpose assistant for research and writing.".to_string()),
-        summary: Some("General assistant".to_string()),
-        system_prompt: Some("You are a helpful assistant.".to_string()),
-        request_context_template: None,
-        backend_id: None,
-        model_name: None,
-        tool_selection_id: None,
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
+        context_id: Some("amy-general:context".to_string()),
+        inference_profile_id: "amy-general:inference".to_string(),
         enabled: true,
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
+        tags: Vec::new(),
         created_at: None,
     };
     upsert_agent_behavior(&node, &doc)
         .await
-        .expect("upsert should persist description and summary fields");
+        .expect("upsert should persist description fields");
 
     let loaded = load_agent_behavior(&node, "amy-general")
         .await
@@ -852,74 +985,135 @@ async fn agent_behavior_description_and_summary_round_trip() {
         Some("A general-purpose assistant for research and writing.".to_string()),
         "description must round-trip through upsert/load"
     );
-    assert_eq!(
-        loaded.summary,
-        Some("General assistant".to_string()),
-        "summary must round-trip through upsert/load"
-    );
+    assert_eq!(loaded.context_id, doc.context_id);
+    assert_eq!(loaded.inference_profile_id, doc.inference_profile_id);
+    assert!(loaded.enabled);
+}
+
+/// Borrow the embedded node back out of a Local `ConfigAccess` for the
+/// document-level readers that still take `&EmbeddedNode`.
+fn access_node(access: &crate::config_client::ConfigAccess) -> &defra_node::EmbeddedNode {
+    match access {
+        crate::config_client::ConfigAccess::Local(node) => node,
+        crate::config_client::ConfigAccess::Graphql(_) => {
+            unreachable!("test helpers use Local access")
+        }
+    }
 }
 
 #[tokio::test]
-async fn inference_profile_completion_retry_fields_round_trip() {
+async fn inference_retry_policy_fields_round_trip() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
+    // Retry knobs are now owned by the referenced InferenceRetryPolicy, not the
+    // profile; typed effort lives on the profile. The backend must exist for
+    // the references closure to accept the profile.
+    let retry = InferenceRetryPolicy {
+        agent_did: "did:key:z-test-retry".to_string(),
+        retry_policy_id: "retry-policy".to_string(),
+        display_name: Some("Retry Policy".to_string()),
+        max_transport_retries: Some(4),
+        backoff_ms: Some(vec![1_000, 5_000, 30_000]),
+        max_resample_retries: Some(2),
+        allow_repair: Some(false),
+        interactive_max_retries: Some(2),
+        ..Default::default()
+    };
+    let backend: crate::document_config::InferenceBackend =
+        serde_json::from_value(serde_json::json!({
+            "agent_did": "did:key:z-test-retry",
+            "backend_id": "backend",
+            "name": "Local",
+            "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:1/v1",
+            "auth": {"kind": "unauthenticated"}
+        }))
+        .unwrap();
     let profile = InferenceProfile {
+        agent_did: "did:key:z-test-retry".to_string(),
         profile_id: "retry-profile".to_string(),
         display_name: Some("Retry Profile".to_string()),
-        context_window: None,
-        max_output_tokens: None,
-        max_turns: None,
-        temperature: None,
-        reasoning_effort: Some("max".to_string()),
-        stream_batch_ms: None,
-        stream_liveness_timeout_secs: None,
-        deadline_duration_secs: None,
-        retry_max_transport: Some(4),
-        retry_backoff_ms: Some(vec![1_000, 5_000, 30_000]),
-        retry_max_resample: Some(2),
-        retry_allow_repair: Some(false),
-        retry_interactive_max: Some(2),
+        backend_id: "backend".to_string(),
+        model_name: "test-model".to_string(),
+        reasoning_effort: Some(crate::config::ReasoningEffort::Max),
+        execution_id: Some("retry-execution".to_string()),
+        ..Default::default()
+    };
+    let execution = InferenceExecution {
+        agent_did: "did:key:z-test-retry".to_string(),
+        execution_id: "retry-execution".to_string(),
+        retry_policy_id: Some("retry-policy".to_string()),
         ..Default::default()
     };
 
-    upsert_inference_profile(&node, &profile)
+    let access = crate::config_client::ConfigAccess::Local(std::sync::Arc::new(node));
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceBackend,
+            add: serde_json::to_value(&backend).unwrap(),
+            update: serde_json::to_value(&backend).unwrap(),
+        },
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceRetryPolicy,
+            add: serde_json::to_value(&retry).unwrap(),
+            update: serde_json::to_value(&retry).unwrap(),
+        },
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceExecution,
+            add: serde_json::to_value(&execution).unwrap(),
+            update: serde_json::to_value(&execution).unwrap(),
+        },
+        crate::config_client::DesiredStateApplyDocument {
+            collection: crate::Collection::InferenceProfile,
+            add: serde_json::to_value(&profile).unwrap(),
+            update: serde_json::to_value(&profile).unwrap(),
+        },
+    ])
+    .expect("retry chain plan must be valid");
+    access
+        .transact("test.retry_chain.write", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        })
         .await
-        .expect("upsert should persist retry fields");
+        .expect("apply should persist the retry chain");
 
-    let loaded = load_inference_profile(&node, "retry-profile")
-        .await
-        .expect("load should succeed")
-        .expect("profile should exist");
-    assert_eq!(loaded.retry_max_transport, Some(4));
-    assert_eq!(loaded.reasoning_effort.as_deref(), Some("max"));
-    assert_eq!(loaded.retry_backoff_ms, Some(vec![1_000, 5_000, 30_000]));
-    assert_eq!(loaded.retry_max_resample, Some(2));
-    assert_eq!(loaded.retry_allow_repair, Some(false));
-    assert_eq!(loaded.retry_interactive_max, Some(2));
+    let loaded = load_inference_profile(
+        &access_node(&access),
+        "did:key:z-test-retry",
+        "retry-profile",
+    )
+    .await
+    .expect("load should succeed")
+    .expect("profile should exist");
+    assert_eq!(
+        loaded.reasoning_effort,
+        Some(crate::config::ReasoningEffort::Max)
+    );
+    assert_eq!(loaded.execution_id.as_deref(), Some("retry-execution"));
 }
 
-#[tokio::test]
-async fn inference_profile_upsert_rejects_negative_seed() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    crate::ensure_runtime_schemas(&node).await.unwrap();
-    let profile = InferenceProfile {
-        profile_id: "negative-seed-profile".to_string(),
+#[test]
+fn inference_sampling_rejects_negative_seed() {
+    // Seed is owned by InferenceSampling (#1430 split); the canonical validator
+    // rejects it before any write is staged, so the DB-level negative-seed
+    // rejection now lives with this owner.
+    let sampling = InferenceSampling {
+        agent_did: "did:key:z-test-seed".to_string(),
+        sampling_id: "negative-seed-sampling".to_string(),
         seed: Some(-1),
         ..Default::default()
     };
 
     assert_eq!(
-        upsert_inference_profile(&node, &profile)
-            .await
-            .unwrap_err()
-            .to_string(),
-        "InferenceProfile negative-seed-profile seed must be non-negative"
+        sampling.validate().unwrap_err().to_string(),
+        "InferenceSampling negative-seed-sampling seed must be non-negative"
     );
 }
 
 #[test]
-fn inference_profile_empty_retry_backoff_serializes_null_and_resolves_defaults() {
+fn inference_retry_policy_null_backoff_decodes_to_defaults() {
     let fields = crate::agent::completion_retry::CompletionRetryProfileFields {
         retry_backoff_ms: Some(Vec::new()),
         ..Default::default()
@@ -933,31 +1127,29 @@ fn inference_profile_empty_retry_backoff_serializes_null_and_resolves_defaults()
         crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
     );
 
-    let profile = InferenceProfile {
-        profile_id: "empty-backoff".to_string(),
-        display_name: None,
-        context_window: None,
-        max_output_tokens: None,
-        max_turns: None,
-        temperature: None,
-        stream_batch_ms: None,
-        stream_liveness_timeout_secs: None,
-        deadline_duration_secs: None,
-        retry_max_transport: None,
-        retry_backoff_ms: Some(Vec::new()),
-        retry_max_resample: None,
-        retry_allow_repair: None,
-        retry_interactive_max: None,
-        ..Default::default()
+    // `backoff_ms: null` (DefraDB's unset form — never `[]`) decodes to the
+    // unset default and resolves the scheduled ladder.
+    let retry: InferenceRetryPolicy = serde_json::from_value(serde_json::json!({
+        "agent_did": "did:key:z-test-backoff",
+        "retry_policy_id": "empty-backoff",
+        "backoff_ms": null,
+    }))
+    .unwrap();
+    assert_eq!(retry.backoff_ms, None);
+    let fields = crate::agent::completion_retry::CompletionRetryProfileFields {
+        retry_max_transport: retry.max_transport_retries,
+        retry_backoff_ms: retry.backoff_ms,
+        retry_max_resample: retry.max_resample_retries,
+        retry_allow_repair: retry.allow_repair,
+        retry_interactive_max: retry.interactive_max_retries,
     };
-    let mutation = super::inference_profile::upsert_inference_profile_mutation(&profile);
-    assert!(
-        mutation.contains("retry_backoff_ms: null"),
-        "empty retry_backoff_ms must render as null, not []; mutation was {mutation}"
+    let resolved = crate::agent::completion_retry::CompletionRetryPolicy::resolve(
+        &fields,
+        crate::lifecycle::ExecutionOrigin::Scheduled,
     );
-    assert!(
-        !mutation.contains("retry_backoff_ms: []"),
-        "DefraDB mutations must never emit [] for retry_backoff_ms"
+    assert_eq!(
+        resolved,
+        crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default()
     );
 }
 
@@ -1006,104 +1198,133 @@ fn completion_retry_policy_resolution_uses_origin_and_profile_fields() {
 }
 
 #[test]
-fn validate_accepts_well_formed_subagent_targets() {
-    // Bare behavior-id strings like "amy-code" are NOT valid SubagentTarget
-    // entries — the runtime silently drops them. Proper entries are JSON
-    // objects built with subagent_target_entry().
-    let code_entry = subagent_target_entry(
-        "amy-code",
-        "did:key:zParent",
-        "did:key:zParent:amy-code",
-        Some("Code assistant".to_string()),
-    );
-    let research_entry = subagent_target_entry(
-        "amy-research",
-        "did:key:zParent",
-        "did:key:zParent:amy-research",
-        None,
-    );
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
+fn validate_accepts_well_formed_subagent_target_documents() {
+    // Delegation targets are SubagentTarget documents: same-owner behavior
+    // references close through the references closure, foreign destinations are
+    // explicit. The calling owner owns each target document; target_agent_did
+    // owns the destination behavior.
+    let code_entry = SubagentTargetDocument {
+        target_id: "amy-code".to_string(),
+        agent_did: "did:key:zParent".to_string(),
+        target_agent_did: "did:key:zParent".to_string(),
+        behavior_id: "amy-code".to_string(),
+        name: "Code assistant".to_string(),
+        description: None,
+        tags: Vec::new(),
+    };
+    let research_entry = SubagentTargetDocument {
+        target_id: "amy-research".to_string(),
+        agent_did: "did:key:zParent".to_string(),
+        target_agent_did: "did:key:zDestination".to_string(),
+        behavior_id: "amy-research".to_string(),
+        name: "amy-research".to_string(),
+        description: None,
+        tags: Vec::new(),
+    };
+    // Canonical documents deserialize strictly and preserve their fields.
+    for entry in [&code_entry, &research_entry] {
+        let value = serde_json::to_value(entry).unwrap();
+        assert_eq!(
+            serde_json::from_value::<SubagentTargetDocument>(value).unwrap(),
+            *entry
+        );
+    }
+    // The Tools subagent group references these by target_id only.
+    let doc = Tools {
+        tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
-        subagent_targets: Some(vec![code_entry, research_entry]),
-        subagent_spawn_enabled: Some(true),
-        subagent_steering_enabled: Some(false),
-        subagent_background_enabled: Some(true),
+        subagents: Some(SubagentTools {
+            target_ids: vec!["amy-code".to_string(), "amy-research".to_string()],
+            spawn_enabled: Some(true),
+            steering_enabled: Some(false),
+            background_enabled: Some(true),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     assert!(
         doc.validate().is_ok(),
-        "well-formed JSON SubagentTarget entries must be accepted"
+        "well-formed subagent target references must be accepted"
     );
 }
 
 #[test]
 fn validate_rejects_background_default_when_background_disabled() {
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
+    let doc = Tools {
+        tools_id: "test-tools".to_string(),
         agent_did: "did:test:test".to_string(),
-        subagent_background_enabled: Some(false),
-        subagent_default_await_mode: Some("background".to_string()),
+        subagents: Some(SubagentTools {
+            background_enabled: Some(false),
+            default_await_mode: Some("background".to_string()),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let result = doc.validate();
     assert!(result.is_err());
     assert!(
-        format!("{}", result.unwrap_err()).contains("subagent_default_await_mode"),
-        "error message must mention subagent_default_await_mode"
+        format!("{}", result.unwrap_err()).contains("default_await_mode"),
+        "error message must mention subagents.default_await_mode"
     );
 }
 
 #[test]
-fn tool_selection_validation_reports_every_violation() {
-    let doc = ToolSelectionDocument {
-        selection_id: "invalid-tools".to_string(),
+fn tools_validation_reports_every_violation() {
+    let doc = Tools {
+        tools_id: "invalid-tools".to_string(),
         agent_did: "did:test:test".to_string(),
-        subagent_targets: Some(vec![String::new()]),
-        backgroundable_tool_names: Some(vec![String::new()]),
-        subagent_background_enabled: Some(false),
-        subagent_default_await_mode: Some("background".to_string()),
+        subagents: Some(SubagentTools {
+            target_ids: vec![String::new()],
+            background_enabled: Some(false),
+            default_await_mode: Some("background".to_string()),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
     let violations = doc.validation_violations();
-    assert_eq!(violations.len(), 3, "{violations:?}");
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("subagent_targets[0]")));
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("backgroundable_tool_names[0]")));
-    assert!(violations
-        .iter()
-        .any(|error| error.contains("subagent_default_await_mode")));
+    assert_eq!(violations.len(), 2, "{violations:?}");
+    assert!(
+        violations
+            .iter()
+            .any(|error| error.contains("subagents.target_ids"))
+    );
+    assert!(
+        violations
+            .iter()
+            .any(|error| error.contains("default_await_mode"))
+    );
 }
 
 #[test]
-fn validate_rejects_bare_string_subagent_target() {
-    // A bare behavior-id string is NOT a valid SubagentTarget JSON entry.
-    // The runtime silently drops non-JSON entries, so validate() must catch
-    // this misconfiguration early with a clear error.
-    let doc = ToolSelectionDocument {
-        selection_id: "test-tools".to_string(),
-        agent_did: "did:test:test".to_string(),
-        subagent_targets: Some(vec!["amy-code".to_string()]),
-        subagent_spawn_enabled: Some(true),
-        ..Default::default()
-    };
-    let result = doc.validate();
+fn validate_rejects_undeclared_subagent_target_reference() {
+    // SubagentTools.target_ids are references to SubagentTarget documents; the
+    // references closure rejects undeclared ids early with a clear error.
+    let refs = ConfigReferences::from_documents(
+        "did:test:test",
+        vec![(
+            crate::Collection::Tools,
+            serde_json::json!({
+                "tools_id": "test-tools",
+                "agent_did": "did:test:test",
+                "subagents": {"target_ids": ["amy-code"], "spawn_enabled": true}
+            }),
+        )],
+    )
+    .unwrap();
+    let result = refs.validate();
     assert!(
         result.is_err(),
-        "bare behavior-id string must be rejected by validate()"
+        "undeclared subagent target reference must be rejected"
     );
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
-        err_msg.contains("subagent_targets"),
-        "error must mention subagent_targets; got: {err_msg}"
+        err_msg.contains("subagents.target_ids"),
+        "error must mention subagents.target_ids; got: {err_msg}"
     );
     assert!(
-        err_msg.contains("SubagentTarget JSON"),
-        "error must mention SubagentTarget JSON; got: {err_msg}"
+        err_msg.contains("SubagentTarget"),
+        "error must mention the SubagentTarget collection; got: {err_msg}"
     );
 }
 
@@ -1134,48 +1355,53 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
         assert!(serde_json::from_value::<WriteToolField>(invalid).is_err());
     }
 
-    let doc = ToolSelectionDocument {
-        selection_id: "filled-tools".into(),
-        agent_did: "did:test:test".into(),
-        write_tools: Some(vec![WriteToolDecl {
-            tool_name: "write_result".into(),
-            collection: "Result".into(),
-            description: String::new(),
-            fields: vec![WriteToolField {
-                name: "run_id".into(),
-                required: true,
-                fill: Some(WriteToolFieldFill::Correlation),
-            }],
-            output_obligation: None,
-        }]),
-        ..Default::default()
-    };
-    assert!(doc.validate().is_err());
+    let decls = vec![WriteToolDecl {
+        tool_name: "write_result".into(),
+        collection: "Result".into(),
+        description: String::new(),
+        fields: vec![WriteToolField {
+            name: "run_id".into(),
+            required: true,
+            fill: Some(WriteToolFieldFill::Correlation),
+        }],
+        output_obligation: None,
+    }];
+    assert!(validate_write_tools(&decls).is_err());
 }
 
 // ---------------------------------------------------------------------------
-// InferenceProfile::validate (#1331) — table-driven from the historical
-// gents-cli desired-state rules (crates/gents-cli/src/desired_state/validate/agent.rs).
+// InferenceSampling::validate (#1331 rules, #1430 owner split) — table-driven
+// from the historical gents-cli desired-state rules
+// (crates/gents-cli/src/desired_state/validate/agent.rs).
 // ---------------------------------------------------------------------------
 
-fn base_profile(profile_id: &str) -> InferenceProfile {
-    InferenceProfile {
-        profile_id: profile_id.to_string(),
+fn base_sampling(sampling_id: &str) -> InferenceSampling {
+    InferenceSampling {
+        agent_did: "owner".to_string(),
+        sampling_id: sampling_id.to_string(),
+        ..Default::default()
+    }
+}
+
+fn base_execution(execution_id: &str) -> InferenceExecution {
+    InferenceExecution {
+        agent_did: "owner".to_string(),
+        execution_id: execution_id.to_string(),
         ..Default::default()
     }
 }
 
 #[test]
-fn inference_profile_validate_accepts_defaults() {
-    assert!(base_profile("defaults").validate().is_ok());
+fn inference_execution_validate_accepts_defaults() {
+    assert!(base_execution("defaults").validate().is_ok());
 }
 
 #[test]
-fn inference_profile_validate_rejects_non_positive_stream_liveness_timeout() {
+fn inference_execution_validate_rejects_non_positive_stream_liveness_timeout() {
     for value in [0, -1] {
-        let mut profile = base_profile("liveness");
-        profile.stream_liveness_timeout_secs = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut execution = base_execution("liveness");
+        execution.stream_liveness_timeout_secs = Some(value);
+        let error = execution.validate().unwrap_err().to_string();
         assert!(
             error.contains("stream_liveness_timeout_secs must be positive"),
             "value {value}: {error}"
@@ -1184,12 +1410,12 @@ fn inference_profile_validate_rejects_non_positive_stream_liveness_timeout() {
 }
 
 #[test]
-fn inference_profile_validate_rejects_non_positive_deadline() {
+fn inference_execution_validate_rejects_non_positive_deadline() {
     for value in [0, -1] {
-        let mut profile = base_profile("deadline");
-        profile.stream_liveness_timeout_secs = Some(300);
-        profile.deadline_duration_secs = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut execution = base_execution("deadline");
+        execution.stream_liveness_timeout_secs = Some(300);
+        execution.deadline_duration_secs = Some(value);
+        let error = execution.validate().unwrap_err().to_string();
         assert!(
             error.contains("deadline_duration_secs must be positive"),
             "value {value}: {error}"
@@ -1198,12 +1424,12 @@ fn inference_profile_validate_rejects_non_positive_deadline() {
 }
 
 #[test]
-fn inference_profile_validate_rejects_liveness_at_or_past_deadline() {
+fn inference_execution_validate_rejects_liveness_at_or_past_deadline() {
     for (liveness, deadline) in [(300, 300), (600, 300)] {
-        let mut profile = base_profile("relationship");
-        profile.stream_liveness_timeout_secs = Some(liveness);
-        profile.deadline_duration_secs = Some(deadline);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut execution = base_execution("relationship");
+        execution.stream_liveness_timeout_secs = Some(liveness);
+        execution.deadline_duration_secs = Some(deadline);
+        let error = execution.validate().unwrap_err().to_string();
         assert!(
             error.contains(&format!(
                 "stream_liveness_timeout_secs ({liveness}) must be less than deadline_duration_secs ({deadline})"
@@ -1214,72 +1440,102 @@ fn inference_profile_validate_rejects_liveness_at_or_past_deadline() {
 }
 
 #[test]
-fn inference_profile_validate_accepts_liveness_shorter_than_deadline() {
-    let mut profile = base_profile("ok-relationship");
-    profile.stream_liveness_timeout_secs = Some(300);
-    profile.deadline_duration_secs = Some(600);
-    assert!(profile.validate().is_ok());
+fn inference_execution_validate_accepts_liveness_shorter_than_deadline() {
+    let mut execution = base_execution("ok-relationship");
+    execution.stream_liveness_timeout_secs = Some(300);
+    execution.deadline_duration_secs = Some(600);
+    assert!(execution.validate().is_ok());
 }
 
 #[test]
-fn inference_profile_validate_rejects_negative_seed() {
-    let mut profile = base_profile("seeded");
-    profile.seed = Some(-1);
-    let error = profile.validate().unwrap_err().to_string();
-    assert_eq!(error, "InferenceProfile seeded seed must be non-negative");
+fn inference_sampling_validate_rejects_negative_seed() {
+    let mut sampling = base_sampling("seeded");
+    sampling.seed = Some(-1);
+    let error = sampling.validate().unwrap_err().to_string();
+    assert!(error.contains("seed must be non-negative"), "{error}");
 }
 
 #[test]
-fn inference_profile_validate_accepts_unset_reasoning_effort_in_every_empty_form() {
-    for unset in [None, Some(""), Some("   ")] {
-        let mut profile = base_profile("unset-effort");
-        profile.reasoning_effort = unset.map(str::to_string);
+fn inference_profile_accepts_unset_and_every_vocabulary_reasoning_effort() {
+    // Effort is a typed enum on the canonical profile: unset (None variant)
+    // and every vocabulary entry are valid; unknown strings are rejected at
+    // deserialization by the enum itself.
+    use crate::config::ReasoningEffort;
+    let unset_forms: [Option<ReasoningEffort>; 1] = [None];
+    for unset in unset_forms {
+        let profile = InferenceProfile {
+            agent_did: "owner".into(),
+            profile_id: "unset-effort".into(),
+            backend_id: "backend".into(),
+            model_name: "model".into(),
+            reasoning_effort: unset,
+            ..Default::default()
+        };
         assert!(profile.validate().is_ok(), "unset form {unset:?} failed");
     }
-}
-
-#[test]
-fn inference_profile_validate_accepts_every_reasoning_effort_in_the_vocabulary() {
     for value in [
-        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+        ReasoningEffort::None,
+        ReasoningEffort::Minimal,
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+        ReasoningEffort::XHigh,
+        ReasoningEffort::Max,
+        ReasoningEffort::Ultra,
     ] {
-        let mut profile = base_profile("vocab");
-        profile.reasoning_effort = Some(value.to_string());
-        assert!(profile.validate().is_ok(), "value {value} failed");
+        let profile = InferenceProfile {
+            agent_did: "owner".into(),
+            profile_id: "vocab".into(),
+            backend_id: "backend".into(),
+            model_name: "model".into(),
+            reasoning_effort: Some(value),
+            ..Default::default()
+        };
+        assert!(profile.validate().is_ok(), "value {value:?} failed");
+        // Round-trip through the typed serialization.
+        let value_json = serde_json::to_value(value).unwrap();
+        assert_eq!(
+            serde_json::from_value::<ReasoningEffort>(value_json.clone()).unwrap(),
+            value
+        );
     }
-}
-
-#[test]
-fn inference_profile_validate_rejects_reasoning_effort_outside_the_vocabulary() {
-    let mut profile = base_profile("bad-effort");
-    profile.reasoning_effort = Some("extreme".to_string());
-    let error = profile.validate().unwrap_err().to_string();
+    // Outside the vocabulary the parser is the rejection owner.
+    assert!(ReasoningEffort::parse("extreme").is_err());
+    let error = ReasoningEffort::parse("extreme").unwrap_err().to_string();
     assert!(error.contains("reasoning_effort must be one of"), "{error}");
+    // And an unknown serialized string must not decode onto the profile.
+    let decoded: Result<InferenceProfile, _> = serde_json::from_value(serde_json::json!({
+        "agent_did": "owner", "profile_id": "bad-effort",
+        "backend_id": "backend", "model_name": "model",
+        "reasoning_effort": "extreme"
+    }));
+    assert!(decoded.is_err(), "unknown effort strings must not decode");
 }
 
 // ---------------------------------------------------------------------------
 // Sampling bounds (#1331 fix round 1 — moved from the imperative
-// `gents config profile set` writer, the only place that enforced them).
+// `gents config profile set` writer, the only place that enforced them;
+// #1430 moved the rules into InferenceSampling::validate).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn inference_profile_validate_accepts_sampling_bounds_at_their_edges() {
-    let mut profile = base_profile("edges");
-    profile.top_p = Some(0.0);
-    profile.min_p = Some(1.0);
-    profile.top_k = Some(1);
-    profile.repetition_penalty = Some(f64::MIN_POSITIVE);
-    profile.frequency_penalty = Some(-2.0);
-    profile.presence_penalty = Some(2.0);
-    assert!(profile.validate().is_ok());
+fn inference_sampling_validate_accepts_sampling_bounds_at_their_edges() {
+    let mut sampling = base_sampling("edges");
+    sampling.top_p = Some(0.0);
+    sampling.min_p = Some(1.0);
+    sampling.top_k = Some(1);
+    sampling.repetition_penalty = Some(f64::MIN_POSITIVE);
+    sampling.frequency_penalty = Some(-2.0);
+    sampling.presence_penalty = Some(2.0);
+    assert!(sampling.validate().is_ok());
 }
 
 #[test]
-fn inference_profile_validate_rejects_top_p_outside_unit_interval() {
+fn inference_sampling_validate_rejects_top_p_outside_unit_interval() {
     for value in [-0.01, 1.01] {
-        let mut profile = base_profile("top-p");
-        profile.top_p = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut sampling = base_sampling("top-p");
+        sampling.top_p = Some(value);
+        let error = sampling.validate().unwrap_err().to_string();
         assert!(
             error.contains("top_p must be within [0, 1]"),
             "{value}: {error}"
@@ -1288,11 +1544,11 @@ fn inference_profile_validate_rejects_top_p_outside_unit_interval() {
 }
 
 #[test]
-fn inference_profile_validate_rejects_min_p_outside_unit_interval() {
+fn inference_sampling_validate_rejects_min_p_outside_unit_interval() {
     for value in [-0.01, 1.01] {
-        let mut profile = base_profile("min-p");
-        profile.min_p = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut sampling = base_sampling("min-p");
+        sampling.min_p = Some(value);
+        let error = sampling.validate().unwrap_err().to_string();
         assert!(
             error.contains("min_p must be within [0, 1]"),
             "{value}: {error}"
@@ -1301,21 +1557,21 @@ fn inference_profile_validate_rejects_min_p_outside_unit_interval() {
 }
 
 #[test]
-fn inference_profile_validate_rejects_non_positive_top_k() {
+fn inference_sampling_validate_rejects_non_positive_top_k() {
     for value in [0, -1] {
-        let mut profile = base_profile("top-k");
-        profile.top_k = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut sampling = base_sampling("top-k");
+        sampling.top_k = Some(value);
+        let error = sampling.validate().unwrap_err().to_string();
         assert!(error.contains("top_k must be positive"), "{value}: {error}");
     }
 }
 
 #[test]
-fn inference_profile_validate_rejects_non_positive_repetition_penalty() {
+fn inference_sampling_validate_rejects_non_positive_repetition_penalty() {
     for value in [0.0, -1.0] {
-        let mut profile = base_profile("rep-penalty");
-        profile.repetition_penalty = Some(value);
-        let error = profile.validate().unwrap_err().to_string();
+        let mut sampling = base_sampling("rep-penalty");
+        sampling.repetition_penalty = Some(value);
+        let error = sampling.validate().unwrap_err().to_string();
         assert!(
             error.contains("repetition_penalty must be positive"),
             "{value}: {error}"
@@ -1324,9 +1580,9 @@ fn inference_profile_validate_rejects_non_positive_repetition_penalty() {
 }
 
 #[test]
-fn inference_profile_validate_rejects_frequency_and_presence_penalty_outside_range() {
+fn inference_sampling_validate_rejects_frequency_and_presence_penalty_outside_range() {
     for value in [-2.01, 2.01] {
-        let mut frequency = base_profile("freq-penalty");
+        let mut frequency = base_sampling("freq-penalty");
         frequency.frequency_penalty = Some(value);
         let error = frequency.validate().unwrap_err().to_string();
         assert!(
@@ -1334,7 +1590,7 @@ fn inference_profile_validate_rejects_frequency_and_presence_penalty_outside_ran
             "{value}: {error}"
         );
 
-        let mut presence = base_profile("presence-penalty");
+        let mut presence = base_sampling("presence-penalty");
         presence.presence_penalty = Some(value);
         let error = presence.validate().unwrap_err().to_string();
         assert!(
@@ -1345,12 +1601,12 @@ fn inference_profile_validate_rejects_frequency_and_presence_penalty_outside_ran
 }
 
 #[test]
-fn inference_profile_validate_reports_every_violation_at_once() {
-    let mut profile = base_profile("multi-bad");
-    profile.seed = Some(-1);
-    profile.top_p = Some(2.0);
-    profile.top_k = Some(0);
-    let error = profile.validate().unwrap_err().to_string();
+fn inference_sampling_validate_reports_every_violation_at_once() {
+    let mut sampling = base_sampling("multi-bad");
+    sampling.seed = Some(-1);
+    sampling.top_p = Some(2.0);
+    sampling.top_k = Some(0);
+    let error = sampling.validate().unwrap_err().to_string();
     assert!(error.contains("seed must be non-negative"), "{error}");
     assert!(error.contains("top_p must be within [0, 1]"), "{error}");
     assert!(error.contains("top_k must be positive"), "{error}");
@@ -1365,287 +1621,172 @@ fn inference_profile_validate_reports_every_violation_at_once() {
 // AgentBehavior::validate_references (#1331)
 // ---------------------------------------------------------------------------
 
-fn base_behavior(behavior_id: &str) -> AgentBehavior {
-    AgentBehavior {
-        behavior_id: behavior_id.to_string(),
-        agent_did: "did:test:agent".to_string(),
-        display_name: None,
-        description: None,
-        summary: None,
-        system_prompt: None,
-        request_context_template: None,
-        backend_id: None,
-        model_name: None,
-        tool_selection_id: None,
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
-        enabled: true,
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        created_at: None,
+fn reference_documents() -> Vec<(crate::Collection, serde_json::Value)> {
+    use crate::Collection;
+    vec![
+        (
+            Collection::InferenceBackend,
+            serde_json::json!({"agent_did":"owner","backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+        ),
+        (
+            Collection::InferenceProfile,
+            serde_json::json!({"agent_did":"owner","profile_id":"profile","backend_id":"backend","model_name":"model"}),
+        ),
+        (
+            Collection::AgentContext,
+            serde_json::json!({"agent_did":"owner","context_id":"context","tools_id":"tools","skill_ids":["skill"]}),
+        ),
+        (
+            Collection::Tools,
+            serde_json::json!({"agent_did":"owner","tools_id":"tools"}),
+        ),
+        (
+            Collection::Skill,
+            serde_json::json!({"agent_did":"owner","skill_id":"skill","name":"Skill","description":"Skill","instructions":"literal"}),
+        ),
+    ]
+}
+
+fn reference_behavior() -> AgentBehavior {
+    serde_json::from_value(serde_json::json!({"agent_did":"owner","behavior_id":"behavior","context_id":"context","inference_profile_id":"profile"})).unwrap()
+}
+
+#[test]
+fn behavior_and_context_share_canonical_reference_closure() {
+    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
+    reference_behavior().validate_references(&refs).unwrap();
+    // Absence invokes context defaults, not an implicit tool or skill set.
+    let mut behavior = reference_behavior();
+    behavior.context_id = None;
+    behavior.validate_references(&refs).unwrap();
+    behavior.inference_profile_id = "missing".into();
+    assert!(
+        behavior
+            .validate_references(&refs)
+            .unwrap_err()
+            .to_string()
+            .contains("InferenceProfile")
+    );
+}
+
+#[test]
+fn unchanged_nested_links_are_validated_without_a_behavior_write() {
+    for missing in [
+        crate::Collection::Tools,
+        crate::Collection::Skill,
+        crate::Collection::InferenceBackend,
+    ] {
+        let documents = reference_documents()
+            .into_iter()
+            .filter(|(collection, _)| *collection != missing);
+        let refs = ConfigReferences::from_documents("owner", documents).unwrap();
+        assert!(
+            refs.validate()
+                .unwrap_err()
+                .to_string()
+                .contains(missing.graphql_type())
+        );
     }
 }
 
-fn refs_with(
-    backends: &[(&str, &[&str])],
-    tool_selections: &[&str],
-    profiles: &[&str],
-    skills: &[&str],
-) -> ConfigReferences {
-    ConfigReferences {
-        backends: backends
-            .iter()
-            .map(|(id, models)| {
-                (
-                    id.to_string(),
-                    models.iter().map(|m| m.to_string()).collect(),
-                )
-            })
-            .collect(),
-        tool_selections: tool_selections.iter().map(|s| s.to_string()).collect(),
-        profiles: profiles.iter().map(|s| s.to_string()).collect(),
-        skills: skills.iter().map(|s| s.to_string()).collect(),
+#[test]
+fn reference_snapshot_rejects_foreign_roots_duplicates_and_malformed_rows() {
+    let mut documents = reference_documents();
+    documents[0].1["agent_did"] = "foreign".into();
+    assert!(ConfigReferences::from_documents("owner", documents).is_err());
+    let mut documents = reference_documents();
+    documents.push(documents[0].clone());
+    assert!(
+        ConfigReferences::from_documents("owner", documents)
+            .unwrap_err()
+            .to_string()
+            .contains("multiple live")
+    );
+    // Genuinely malformed canonical backend row: the auth object with a
+    // competing credential selection fails the backend validator.
+    let mut documents = reference_documents();
+    documents[0].1["auth"] = serde_json::json!({"kind":"api_key", "key":"key", "variable":"KEY"});
+    assert!(ConfigReferences::from_documents("owner", documents).is_err());
+}
+
+#[test]
+fn references_preserve_exact_ids_and_reject_present_blank_selections() {
+    let refs = ConfigReferences::from_documents("owner", reference_documents()).unwrap();
+    for selected in ["", " ", " context ", "missing"] {
+        let mut behavior = reference_behavior();
+        behavior.context_id = Some(selected.into());
+        assert!(behavior.validate_references(&refs).is_err(), "{selected:?}");
     }
 }
 
 #[test]
-fn agent_behavior_validate_references_accepts_no_references() {
-    let behavior = base_behavior("empty");
-    let refs = ConfigReferences::default();
-    assert!(behavior.validate_references(&refs).is_ok());
+fn same_owner_delegation_requires_a_behavior_but_foreign_admission_is_separate() {
+    let target = |destination| {
+        (
+            crate::Collection::SubagentTarget,
+            serde_json::json!({"agent_did":"owner","target_id":"worker","name":"worker","target_agent_did":destination,"behavior_id":"remote"}),
+        )
+    };
+    // Same-owner targets must resolve the referenced behavior inside the same
+    // closure; foreign destinations are checked by delegation admission under
+    // ACP, never satisfied by a config lookup, so the foreign case validates.
+    let refs = ConfigReferences::from_documents("owner", vec![target("owner")]).unwrap();
+    assert!(refs.validate().is_err());
+    let refs = ConfigReferences::from_documents("owner", vec![target("foreign")]).unwrap();
+    refs.validate().unwrap();
 }
-
-#[test]
-fn agent_behavior_validate_references_rejects_missing_backend() {
-    let mut behavior = base_behavior("b");
-    behavior.backend_id = Some("ghost".to_string());
-    let refs = ConfigReferences::default();
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("references missing backend_id ghost"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_rejects_model_not_advertised() {
-    let mut behavior = base_behavior("b");
-    behavior.backend_id = Some("reviewers".to_string());
-    behavior.model_name = Some("GLM-5.2".to_string());
-    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("selects model GLM-5.2 which backend reviewers does not advertise"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_accepts_model_when_backend_advertises_none() {
-    // An empty advertised-models list means "any model is accepted" — the
-    // backend hasn't been probed, or advertises nothing specific.
-    let mut behavior = base_behavior("b");
-    behavior.backend_id = Some("reviewers".to_string());
-    behavior.model_name = Some("anything".to_string());
-    let refs = refs_with(&[("reviewers", &[])], &[], &[], &[]);
-    assert!(behavior.validate_references(&refs).is_ok());
-}
-
-#[test]
-fn agent_behavior_validate_references_accepts_advertised_model() {
-    let mut behavior = base_behavior("b");
-    behavior.backend_id = Some("reviewers".to_string());
-    behavior.model_name = Some("d4f".to_string());
-    let refs = refs_with(&[("reviewers", &["d4f"])], &[], &[], &[]);
-    assert!(behavior.validate_references(&refs).is_ok());
-}
-
-#[test]
-fn agent_behavior_validate_references_rejects_missing_tool_selection() {
-    let mut behavior = base_behavior("b");
-    behavior.tool_selection_id = Some("ghost-tools".to_string());
-    let refs = ConfigReferences::default();
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("references missing tool_selection_id ghost-tools"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_accepts_known_tool_selection() {
-    let mut behavior = base_behavior("b");
-    behavior.tool_selection_id = Some("known-tools".to_string());
-    let refs = refs_with(&[], &["known-tools"], &[], &[]);
-    assert!(behavior.validate_references(&refs).is_ok());
-}
-
-#[test]
-fn agent_behavior_validate_references_rejects_missing_profile() {
-    let mut behavior = base_behavior("b");
-    behavior.inference_profile_id = Some("ghost-profile".to_string());
-    let refs = ConfigReferences::default();
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("references missing inference_profile_id ghost-profile"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_accepts_known_profile() {
-    let mut behavior = base_behavior("b");
-    behavior.inference_profile_id = Some("known-profile".to_string());
-    let refs = refs_with(&[], &[], &["known-profile"], &[]);
-    assert!(behavior.validate_references(&refs).is_ok());
-}
-
-#[test]
-fn agent_behavior_validate_references_rejects_missing_skill_ref() {
-    let mut behavior = base_behavior("b");
-    behavior.skill_refs = vec!["ghost-skill".to_string()];
-    let refs = ConfigReferences::default();
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("references missing skill_ref ghost-skill"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_rejects_missing_skill_exclude() {
-    let mut behavior = base_behavior("b");
-    behavior.skill_excludes = vec!["ghost-skill".to_string()];
-    let refs = ConfigReferences::default();
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("references missing skill_exclude ghost-skill"),
-        "{error}"
-    );
-}
-
-#[test]
-fn agent_behavior_validate_references_accepts_known_skills() {
-    let mut behavior = base_behavior("b");
-    behavior.skill_refs = vec!["known-skill".to_string()];
-    behavior.skill_excludes = vec!["known-skill".to_string()];
-    let refs = refs_with(&[], &[], &[], &["known-skill"]);
-    assert!(behavior.validate_references(&refs).is_ok());
-}
-
-#[test]
-fn agent_behavior_reference_violations_reports_every_missing_reference_at_once() {
-    // Regression (#1331 fix round 2): a behavior dangling on backend, tool
-    // selection, AND profile simultaneously must surface all three, not
-    // just the first-checked one — this is what desired state's
-    // `config validate` renders as separate error-list entries.
-    let mut behavior = base_behavior("b");
-    behavior.backend_id = Some("missing-backend".to_string());
-    behavior.tool_selection_id = Some("missing-tools".to_string());
-    behavior.inference_profile_id = Some("missing-profile".to_string());
-    let refs = ConfigReferences::default();
-
-    let violations = behavior.reference_violations(&refs);
-    assert_eq!(
-        violations.len(),
-        3,
-        "expected 3 violations, got {violations:?}"
-    );
-    assert!(violations
-        .iter()
-        .any(|msg| msg.contains("missing backend_id missing-backend")));
-    assert!(violations
-        .iter()
-        .any(|msg| msg.contains("missing tool_selection_id missing-tools")));
-    assert!(violations
-        .iter()
-        .any(|msg| msg.contains("missing inference_profile_id missing-profile")));
-
-    // validate_references (the Result wrapper) joins them into one error —
-    // still all three, just not as separate Vec entries.
-    let error = behavior.validate_references(&refs).unwrap_err().to_string();
-    assert!(
-        error.contains("missing backend_id missing-backend"),
-        "{error}"
-    );
-    assert!(
-        error.contains("missing tool_selection_id missing-tools"),
-        "{error}"
-    );
-    assert!(
-        error.contains("missing inference_profile_id missing-profile"),
-        "{error}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// ConfigReferences::load — lenient backend parsing (#1331, fix round 1)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn config_references_load_tolerates_a_malformed_backend_row_beside_a_good_one() {
-    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+async fn reference_loader_isolates_foreign_malformed_backends_and_rejects_owned_corruption() {
+    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
     crate::ensure_runtime_schemas(&node).await.unwrap();
-
-    // Missing max_concurrent: `InferenceBackend::from_value` (the strict
-    // registry parser) requires it and would fail on this row. It still has
-    // a usable backend_id, so `ConfigReferences::load` — which reads
-    // backend_id/models directly, not through that parser — must not sink
-    // the whole load over it.
-    let malformed = node
-        .execute(
-            r#"mutation {
-                create_InferenceBackend(input: {
-                    backend_id: "malformed-backend",
-                    name: "Malformed",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "http://127.0.0.1:11434/v1",
-                    enabled: true,
-                    models: ["should-not-matter"],
-                    probe_status: "unknown"
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(!malformed.has_errors(), "{:?}", malformed.errors);
-
-    let good = node
-        .execute(
-            r#"mutation {
-                create_InferenceBackend(input: {
-                    backend_id: "good-backend",
-                    name: "Good",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "http://127.0.0.1:11434/v1",
-                    max_concurrent: 4,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["model-a", "model-b"],
-                    probe_status: "healthy"
-                }) { _docID }
-            }"#,
-        )
-        .await;
-    assert!(!good.has_errors(), "{:?}", good.errors);
-
-    let txn = crate::config_client::ConfigApplyTxn::begin_local(&node, None)
-        .await
-        .expect("begin reference-load transaction");
-    let refs = ConfigReferences::load_in_txn(&txn, "did:test:whatever")
-        .await
-        .expect("load must tolerate a malformed unrelated backend row");
-    txn.discard().await.expect("discard read-only transaction");
-
-    assert_eq!(
-        refs.backends.get("good-backend").map(Vec::as_slice),
-        Some(&["model-a".to_string(), "model-b".to_string()][..]),
-        "the good backend's models must still come through"
+    // Use raw storage only to seed deliberately malformed rows. The common
+    // desired-state writer correctly rejects these before publication.
+    for (owner, id, auth) in [
+        ("owner", "good", "unauthenticated"),
+        ("foreign", "bad", "invalid-auth"),
+    ] {
+        let owner = crate::graphql::escape_graphql_string(owner);
+        let id = crate::graphql::escape_graphql_string(id);
+        let auth = crate::graphql::escape_graphql_string(auth);
+        let result = node.execute(&format!(r#"mutation {{ create_InferenceBackend(input: {{agent_did: "{owner}", backend_id: "{id}", name: "fixture", provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000/v1", auth: {{kind: "{auth}"}}, enabled: true}}) {{_docID}} }}"#)).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+    }
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.reference_owner_isolation",
+        |txn| {
+            Box::pin(async move {
+                let refs = ConfigReferences::load_in_txn(txn, "owner").await?;
+                refs.validate()?;
+                assert!(refs.documents().any(|((collection, id), _)| *collection
+                    == crate::Collection::InferenceBackend
+                    && id == "good"));
+                assert!(!refs.documents().any(|((_, id), _)| id == "bad"));
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let result = node.execute(r#"mutation { update_InferenceBackend(filter: {agent_did: {_eq: "owner"}, backend_id: {_eq: "good"}}, input: {auth: {kind: "invalid-auth"}}) {_docID} }"#).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let result = crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.reference_owned_corruption",
+        |txn| {
+            Box::pin(async move {
+                ConfigReferences::load_in_txn(txn, "owner")
+                    .await?
+                    .validate()
+            })
+        },
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "owned malformed configuration must fail closed"
     );
-    // The malformed row's own backend_id is fine — only max_concurrent is
-    // missing — so it's present too; ConfigReferences skips a row only when
-    // even backend_id is unusable. The point of this test is that its
-    // absence of max_concurrent doesn't fail the whole load, not that the
-    // row itself is excluded.
-    assert!(refs.backends.contains_key("malformed-backend"));
 }

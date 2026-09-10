@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Datelike, Duration as ChronoDuration, Timelike, Utc};
 use chrono_tz::Tz;
 
@@ -10,6 +10,7 @@ const MAX_CRON_LOOKAHEAD_MINUTES: i64 = 366 * 24 * 60 * 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum CronMissedRunPolicy {
     LatestOnly,
 }

@@ -1333,9 +1333,14 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         let metadata: serde_json::Value =
             serde_json::from_str(children[0].metadata.as_deref().unwrap()).unwrap();
         assert_eq!(metadata["goal"]["wrapup"], true, "{terminal}");
-        let history = gents::load_history(&db.node, &children[0].session_id)
-            .await
-            .unwrap();
+        let history = gents::load_history(
+            &db.node,
+            &children[0].session_id,
+            &children[0].agent_did,
+            children[0].requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
         assert!(
             serde_json::to_string(&history)
                 .unwrap()

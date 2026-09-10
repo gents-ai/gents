@@ -401,10 +401,10 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("group-trigger".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("group-trigger".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
@@ -427,7 +427,7 @@ async fn dispatch_parallel_group_materializes_once_for_the_same_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
+        durable_fire_key: super::super::durable_fire_key("event-group", &["same-generation"]),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -556,10 +556,10 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("event-1".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
@@ -596,7 +596,7 @@ async fn dispatch_serial_per_document_is_trigger_wide_despite_correlation() {
 }
 
 #[tokio::test]
-async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
+async fn dispatch_serial_per_group_separates_correlation_and_membership_generation() {
     let task = resolved_task("run {{ group.correlation_value }}");
     let trigger = ResolvedEventTrigger {
         fire_mode: crate::runtime_snapshot::EventTriggerFireMode::PerGroup,
@@ -605,6 +605,7 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
         ..resolved_event_trigger_with_concurrency("event-1", task.clone(), ConcurrencyMode::Serial)
     };
     let behavior = integration_test_behavior("general");
+    let agent_did = behavior.agent_did().to_owned();
     let snapshot = Arc::new(
         ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
             "general".to_string(),
@@ -613,16 +614,19 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([("event-1".to_string(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([("event-1".to_string(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(stub_principal())
         .activate(1, HashMap::new()),
     );
     let (_tx, rx) = watch::channel(snapshot);
     let materializer = SpyMaterializer::new();
-    materializer.mark_correlated_nonterminal("event-1", TriggerKind::Event, "run-a");
+    // Active work is itself a durable marker. Model that real storage invariant.
+    let old_key = super::super::durable_fire_key("event-group", &["run-a"]);
+    materializer.mark_group_materialized(&agent_did, "event-1", &old_key);
+    materializer.persist_materialized_group_markers(&agent_did);
     let engine = TriggerEngine::new(rx, materializer.clone());
 
     let make_intent = |correlation: &str| FireIntent {
@@ -644,7 +648,7 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
         })),
         trigger_context: None,
         args_vars: None,
-        durable_fire_key: "dispatch-test-fire".to_string(),
+        durable_fire_key: super::super::durable_fire_key("event-group", &[correlation]),
         pre_materialized_request_id: None,
         on_result: Box::new(|_| {}),
     };
@@ -655,6 +659,21 @@ async fn dispatch_serial_per_group_scopes_active_requests_by_correlation() {
     assert!(matches!(same_run, FireResult::Skipped { .. }));
     assert!(matches!(other_run, FireResult::Fired { .. }));
     assert_eq!(materializer.calls().len(), 1);
+    let mut changed = make_intent("run-a");
+    changed.durable_fire_key =
+        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
+    assert!(
+        matches!(engine.dispatch(changed).await, FireResult::Fired { .. }),
+        "old generation must not block new membership"
+    );
+    let mut replay = make_intent("run-a");
+    replay.durable_fire_key =
+        super::super::durable_fire_key("event-group", &["run-a:new-membership"]);
+    assert!(matches!(
+        engine.dispatch(replay).await,
+        FireResult::Skipped { .. }
+    ));
+    assert_eq!(materializer.calls().len(), 2);
 }
 
 #[tokio::test]
@@ -695,7 +714,7 @@ async fn dispatch_latest_only_supersedes_prior_and_fires_new() {
     let supersede_calls = materializer.supersede_calls();
     assert_eq!(
         supersede_calls,
-        vec![("sched-1".to_string(), TriggerKind::Schedule)],
+        vec!["sched-1".to_string()],
         "exactly one supersede call for (sched-1, Schedule) expected"
     );
     let calls = materializer.calls();
@@ -746,7 +765,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
         .expect("first LatestOnly dispatch should enter materialize gate");
     assert_eq!(
         materializer.supersede_calls(),
-        vec![("sched-1".to_string(), TriggerKind::Schedule)],
+        vec!["sched-1".to_string()],
         "first LatestOnly dispatch should supersede before materializing"
     );
 
@@ -795,10 +814,7 @@ async fn dispatch_latest_only_lock_blocks_second_supersede_until_first_materiali
     );
     assert_eq!(
         materializer.supersede_calls(),
-        vec![
-            ("sched-1".to_string(), TriggerKind::Schedule),
-            ("sched-1".to_string(), TriggerKind::Schedule),
-        ],
+        vec!["sched-1".to_string(), "sched-1".to_string(),],
         "the second supersede must occur only after the first materialize completes"
     );
     assert_eq!(

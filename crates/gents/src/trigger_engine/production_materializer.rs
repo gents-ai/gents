@@ -8,7 +8,7 @@
 //!   executes it while preserving `caused_by_trigger_id` /
 //!   `caused_by_trigger_kind`.
 //! * `has_active_runtime_request_for_trigger` performs a GraphQL query against
-//!   `AgentRequest`, filtering on the `(trigger_id, trigger_kind)` tuple and
+//!   `AgentRequest`, filtering on the owner-scoped logical trigger and
 //!   the active runtime lifecycle states (`pending`, `claimed`, `processing`).
 //! * `supersede_active_runtime_requests_for_trigger` transitions every matching
 //!   active runtime request to `lifecycle_state = superseded`.
@@ -30,18 +30,16 @@ use gents_protocol::row::AgentRequestRow;
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use crate::lifecycle::{
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    task_goal_conversation_title, task_run_conversation_title,
+    task_goal_session_title, task_session_title,
     write_pending_agent_request_with_lineage_workspace_and_conversation_title, ExecutionOrigin,
     TriggerLineage, WorkspaceLineage,
 };
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ResolvedTask};
-use crate::trigger_engine::{MaterializeSkip, MaterializerHandle, TriggerKind};
-use crate::watcher::workspace_bound_request_claimable;
+use crate::trigger_engine::{MaterializerHandle, TriggerKind};
 
 pub(crate) struct ProductionMaterializer {
     node: Arc<EmbeddedNode>,
     snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
-    local_deployment_id: Option<String>,
 }
 
 impl ProductionMaterializer {
@@ -49,19 +47,7 @@ impl ProductionMaterializer {
         node: Arc<EmbeddedNode>,
         snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     ) -> Self {
-        Self {
-            node,
-            snapshot_rx,
-            local_deployment_id: None,
-        }
-    }
-
-    pub(crate) fn with_local_deployment_id(mut self, deployment_id: impl Into<String>) -> Self {
-        let deployment_id = deployment_id.into();
-        if !deployment_id.trim().is_empty() {
-            self.local_deployment_id = Some(deployment_id);
-        }
-        self
+        Self { node, snapshot_rx }
     }
 
     fn resolve_behavior(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
@@ -94,25 +80,25 @@ impl ProductionMaterializer {
 
 pub(crate) async fn recover_workspace_binding_pending_requests(
     node: &EmbeddedNode,
-    local_deployment_id: &str,
+    principal_did: &str,
 ) -> Result<usize> {
     let query = format!(
         r#"{{
             AgentRequest(filter: {{
                 lifecycle_state: {{ _eq: "{workspace_binding_pending}" }},
-                workspace_owner_deployment_id: {{ _eq: "{deployment_id}" }}
+                agent_did: {{ _eq: "{principal}" }}
             }}) {{
                 _docID
                 request_id
                 agent_did
                 workspace_id
+                workspace_owner_agent_did
                 workspace_authority
-                workspace_owner_deployment_id
                 workspace_seal_hash
             }}
         }}"#,
         workspace_binding_pending = RequestLifecycleState::WorkspaceBindingPending.as_str(),
-        deployment_id = escape_graphql_string(local_deployment_id),
+        principal = escape_graphql_string(principal_did),
     );
     let response = graphql_with_transaction_retry(
         node,
@@ -132,6 +118,9 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             .as_deref()
             .context("workspace-binding-pending AgentRequest is missing agent_did")?;
         let lineage = WorkspaceLineage {
+            workspace_owner_agent_did: Some(request.workspace_owner_agent_did.clone().context(
+                "workspace-binding-pending AgentRequest is missing workspace_owner_agent_did",
+            )?),
             workspace_id: Some(
                 request
                     .workspace_id
@@ -141,11 +130,6 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             workspace_authority: Some(request.workspace_authority.clone().context(
                 "workspace-binding-pending AgentRequest is missing workspace_authority",
             )?),
-            workspace_owner_deployment_id: Some(
-                request.workspace_owner_deployment_id.clone().context(
-                    "workspace-binding-pending AgentRequest is missing workspace_owner_deployment_id",
-                )?,
-            ),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
         };
         match crate::workspace::materialize_workspace_binding(
@@ -154,7 +138,6 @@ pub(crate) async fn recover_workspace_binding_pending_requests(
             request_doc_id,
             agent_did,
             &lineage,
-            Some(local_deployment_id),
         )
         .await
         {
@@ -248,7 +231,6 @@ impl MaterializerHandle for ProductionMaterializer {
         let trigger_kind_str = trigger_kind.as_str().to_owned();
 
         let execution_origin = execution_origin_for_trigger_kind(trigger_kind);
-        let local_deployment_id = self.local_deployment_id.clone();
 
         Box::pin(async move {
             let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;
@@ -280,32 +262,14 @@ impl MaterializerHandle for ProductionMaterializer {
                 .map(|resolved| resolved.lineage.clone())
                 .unwrap_or(explicit);
             workspace.require_authority_if_workspace_id()?;
-            // Ordinary explicit lineage may omit owner; the workspace owner
-            // resolves it before the same single locality decision below.
-            let needs_owner_stamp = graph.is_none() && workspace.owner_deployment_id().is_none();
-            if needs_owner_stamp {
-                crate::workspace::stamp_workspace_lineage(node.as_ref(), &mut workspace).await?;
-            }
-            if !workspace_bound_request_claimable(
-                local_deployment_id.as_deref(),
-                workspace.workspace_id.as_deref(),
-                workspace.workspace_owner_deployment_id.as_deref(),
-            ) {
-                return Err(MaterializeSkip {
-                    reason:
-                        "workspace-bound request is owned by another deployment; not claimable here"
-                            .into(),
-                }
-                .into());
-            }
             if let Some(resolved) = graph {
                 workspace =
                     crate::graph_pipeline::finalize_graph_workspace(node.as_ref(), resolved)
                         .await?
                         .lineage;
-            } else if !needs_owner_stamp {
-                crate::workspace::stamp_workspace_lineage(node.as_ref(), &mut workspace).await?;
             }
+            crate::workspace::stamp_workspace_lineage(node.as_ref(), &behavior_did, &mut workspace)
+                .await?;
             let lineage = TriggerLineage {
                 trigger_id: trigger_id.clone(),
                 trigger_kind: Some(trigger_kind_str),
@@ -323,7 +287,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     &durable_fire_key,
                 );
                 let conversation_title =
-                    task_goal_conversation_title(&task_label, &identity.retry_key);
+                    task_goal_session_title(&task_label, &identity.retry_key);
                 let create = build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title(
                     &behavior_did,
                     &behavior_name,
@@ -354,8 +318,12 @@ impl MaterializerHandle for ProductionMaterializer {
                     goal_token_budget.is_none(),
                     "goal token budget requires a goal objective template"
                 );
-                let request_id = uuid::Uuid::new_v4().to_string();
-                let conversation_title = task_run_conversation_title(&task_label);
+                let request_id = if super::event_delivery::is_group_fire_key(&durable_fire_key) {
+                    durable_fire_key.clone()
+                } else {
+                    uuid::Uuid::new_v4().to_string()
+                };
+                let conversation_title = task_session_title(&task_label);
                 let enqueued =
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
                         node.as_ref(),
@@ -380,7 +348,6 @@ impl MaterializerHandle for ProductionMaterializer {
                     &enqueued.doc_id,
                     &behavior_did,
                     &workspace,
-                    local_deployment_id.as_deref(),
                 )
                 .await?;
                 crate::lifecycle::activate_workspace_bound_request(node.as_ref(), &enqueued.doc_id)
@@ -402,26 +369,18 @@ impl MaterializerHandle for ProductionMaterializer {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: Option<&str>,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let trigger_kind_str = trigger_kind.as_str();
-        let correlation_filter = correlation
-            .map(escape_graphql_string)
-            .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
-            .unwrap_or_default();
         let request_exclusion_filter = excluded_request_id
             .map(escape_graphql_string)
             .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
             .unwrap_or_default();
         let active_runtime_states = RequestLifecycleState::active_runtime_graphql_list();
         Box::pin(async move {
-            // Strict tuple match on `(agent_did, caused_by_trigger_id,
-            // caused_by_trigger_kind)` + active runtime `lifecycle_state`.
+            // Canonical owner/trigger match plus active runtime lifecycle state.
             // The DID scope is load-bearing (#605): the replicated store also
             // holds other agents' requests for the same human-chosen trigger
             // id, and those must never gate this agent's fires.
@@ -442,16 +401,13 @@ impl MaterializerHandle for ProductionMaterializer {
                     AgentRequest(
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
+                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
                             lifecycle_state: {{ _in: {active_runtime_states} }}
                         }}
                     ) {{ _docID request_id lifecycle_state deadline }}
                 }}"#,
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
-                trigger_kind = trigger_kind_str,
-                correlation_filter = correlation_filter,
                 request_exclusion_filter = request_exclusion_filter,
             );
             let resp = node.execute(&query).await;
@@ -472,18 +428,11 @@ impl MaterializerHandle for ProductionMaterializer {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: Option<&str>,
         excluded_request_id: Option<&str>,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<usize>> + Send + '_>> {
         let node = self.node.clone();
         let escaped_agent_did = escape_graphql_string(agent_did);
         let escaped_trigger_id = escape_graphql_string(trigger_id);
-        let trigger_kind_str = trigger_kind.as_str();
-        let correlation_filter = correlation
-            .map(escape_graphql_string)
-            .map(|value| format!(r#", caused_by_correlation: {{ _eq: "{value}" }}"#))
-            .unwrap_or_default();
         let request_exclusion_filter = excluded_request_id
             .map(escape_graphql_string)
             .map(|value| format!(r#", request_id: {{ _neq: "{value}" }}"#))
@@ -495,8 +444,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     update_AgentRequest(
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }}{correlation_filter}{request_exclusion_filter},
+                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}{request_exclusion_filter},
                             lifecycle_state: {{ _eq: "pending" }}
                         }},
                         input: {{
@@ -508,8 +456,6 @@ impl MaterializerHandle for ProductionMaterializer {
                 }}"#,
                 agent_did = escaped_agent_did,
                 trigger_id = escaped_trigger_id,
-                trigger_kind = trigger_kind_str,
-                correlation_filter = correlation_filter,
                 request_exclusion_filter = request_exclusion_filter,
             );
             let resp = crate::config_client::ConfigAccess::write_local_idempotent_update_response(
@@ -534,8 +480,7 @@ impl MaterializerHandle for ProductionMaterializer {
             let query = format!(
                 r#"{{ AgentRequest(filter: {{
                 agent_did: {{ _eq: "{escaped_agent_did}" }},
-                caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }},
-                caused_by_trigger_kind: {{ _eq: "{trigger_kind_str}" }}{correlation_filter}{request_exclusion_filter},
+                caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }}{request_exclusion_filter},
                 lifecycle_state: {{ _in: {active} }}
             }}) {{ _docID request_id agent_did requester_did behavior_id session_id lifecycle_state
                 execution_generation execution_lease_expires_at execution_progress_seq
@@ -579,7 +524,6 @@ impl MaterializerHandle for ProductionMaterializer {
                 tracing::info!(
                     agent_did = %escaped_agent_did,
                     trigger_id = %escaped_trigger_id,
-                    trigger_kind = %trigger_kind_str,
                     count,
                     "superseded active runtime AgentRequests for trigger"
                 );
@@ -657,26 +601,22 @@ impl MaterializerHandle for ProductionMaterializer {
         &self,
         agent_did: &str,
         trigger_id: &str,
-        trigger_kind: TriggerKind,
-        correlation: &str,
+        durable_fire_key: &str,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<bool>> + Send + '_>> {
         let node = self.node.clone();
+        let owner = agent_did.to_string();
         let agent_did = escape_graphql_string(agent_did);
         let trigger_id = escape_graphql_string(trigger_id);
-        let trigger_kind = trigger_kind.as_str();
-        let correlation = escape_graphql_string(correlation);
+        let durable_fire_key = durable_fire_key.to_owned();
         Box::pin(async move {
             let query = format!(
                 r#"query {{
                     AgentRequest(
                         filter: {{
                             agent_did: {{ _eq: "{agent_did}" }},
-                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }},
-                            caused_by_trigger_kind: {{ _eq: "{trigger_kind}" }},
-                            caused_by_correlation: {{ _eq: "{correlation}" }}
-                        }},
-                        limit: 1
-                    ) {{ _docID }}
+                            caused_by_trigger_id: {{ _eq: "{trigger_id}" }}
+                        }}
+                    ) {{ _docID request_id }}
                 }}"#,
             );
             let response = node.execute(&query).await;
@@ -691,7 +631,19 @@ impl MaterializerHandle for ProductionMaterializer {
                 .as_ref()
                 .and_then(|data| data.get("AgentRequest"))
                 .and_then(serde_json::Value::as_array)
-                .is_some_and(|rows| !rows.is_empty()))
+                .is_some_and(|rows| {
+                    rows.iter().any(|row| {
+                        row.get("request_id")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|request_id| {
+                                super::event_delivery::request_matches_fire_key(
+                                    &owner,
+                                    request_id,
+                                    &durable_fire_key,
+                                )
+                            })
+                    })
+                }))
         })
     }
 }

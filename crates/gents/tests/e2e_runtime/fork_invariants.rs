@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use axum::{extract::State, routing::post, Json, Router};
 use gents::adapter_projection::{
     build_adapter_projection, validate_adapter_projection_contract, AdapterProjectionKind,
     ProjectionContext,
@@ -9,8 +8,6 @@ use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline_fetch::load_run_timeline;
 use gents::session::{fork, fork_via_http, ForkError, ForkParams};
-use serde::Deserialize;
-use tokio::net::TcpListener;
 
 use crate::support::snapshots::fetch_compaction_entry_snapshots_for_session;
 use crate::support::snapshots::fetch_message_snapshots_for_session;
@@ -23,45 +20,28 @@ use crate::support::{
     AGENT_NAME,
 };
 
-#[derive(Clone)]
-struct EmbeddedGraphqlState {
-    node: Arc<defra_node::EmbeddedNode>,
-}
-
-#[derive(Deserialize)]
-struct GraphqlRequest {
-    query: String,
-}
-
-async fn embedded_graphql_handler(
-    State(state): State<EmbeddedGraphqlState>,
-    Json(request): Json<GraphqlRequest>,
-) -> Json<serde_json::Value> {
-    let response = state.node.execute(&request.query).await;
-    Json(serde_json::json!({
-        "data": response.data,
-        "errors": response.errors,
-    }))
-}
-
-async fn spawn_embedded_graphql(node: Arc<defra_node::EmbeddedNode>) -> String {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("bind embedded graphql listener");
-    let addr = listener
-        .local_addr()
-        .expect("read embedded graphql listener addr");
-    let router = Router::new()
-        .route("/api/v0/graphql", post(embedded_graphql_handler))
-        .with_state(EmbeddedGraphqlState { node });
-
-    tokio::spawn(async move {
-        axum::serve(listener, router)
-            .await
-            .expect("serve embedded graphql");
-    });
-
-    format!("http://{addr}/api/v0/graphql")
+async fn insert_fork_fixture(
+    node: &defra_node::EmbeddedNode,
+    collection: &str,
+    input: serde_json::Value,
+) -> String {
+    let input = gents_protocol::graphql::graphql_input_literal(&input).unwrap();
+    let response = node
+        .execute(&format!(
+            "mutation {{create_{collection}(input:{input}) {{_docID}}}}"
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "fixture {collection}: {:?}",
+        response.errors
+    );
+    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned()
 }
 
 async fn set_tool_call_trace_fields(
@@ -175,6 +155,7 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -194,7 +175,7 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
     assert_eq!(child_messages[0].session_id, outcome.session_id);
     assert_eq!(
         child_messages[0].message_key,
-        format!("{}:1", outcome.session_id)
+        gents::session::sequence_message_key(AGENT_DID, &outcome.session_id, None, 1)
     );
     assert_eq!(child_messages[1].sequence, 2);
     assert_eq!(child_messages[1].role, "assistant");
@@ -208,14 +189,41 @@ async fn fork_copies_message_prefix_up_to_user_turn_boundary() {
 
 #[tokio::test]
 async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
-    let db = test_db("fork-http-happy-path-messages").await;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .with_http(defra_node::HttpConfig::with_addr(address))
+            .build()
+            .await
+            .unwrap(),
+    );
+    gents::ensure_runtime_schemas(&node).await.unwrap();
+    let graphql = format!("http://{address}/api/v0/graphql");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if reqwest::Client::new()
+                .post(&graphql)
+                .json(&serde_json::json!({"query":"{__typename}"}))
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("native HTTP server starts");
 
     let parent_session = "parent-http-session";
-    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
-    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_session(&node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&node, AGENT_NAME, AGENT_DID).await;
 
     create_agent_message(
-        &db.node,
+        &node,
         parent_session,
         1,
         "user",
@@ -224,7 +232,7 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     )
     .await;
     create_agent_message(
-        &db.node,
+        &node,
         parent_session,
         2,
         "assistant",
@@ -233,7 +241,7 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     )
     .await;
     create_agent_message(
-        &db.node,
+        &node,
         parent_session,
         3,
         "user",
@@ -242,20 +250,20 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     )
     .await;
 
-    let graphql = spawn_embedded_graphql(db.node.clone()).await;
     let outcome = fork_via_http(
         &graphql,
         ForkParams {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
     .await
     .expect("fork via http succeeds");
 
-    let child_messages = fetch_message_snapshots_for_session(&db.node, &outcome.session_id).await;
+    let child_messages = fetch_message_snapshots_for_session(&node, &outcome.session_id).await;
     assert_eq!(child_messages.len(), 2);
     assert_eq!(child_messages[0].sequence, 1);
     assert_eq!(child_messages[0].role, "user");
@@ -265,7 +273,7 @@ async fn fork_via_http_copies_message_prefix_up_to_user_turn_boundary() {
     assert_eq!(child_messages[1].role, "assistant");
     assert_eq!(child_messages[1].content, "a1");
 
-    let child_session = fetch_session_snapshot(&db.node, &outcome.session_id)
+    let child_session = fetch_session_snapshot(&node, &outcome.session_id)
         .await
         .expect("child canonical session exists");
     assert_eq!(
@@ -386,6 +394,7 @@ async fn fork_copies_tool_calls_up_to_user_turn_boundary() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -502,6 +511,7 @@ async fn fork_copies_spills_by_retained_call_not_creation_time() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -521,7 +531,7 @@ async fn fork_copies_spills_by_retained_call_not_creation_time() {
     assert_eq!(child_results[0].tool_name, "read_file");
     assert_eq!(child_results[0].tool_input, "{}");
     assert!(!child_results[0].truncated);
-    assert_eq!(child_results[0].truncation_metadata, "");
+    assert_eq!(child_results[0].truncation_metadata.as_deref(), Some(""));
     let child = escape_graphql_string(&outcome.session_id);
     let calls = db.node.execute(&format!(r#"{{
         AgentToolCall(filter: {{session_id: {{_eq: "{child}"}}}}) {{_docID tool_call_id request_id request_doc_id}}
@@ -598,6 +608,7 @@ async fn fork_copies_compaction_cursor_with_retained_prefix() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -614,7 +625,7 @@ async fn fork_copies_compaction_cursor_with_retained_prefix() {
     assert_eq!(child_compactions[0].request_doc_id, None);
     assert_eq!(
         child_compactions[0].compaction_key,
-        format!("{}:1", outcome.session_id)
+        gents::session::compaction_key(AGENT_DID, &outcome.session_id, None, 1)
     );
     assert_eq!(outcome.copied_compaction_entries, 1);
 }
@@ -639,6 +650,12 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
     let parent_request_id_escaped = escape_graphql_string(parent_request_id);
     let parent_request_doc_id_escaped = escape_graphql_string(&parent_request_doc_id);
     let tool_call_key = format!("{parent_session_escaped}:physical-tool");
+    let source_compaction_key = escape_graphql_string(&gents::session::compaction_key(
+        AGENT_DID,
+        parent_session,
+        None,
+        1,
+    ));
     let mutation = format!(
         r#"mutation {{
             user: create_AgentMessage(input: {{
@@ -680,7 +697,7 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
                 completed_at: "2026-04-21T10:00:03Z"
             }}) {{ _docID }}
             compaction: create_CompactionEntry(input: {{
-                compaction_key: "{parent_session_escaped}:1",
+                compaction_key: "{source_compaction_key}",
                 session_id: "{parent_session_escaped}",
                 agent_did: "{AGENT_DID}",
                 request_id: "{parent_request_id_escaped}",
@@ -773,6 +790,7 @@ async fn forked_history_drops_uncopied_physical_edges_and_remains_projectable() 
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -886,80 +904,43 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
     let db = test_db("fork-batch-copy-all").await;
 
     let parent_session = "parent-batch-copy";
-    create_agent_session(&db.node, parent_session, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    let requester = "did:key:fork-requester";
+    let mut session =
+        crate::support::session_document(parent_session, AGENT_NAME, "2026-04-21T10:00:00Z");
+    session.requester_did = Some(requester.into());
+    crate::support::create_session_document(&db.node, &session).await;
     create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
-
-    for (sequence, role, content, timestamp) in [
-        (1, "user", "u1", "2026-04-21T10:00:00Z"),
-        (2, "assistant", "a1", "2026-04-21T10:00:01Z"),
-        (3, "tool", "tool output", "2026-04-21T10:00:02Z"),
-        (4, "user", "u2", "2026-04-21T10:00:04Z"),
+    for (sequence, role, content) in [
+        (1, "user", "u1"),
+        (2, "assistant", "a1"),
+        (3, "tool", "tool output"),
+        (4, "user", "u2"),
     ] {
-        create_agent_message(&db.node, parent_session, sequence, role, content, timestamp).await;
+        insert_fork_fixture(&db.node, "AgentMessage", serde_json::json!({
+            "message_key":gents::session::sequence_message_key(AGENT_DID,parent_session,Some(requester),sequence),
+            "agent_did":AGENT_DID,"session_id":parent_session,"requester_did":requester,
+            "sequence":sequence,"role":role,"content":content,"timestamp":"2026-04-21T10:00:00Z"
+        })).await;
     }
-
     for i in 1..=3 {
-        let tool_call_id = format!("tc-{i}");
-        let args = format!(r#"{{"index":{i}}}"#);
-        let result = format!("tool-call-result-{i}");
         let timestamp = format!("2026-04-21T10:00:0{i}Z");
-        let call_doc_id = create_agent_tool_call(
-            &db.node,
-            parent_session,
-            i,
-            &tool_call_id,
-            "read_file",
-            &args,
-            &result,
-            "completed",
-            &timestamp,
-            &timestamp,
-        )
-        .await;
-
-        let tool_input = format!(r#"{{"path":"file-{i}.txt"}}"#);
-        let output_text = format!("tool-result-{i}");
-        create_agent_tool_result(
-            &db.node,
-            parent_session,
-            &call_doc_id,
-            "read_file",
-            &tool_input,
-            &output_text,
-            &timestamp,
-        )
-        .await;
-
-        create_compaction_entry(
-            &db.node,
-            parent_session,
-            i,
-            &format!("summary-{i}"),
-            i,
-            i,
-            &timestamp,
-        )
-        .await;
-    }
-
-    // A concrete requester scope survives on the canonical child and every copied row.
-    for collection in [
-        "AgentSession",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "CompactionEntry",
-    ] {
-        let source = escape_graphql_string(parent_session);
-        let mutation = format!(
-            r#"mutation {{ update_{collection}(filter: {{session_id: {{_eq: "{source}"}}}}, input: {{requester_did: "did:key:fork-requester"}}) {{_docID}} }}"#
-        );
-        let response = db.node.execute(&mutation).await;
-        assert!(
-            !response.has_errors(),
-            "seed exact requester scope: {:?}",
-            response.errors
-        );
+        let call = insert_fork_fixture(&db.node, "AgentToolCall", serde_json::json!({
+            "tool_call_key":format!("{parent_session}:tc-{i}"),"tool_call_id":format!("tc-{i}"),
+            "agent_did":AGENT_DID,"session_id":parent_session,"requester_did":requester,
+            "message_sequence":i,"tool_name":"read_file","args":format!(r#"{{"index":{i}}}"#),
+            "result":format!("tool-call-result-{i}"),"status":"completed","started_at":timestamp,"completed_at":timestamp
+        })).await;
+        insert_fork_fixture(&db.node, "AgentToolResult", serde_json::json!({
+            "agent_did":AGENT_DID,"session_id":parent_session,"requester_did":requester,
+            "tool_call_doc_id":call,"tool_name":"read_file","tool_input":format!(r#"{{"path":"file-{i}.txt"}}"#),
+            "output_text":format!("tool-result-{i}"),"truncated":false,"created_at":timestamp
+        })).await;
+        insert_fork_fixture(&db.node, "CompactionEntry", serde_json::json!({
+            "compaction_key":gents::session::compaction_key(AGENT_DID,parent_session,Some(requester),i),
+            "agent_did":AGENT_DID,"session_id":parent_session,"requester_did":requester,
+            "sequence":i,"summary":format!("summary-{i}"),"files_read":"[]","files_modified":"[]",
+            "messages_compacted":i,"compacted_through_sequence":i,"original_tokens":100,"compacted_tokens":50,"created_at":timestamp
+        })).await;
     }
     let outcome = fork(
         &db.node,
@@ -967,6 +948,7 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: Some("did:key:fork-requester"),
             target_behavior_id: None,
         },
     )
@@ -1019,7 +1001,12 @@ async fn fork_batches_multiple_rows_for_all_copy_collections() {
         assert_eq!(compaction.summary, format!("summary-{sequence}"));
         assert_eq!(
             compaction.compaction_key,
-            format!("{}:{sequence}", outcome.session_id)
+            gents::session::compaction_key(
+                AGENT_DID,
+                &outcome.session_id,
+                Some("did:key:fork-requester"),
+                sequence
+            )
         );
     }
     for collection in [
@@ -1077,6 +1064,7 @@ async fn fork_rejects_source_with_non_terminal_request() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1113,6 +1101,7 @@ async fn fork_rejects_mismatched_caller_principal() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: "did:test:someone-else",
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1120,8 +1109,8 @@ async fn fork_rejects_mismatched_caller_principal() {
     .expect_err("fork must reject mismatched principal");
 
     assert!(
-        matches!(err, ForkError::ForkNotSameAgent),
-        "expected ForkNotSameAgent, got {:?}",
+        matches!(err, ForkError::ForkSourceNotFound(_)),
+        "foreign principal must not resolve the source, got {:?}",
         err
     );
 }
@@ -1150,6 +1139,7 @@ async fn fork_accepts_behavior_swap_within_same_principal() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: Some("alt-behavior"),
         },
     )
@@ -1191,6 +1181,7 @@ async fn fork_rejects_behavior_owned_by_different_principal() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: Some("foreign-behavior"),
         },
     )
@@ -1198,8 +1189,8 @@ async fn fork_rejects_behavior_owned_by_different_principal() {
     .expect_err("fork must reject cross-principal behavior swap");
 
     assert!(
-        matches!(err, ForkError::ForkBehaviorNotOwnedByPrincipal(_, _)),
-        "expected ForkBehaviorNotOwnedByPrincipal, got {:?}",
+        matches!(err, ForkError::ForkBehaviorNotFound(_)),
+        "foreign behavior must not resolve within caller scope, got {:?}",
         err
     );
 }
@@ -1236,6 +1227,7 @@ async fn fork_rejects_out_of_range_user_turn() {
             source_session_id: parent_session,
             fork_at_user_turn: 5,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1308,6 +1300,7 @@ async fn fork_at_user_turn_zero_produces_empty_child_with_provenance() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1394,6 +1387,7 @@ async fn fork_at_total_user_turns_copies_full_history() {
             source_session_id: parent_session,
             fork_at_user_turn: 2,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1467,6 +1461,7 @@ async fn fork_preserves_parent_session_and_message_fields() {
             source_session_id: parent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1535,6 +1530,7 @@ async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
                 source_session_id: &parent_session_a,
                 fork_at_user_turn: 0,
                 caller_agent_did: AGENT_DID,
+                caller_requester_did: None,
                 target_behavior_id: None,
             },
         )
@@ -1547,6 +1543,7 @@ async fn concurrent_forks_of_same_parent_produce_disjoint_children() {
                 source_session_id: &parent_session_b,
                 fork_at_user_turn: 1,
                 caller_agent_did: AGENT_DID,
+                caller_requester_did: None,
                 target_behavior_id: None,
             },
         )
@@ -1577,6 +1574,7 @@ async fn fork_rejects_nonexistent_source_session() {
             source_session_id: "does-not-exist",
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1613,6 +1611,7 @@ async fn fork_rejects_unknown_target_behavior() {
             source_session_id: parent_session,
             fork_at_user_turn: 0,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: Some("no-such-behavior"),
         },
     )
@@ -1683,6 +1682,7 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
             source_session_id: grandparent_session,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1715,6 +1715,7 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
             source_session_id: &child_outcome.session_id,
             fork_at_user_turn: 1,
             caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
             target_behavior_id: None,
         },
     )
@@ -1750,7 +1751,7 @@ async fn fork_of_fork_links_to_immediate_parent_not_grandparent() {
     );
     assert_eq!(
         grandchild_messages[0].message_key,
-        format!("{}:1", grandchild_outcome.session_id)
+        gents::session::sequence_message_key(AGENT_DID, &grandchild_outcome.session_id, None, 1)
     );
 
     assert!(!grandchild_messages
@@ -1809,6 +1810,7 @@ async fn fork_rejects_nonexistent_call_associations_and_compaction_prefixes() {
                     source_session_id: parent,
                     fork_at_user_turn: 1,
                     caller_agent_did: AGENT_DID,
+                    caller_requester_did: None,
                     target_behavior_id: None
                 }
             )
@@ -1853,5 +1855,67 @@ async fn fork_rejects_nonexistent_call_associations_and_compaction_prefixes() {
                 );
             }
         }
+    }
+}
+
+#[tokio::test]
+async fn fork_rolls_back_earlier_copies_when_later_copy_identity_conflicts() {
+    let db = test_db("fork-atomic-copy-failure").await;
+    let parent = "parent-copy-conflict";
+    create_agent_session(&db.node, parent, AGENT_NAME, "2026-04-21T10:00:00Z").await;
+    create_agent_behavior(&db.node, AGENT_NAME, AGENT_DID).await;
+    create_agent_message(&db.node, parent, 1, "user", "u1", "2026-04-21T10:00:01Z").await;
+    // Distinct physical source calls collide in the destination's actual unique
+    // tool-call key. The first copy must not survive the later failure.
+    for source_key in ["source-call-a", "source-call-b"] {
+        insert_fork_fixture(
+            &db.node,
+            "AgentToolCall",
+            serde_json::json!({
+                "tool_call_key":source_key,"session_id":parent,"agent_did":AGENT_DID,
+                "requester_did":null,"message_sequence":1,"tool_call_id":"same-call",
+                "tool_name":"read_file","args":"{}","result":"output","status":"completed",
+                "started_at":"2026-04-21T10:00:01Z","completed_at":"2026-04-21T10:00:02Z"
+            }),
+        )
+        .await;
+    }
+    assert!(fork(
+        &db.node,
+        ForkParams {
+            source_session_id: parent,
+            fork_at_user_turn: 1,
+            caller_agent_did: AGENT_DID,
+            caller_requester_did: None,
+            target_behavior_id: None
+        }
+    )
+    .await
+    .is_err());
+    for (collection, count) in [
+        ("AgentSession", 1),
+        ("AgentMessage", 1),
+        ("AgentToolCall", 2),
+        ("AgentToolResult", 0),
+        ("CompactionEntry", 0),
+    ] {
+        let response = db
+            .node
+            .execute(&format!("{{{collection}{{session_id}}}}"))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "{collection}: {:?}",
+            response.errors
+        );
+        let rows = response.data.as_ref().unwrap()[collection]
+            .as_array()
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            count,
+            "{collection} must roll back all child rows"
+        );
+        assert!(rows.iter().all(|row| row["session_id"] == parent));
     }
 }

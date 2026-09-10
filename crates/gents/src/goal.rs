@@ -732,6 +732,64 @@ pub fn task_goal_fire_identity(
     }
 }
 
+/// Recover the delivery component from this owner's existing stable identity.
+/// Exact roundtrip validation keeps marker consumers independent of task names
+/// without accepting a second spelling of the identity format.
+pub(crate) fn task_goal_fire_key<'a>(request_id: &'a str, expected_owner: &str) -> Option<&'a str> {
+    fn component(input: &str) -> Option<(&str, &str)> {
+        let (length, rest) = input.split_once(':')?;
+        let length = length.parse::<usize>().ok()?;
+        let end = rest
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain(std::iter::once(rest.len()))
+            .nth(length)?;
+        Some((&rest[..end], &rest[end..]))
+    }
+    let scope = request_id.strip_prefix("task-goal-request:")?;
+    let (owner, tail) = component(scope)?;
+    let (task, tail) = component(tail.strip_prefix(':')?)?;
+    let (fire, tail) = component(tail.strip_prefix(':')?)?;
+    if owner != expected_owner
+        || !tail.is_empty()
+        || task_goal_fire_identity(owner, task, fire).request_id != request_id
+    {
+        return None;
+    }
+    Some(fire)
+}
+
+#[cfg(test)]
+mod task_fire_identity_decode_tests {
+    use super::*;
+    #[test]
+    fn delivery_roundtrips_unicode_delimiters_and_rejects_noncanonical_identity() {
+        let key = "group:one:é火";
+        let identity = task_goal_fire_identity("did:owner:é", "task:火", key);
+        assert_eq!(
+            task_goal_fire_key(&identity.request_id, "did:owner:é"),
+            Some(key)
+        );
+        assert_eq!(task_goal_fire_key(&identity.request_id, "did:other"), None);
+        assert_eq!(
+            task_goal_fire_key(&(identity.request_id.clone() + ":suffix"), "did:owner:é"),
+            None
+        );
+        assert_eq!(
+            task_goal_fire_key("task-goal-request:99999999999999999999999999:x", "x"),
+            None
+        );
+        assert_eq!(
+            task_goal_fire_key("task-goal-request:01:x:1:t:1:f", "x"),
+            None
+        );
+        assert_eq!(
+            task_goal_fire_key("task-goal-request:2:x:1:t:1:f", "x"),
+            None
+        );
+    }
+}
+
 #[doc(hidden)]
 pub fn validate_task_goal_declaration(
     objective: Option<&str>,
@@ -1194,7 +1252,7 @@ pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
     caused_by_source_doc_id retry_count max_retries valid_until subagent_depth
     caused_by_parent_request_id caused_by_parent_request_doc_id
     caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
-    workspace_id workspace_authority workspace_seal_hash
+    workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
     admission_kind admission_signer_did enrollment_request_id
     enrollment_request_digest enrollment_admin_did
     enrollment_authorization_sequence enrollment_authorization_expires_at
@@ -1241,6 +1299,7 @@ pub(crate) struct GoalBackedRequestFingerprint {
     caused_by_parent_tool_call_id: Option<String>,
     caused_by_parent_tool_call_doc_id: Option<String>,
     workspace_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     workspace_authority: Option<String>,
     workspace_seal_hash: Option<String>,
     admission_kind: String,
@@ -1291,6 +1350,7 @@ impl GoalBackedRequestFingerprint {
             caused_by_parent_tool_call_id: _,
             caused_by_parent_tool_call_doc_id: _,
             workspace_id: _,
+            workspace_owner_agent_did: _,
             workspace_authority: _,
             workspace_seal_hash: _,
             initial_lifecycle_state: _,
@@ -1324,6 +1384,7 @@ impl GoalBackedRequestFingerprint {
             caused_by_parent_tool_call_id: request.caused_by_parent_tool_call_id.clone(),
             caused_by_parent_tool_call_doc_id: request.caused_by_parent_tool_call_doc_id.clone(),
             workspace_id: request.workspace_id.clone(),
+            workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
             workspace_authority: request.workspace_authority.clone(),
             workspace_seal_hash: request.workspace_seal_hash.clone(),
             admission_kind: request.admission.kind.as_str().to_string(),
@@ -2487,6 +2548,32 @@ mod tests {
                 GoalBackedRequestFingerprint::from_create(&changed).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn retry_fingerprint_distinguishes_workspace_owners_with_the_same_logical_id() {
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+        let mut request = AgentRequestCreate::base(
+            "request",
+            "did:key:executor",
+            "did:key:executor",
+            "behavior",
+            "session",
+            "continue",
+            "interactive",
+            "2026-09-09T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self("did:key:executor"),
+        );
+        request.workspace_id = Some("shared-label".into());
+        request.workspace_owner_agent_did = Some("did:key:source-owner".into());
+        request.workspace_authority = Some("readOnly".into());
+        request.workspace_seal_hash = Some("same-seal".into());
+        let expected = GoalBackedRequestFingerprint::from_create(&request).unwrap();
+        request.workspace_owner_agent_did = Some("did:key:different-owner".into());
+        assert_ne!(
+            expected,
+            GoalBackedRequestFingerprint::from_create(&request).unwrap()
+        );
     }
 
     #[test]

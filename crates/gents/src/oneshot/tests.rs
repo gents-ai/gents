@@ -315,7 +315,11 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
             Vec::new(),
         )
         .unwrap();
-        let surface = behavior.tools.resolve(&node).await.unwrap();
+        let surface = behavior
+            .tools
+            .resolve(&node, behavior.agent_did())
+            .await
+            .unwrap();
         let obligations = surface.output_obligations();
         assert_eq!(
             obligations.len(),
@@ -324,7 +328,7 @@ async fn oneshot_configured_output_gate_requires_real_write_and_respects_trigger
         );
         let runtime =
             ToolRuntimeContext::oneshot_with_agent_did(node.clone(), behavior.agent_did());
-        let tools = Arc::new(surface.build_tools(&runtime).unwrap());
+        let tools = Arc::new(surface.build_tools(&runtime).await.unwrap());
         let prompt = LayeredPromptBuilder::new(&behavior, &surface, &[]);
         let mut config = loop_config(
             &behavior,

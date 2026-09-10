@@ -14,25 +14,31 @@ struct PromptCompactionRow {
 }
 
 #[derive(Clone, Deserialize)]
-struct CompactionGenerationRow {
+pub(super) struct CompactionGenerationRow {
     compaction_key: String,
     sequence: u32,
     summary: String,
     messages_compacted: u32,
     #[serde(default)]
     compacted_through_sequence: Option<u32>,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null"
+    )]
     files_read: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::document_config::deserialize_default_on_null"
+    )]
     files_modified: String,
     #[serde(default)]
     agent_did: String,
     #[serde(default)]
     requester_did: Option<String>,
     #[serde(default)]
-    request_id: String,
+    request_id: Option<String>,
     #[serde(default)]
-    request_doc_id: String,
+    request_doc_id: Option<String>,
     #[serde(default)]
     original_tokens: i64,
     #[serde(default)]
@@ -41,7 +47,7 @@ struct CompactionGenerationRow {
     created_at: String,
 }
 
-trait CompactionProjection {
+pub(super) trait CompactionProjection {
     fn key(&self) -> &str;
     fn sequence(&self) -> u32;
     fn summary(&self) -> &str;
@@ -85,11 +91,29 @@ impl CompactionProjection for CompactionGenerationRow {
     }
 }
 
-fn validate_compaction_chain<T: CompactionProjection>(session_id: &str, rows: &[T]) -> Result<()> {
+pub fn compaction_key(
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    sequence: u32,
+) -> String {
+    format!(
+        "compaction:{}",
+        serde_json::to_string(&(agent_did, session_id, requester_did, sequence))
+            .expect("session scope serializes")
+    )
+}
+
+pub(super) fn validate_compaction_chain<T: CompactionProjection>(
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    rows: &[T],
+) -> Result<()> {
     let mut prior_cursor = None;
     for (index, row) in rows.iter().enumerate() {
         let expected_sequence = u32::try_from(index + 1).context("compaction sequence overflow")?;
-        let expected_key = format!("{session_id}:{expected_sequence}");
+        let expected_key = compaction_key(agent_did, session_id, requester_did, expected_sequence);
         anyhow::ensure!(
             row.sequence() == expected_sequence && row.key() == expected_key,
             "ambiguous compaction chain for session {session_id}: expected {expected_key}, found {} at sequence {}",
@@ -135,16 +159,18 @@ fn compaction_generation<T: CompactionProjection>(rows: &[T]) -> Result<String> 
 pub(crate) async fn load_prompt_compaction_state(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<PromptCompactionState> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     // A background request is claimed against an immutable transcript high
     // water mark. A compaction produced later may only shape that request when
     // its cumulative canonical cursor is itself inside the claimed snapshot.
     let query = format!(
         r#"{{
             CompactionEntry(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {scope} }},
                 order: {{ sequence: ASC }}
             ) {{
                 compaction_key
@@ -171,7 +197,7 @@ pub(crate) async fn load_prompt_compaction_state(
         Some(value) => serde_json::from_value(value.clone())?,
         None => Vec::new(),
     };
-    validate_compaction_chain(session_id, &rows)?;
+    validate_compaction_chain(agent_did, session_id, requester_did, &rows)?;
     let active_len = through_sequence.map_or(rows.len(), |cutoff| {
         rows.iter()
             .rposition(|row| {
@@ -207,12 +233,14 @@ pub(crate) async fn load_prompt_compaction_state(
 pub async fn load_compaction_entries(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
 ) -> Result<Vec<CompactionEntry>> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             CompactionEntry(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                filter: {{ {scope} }},
                 order: {{ sequence: ASC }}
             ) {{
                 session_id
@@ -317,7 +345,7 @@ pub(crate) async fn save_compaction_entry(
     original_tokens: usize,
     compacted_tokens: usize,
 ) -> Result<CompactionEntry> {
-    let state = load_prompt_compaction_state(node, session_id, None).await?;
+    let state = load_prompt_compaction_state(node, session_id, agent_did, None, None).await?;
     save_compaction_entry_with_requester_did(
         node,
         session_id,
@@ -357,11 +385,13 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
     let compacted_through_sequence = Some(compacted_through_sequence);
     let summary = summary.trim().to_string();
     let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let escaped_agent_did = escape_graphql_string(agent_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_request_doc_id = escape_graphql_string(request_doc_id);
     let requester_did_field = super::requester_did_create_field(requester_did);
     let summary = &summary;
+    let scope = &scope;
     let escaped_session_id = &escaped_session_id;
     let escaped_agent_did = &escaped_agent_did;
     let escaped_request_id = &escaped_request_id;
@@ -377,7 +407,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                 let query = format!(
                     r#"{{
                     CompactionEntry(
-                        filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
+                        filter: {{ {scope} }},
                         order: {{ sequence: ASC }}
                     ) {{
                         compaction_key sequence summary messages_compacted
@@ -395,7 +425,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
                         .cloned()
                         .unwrap_or_else(|| serde_json::json!([])),
                 )?;
-                validate_compaction_chain(session_id, &rows)?;
+                validate_compaction_chain(agent_did, session_id, requester_did, &rows)?;
                 let actual_generation = compaction_generation(&rows)?;
                 if actual_generation != expected_generation {
                     if let Some(entry) = reconcile_exact_redelivery(
@@ -449,7 +479,7 @@ pub(crate) async fn save_compaction_entry_with_requester_did(
 
                 let sequence =
                     u32::try_from(rows.len() + 1).context("compaction sequence overflow")?;
-                let compaction_key = format!("{session_id}:{sequence}");
+                let compaction_key = compaction_key(agent_did, session_id, requester_did, sequence);
                 // DefraDB canonicalizes fractional seconds with Go's RFC3339Nano
                 // formatter, which trims trailing zeros.  Emit whole seconds so the
                 // value returned from this create is byte-identical to the value
@@ -555,14 +585,11 @@ fn reconcile_exact_redelivery(
 
     let persisted_files_read = decode_paths(&persisted.files_read)?;
     let persisted_files_modified = decode_paths(&persisted.files_modified)?;
-    let requester_matches = persisted.requester_did.as_deref().and_then(|did| {
-        let did = did.trim();
-        (!did.is_empty()).then_some(did)
-    }) == requester_did.map(str::trim).filter(|did| !did.is_empty());
+    let requester_matches = persisted.requester_did.as_deref() == requester_did;
     let matches = persisted.agent_did == agent_did
         && requester_matches
-        && persisted.request_id == request_id
-        && persisted.request_doc_id == request_doc_id
+        && persisted.request_id.as_deref() == Some(request_id)
+        && persisted.request_doc_id.as_deref() == Some(request_doc_id)
         && persisted.summary == summary
         && persisted.messages_compacted == messages_compacted
         && persisted.compacted_through_sequence == compacted_through_sequence

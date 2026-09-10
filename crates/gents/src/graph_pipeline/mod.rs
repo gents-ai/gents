@@ -24,7 +24,6 @@ pub use run::{
     request_graph_run_cancellation, request_graph_run_cancellation_with_access, GraphResultRef,
     GraphRunGroupView, GraphRunRequestView, GraphRunResultView, GraphRunStageView, GraphRunView,
 };
-pub(crate) use runtime::materialize_graph_revision_in_txn;
 pub use runtime::{
     activate_graph_revision, activate_graph_revision_with_access, graph_run_terminal_decision,
     load_active_graph_plan_with_access, materialize_graph_revision, publish_graph_plan,
@@ -34,8 +33,9 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     fence_graph_publication_in_txn, fence_graph_root_request_in_txn, graph_artifact_is_reserved,
-    graph_artifact_is_visible, load_visible_package_artifact_ids,
+    graph_artifact_is_visible, load_runtime_graph_artifacts_in_txn,
 };
+pub(crate) use runtime::{load_active_graph_plan_in_txn, materialize_graph_revision_in_txn};
 pub use tools::{
     CompileGraphArgs, CompileGraphResponse, CompileGraphTool, GraphPipelineToolError,
     COMPILE_GRAPH_TOOL_NAME, GRAPH_PIPELINE_TOOL_NAMES,
@@ -43,10 +43,9 @@ pub use tools::{
 pub use types::{
     BundledProvenance, CapabilityManifestEntry, DeliveryConcurrency, DeliveryMode, Diagnostic,
     DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
-    GroupCount, PackageArtifactKind, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode,
-    PlannedPackageArtifact, PlannedResult, PortCardinality, PortRef, PortSpec,
-    RequiredSchemaDigest, ResultCardinality, ResultContract, StageCapability, WorkspaceAuthority,
-    COMPILER_VERSION,
+    GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedPackageArtifact,
+    PlannedResult, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
+    ResultContract, StageCapability, WorkspaceAuthority, COMPILER_VERSION,
 };
 
 #[cfg(test)]

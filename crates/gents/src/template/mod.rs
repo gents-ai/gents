@@ -6,7 +6,6 @@ mod tests;
 use minijinja::{AutoEscape, Environment, UndefinedBehavior};
 
 pub mod catalog;
-pub mod reads;
 
 pub struct TemplateScope {
     pub event: serde_json::Value,
@@ -81,92 +80,6 @@ pub fn render_template(template: &str, scope: &TemplateScope) -> Result<String, 
         return Err(TemplateError::SizeCap(rendered.len()));
     }
     Ok(rendered)
-}
-
-pub fn render_system_prompt(
-    template: &str,
-    node: serde_json::Value,
-    cat: &catalog::Catalog,
-) -> Result<String, TemplateError> {
-    if !template.contains("{{") && !template.contains("{%") && !template.contains("{#") {
-        return Ok(template.to_string());
-    }
-    reads::validate_system_template(template, cat)?;
-    let scope = TemplateScope {
-        event: serde_json::json!({}),
-        doc: None,
-        args: None,
-        group: None,
-        node,
-        ctx: serde_json::json!({}),
-    };
-    render_template(template, &scope)
-}
-
-pub fn render_request_context_template(
-    template: &str,
-    node: serde_json::Value,
-    ctx: serde_json::Value,
-    cat: &catalog::Catalog,
-) -> Result<String, TemplateError> {
-    validate_catalog_scope(template, cat, catalog::Site::RequestContext)?;
-    let scope = TemplateScope {
-        event: serde_json::json!({}),
-        doc: None,
-        args: None,
-        group: None,
-        node,
-        ctx,
-    };
-    render_template(template, &scope)
-}
-
-pub fn validate_request_context_template(
-    template: &str,
-    cat: &catalog::Catalog,
-) -> Result<(), TemplateError> {
-    validate_catalog_scope(template, cat, catalog::Site::RequestContext)
-}
-
-fn validate_catalog_scope(
-    template: &str,
-    cat: &catalog::Catalog,
-    site: catalog::Site,
-) -> Result<(), TemplateError> {
-    let reads = reads::collect_request_reads(template)?;
-    for var in reads {
-        if !is_catalog_scoped_ref(&var) {
-            continue;
-        }
-        if !cat.is_available_at(&var, site) {
-            return Err(TemplateError::Render(format!(
-                "template references unavailable variable `{var}` at {site:?}"
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn is_catalog_scoped_ref(var: &str) -> bool {
-    var == "node" || var == "ctx" || var.starts_with("node.") || var.starts_with("ctx.")
-}
-
-pub fn collection_summary(node: &defra_node::EmbeddedNode) -> anyhow::Result<String> {
-    let mut names = node.list_collections()?;
-    names.sort();
-    let mut lines = Vec::with_capacity(names.len() + 1);
-    lines.push(format!("collections: {}", names.len()));
-    for name in names {
-        let Some(collection) = node.get_collection(&name)? else {
-            continue;
-        };
-        lines.push(format!(
-            "- {}: {} fields",
-            collection.name,
-            collection.fields.len()
-        ));
-    }
-    Ok(lines.join("\n"))
 }
 
 pub fn task_node_ctx(

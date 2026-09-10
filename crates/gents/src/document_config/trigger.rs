@@ -7,12 +7,15 @@ use serde::{Deserialize, Serialize};
 /// request, not to a new task-run lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct Trigger {
     pub agent_did: String,
     pub trigger_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
     pub task_id: String,
     pub source: TriggerSource,
@@ -21,14 +24,18 @@ pub struct Trigger {
         deserialize_with = "super::serde_helpers::deserialize_enabled",
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
     /// Reuse parallel / serial / latest_only semantics. Absent/null is Parallel
     /// for both schedule and event sources, matching the graph-edge default.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub concurrency: Option<ConcurrencyMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub updated_at: Option<String>,
     /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
@@ -36,6 +43,7 @@ pub struct Trigger {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }
 
@@ -45,6 +53,7 @@ pub struct Trigger {
 /// does not require a persisted Trigger document.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum TriggerSource {
     Schedule { schedule_id: String },
     Event { event_source_id: String },
@@ -66,6 +75,7 @@ pub struct TriggerObservation {
     Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ConcurrencyMode {
     #[default]
     Parallel,

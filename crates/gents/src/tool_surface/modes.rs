@@ -1,12 +1,13 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::toolset::CliToolConfig;
 
 use super::policy::{EndpointScope, ToolPolicySurface};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum FileToolMode {
     #[default]
     Off,
@@ -42,6 +43,7 @@ impl FileToolMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum BashMode {
     #[default]
     Off,

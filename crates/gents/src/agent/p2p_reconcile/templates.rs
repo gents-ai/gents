@@ -234,12 +234,16 @@ const CONVERSATION_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
@@ -254,7 +258,6 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
 ];
 
@@ -263,8 +266,8 @@ const CONVERSATION_TRANSCRIPT_COLLECTIONS: &[&str] = &[
 /// requester and owning agent, while the small control plane lets a client
 /// render behaviors and automations without importing arbitrary history.
 /// `InferenceBackend` is deliberately absent: the frozen schema contains raw
-/// API-key material. Mobile needs a future redacted backend projection rather
-/// than replication of the credential-bearing document.
+/// API-key material. Clients resolve model choices through inference profiles;
+/// backend credentials remain on their existing operator/runtime route.
 pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -272,15 +275,20 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
     "PersonaConfigRequest",
     "PeerEndpoint",
     "SessionHydrationRequest",
     "AgentBehavior",
-    "ToolSelection",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
@@ -288,7 +296,8 @@ pub const CLIENT_COLLECTIONS: &[&str] = &[
     "EthTool",
     "Task",
     "Schedule",
-    "EventTrigger",
+    "Trigger",
+    "EventSource",
     "AgentBehaviorReadiness",
 ];
 
@@ -305,7 +314,6 @@ pub const CLIENT_TO_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
     "MailboxItem",
     "PersonaConfigRequest",
@@ -345,28 +353,17 @@ const CONVERSATION_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
         collection: "CompactionEntry",
         field: "requester_did",
         source: DidSource::PeerDid,
     },
 ];
 
-/// Requester-scoped session-index grant. The database replicator owns initial
-/// replay and reconnect recovery; desktop paging reads its local replica.
-pub const CLIENT_INDEX_COLLECTIONS: [&str; 3] =
-    ["AgentConversation", "AgentSession", "MailboxItem"];
+/// Requester-scoped session-index grant. Complete historical index hydration
+/// is handled separately by the desktop's node-global branchable pull.
+pub const CLIENT_INDEX_COLLECTIONS: [&str; 2] = ["AgentSession", "MailboxItem"];
 
 const CLIENT_INDEX_RULES: &[CollectionRule] = &[
-    CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
     CollectionRule {
         collection: "AgentSession",
         field: "requester_did",
@@ -384,8 +381,8 @@ const CLIENT_INDEX_RULES: &[CollectionRule] = &[
 /// literal because the catalog is deliberately dependency-free strings.
 pub const AGENT_DIRECTORY_COLLECTION: &str = "AgentDirectoryEntry";
 
-/// Machine template collections: the conversation plane plus the agent
-/// directory. Order mirrors CONVERSATION_COLLECTIONS + the directory.
+/// Machine template collections: the ordinary conversation plane plus mailbox,
+/// hydration and directory observations. Credentials remain operator-only.
 const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentRequest",
     "AgentResponse",
@@ -393,18 +390,22 @@ const MACHINE_COLLECTIONS: &[&str] = &[
     "AgentToolCall",
     "AgentToolResult",
     "AgentSession",
-    "AgentConversation",
     "CompactionEntry",
-    "MailboxItem",
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
+    "MailboxItem",
     "SessionHydrationRequest",
     AGENT_DIRECTORY_COLLECTION,
 ];
@@ -441,11 +442,6 @@ const MACHINE_RULES: &[CollectionRule] = &[
         source: DidSource::PeerDid,
     },
     CollectionRule {
-        collection: "AgentConversation",
-        field: "requester_did",
-        source: DidSource::PeerDid,
-    },
-    CollectionRule {
         collection: "CompactionEntry",
         field: "requester_did",
         source: DidSource::PeerDid,
@@ -471,14 +467,20 @@ const MACHINE_RULES: &[CollectionRule] = &[
 /// the operator wants the full config set replicated, not per-peer slices.
 const AGENT_CONFIG_COLLECTIONS: &[&str] = &[
     "AgentBehavior",
-    "ToolSelection",
-    "InferenceBackend",
+    "AgentContext",
+    "CompactionConfig",
+    "Tools",
+    "SubagentTarget",
     "InferenceProfile",
+    "InferenceSampling",
+    "InferenceExecution",
+    "InferenceRetryPolicy",
     "ToolServiceRegistry",
     "Skill",
     "DatastoreToolSurface",
     "ChainKeyBinding",
     "EthTool",
+    "InferenceBackend",
 ];
 
 /// Coordinator → host leg for subagent delegation: carry only bridges
@@ -674,7 +676,7 @@ mod tests {
         let t = resolve_template("conversation").unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(t.collections.len(), 17);
+        assert_eq!(t.collections.len(), 21);
         assert!(t.collections.contains(&"AgentRequest"));
         assert!(t.collections.contains(&"AgentBehavior"));
         assert!(t.collections.contains(&"ChainKeyBinding"));
@@ -701,7 +703,7 @@ mod tests {
     fn conversation_scope_filters_transcript_by_requester() {
         let t = resolve_template("conversation").unwrap();
         let f = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-        assert_eq!(f.len(), 8);
+        assert_eq!(f.len(), 7);
         let p = f.get("AgentRequest").unwrap();
         assert_eq!(single_string_eq(p), Some(("requester_did", "did:key:bob")));
     }
@@ -783,13 +785,10 @@ mod tests {
         let t = resolve_template(CLIENT_INDEX_TEMPLATE).unwrap();
         assert_eq!(t.delivery, Delivery::Push);
         assert!(matches!(t.scope, Scope::PerCollection(_)));
-        assert_eq!(
-            t.collections,
-            &["AgentConversation", "AgentSession", "MailboxItem"]
-        );
+        assert_eq!(t.collections, &["AgentSession", "MailboxItem"]);
 
         let filter = scope_filter(&t.scope, t.collections, "did:key:phone", "did:key:home");
-        assert_eq!(filter.len(), 3);
+        assert_eq!(filter.len(), 2);
         for collection in &CLIENT_INDEX_COLLECTIONS {
             let predicate = filter
                 .get(*collection)
@@ -877,12 +876,7 @@ mod tests {
                 "unexpected subagent-host filter for {col}"
             );
         }
-        for local_collection in [
-            "AgentToolResult",
-            "AgentSession",
-            "AgentConversation",
-            "CompactionEntry",
-        ] {
+        for local_collection in ["AgentToolResult", "AgentSession", "CompactionEntry"] {
             assert!(!t.collections.contains(&local_collection));
             assert!(!f.contains_key(local_collection));
         }

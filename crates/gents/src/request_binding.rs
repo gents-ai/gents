@@ -67,13 +67,8 @@ pub(crate) async fn load_agent_request(
                 behavior_id
                 session_id
                 content
-                temperature
-                top_p
-                top_k
-                seed
-                max_tokens
                 max_total_tokens
-                metadata
+                input
                 execution_origin
                 created_at
                 deadline
@@ -89,7 +84,7 @@ pub(crate) async fn load_agent_request(
                 caused_by_trigger_context
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
             }}
         }}"#,

@@ -18,6 +18,7 @@ use super::methods::{
 
 pub const ETH_USER_AGENT: &str = concat!("gents-eth/", env!("CARGO_PKG_VERSION"));
 pub const ETH_GET_LOGS_MAX_RANGE: u64 = 1000;
+const DEFAULT_RPC_TIMEOUT_SECS: i64 = 30;
 
 #[async_trait]
 pub trait JsonRpcTransport: Send + Sync {
@@ -31,9 +32,16 @@ pub struct HttpJsonRpc {
 
 impl HttpJsonRpc {
     pub fn new() -> Result<Self> {
+        Self::with_timeout(HttpEthRpc::configured_timeout(None)?)
+    }
+
+    pub fn with_timeout(timeout: Duration) -> Result<Self> {
+        if timeout.is_zero() {
+            bail!("eth rpc_timeout_secs must be positive");
+        }
         let client = reqwest::Client::builder()
             .user_agent(ETH_USER_AGENT)
-            .timeout(Duration::from_secs(30))
+            .timeout(timeout)
             .build()
             .context("building eth JSON-RPC HTTP client")?;
         Ok(Self { client })
@@ -79,16 +87,38 @@ pub struct EthRpcClient<T> {
 pub type HttpEthRpc = EthRpcClient<HttpJsonRpc>;
 
 impl HttpEthRpc {
+    pub fn configured_timeout(seconds: Option<i64>) -> Result<Duration> {
+        let seconds = seconds.unwrap_or(DEFAULT_RPC_TIMEOUT_SECS);
+        if seconds <= 0 {
+            bail!("eth rpc_timeout_secs must be positive");
+        }
+        Ok(Duration::from_secs(seconds as u64))
+    }
+
     pub fn http(
         rpc_url: impl Into<String>,
         expected_chain_id: u64,
         query_methods: &[String],
     ) -> Result<Self> {
+        Self::http_with_timeout(
+            rpc_url,
+            expected_chain_id,
+            query_methods,
+            Self::configured_timeout(None)?,
+        )
+    }
+
+    pub fn http_with_timeout(
+        rpc_url: impl Into<String>,
+        expected_chain_id: u64,
+        query_methods: &[String],
+        timeout: Duration,
+    ) -> Result<Self> {
         Self::new(
             rpc_url,
             expected_chain_id,
             query_methods,
-            HttpJsonRpc::new()?,
+            HttpJsonRpc::with_timeout(timeout)?,
         )
     }
 }
@@ -677,6 +707,50 @@ mod tests {
         assert_eq!(
             balance["params"],
             json!(["0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "latest"])
+        );
+    }
+
+    #[test]
+    fn rpc_timeout_defaults_and_invalid_limits() {
+        assert_eq!(
+            HttpEthRpc::configured_timeout(None).unwrap(),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            HttpEthRpc::configured_timeout(Some(9)).unwrap(),
+            Duration::from_secs(9)
+        );
+        assert!(HttpEthRpc::configured_timeout(Some(0)).is_err());
+        assert!(HttpEthRpc::configured_timeout(Some(-1)).is_err());
+        assert!(HttpJsonRpc::with_timeout(Duration::ZERO).is_err());
+    }
+
+    #[tokio::test]
+    async fn configured_http_timeout_bounds_an_unresponsive_rpc() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+        let rpc = HttpEthRpc::http_with_timeout(
+            &url,
+            8453,
+            &["eth_chainId".into()],
+            Duration::from_millis(100),
+        )
+        .unwrap();
+        let result =
+            tokio::time::timeout(Duration::from_secs(5), rpc.call("eth_chainId", json!([]))).await;
+        server.abort();
+        let error = result
+            .expect("configured timeout must beat the default 30 seconds")
+            .expect_err("server never responds");
+        assert!(
+            error.chain().any(|cause| cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)),
+            "{error:#}"
         );
     }
 

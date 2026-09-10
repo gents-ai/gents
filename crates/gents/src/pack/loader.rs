@@ -15,57 +15,76 @@ pub fn load_pack_config(
     environment: &dyn Fn(&str) -> Option<String>,
 ) -> Result<PackConfig> {
     validate_pack_manifest(manifest)?;
-    anyhow::ensure!(
-        !options.agent_did.trim().is_empty(),
-        "installation owner DID must not be blank"
-    );
     let path = manifest
         .config
         .as_deref()
         .context("pack has no configuration")?;
     let bytes = read_asset(path).with_context(|| format!("reading pack config {path}"))?;
-    let mut value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
-    interpolate_values(&mut value, environment)?;
+    let value: Value = serde_json::from_slice(&bytes).context("parsing pack config JSON")?;
+    decode_pack_config(value, Some(options), environment, &|_, _, reference| {
+        let mut prompt = reference.to_owned();
+        hydrate_sidecar(&mut prompt, path, manifest, read_asset)?;
+        Ok(prompt)
+    })
+}
+
+/// Decode canonical authoring for both distributed packs and local configuration.
+/// Explicit install scope wins over ambient environment. Without install options,
+/// the authored principal must supply its owner. Sidecar access stays with the
+/// caller's asset/filesystem boundary; sidecar contents are never interpolated.
+pub fn decode_pack_config(
+    mut value: Value,
+    options: Option<&PackInstallOptions>,
+    environment: &dyn Fn(&str) -> Option<String>,
+    read_sidecar: &dyn Fn(crate::Collection, &str, &str) -> Result<String>,
+) -> Result<PackConfig> {
+    let authored_owner = if options.is_none() {
+        value
+            .pointer("/agent_principal/agent_did")
+            .and_then(Value::as_str)
+            .map(|owner| {
+                interpolate::interpolate_with(owner, environment).map_err(|missing| {
+                    anyhow::anyhow!(
+                        "principal owner references unset variables: {}",
+                        missing.join(", ")
+                    )
+                })
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let owner = options
+        .map(|options| options.agent_did.as_str())
+        .or(authored_owner.as_deref())
+        .context("configuration requires an explicit principal owner")?;
+    anyhow::ensure!(
+        !owner.trim().is_empty(),
+        "configuration owner DID must not be blank"
+    );
+    interpolate_values(&mut value, &|name| {
+        if name == "GENTS_PACK_AGENT_DID" {
+            Some(owner.to_owned())
+        } else {
+            environment(name)
+        }
+    })?;
     let root = value
         .as_object_mut()
         .context("pack config must be an object")?;
     bind_owner(
         root.get_mut("agent_principal")
             .context("pack config requires agent_principal")?,
-        &options.agent_did,
+        owner,
         "agent_principal",
     )?;
     // These are document roots, not an unrestricted recursive DID replacement.
     // The canonical serde decoder below rejects unknown collections/fields.
-    for collection in [
-        "agent_behaviors",
-        "contexts",
-        "compactions",
-        "tools",
-        "subagent_targets",
-        "skills",
-        "datastore_tool_surfaces",
-        "chain_key_bindings",
-        "eth_tools",
-        "inference_backends",
-        "inference_profiles",
-        "inference_sampling",
-        "inference_execution",
-        "inference_retry_policies",
-        "tool_service_registries",
-        "projection_acp_bindings",
-        "tasks",
-        "triggers",
-        "schedules",
-        "event_sources",
-        "callbacks",
-        "callback_bindings",
-        "callback_modules",
-        "repository_placements",
-        "graphs",
-        "graph_intents",
-        "graph_capabilities",
-    ] {
+    for collection in crate::Collection::ALL
+        .into_iter()
+        .filter_map(|collection| collection.dir_name())
+        .chain(["graph_intents", "graph_capabilities"])
+    {
         if let Some(values) = root.get_mut(collection) {
             if values.is_null() {
                 continue;
@@ -74,7 +93,7 @@ pub fn load_pack_config(
                 .as_array_mut()
                 .with_context(|| format!("{collection} must be an array or null"))?;
             for (index, row) in rows.iter_mut().enumerate() {
-                bind_owner(row, &options.agent_did, &format!("{collection}[{index}]"))?;
+                bind_owner(row, owner, &format!("{collection}[{index}]"))?;
             }
         }
     }
@@ -82,11 +101,20 @@ pub fn load_pack_config(
         serde_json::from_value(value).context("decoding canonical pack configuration")?;
     for context in &mut config.contexts {
         if let Some(prompt) = &mut context.system_prompt {
-            hydrate_sidecar(prompt, path, manifest, read_asset)?;
+            if prompt.starts_with("./") {
+                *prompt =
+                    read_sidecar(crate::Collection::AgentContext, &context.context_id, prompt)?;
+            }
         }
     }
     for task in &mut config.tasks {
-        hydrate_sidecar(&mut task.prompt_template, path, manifest, read_asset)?;
+        if task.prompt_template.starts_with("./") {
+            task.prompt_template = read_sidecar(
+                crate::Collection::Task,
+                &task.task_id,
+                &task.prompt_template,
+            )?;
+        }
     }
     Ok(config)
 }

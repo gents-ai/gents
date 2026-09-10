@@ -159,6 +159,8 @@ pub(crate) struct LeanQueueDeadlineConformanceCase {
     pub(crate) post_coalesced_pending_count: usize,
     pub(crate) automated_drained_request_ids: Vec<usize>,
     pub(crate) preserved_user_pending_request_ids: Vec<usize>,
+    pub(crate) preserved_foreign_requester_request_ids: Vec<usize>,
+    pub(crate) preserved_foreign_owner_request_ids: Vec<usize>,
     pub(crate) post_terminal_request_ids: Vec<usize>,
     pub(crate) pre_request_deadline: Option<usize>,
     pub(crate) synthesized_claim_deadline: Option<usize>,

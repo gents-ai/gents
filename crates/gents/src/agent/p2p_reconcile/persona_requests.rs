@@ -6,7 +6,7 @@
 //! the server-side sweep that drives every `pending` row to a terminal
 //! `applied`/`rejected` status: it loads the row, builds a
 //! [`PersonaCatalogView`] straight from the source collections
-//! (`InferenceBackend`, `WorkspaceRoot`, `InferenceProfile`, this agent's own
+//! (`WorkspaceRoot`, `InferenceProfile`, this agent's own
 //! `AgentBehavior` rows) — never from the `AgentDirectoryEntry` projection,
 //! so this reconciler never depends on the directory sweep having already
 //! run — runs [`decide_persona_request`], and on `Admit` calls
@@ -26,11 +26,11 @@
 //! orphan config for a phantom or foreign agent.
 //!
 //! CRASH REPAIR — [`apply_persona_request`] is idempotent: if a prior tick
-//! applied the request (writing the `AgentBehavior`/`ToolSelection`) but
+//! applied the request (writing the `AgentBehavior`/`AgentContext`/`Tools`) but
 //! crashed or errored before this reconciler could write `status: applied`
 //! back onto the row, the row is still `pending` and gets re-processed. The
 //! re-run's catalog view includes the already-materialized behavior, so
-//! `apply_persona_request` recognizes the `sel-{request_key}` selection and
+//! `apply_persona_request` recognizes the request-owned context/tools and
 //! returns `repaired: true` instead of minting a duplicate — this tick only
 //! needs to (re)write the mark to converge.
 
@@ -244,7 +244,6 @@ fn validate_raw_persona_document(doc: &PersonaRequestDoc) -> Result<()> {
                 _ => None,
             },
         ),
-        ("backend_model", doc.backend_model.as_deref()),
         ("root", doc.root.as_deref()),
         ("preset", doc.preset.as_deref()),
         ("profile_id", doc.profile_id.as_deref()),
@@ -430,7 +429,6 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 behavior_id
                 clone_from
                 persona_name
-                backend_model
                 root
                 preset
                 profile_id
@@ -510,8 +508,7 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
 }
 
 /// Build a [`PersonaCatalogView`] straight from source collections: enabled
-/// `AgentPrincipal` DIDs, enabled `InferenceBackend` models
-/// (`"backend_id|model_name"`), enabled `WorkspaceRoot` paths,
+/// `AgentPrincipal` DIDs, enabled `WorkspaceRoot` paths,
 /// `InferenceProfile` ids, and `agent_did`'s own `AgentBehavior` rows.
 /// Deliberately independent of the `AgentDirectoryEntry` projection
 /// (`crate::agent::directory_projection`) — coupling admission to that
@@ -530,26 +527,20 @@ async fn load_catalog_view_from_node(
     let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
-            AgentPrincipal {{
+            AgentPrincipal(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 agent_did
-                enabled
-            }}
-            InferenceBackend {{
-                backend_id
-                models
                 enabled
             }}
             WorkspaceRoot {{
                 root_path
                 enabled
             }}
-            InferenceProfile {{
+            InferenceProfile(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 profile_id
             }}
             AgentBehavior(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 behavior_id
                 enabled
-                tool_selection_id
             }}
         }}"#
     );
@@ -563,20 +554,6 @@ async fn load_catalog_view_from_node(
             .filter_map(|row| {
                 let did = row.agent_did?.trim().to_string();
                 (!did.is_empty()).then_some(did)
-            })
-            .collect();
-
-    let available_models: BTreeSet<String> =
-        rows::<InferenceBackendRow>(&response, "InferenceBackend")?
-            .into_iter()
-            .filter(|row| row.enabled.unwrap_or(false))
-            .flat_map(|row| {
-                let backend_id = row.backend_id.unwrap_or_default();
-                row.models
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |model| format!("{backend_id}|{model}"))
-                    .collect::<Vec<_>>()
             })
             .collect();
 
@@ -614,14 +591,12 @@ async fn load_catalog_view_from_node(
                     behavior_id,
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
-                        tool_selection_id: row.tool_selection_id.unwrap_or_default(),
                     },
                 ))
             })
             .collect();
 
     Ok(PersonaCatalogView {
-        available_models,
         allowed_roots,
         available_profile_ids,
         known_agent_dids,
@@ -656,7 +631,6 @@ fn persona_request_doc_from_row(row: PersonaRequestRow) -> Option<PersonaRequest
         op,
         behavior_id: row.behavior_id,
         persona_name: row.persona_name,
-        backend_model: row.backend_model,
         root: row.root,
         preset: row.preset,
         profile_id: row.profile_id,
@@ -682,7 +656,6 @@ fn local_persona_record(doc: &PersonaRequestDoc) -> LocalPersonaRequestRecord {
             _ => None,
         },
         persona_name: doc.persona_name.clone(),
-        backend_model: doc.backend_model.clone(),
         root: doc.root.clone(),
         preset: doc.preset.clone(),
         profile_id: doc.profile_id.clone(),
@@ -762,8 +735,6 @@ struct PersonaRequestRow {
     #[serde(default)]
     persona_name: Option<String>,
     #[serde(default)]
-    backend_model: Option<String>,
-    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     preset: Option<String>,
@@ -790,16 +761,6 @@ struct AgentPrincipalCatalogRow {
 }
 
 #[derive(Deserialize)]
-struct InferenceBackendRow {
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    models: Option<Vec<String>>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
 struct WorkspaceRootRow {
     #[serde(default)]
     root_path: Option<String>,
@@ -819,8 +780,6 @@ struct AgentBehaviorCatalogRow {
     behavior_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
-    #[serde(default)]
-    tool_selection_id: Option<String>,
 }
 
 #[cfg(test)]
@@ -843,15 +802,50 @@ mod tests {
 
     async fn build_apply_node(tempdir: &tempfile::TempDir) -> Arc<EmbeddedNode> {
         let node = build_node(tempdir).await;
-        crate::agent::persona_ops::seed_persona_validation_references(&node)
+        crate::agent::persona_ops::seed_persona_validation_references(&node, "did:key:agent")
             .await
             .expect("persona validation references seed");
         node
     }
 
+    #[tokio::test]
+    async fn catalog_admission_only_offers_the_requested_principals_profiles() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        crate::agent::persona_ops::seed_persona_validation_references(&node, "did:key:foreign")
+            .await?;
+        ensure_no_errors(
+            &node
+                .execute(
+                    r#"mutation {
+            create_InferenceProfile(input: {
+                agent_did: "did:key:foreign", profile_id: "foreign-only",
+                backend_id: "backend", model_name: "model-1"
+            }) { _docID }
+        }"#,
+                )
+                .await,
+            "seed foreign profile",
+        )?;
+        let catalog = load_catalog_view_from_node(&node, "did:key:agent", None).await?;
+        assert_eq!(
+            catalog.known_agent_dids,
+            BTreeSet::from(["did:key:agent".into()])
+        );
+        assert_eq!(
+            catalog.available_profile_ids,
+            BTreeSet::from(["profile-1".into(), "profile-2".into()])
+        );
+        let mut request = pending_create_doc("foreign-profile", "did:key:agent");
+        request.profile_id = Some("foreign-only".into());
+        assert!(
+            matches!(decide_persona_request(&request, &catalog), PersonaVerdict::Reject(detail) if detail.contains("foreign-only"))
+        );
+        Ok(())
+    }
+
     fn happy_catalog(agent_did: &str) -> PersonaCatalogView {
         PersonaCatalogView {
-            available_models: BTreeSet::from(["openai|gpt-5".to_string()]),
             allowed_roots: BTreeSet::new(),
             available_profile_ids: BTreeSet::from(["profile-1".to_string()]),
             known_agent_dids: BTreeSet::from([agent_did.to_string()]),
@@ -874,7 +868,6 @@ mod tests {
             op_raw: "create".to_string(),
             op: Some(PersonaOp::Create { clone_from: None }),
             persona_name: Some("Research Assistant".to_string()),
-            backend_model: Some("openai|gpt-5".to_string()),
             preset: Some(crate::agent::persona_presets::PRESET_WRITE.to_string()),
             profile_id: Some("profile-1".to_string()),
             created_at: Some("2026-08-30T00:00:00Z".to_string()),
@@ -1091,7 +1084,7 @@ mod tests {
         let node = build_node(&tempdir).await;
 
         let mut doc = pending_create_doc("req-invalid", "did:key:agent");
-        doc.backend_model = Some("nope|nope".to_string());
+        doc.profile_id = Some("missing-profile".to_string());
         let mut catalog_by_agent = BTreeMap::new();
         catalog_by_agent.insert("did:key:agent".to_string(), happy_catalog("did:key:agent"));
         let store = FixtureStore {
@@ -1112,7 +1105,7 @@ mod tests {
         assert_eq!(rejected[0].0, "req-invalid");
         assert_eq!(
             rejected[0].1,
-            r#"unknown model "nope|nope" — pick from the published available_models: [openai|gpt-5]"#
+            r#"unknown profile "missing-profile" — pick from the published available_profile_ids: [profile-1]"#
         );
         Ok(())
     }
@@ -1241,7 +1234,6 @@ mod tests {
                 behavior.behavior_id.clone(),
                 BehaviorRef {
                     enabled: behavior.enabled,
-                    tool_selection_id: behavior.tool_selection_id.clone().unwrap_or_default(),
                 },
             );
         }
@@ -1301,32 +1293,12 @@ mod tests {
         )?);
         let agent_did = identity.did().to_string();
 
-        let seed = format!(
-            r#"mutation {{
-            create_AgentPrincipal(input: {{
-                agent_did: "{agent_did}",
-                display_name: "Persona Agent",
-                enabled: true,
-                created_at: "2026-07-23T00:00:00Z"
-            }}) {{ _docID }}
-            create_InferenceBackend(input: {{
-                backend_id: "openai",
-                name: "OpenAI",
-                provider_kind: "OpenAiCompatible",
-                enabled: true,
-                models: ["gpt-5"]
-            }}) {{ _docID }}
-            create_InferenceProfile(input: {{
-                profile_id: "profile-1",
-                display_name: "Fast"
-            }}) {{ _docID }}
-            create_WorkspaceRoot(input: {{
-                root_path: "/repo/allowed",
-                display_name: "Allowed Root",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-        );
+        crate::agent::persona_ops::seed_persona_validation_references(&node, &agent_did).await?;
+        let seed = r#"mutation {
+            create_WorkspaceRoot(input: {
+                root_path: "/repo/allowed", display_name: "Allowed Root", enabled: true
+            }) { _docID }
+        }"#;
         let response = node.execute(&seed).await;
         ensure_no_errors(&response, "seed persona reconciler integration fixtures")?;
 
@@ -1340,7 +1312,6 @@ mod tests {
             behavior_id: None,
             clone_from: None,
             persona_name: Some("Research Assistant".to_string()),
-            backend_model: Some("openai|gpt-5".to_string()),
             root: Some("/repo/allowed".to_string()),
             preset: Some("write".to_string()),
             profile_id: Some("profile-1".to_string()),
@@ -1372,15 +1343,53 @@ mod tests {
             Some("Research Assistant".to_string())
         );
         assert!(behavior.enabled);
+        let (context, tools) = crate::config_client::ConfigAccess::transact_local(
+            &node,
+            None,
+            "test.persona.context",
+            |txn| {
+                let behavior = behavior.clone();
+                Box::pin(async move {
+                    use crate::collection::Collection;
+                    use crate::config_client::read_desired_state_document_in_txn;
+                    let context: crate::document_config::AgentContext = serde_json::from_value(
+                        read_desired_state_document_in_txn(
+                            txn,
+                            Collection::AgentContext,
+                            &behavior.agent_did,
+                            behavior
+                                .context_id
+                                .as_deref()
+                                .context("persona context reference missing")?,
+                        )
+                        .await?
+                        .context("persona context missing")?,
+                    )?;
+                    let tools: crate::document_config::Tools = serde_json::from_value(
+                        read_desired_state_document_in_txn(
+                            txn,
+                            Collection::Tools,
+                            &behavior.agent_did,
+                            context
+                                .tools_id
+                                .as_deref()
+                                .context("persona tools reference missing")?,
+                        )
+                        .await?
+                        .context("persona tools missing")?,
+                    )?;
+                    Ok((context, tools))
+                })
+            },
+        )
+        .await?;
+        assert_eq!(context.tools_id.as_deref(), Some("tools-req-integration-1"));
+        let host = tools.host.context("write preset host tools missing")?;
+        assert_eq!(host.root.as_deref(), Some("/repo/allowed"));
         assert_eq!(
-            behavior.tool_selection_id,
-            Some("sel-req-integration-1".to_string())
+            host.bash.context("write preset bash missing")?.mode,
+            crate::tool_surface::BashMode::Unrestricted
         );
-
-        let selection = crate::load_tool_selection(&node, "sel-req-integration-1")
-            .await?
-            .expect("selection created");
-        assert_eq!(selection.enable_bash, Some(true));
 
         let status_query = r#"{
             PersonaConfigRequest(filter: { request_key: { _eq: "req-integration-1" } }) {
@@ -1436,24 +1445,12 @@ mod tests {
         let tempdir = tempfile::tempdir()?;
         let node = build_node(&tempdir).await;
 
+        crate::agent::persona_ops::seed_persona_validation_references(
+            &node,
+            "did:key:ceiling-agent",
+        )
+        .await?;
         let seed = r#"mutation {
-            create_AgentPrincipal(input: {
-                agent_did: "did:key:ceiling-agent",
-                display_name: "Ceiling Agent",
-                enabled: true,
-                created_at: "2026-08-06T00:00:00Z"
-            }) { _docID }
-            create_InferenceBackend(input: {
-                backend_id: "openai",
-                name: "OpenAI",
-                provider_kind: "OpenAiCompatible",
-                enabled: true,
-                models: ["gpt-5"]
-            }) { _docID }
-            create_InferenceProfile(input: {
-                profile_id: "profile-1",
-                display_name: "Fast"
-            }) { _docID }
             create_WorkspaceRoot(input: {
                 root_path: "/ceil/ws/inside",
                 display_name: "inside",
@@ -1491,7 +1488,6 @@ mod tests {
             op: Some(PersonaOp::Create { clone_from: None }),
             behavior_id: None,
             persona_name: Some("Escapee".to_string()),
-            backend_model: Some("openai|gpt-5".to_string()),
             root: Some("/outside/app".to_string()),
             preset: Some("readonly".to_string()),
             profile_id: Some("profile-1".to_string()),

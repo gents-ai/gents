@@ -5,9 +5,10 @@ use serde_json::json;
 #[test]
 fn failure_class_parser_accepts_only_canonical_persisted_values() {
     assert_eq!(
-        failure_class_from_str("approvalDenied"),
-        Some(ToolFailureClass::ApprovalDenied)
+        failure_class_from_str("policyDenied"),
+        Some(ToolFailureClass::PolicyDenied)
     );
+    assert_eq!(failure_class_from_str("approvalDenied"), None);
     assert_eq!(failure_class_from_str("approval_denied"), None);
     assert_eq!(failure_class_from_str("tool_not_found"), None);
 }

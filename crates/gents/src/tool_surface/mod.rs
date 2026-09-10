@@ -7,6 +7,7 @@ mod runtime_context;
 mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
+pub use build::measured_mcp_services_for_access;
 pub(crate) use build::{measured_available_mcp_service_ids, resolve_configured_tool_root};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
@@ -28,8 +29,8 @@ use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
 };
 use crate::defra_write::BoundedWriteTool;
-use crate::document_config::{QueryToolDecl, SubagentTarget, WriteToolDecl};
-use crate::meta_tools::{build_meta_tools, META_TOOL_NAMES};
+use crate::document_config::{QueryToolDecl, SubagentTargetDocument, WriteToolDecl};
+use crate::meta_tools::build_meta_tools;
 use crate::toolset::{
     background_tool_names, build_background_tools, build_context_budget_tool, build_goal_tools,
     build_session_history_tool, build_subagent_tools, subagent_tool_names, CliToolConfig, ToolSet,
@@ -47,9 +48,9 @@ pub struct ToolSurface {
     include_goal_tools: bool,
     include_goal_creation: bool,
     allowed_mcp_service_ids: Vec<String>,
+    remote_tools: Option<crate::document_config::RemoteTools>,
     subagent_tools: SubagentToolConfig,
     background_tools: BackgroundToolConfig,
-    approval_required_tools: Vec<String>,
     custom_tools: Vec<CustomToolFactory>,
     pub(super) enable_memory: bool,
     pub(super) enable_context_budget_tool: bool,
@@ -138,6 +139,10 @@ impl ToolSurface {
         self.enable_skills
     }
 
+    pub(crate) fn remote_tools(&self) -> Option<&crate::document_config::RemoteTools> {
+        self.remote_tools.as_ref()
+    }
+
     pub fn allowed_mcp_service_ids(&self) -> &[String] {
         &self.allowed_mcp_service_ids
     }
@@ -147,7 +152,7 @@ impl ToolSurface {
         &self.subagent_tools
     }
 
-    pub(crate) fn subagent_targets(&self) -> &[SubagentTarget] {
+    pub(crate) fn subagent_targets(&self) -> &[SubagentTargetDocument] {
         if self.subagent_tools.spawn_enabled {
             &self.subagent_tools.targets
         } else {
@@ -159,17 +164,13 @@ impl ToolSurface {
         &self.background_tools
     }
 
-    pub(crate) fn approval_required_tools(&self) -> &[String] {
-        &self.approval_required_tools
-    }
-
     pub(crate) fn retain_subagent_targets(
         &mut self,
         own_agent_did: &str,
         active_behavior_ids: &HashSet<String>,
     ) {
         self.subagent_tools.targets.retain(|target| {
-            if target.agent_did == own_agent_did {
+            if target.target_agent_did == own_agent_did {
                 active_behavior_ids.contains(&target.behavior_id)
             } else {
                 true
@@ -180,7 +181,10 @@ impl ToolSurface {
     pub fn tool_names(&self) -> Vec<String> {
         let mut names = self.host_tools.tool_names();
         if self.include_meta_tools {
-            names.extend(META_TOOL_NAMES.iter().map(|name| (*name).to_string()));
+            names.extend(crate::meta_tools::presented_tool_names(
+                self.remote_tools.as_ref().unwrap_or(&Default::default()),
+                &self.allowed_mcp_service_ids,
+            ));
         }
         names.extend(subagent_tool_names(&self.subagent_tools));
         names.extend(background_tool_names(&self.background_tools));
@@ -231,7 +235,7 @@ impl ToolSurface {
         self.lsp.as_ref()
     }
 
-    pub fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+    pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::toolset::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
         });
@@ -239,15 +243,19 @@ impl ToolSurface {
             .host_tools
             .build_native_tools_with_writethrough(writethrough)?;
         if self.include_meta_tools {
-            tools.extend(build_meta_tools(
-                runtime.node.clone(),
-                runtime.mcp_pool.clone(),
-                runtime.health_map.clone(),
-                runtime.local_hostname.clone(),
-                runtime.local_subnet.clone(),
-                runtime.agent_did.clone(),
-                self.allowed_mcp_service_ids.clone(),
-            ));
+            tools.extend(
+                build_meta_tools(
+                    runtime.node.clone(),
+                    runtime.mcp_pool.clone(),
+                    runtime.health_map.clone(),
+                    runtime.local_hostname.clone(),
+                    runtime.local_subnet.clone(),
+                    runtime.agent_did.clone(),
+                    self.allowed_mcp_service_ids.clone(),
+                    self.remote_tools.clone().unwrap_or_default(),
+                )
+                .await?,
+            );
         }
         tools.extend(build_subagent_tools(self.subagent_tools.clone()));
         tools.extend(build_background_tools(self.background_tools.clone()));
@@ -367,9 +375,9 @@ impl std::fmt::Debug for ToolSurface {
             .field("include_goal_tools", &self.include_goal_tools)
             .field("include_goal_creation", &self.include_goal_creation)
             .field("allowed_mcp_service_ids", &self.allowed_mcp_service_ids)
+            .field("remote_tools", &self.remote_tools)
             .field("subagent_tools", &self.subagent_tools)
             .field("background_tools", &self.background_tools)
-            .field("approval_required_tools", &self.approval_required_tools)
             .field(
                 "custom_tools",
                 &self
@@ -420,7 +428,16 @@ pub(crate) fn resolve_subagent_target_descriptions(
     tool_surface
         .subagent_targets()
         .iter()
-        .map(|target| (target.name.clone(), target.description_text().to_string()))
+        .map(|target| {
+            (
+                target.name.clone(),
+                target
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
         .collect()
 }
 
@@ -442,3 +459,6 @@ pub fn cli_tool(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod document_explanation_tests;

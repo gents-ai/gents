@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -22,118 +22,161 @@ use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queu
 ///
 /// # Concurrent callers
 ///
-/// Under two concurrent `interrupt_request` callers both observing an empty
-/// field, both will write; the last mutation wins. The latched value under
-/// contention is therefore "interrupt requested near T" rather than "at
-/// exactly T" — acceptable for audit semantics but weaker than a strict
-/// first-writer-wins contract. S7 (`interrupt_monotonicity`) holds on the
-/// ideal state machine as-stated (the field is never unset once set); the
-/// physical race only affects which timestamp gets persisted, not whether
-/// a timestamp is persisted.
+/// Same-node lookup and latch run in the existing transaction owner, preserving
+/// an already observed timestamp. Distributed concurrent writers still follow
+/// DefraDB's existing merge semantics.
 ///
 /// In P2P-replicated deployments, independent writers on different nodes
 /// may each stamp, and CRDT merge will pick whichever timestamp sorts
 /// higher by DefraDB's LWW rules. Same conclusion: audit meaning is
 /// preserved; microsecond-exact ordering is not.
 pub async fn interrupt_request(node: &EmbeddedNode, request_id: &str) -> Result<()> {
-    // Combined existence + latch-status check. We distinguish "no row" from
-    // "row with empty field" so that interrupting a bogus request id reports
-    // an error instead of silently succeeding with a no-op mutation.
-    //
-    // Pre-check is also an optimization: the submitter latches on first write,
-    // and subsequent writers must not clobber the timestamp. DefraDB's update
-    // mutation does not have an atomic "set-if-null" so we read-then-write.
-    let escaped_request_id = escape_graphql_string(request_id);
-    let lookup_query = format!(
-        r#"query {{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                limit: 1
-            ) {{
-                request_id
-                session_id
-                agent_did
-                interrupt_requested_at
-            }}
-        }}"#
-    );
-    let lookup = node.execute(&lookup_query).await;
-    if lookup.has_errors() {
-        bail!(
-            "interrupt_request({request_id}) lookup failed: {}",
-            lookup
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-    let row = lookup
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first());
-    let Some(row) = row else {
-        bail!("interrupt_request: request {request_id} not found");
-    };
-    let already_latched = row
-        .get("interrupt_requested_at")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| !s.is_empty());
-    if already_latched {
-        drain_request_queue_after_interrupt(node, request_id, row).await;
-        return Ok(());
-    }
+    let logical = escape_graphql_string(request_id);
+    interrupt_request_matching(node, format!("request_id:{{_eq:\"{logical}\"}}")).await
+}
 
-    let now = Utc::now().to_rfc3339();
-    let escaped_now = escape_graphql_string(&now);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                input: {{ interrupt_requested_at: "{escaped_now}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    // The latch mutation is idempotent and can race the source-spawn observer
-    // or another interrupt caller. Route it through the canonical write owner
-    // so DefraDB owns any auto-commit conflict handling.
-    let resp = crate::config_client::ConfigAccess::write_local_response(
+/// Interrupt the exact request already selected within a principal/requester scope.
+/// DefraDB ACP and the existing interruption owner retain all authorization and lifecycle work.
+pub async fn interrupt_request_by_doc_id(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
+    interrupt_request_matching(
         node,
+        exact_request_filter(request_doc_id, agent_did, requester_did)?,
+    )
+    .await
+}
+
+fn exact_request_filter(
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<String> {
+    anyhow::ensure!(
+        !request_doc_id.trim().is_empty() && !agent_did.trim().is_empty(),
+        "interrupt requires physical request and principal identity"
+    );
+    let physical = escape_graphql_string(request_doc_id);
+    let owner = escape_graphql_string(agent_did);
+    let requester = requester_did
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    Ok(format!(
+        "_docID:{{_eq:\"{physical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
+    ))
+}
+
+/// Latch the same exact interrupt through local or HTTP transaction access.
+/// The existing completion loop observes the durable intent on the target node.
+pub async fn interrupt_request_by_doc_id_with_access(
+    access: &crate::config_client::ConfigAccess,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<()> {
+    let filter = exact_request_filter(request_doc_id, agent_did, requester_did)?;
+    let row = access
+        .transact("interrupt.latch_request", |txn| {
+            let filter = &filter;
+            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
+        })
+        .await?;
+    if let crate::config_client::ConfigAccess::Local(node) = access {
+        drain_request_queue_after_interrupt(
+            node,
+            row["request_id"]
+                .as_str()
+                .expect("validated logical identity"),
+            &row,
+        )
+        .await;
+    }
+    Ok(())
+}
+
+async fn interrupt_request_matching(node: &EmbeddedNode, filter: String) -> Result<()> {
+    let row = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
         "interrupt.latch_request",
-        &mutation,
+        |txn| {
+            let filter = &filter;
+            Box::pin(async move { interrupt_request_matching_in_txn(txn, filter).await })
+        },
     )
     .await?;
-    // Defensive: confirm at least one row was updated. Zero rows would mean
-    // either the row was deleted between lookup and mutation, or another
-    // writer raced us (idempotent). Treat as success, log for observability.
-    let updated = resp
-        .data
-        .as_ref()
-        .and_then(|d| d.get("update_AgentRequest"))
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.len())
-        .unwrap_or(0);
-    if updated == 0 {
-        tracing::info!(
-            request_id = %request_id,
-            "interrupt_request mutation updated 0 rows; treating as idempotent (racy delete or concurrent latch)"
-        );
-    }
-    drain_request_queue_after_interrupt(node, request_id, row).await;
+    drain_request_queue_after_interrupt(
+        node,
+        row["request_id"]
+            .as_str()
+            .expect("validated logical identity"),
+        &row,
+    )
+    .await;
     Ok(())
+}
+
+async fn interrupt_request_matching_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    filter: &str,
+) -> Result<serde_json::Value> {
+    let lookup = txn.execute(&format!(r#"{{AgentRequest(filter: {{{filter}}}, limit: 2) {{_docID request_id session_id agent_did requester_did interrupt_requested_at}}}}"#)).await?;
+    let rows = lookup["data"]["AgentRequest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("interrupt request query omitted rows"))?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "interrupt request is missing or ambiguous within selected scope"
+    );
+    let row = rows[0].clone();
+    anyhow::ensure!(
+        row["request_id"].as_str().is_some(),
+        "interrupt request missing logical identity"
+    );
+    let physical = row["_docID"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("interrupt request missing physical identity"))?;
+    if row["interrupt_requested_at"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Ok(row);
+    }
+    let physical = escape_graphql_string(physical);
+    let now = escape_graphql_string(&Utc::now().to_rfc3339());
+    let result = txn.execute(&format!(r#"mutation {{update_AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}}, input: {{interrupt_requested_at: "{now}"}}) {{_docID}}}}"#)).await?;
+    let updated = result["data"]["update_AgentRequest"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("interrupt mutation omitted affected rows"))?;
+    anyhow::ensure!(
+        updated.len() == 1 && updated[0]["_docID"] == row["_docID"],
+        "interrupt mutation did not update the selected physical request"
+    );
+    Ok(row)
 }
 
 pub(crate) async fn interrupt_active_session_request(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
 ) -> Result<bool> {
-    let Some(request_id) = active_session_request_id(node, session_id).await? else {
+    let Some(row) = active_session_request(node, session_id, agent_did, requester_did).await?
+    else {
         return Ok(false);
     };
-    interrupt_request(node, &request_id).await?;
+    interrupt_request_by_doc_id(
+        node,
+        row.doc_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("active request has no physical identity"))?,
+        agent_did,
+        requester_did,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -141,52 +184,40 @@ pub(crate) async fn cancel_subagent_session_queue(
     node: &EmbeddedNode,
     session_id: &str,
     agent_did: &str,
+    requester_did: Option<&str>,
     reason: &str,
 ) -> Result<usize> {
-    drain_subagent_owned_queue(node, session_id, agent_did, reason).await
+    drain_subagent_owned_queue(node, session_id, agent_did, requester_did, reason).await
 }
 
-async fn active_session_request_id(
+pub(crate) async fn active_session_request(
     node: &EmbeddedNode,
     session_id: &str,
-) -> Result<Option<String>> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
-                    lifecycle_state: {{ _in: ["claimed", "processing"] }}
-                }},
-                order: [{{ created_at: ASC }}, {{ request_id: ASC }}],
-                limit: 1
-            ) {{
-                request_id
-            }}
-        }}"#
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let response=node.execute(&format!(r#"{{AgentRequest(filter:{{{scope},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#)).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "active request lookup failed: {:?}",
+        response.errors
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "query active request for session {session_id} failed: {}",
-            response
-                .errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
-
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("request_id"))
-        .and_then(|value| value.as_str())
-        .map(str::to_owned))
+    anyhow::ensure!(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .is_some(),
+        "active request query omitted rows"
+    );
+    let mut rows: Vec<gents_protocol::row::AgentRequestRow> =
+        crate::graphql::rows(&response, "AgentRequest")?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "multiple active physical requests in exact session scope"
+    );
+    Ok(rows.pop())
 }
 
 async fn drain_request_queue_after_interrupt(
@@ -223,6 +254,7 @@ async fn drain_request_queue_after_interrupt(
         node,
         session_id,
         agent_did,
+        row.get("requester_did").and_then(|value| value.as_str()),
         "automated wake-up drained because active request was interrupted",
     )
     .await
@@ -380,3 +412,9 @@ pub fn spawn_request_interrupt_observer(
         }
     })
 }
+
+#[cfg(test)]
+mod scope_tests;
+
+#[cfg(test)]
+mod physical_scope_tests;

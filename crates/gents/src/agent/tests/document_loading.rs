@@ -6,10 +6,22 @@ use gents_protocol::row::BehaviorReadinessUnavailableReason;
 use super::super::*;
 use super::support::*;
 use crate::default_behavior_id_for_agent;
-use crate::document_config::{AgentBehavior, ToolSelectionDocument};
+use crate::document_config::{AgentBehavior, SubagentTargetDocument, Tools};
 use crate::ensure_runtime_schemas;
 use crate::tool_surface::ToolCeiling;
 use crate::toolset::ToolSet;
+
+/// Install an explicit canonical behavior/context/tools/profile/backend chain
+/// (shared `test_support::install_test_behavior`) and bind it as the
+/// principal's explicit default. `ensure_agent_principal` returns the
+/// `AgentPrincipal` only and invents no executable configuration, so a test
+/// that needs a runnable default chooses one deliberately.
+async fn install_default_behavior_chain(node: &EmbeddedNode, did: &str, behavior_id: &str) {
+    crate::test_support::install_test_behavior(node, did, behavior_id).await;
+    crate::document_config::upsert_agent_principal(node, did, None, Some(behavior_id), true)
+        .await
+        .unwrap();
+}
 
 #[tokio::test]
 async fn document_constructor_rejects_node_without_signing_did_before_migrations() {
@@ -27,22 +39,26 @@ async fn document_constructor_rejects_node_without_signing_did_before_migrations
         Err(error) => error,
     };
 
-    assert!(error
-        .to_string()
-        .contains("EmbeddedNode configured with a node signing DID"));
+    assert!(
+        error
+            .to_string()
+            .contains("EmbeddedNode configured with a node signing DID")
+    );
 }
 
 #[tokio::test]
-async fn from_default_behavior_documents_marks_unbound_default_behavior_unavailable() {
+async fn from_default_behavior_documents_preserves_identity_only_principal() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("bootstrap-profile"));
     let did = identity.did().to_string();
-    let default_behavior_id = default_behavior_id_for_agent(&did);
-
+    // Identity bootstrap deliberately creates no executable default.
+    crate::ensure_agent_principal(node.as_ref(), &did)
+        .await
+        .unwrap();
     let agent = Gents::from_default_behavior_documents(
         node,
-        identity.clone(),
+        identity,
         DocumentRuntimeOptions {
             tool_ceiling: ToolCeiling::readonly(),
             ..Default::default()
@@ -50,17 +66,10 @@ async fn from_default_behavior_documents_marks_unbound_default_behavior_unavaila
     )
     .await
     .unwrap();
-
     assert!(agent.behaviors().is_empty());
-    assert_eq!(agent.default_behavior_id(), default_behavior_id);
     assert_eq!(agent.agent_did(), did);
-    assert_eq!(
-        agent
-            .unavailable_behaviors()
-            .get(default_behavior_id.as_str())
-            .map(|unavailable| unavailable.diagnostic.as_str()),
-        Some(format!("behavior {default_behavior_id} has no backend binding").as_str())
-    );
+    assert!(agent.default_behavior_id().is_empty());
+    assert!(agent.unavailable_behaviors().is_empty());
 }
 
 #[tokio::test]
@@ -71,28 +80,78 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
 
-    crate::ensure_agent_principal(node.as_ref(), &did)
+    install_default_behavior_chain(node.as_ref(), &did, &default_behavior_id).await;
+    // The #649 sampling pins: an explicit sampling document is the only way a
+    // profile can express sampling beyond temperature; the chain it must reach
+    // the provider request body through is behavior.sampling.
+    let sampling_id = format!("{default_behavior_id}:sampling");
+    write_document(
+        node.as_ref(),
+        crate::Collection::InferenceSampling,
+        &crate::document_config::InferenceSampling {
+            agent_did: did.clone(),
+            sampling_id: sampling_id.clone(),
+            temperature: Some(0.2),
+            top_p: Some(0.95),
+            top_k: Some(40),
+            min_p: Some(0.05),
+            frequency_penalty: Some(0.5),
+            presence_penalty: Some(-0.25),
+            repetition_penalty: Some(1.1),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let profile_id = format!("{default_behavior_id}:inference");
+    let mut profile = crate::load_inference_profile(node.as_ref(), &did, &profile_id)
+        .await
+        .unwrap()
+        .expect("installed chain profile");
+    profile.sampling_id = Some(sampling_id);
+    profile.reasoning_effort = Some(crate::config::ReasoningEffort::Max);
+    profile.context_window = Some(32768);
+    profile.max_output_tokens = Some(4096);
+    crate::document_config::upsert_inference_profile(node.as_ref(), &profile)
         .await
         .unwrap();
-    insert_backend(
+    let execution_id = format!("{default_behavior_id}:execution");
+    write_document(
         node.as_ref(),
-        "backend-balanced",
-        "http://127.0.0.1:8123/v1",
+        crate::Collection::InferenceExecution,
+        &crate::document_config::InferenceExecution {
+            agent_did: did.clone(),
+            execution_id: execution_id.clone(),
+            max_turns: Some(8),
+            stream_batch_ms: Some(500),
+            stream_liveness_timeout_secs: Some(45),
+            deadline_duration_secs: Some(120),
+            ..Default::default()
+        },
     )
-    .await;
-    insert_inference_profile(node.as_ref(), "balanced").await;
-    update_default_behavior(
-        node.as_ref(),
-        &default_behavior_id,
-        "balanced",
-        "You are precise.",
-        "backend-balanced",
-        "gpt-local",
-        "StripThenSummarize",
-        0.6,
-    )
-    .await;
+    .await
+    .unwrap();
+    let mut profile = crate::load_inference_profile(node.as_ref(), &did, &profile_id)
+        .await
+        .unwrap()
+        .expect("installed chain profile");
+    profile.execution_id = Some(execution_id);
+    crate::document_config::upsert_inference_profile(node.as_ref(), &profile)
+        .await
+        .unwrap();
+    // Context owns literal system instructions.
+    let mut context = load_installed_context(node.as_ref(), &did, &default_behavior_id).await;
+    context.system_prompt = Some("You are precise.".to_string());
+    upsert_context(node.as_ref(), &context).await;
 
+    let backend: crate::document_config::InferenceBackend = read_document(
+        node.as_ref(),
+        &did,
+        crate::Collection::InferenceBackend,
+        &format!("{default_behavior_id}:backend"),
+    )
+    .await;
+    assert_eq!(backend.endpoint, "http://127.0.0.1:1/v1");
     let agent = Gents::from_default_behavior_documents(
         node,
         identity.clone(),
@@ -107,18 +166,20 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     let behavior = &agent.behaviors()[0];
     assert_eq!(behavior.behavior_id, default_behavior_id);
     assert_eq!(behavior.agent_did(), did);
-    assert_eq!(behavior.backend_endpoint, "http://127.0.0.1:8123/v1");
-    assert_eq!(behavior.model_name, "gpt-local");
+    assert_eq!(
+        behavior.backend_id.as_deref(),
+        Some(format!("{default_behavior_id}:backend").as_str())
+    );
+    assert_eq!(behavior.model_name, "test-model");
     assert_eq!(behavior.context_window, 32768);
     assert_eq!(behavior.max_output_tokens, 4096);
     assert_eq!(behavior.max_turns, 8);
     assert_eq!(behavior.system_prompt, "You are precise.");
-    assert_eq!(behavior.backend_id.as_deref(), Some("backend-balanced"));
     assert!(matches!(
-        behavior.compaction_strategy,
+        behavior.compaction_strategy(),
         crate::compaction::CompactionStrategy::StripThenSummarize
     ));
-    assert_eq!(behavior.compaction_threshold, 0.6);
+    assert_eq!(behavior.compaction_threshold(), 0.75);
     assert_eq!(behavior.stream_batch_ms, 500);
     assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
     assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
@@ -149,6 +210,84 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     assert_eq!(params["repetition_penalty"], 1.1);
 }
 
+async fn read_document<T: serde::de::DeserializeOwned>(
+    node: &EmbeddedNode,
+    owner: &str,
+    collection: crate::Collection,
+    id: &str,
+) -> T {
+    let owner = owner.to_owned();
+    let id = id.to_owned();
+    let value = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "test.read_configuration",
+        |txn| {
+            let owner = &owner;
+            let id = &id;
+            Box::pin(async move {
+                Ok(crate::config_client::read_desired_state_record_in_txn(
+                    txn, collection, owner, id,
+                )
+                .await?
+                .expect("installed document")
+                .1)
+            })
+        },
+    )
+    .await
+    .unwrap();
+    serde_json::from_value(value).unwrap()
+}
+
+async fn write_document<T: serde::Serialize>(
+    node: &EmbeddedNode,
+    collection: crate::Collection,
+    document: &T,
+) -> anyhow::Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = crate::config_client::DesiredStateApplyPlan::new(vec![
+        crate::config_client::DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        },
+    ])?;
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "test.write_configuration",
+        |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        },
+    )
+    .await?;
+    Ok(())
+}
+
+async fn load_installed_context(
+    node: &EmbeddedNode,
+    did: &str,
+    behavior_id: &str,
+) -> crate::document_config::AgentContext {
+    let behavior: AgentBehavior =
+        read_document(node, did, crate::Collection::AgentBehavior, behavior_id).await;
+    read_document(
+        node,
+        did,
+        crate::Collection::AgentContext,
+        behavior.context_id.as_deref().expect("chain context"),
+    )
+    .await
+}
+
+async fn upsert_context(node: &EmbeddedNode, context: &crate::document_config::AgentContext) {
+    write_document(node, crate::Collection::AgentContext, context)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() {
     let node = test_node().await;
@@ -156,101 +295,41 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     let identity = Arc::new(test_identity("tool-selection"));
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
-    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
 
-    let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
-        .await
-        .unwrap();
-    insert_backend(node.as_ref(), "backend-tools", "http://127.0.0.1:8222/v1").await;
-    crate::upsert_tool_selection(
+    install_default_behavior_chain(node.as_ref(), &did, &default_behavior_id).await;
+    // A second enabled behavior the subagent target can point at, plus the
+    // scoped SubagentTarget document and the Tools.subagents selection.
+    crate::test_support::install_test_behavior(node.as_ref(), &did, "researcher").await;
+    write_document(
         node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+        crate::Collection::SubagentTarget,
+        &SubagentTargetDocument {
+            target_id: format!("{default_behavior_id}:researcher"),
             agent_did: did.clone(),
-            display_name: Some("Ops".to_string()),
-            tool_policy_version: Some(crate::tool_surface::TOOL_POLICY_V1.to_string()),
-            enable_file_tools: Some(true),
-            file_tools_mode: Some("ReadWrite".to_string()),
-            file_tool_root: None,
-            enable_bash: Some(true),
-            bash_mode: Some("Unrestricted".to_string()),
-            command_execution_policy: None,
-            command_allowed_argv_prefixes: Some(Vec::new()),
-            command_forbidden_argv_prefixes: Some(Vec::new()),
-            command_network_mode: None,
-            cli_tool_names: Some(Vec::new()),
-            enable_meta_tools: Some(false),
-            allowed_mcp_service_ids: Some(Vec::new()),
-            subagent_targets: Some(vec![
-                crate::document_config::subagent_target_entry(
-                    "researcher",
-                    &did,
-                    "researcher",
-                    None,
-                ),
-                crate::document_config::subagent_target_entry(
-                    "researcher",
-                    &did,
-                    "researcher",
-                    None,
-                ),
-            ]),
-            subagent_spawn_enabled: Some(true),
-            subagent_steering_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: bootstrap.default_behavior.behavior_id,
-            agent_did: did.clone(),
-            display_name: Some("Default".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("Use tools carefully.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-tools".to_string()),
-            model_name: None,
-            tool_selection_id: Some(selection_id.clone()),
-            inference_profile_id: bootstrap.default_behavior.inference_profile_id.clone(),
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.75),
-            enabled: true,
-            created_at: bootstrap.default_behavior.created_at.clone(),
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
+            target_agent_did: did.clone(),
             behavior_id: "researcher".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Researcher".to_string()),
+            name: "researcher".to_string(),
             description: None,
-            summary: None,
-            system_prompt: Some("Research carefully.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-tools".to_string()),
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: true,
-            created_at: Some(chrono::Utc::now().to_rfc3339()),
+            tags: Vec::new(),
         },
     )
     .await
     .unwrap();
+    let mut tools = load_installed_tools(node.as_ref(), &did, &default_behavior_id).await;
+    tools.host = Some(
+        serde_json::from_value(
+            serde_json::json!({"files":{"mode":"ReadWrite"},"bash":{"mode":"Unrestricted"}}),
+        )
+        .unwrap(),
+    );
+    tools.subagents = Some(crate::document_config::SubagentTools {
+        target_ids: vec![format!("{default_behavior_id}:researcher")],
+        spawn_enabled: Some(true),
+        steering_enabled: Some(true),
+        background_enabled: Some(true),
+        ..Default::default()
+    });
+    upsert_tools(node.as_ref(), &tools).await;
 
     let agent = Gents::from_default_behavior_documents(
         node,
@@ -265,6 +344,8 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
 
     let behavior = &agent.behaviors()[0];
     assert_eq!(behavior.behavior_id, default_behavior_id);
+    // The readonly ceiling still bounds the canonical chain: file/bash tools
+    // remain read-only regardless of what the document would grant.
     assert_eq!(behavior.tools.host_tools(), &ToolSet::readonly());
     assert!(!behavior.tools.meta_tools_requested());
     assert_eq!(
@@ -299,6 +380,23 @@ async fn from_default_behavior_documents_resolves_tool_selection_with_ceiling() 
     assert!(tool_names.contains(&"cancel_subagent".to_string()));
 }
 
+async fn load_installed_tools(node: &EmbeddedNode, did: &str, behavior_id: &str) -> Tools {
+    let context = load_installed_context(node, did, behavior_id).await;
+    read_document(
+        node,
+        did,
+        crate::Collection::Tools,
+        context.tools_id.as_deref().expect("chain tools"),
+    )
+    .await
+}
+
+async fn upsert_tools(node: &EmbeddedNode, tools: &Tools) {
+    write_document(node, crate::Collection::Tools, tools)
+        .await
+        .unwrap();
+}
+
 #[tokio::test]
 async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
     let node = test_node().await;
@@ -306,84 +404,46 @@ async fn from_default_behavior_documents_rejects_inactive_subagent_targets() {
     let identity = Arc::new(test_identity("subagent-target-disabled"));
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
-    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
 
-    let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
-        .await
-        .unwrap();
-    insert_backend(
+    install_default_behavior_chain(node.as_ref(), &did, &default_behavior_id).await;
+    // The destination behavior exists but is disabled: an enabled target pointing
+    // at an inactive behavior must quarantine the parent, not silently drop the
+    // target.
+    crate::test_support::install_test_behavior(node.as_ref(), &did, "disabled-researcher").await;
+    let behavior: AgentBehavior = read_document(
         node.as_ref(),
-        "backend-disabled-target",
-        "http://127.0.0.1:8234/v1",
+        &did,
+        crate::Collection::AgentBehavior,
+        "disabled-researcher",
     )
     .await;
-    crate::upsert_tool_selection(
+    let mut disabled = behavior;
+    disabled.enabled = false;
+    crate::upsert_agent_behavior(node.as_ref(), &disabled)
+        .await
+        .unwrap();
+    write_document(
         node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+        crate::Collection::SubagentTarget,
+        &SubagentTargetDocument {
+            target_id: format!("{default_behavior_id}:disabled-researcher"),
             agent_did: did.clone(),
-            enable_meta_tools: Some(false),
-            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
-                "disabled-researcher",
-                &did,
-                "disabled-researcher",
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: bootstrap.default_behavior.behavior_id,
-            agent_did: did.clone(),
-            display_name: Some("Default".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("Use tools carefully.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-disabled-target".to_string()),
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.75),
-            enabled: true,
-            created_at: bootstrap.default_behavior.created_at,
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
+            target_agent_did: did.clone(),
             behavior_id: "disabled-researcher".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Disabled Researcher".to_string()),
+            name: "disabled-researcher".to_string(),
             description: None,
-            summary: None,
-            system_prompt: Some("Research carefully.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-disabled-target".to_string()),
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            enabled: false,
-            created_at: Some(chrono::Utc::now().to_rfc3339()),
+            tags: Vec::new(),
         },
     )
     .await
     .unwrap();
+    let mut tools = load_installed_tools(node.as_ref(), &did, &default_behavior_id).await;
+    tools.subagents = Some(crate::document_config::SubagentTools {
+        target_ids: vec![format!("{default_behavior_id}:disabled-researcher")],
+        spawn_enabled: Some(true),
+        ..Default::default()
+    });
+    upsert_tools(node.as_ref(), &tools).await;
 
     let snapshot = resolve_document_runtime_snapshot(
         node.as_ref(),
@@ -413,61 +473,40 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     let identity = Arc::new(test_identity("subagent-target-missing"));
     let did = identity.did().to_string();
     let default_behavior_id = default_behavior_id_for_agent(&did);
-    let selection_id = crate::default_tool_selection_id_for_behavior(&default_behavior_id);
 
-    let bootstrap = crate::ensure_agent_principal(node.as_ref(), &did)
-        .await
-        .unwrap();
-    insert_backend(
+    install_default_behavior_chain(node.as_ref(), &did, &default_behavior_id).await;
+    crate::test_support::install_test_behavior(node.as_ref(), &did, "target-before-corruption")
+        .await;
+    // The target names a behavior_id that was never installed: scope resolution
+    // must fail closed with a diagnostic naming the subagent_targets entry.
+    write_document(
         node.as_ref(),
-        "backend-missing-target",
-        "http://127.0.0.1:8233/v1",
-    )
-    .await;
-    crate::upsert_tool_selection(
-        node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
+        crate::Collection::SubagentTarget,
+        &SubagentTargetDocument {
+            target_id: format!("{default_behavior_id}:missing-behavior"),
             agent_did: did.clone(),
-            enable_meta_tools: Some(false),
-            subagent_targets: Some(vec![crate::document_config::subagent_target_entry(
-                "missing-behavior",
-                &did,
-                "missing-behavior",
-                None,
-            )]),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: bootstrap.default_behavior.behavior_id,
-            agent_did: did.clone(),
-            display_name: Some("Default".to_string()),
+            target_agent_did: did.clone(),
+            behavior_id: "target-before-corruption".to_string(),
+            name: "missing-behavior".to_string(),
             description: None,
-            summary: None,
-            system_prompt: Some("Use tools carefully.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-missing-target".to_string()),
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: bootstrap.default_behavior.inference_profile_id,
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.75),
-            enabled: true,
-            created_at: bootstrap.default_behavior.created_at,
+            tags: Vec::new(),
         },
     )
     .await
     .unwrap();
+    let mut tools = load_installed_tools(node.as_ref(), &did, &default_behavior_id).await;
+    tools.subagents = Some(crate::document_config::SubagentTools {
+        target_ids: vec![format!("{default_behavior_id}:missing-behavior")],
+        spawn_enabled: Some(true),
+        ..Default::default()
+    });
+    upsert_tools(node.as_ref(), &tools).await;
 
+    let owner = crate::graphql::escape_graphql_string(&did);
+    let target_id =
+        crate::graphql::escape_graphql_string(&format!("{default_behavior_id}:missing-behavior"));
+    let response = node.execute(&format!(r#"mutation {{ update_SubagentTarget(filter: {{agent_did: {{_eq: "{owner}"}}, target_id: {{_eq: "{target_id}"}}}}, input: {{behavior_id: "missing-behavior"}}) {{_docID}} }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
     let agent = Gents::from_default_behavior_documents(
         node,
         identity,
@@ -480,10 +519,12 @@ async fn from_default_behavior_documents_rejects_unresolved_subagent_target() {
     .unwrap();
 
     assert!(agent.behaviors().is_empty());
-    assert!(agent
-        .unavailable_behaviors()
-        .get(default_behavior_id.as_str())
-        .is_some_and(|message| message.diagnostic.contains("subagent_targets entry")));
+    assert!(
+        agent
+            .unavailable_behaviors()
+            .get(default_behavior_id.as_str())
+            .is_some_and(|message| message.diagnostic.contains("subagent_targets entry"))
+    );
 }
 
 #[tokio::test]
@@ -492,145 +533,30 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("behavior-catalog"));
     let did = identity.did().to_string();
-    let default_behavior_id = default_behavior_id_for_agent(&did);
-
     crate::ensure_agent_principal(node.as_ref(), &did)
         .await
         .unwrap();
-    let default_profile_id = crate::default_inference_profile_id_for_behavior(&default_behavior_id);
-    insert_backend_with_health(
+    for name in ["code", "broken", "disabled", "unhealthy"] {
+        crate::test_support::install_test_behavior(node.as_ref(), &did, name).await;
+    }
+    let mut disabled: AgentBehavior = read_document(
         node.as_ref(),
-        "backend-healthy",
-        "http://127.0.0.1:8444/v1",
-        true,
-        "healthy",
+        &did,
+        crate::Collection::AgentBehavior,
+        "disabled",
     )
     .await;
-    insert_backend_with_health(
-        node.as_ref(),
-        "backend-unhealthy",
-        "http://127.0.0.1:8555/v1",
-        true,
-        "unhealthy",
-    )
-    .await;
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: "code".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Code".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("You write code.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-healthy".to_string()),
-            model_name: Some("default".to_string()),
-            tool_selection_id: None,
-            inference_profile_id: Some(default_profile_id),
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.7),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: "broken".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Broken".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("This backend is missing.".to_string()),
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.7),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    // This row deliberately represents persisted corruption so the loader's
-    // unavailable-behavior path remains covered. The guarded writer rejects
-    // dangling backend references, as it should; inject the corruption raw.
-    let escaped_did = crate::graphql::escape_graphql_string(&did);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentBehavior(
-                filter: {{
-                    behavior_id: {{ _eq: "broken" }},
-                    agent_did: {{ _eq: "{escaped_did}" }}
-                }},
-                input: {{
-                    backend_id: "backend-missing",
-                    model_name: "gpt-missing"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
+    disabled.enabled = false;
+    write_document(node.as_ref(), crate::Collection::AgentBehavior, &disabled)
+        .await
+        .unwrap();
+    set_probe_status(node.as_ref(), &did, "code:backend", "healthy").await;
+    set_probe_status(node.as_ref(), &did, "unhealthy:backend", "unhealthy").await;
+    // Guarded publication rejects dangling references. Corrupt one profile only
+    // after installing a valid bundle to exercise the runtime's failure path.
+    let owner = crate::graphql::escape_graphql_string(&did);
+    let response = node.execute(&format!(r#"mutation {{ update_InferenceProfile(filter: {{agent_did: {{_eq: "{owner}"}}, profile_id: {{_eq: "broken:inference"}}}}, input: {{backend_id: "backend-missing"}}) {{_docID}} }}"#)).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: "disabled".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Disabled".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("You should never run.".to_string()),
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.7),
-            enabled: false,
-            created_at: None,
-        },
-    )
-    .await
-    .unwrap();
-    crate::upsert_agent_behavior(
-        node.as_ref(),
-        &AgentBehavior {
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            behavior_id: "unhealthy".to_string(),
-            agent_did: did.clone(),
-            display_name: Some("Unhealthy".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("Backend is unhealthy.".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-unhealthy".to_string()),
-            model_name: Some("default".to_string()),
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: Some("StripThenSummarize".to_string()),
-            compaction_threshold: Some(0.7),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .unwrap();
-
     let agent = Gents::from_default_behavior_documents(
         node,
         identity,
@@ -648,26 +574,18 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         .map(|behavior| behavior.behavior_id.as_str())
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(agent.agent_did(), did);
-    assert_eq!(agent.default_behavior_id(), default_behavior_id);
     assert_eq!(agent.behaviors().len(), 1);
     assert!(runnable_names.contains("code"));
-    let default_reason = agent
-        .unavailable_behaviors()
-        .get(default_behavior_id.as_str())
-        .cloned()
-        .expect("missing default behavior rejection");
-    assert_eq!(
-        default_reason.diagnostic,
-        format!("behavior {default_behavior_id} has no backend binding")
-    );
     let broken_reason = agent
         .unavailable_behaviors()
         .get("broken")
         .cloned()
         .expect("missing broken behavior rejection");
-    assert!(broken_reason
-        .diagnostic
-        .contains("references missing backend backend-missing"));
+    assert!(
+        broken_reason
+            .diagnostic
+            .contains("references missing backend backend-missing")
+    );
     let disabled_reason = agent
         .unavailable_behaviors()
         .get("disabled")
@@ -683,7 +601,15 @@ async fn from_default_behavior_documents_loads_runnable_behaviors_and_tracks_una
         unhealthy_reason.public_reason,
         BehaviorReadinessUnavailableReason::BackendTemporarilyUnavailable
     );
-    assert!(unhealthy_reason
-        .diagnostic
-        .contains("backend backend-unhealthy is not ready"));
+    assert!(
+        unhealthy_reason
+            .diagnostic
+            .contains("backend unhealthy:backend is not ready")
+    );
+}
+
+async fn set_probe_status(node: &EmbeddedNode, did: &str, backend_id: &str, status: &str) {
+    crate::backend_registry::set_backend_probe_status(node, did, backend_id, status)
+        .await
+        .unwrap();
 }

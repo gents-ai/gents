@@ -27,6 +27,33 @@ fn load(value: Value, graph: bool) -> Result<PackConfig> {
 }
 
 #[test]
+fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment() {
+    let value = json!({"agent_principal":{},"graph_capabilities":[{
+        "capability_id":"review","revision":"1","task_id":"review",
+        "allowed_callers":["${GENTS_PACK_AGENT_DID}"]
+    },{
+        "capability_id":"closed","revision":"1","task_id":"review"
+    }]});
+    let config = load_pack_config(
+        &manifest(true),
+        &PackInstallOptions {
+            agent_did: "did:key:selected".into(),
+        },
+        &|_| Ok(serde_json::to_vec(&value)?),
+        &|_| Some("did:key:spoofed".into()),
+    )
+    .unwrap();
+    assert_eq!(
+        config.graph_capabilities[0].allowed_callers,
+        ["did:key:selected"]
+    );
+    assert!(
+        config.graph_capabilities[1].allowed_callers.is_empty(),
+        "owner binding must not invent grants"
+    );
+}
+
+#[test]
 fn document_and_graph_loading_share_scope_defaults_and_literal_sidecars() {
     let value = json!({
         "agent_principal":{"created_by":"did:key:creator"},
@@ -132,4 +159,63 @@ fn sidecar_cannot_escape_or_read_undeclared_assets() {
         &|_| None,
     );
     assert!(result.is_err());
+}
+
+#[test]
+fn bundled_review_loads_with_explicit_inference_and_literal_prompt_assets() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/code_review");
+    let manifest: PackManifest =
+        serde_json::from_slice(&std::fs::read(root.join("manifest.json")).unwrap()).unwrap();
+    let config = load_pack_config(
+        &manifest,
+        &PackInstallOptions {
+            agent_did: "did:key:review-owner".into(),
+        },
+        &|path| Ok(std::fs::read(root.join(path))?),
+        &|name| match name {
+            "GENTS_REVIEW_MODEL" => Some("selected-model".into()),
+            "GENTS_REVIEW_ENDPOINT" => Some("http://inference.example/v1".into()),
+            _ => None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        config.inference_backends[0].endpoint,
+        "http://inference.example/v1"
+    );
+    for profile in &config.inference_profiles {
+        assert_eq!(profile.model_name, "selected-model");
+        assert_eq!(profile.agent_did, "did:key:review-owner");
+    }
+    let authored: Value =
+        serde_json::from_slice(&std::fs::read(root.join("pack_config.json")).unwrap()).unwrap();
+    for (field, prompt_field, resolved) in [
+        (
+            "contexts",
+            "system_prompt",
+            config
+                .contexts
+                .iter()
+                .map(|row| row.system_prompt.as_deref().unwrap())
+                .collect::<Vec<_>>(),
+        ),
+        (
+            "tasks",
+            "prompt_template",
+            config
+                .tasks
+                .iter()
+                .map(|row| row.prompt_template.as_str())
+                .collect::<Vec<_>>(),
+        ),
+    ] {
+        for (row, prompt) in authored[field].as_array().unwrap().iter().zip(resolved) {
+            let path = row[prompt_field]
+                .as_str()
+                .unwrap()
+                .strip_prefix("./")
+                .unwrap();
+            assert_eq!(prompt, std::fs::read_to_string(root.join(path)).unwrap());
+        }
+    }
 }

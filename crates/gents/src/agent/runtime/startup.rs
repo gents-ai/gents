@@ -420,9 +420,6 @@ async fn run_agent_owned(
         agent.default_behavior_id(),
     )
     .await;
-    let local_deployment_id = crate::callback::ensure_local_host_deployment(agent.node.as_ref())
-        .await
-        .context("ensure local HostDeployment")?;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
         tracing::warn!(
             behavior_id = %behavior_id,
@@ -593,7 +590,7 @@ async fn run_agent_owned(
     let (manual_source, manual_trigger_handle) =
         crate::trigger_engine::manual_source::ManualSource::new(trigger_engine_cancel.clone());
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
-    let trigger_engine_deployment_id = local_deployment_id.clone();
+    let trigger_engine_agent_did = agent.agent_did().to_string();
     let trigger_engine_handle = tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
@@ -601,7 +598,7 @@ async fn run_agent_owned(
         }
         match crate::trigger_engine::production_materializer::recover_workspace_binding_pending_requests(
             trigger_engine_node.as_ref(),
-            &trigger_engine_deployment_id,
+            &trigger_engine_agent_did,
         )
         .await
         {
@@ -616,8 +613,7 @@ async fn run_agent_owned(
             crate::trigger_engine::production_materializer::ProductionMaterializer::new(
                 trigger_engine_node.clone(),
                 trigger_engine_materializer_snapshot_rx,
-            )
-            .with_local_deployment_id(trigger_engine_deployment_id),
+            ),
         );
         let schedule_source: Box<dyn crate::trigger_engine::TriggerSource> =
             Box::new(crate::trigger_engine::schedule_source::ScheduleSource::new(
@@ -661,7 +657,7 @@ async fn run_agent_owned(
     });
 
     let callback_node = agent.node.clone();
-    let callback_deployment_id = local_deployment_id.clone();
+    let callback_agent_did = agent.agent_did().to_string();
     let callback_ceiling = agent
         .document_runtime_context()
         .and_then(|context| context.tool_ceiling.root())
@@ -676,7 +672,7 @@ async fn run_agent_owned(
         }
         if let Err(error) = crate::callback::run_callback_engine(
             callback_node,
-            callback_deployment_id,
+            callback_agent_did,
             callback_ceiling,
             callback_cancel,
         )
@@ -908,7 +904,6 @@ async fn run_agent_owned(
 
     let router_node = agent.node.clone();
     let router_agent_did = agent.agent_did().to_string();
-    let router_deployment_id = local_deployment_id.clone();
     let router_active_snapshot_rx = active_snapshot_rx.clone();
     let router_shutdown = shutdown.clone();
     let router_admission_gate = admission_gate.clone();
@@ -918,7 +913,6 @@ async fn run_agent_owned(
             super::router::run_router(
                 router_node,
                 router_agent_did,
-                router_deployment_id,
                 router_active_snapshot_rx,
                 router_shutdown,
                 router_admission_gate,
@@ -1203,6 +1197,7 @@ async fn validate_startup_snapshot(
             .ok_or_else(|| anyhow!("missing tool surface for behavior {behavior_id}"))?;
         tool_surface
             .build_tools(tool_runtime)
+            .await
             .with_context(|| format!("building startup tool surface for behavior {behavior_id}"))?;
     }
 
@@ -1215,7 +1210,7 @@ async fn resolve_tool_surfaces(
 ) -> Result<HashMap<String, Arc<ToolSurface>>> {
     let mut tool_surfaces = HashMap::with_capacity(behaviors.len());
     for behavior in behaviors {
-        let tool_surface = behavior.tools.resolve(node).await?;
+        let tool_surface = behavior.tools.resolve(node, behavior.agent_did()).await?;
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     Ok(tool_surfaces)
@@ -1265,7 +1260,7 @@ async fn resolve_backend_admission_configs(
             continue;
         }
         let (resolved_backend_id, config) = async {
-            let backend = backend_registry::lookup_backend(node, backend_id)
+            let backend = backend_registry::lookup_backend(node, behavior.agent_did(), backend_id)
                 .await?
                 .ok_or_else(|| {
                     anyhow!(
@@ -1274,13 +1269,23 @@ async fn resolve_backend_admission_configs(
                         backend_id
                     )
                 })?;
+            let observation = backend_registry::lookup_backend_observation(
+                node,
+                behavior.agent_did(),
+                backend_id,
+            )
+            .await?
+            .context("backend observation disappeared during admission resolution")?;
             tracing::Span::current().record("backend_enabled", backend.enabled);
-            tracing::Span::current().record("probe_status", backend.probe_status.as_str());
+            tracing::Span::current().record(
+                "probe_status",
+                observation.probe_status.as_deref().unwrap_or("unknown"),
+            );
             tracing::Span::current().record("max_concurrent", backend.max_concurrent);
             tracing::Span::current().record("max_queue_depth", backend.max_queue_depth);
             Ok::<_, anyhow::Error>((
                 backend.backend_id.clone(),
-                BackendAdmissionConfig::from_backend(&backend)?,
+                BackendAdmissionConfig::from_backend(&backend, &observation)?,
             ))
         }
         .instrument(tracing::info_span!(

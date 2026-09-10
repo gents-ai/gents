@@ -10,6 +10,9 @@ use tokio::sync::watch;
 
 use crate::admission::BackendAdmissionConfig;
 use crate::config::AgentBehavior;
+pub use crate::document_config::ConcurrencyMode;
+pub use crate::document_config::ScheduleCadence;
+use crate::document_config::TaskHook;
 use crate::identity::AgentPrincipal;
 use crate::schedule_cron::{next_cron_run_after, CronMissedRunPolicy};
 use crate::tool_surface::ToolSurface;
@@ -89,6 +92,9 @@ pub struct ResolvedTask {
     pub goal_token_budget: Option<i64>,
     #[allow(dead_code)]
     pub output_schema_ref: Option<String>,
+    /// Hooks are explicitly configured host commands carried by Task; no
+    /// second persisted model and no TaskRun lifecycle state here.
+    pub hooks: Vec<TaskHook>,
 }
 
 impl ResolvedTask {
@@ -103,6 +109,8 @@ impl ResolvedTask {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedSchedule {
+    /// Physical id of the Trigger document whose Schedule source points at
+    /// this schedule; empty when no enabled trigger references it.
     pub trigger_doc_id: String,
     pub schedule_id: String,
     #[allow(dead_code)]
@@ -114,54 +122,9 @@ pub struct ResolvedSchedule {
     pub concurrency: ConcurrencyMode,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScheduleCadence {
-    Interval {
-        interval_secs: i64,
-    },
-    Cron {
-        expression: String,
-        timezone: String,
-        missed_run_policy: CronMissedRunPolicy,
-    },
-}
-
-impl ScheduleCadence {
-    pub(crate) fn seed_next_run_at(&self, now: DateTime<Utc>) -> Result<DateTime<Utc>> {
-        match self {
-            Self::Interval { .. } => Ok(now),
-            Self::Cron {
-                expression,
-                timezone,
-                ..
-            } => next_cron_run_after(expression, timezone, now),
-        }
-    }
-
-    pub(crate) fn advance_next_run_at(
-        &self,
-        parsed_next_run_at: DateTime<Utc>,
-        now: DateTime<Utc>,
-    ) -> Result<DateTime<Utc>> {
-        match self {
-            Self::Interval { interval_secs } => {
-                Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
-            }
-            Self::Cron {
-                expression,
-                timezone,
-                missed_run_policy,
-            } => match missed_run_policy {
-                CronMissedRunPolicy::LatestOnly => next_cron_run_after(expression, timezone, now),
-            },
-        }
-    }
-}
-
-pub use crate::document_config::ConcurrencyMode;
-
 pub const MAX_EVENT_TRIGGER_GROUP_DOCS: usize = 256;
 
+/// Runtime delivery mode derived from the presence of `EventSource.group`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventTriggerFireMode {
@@ -169,29 +132,9 @@ pub enum EventTriggerFireMode {
     PerGroup,
 }
 
-impl EventTriggerFireMode {
-    pub(crate) fn parse(value: Option<&str>) -> Option<Self> {
-        match value.map(str::trim).filter(|value| !value.is_empty()) {
-            None | Some("per_document") => Some(Self::PerDocument),
-            Some("per_group") => Some(Self::PerGroup),
-            Some(_) => None,
-        }
-    }
-}
-
-impl ConcurrencyMode {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
-        match s {
-            "parallel" => Some(Self::Parallel),
-            "serial" => Some(Self::Serial),
-            "latest_only" => Some(Self::LatestOnly),
-            _ => None,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct ResolvedEventTrigger {
+    /// Physical id of the Trigger document carrying this event source.
     pub trigger_doc_id: String,
     pub trigger_id: String,
     #[allow(dead_code)]
@@ -210,6 +153,57 @@ pub struct ResolvedEventTrigger {
     pub group_timeout_secs: Option<u64>,
     pub group_min_count: usize,
     pub workspace_authority: Option<String>,
+}
+
+/// Resolved automation projection installed on the runtime snapshot in one
+/// step via [`ResolvedRuntimeSnapshot::with_automation`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ResolvedAutomation {
+    pub(crate) tasks: HashMap<String, ResolvedTask>,
+    pub(crate) schedules: HashMap<String, ResolvedSchedule>,
+    pub(crate) unavailable_schedules: HashSet<String>,
+    pub(crate) event_triggers: HashMap<String, ResolvedEventTrigger>,
+    pub(crate) unavailable_event_triggers: HashSet<String>,
+}
+
+/// Seeds the first `next_run_at` cursor for a canonical cadence: interval
+/// schedules are immediately due; cron schedules align to the next match.
+pub(crate) fn seed_schedule_next_run_at(
+    cadence: &ScheduleCadence,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
+    match cadence {
+        ScheduleCadence::Interval { .. } => Ok(now),
+        ScheduleCadence::Cron {
+            expression,
+            timezone,
+            ..
+        } => next_cron_run_after(expression, timezone, now),
+    }
+}
+
+/// Advances a parsed `next_run_at` cursor after a fire attempt: interval
+/// schedules add their interval; cron schedules (latest_only) jump to the
+/// next match after `now`.
+pub(crate) fn advance_schedule_next_run_at(
+    cadence: &ScheduleCadence,
+    parsed_next_run_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>> {
+    match cadence {
+        ScheduleCadence::Interval { interval_secs } => {
+            Ok(parsed_next_run_at + ChronoDuration::seconds(*interval_secs))
+        }
+        ScheduleCadence::Cron {
+            expression,
+            timezone,
+            missed_run_policy,
+        } => match missed_run_policy {
+            None | Some(CronMissedRunPolicy::LatestOnly) => {
+                next_cron_run_after(expression, timezone, now)
+            }
+        },
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -327,28 +321,14 @@ impl ResolvedRuntimeSnapshot {
         self
     }
 
-    pub(crate) fn with_schedules(
-        mut self,
-        active_schedules: HashMap<String, ResolvedSchedule>,
-        unavailable_schedules: HashSet<String>,
-    ) -> Self {
-        self.active_schedules = active_schedules;
-        self.unavailable_schedules = unavailable_schedules;
-        self
-    }
-
-    pub(crate) fn with_event_triggers(
-        mut self,
-        active_event_triggers: HashMap<String, ResolvedEventTrigger>,
-        unavailable_event_triggers: HashSet<String>,
-    ) -> Self {
-        self.active_event_triggers = active_event_triggers;
-        self.unavailable_event_triggers = unavailable_event_triggers;
-        self
-    }
-
-    pub(crate) fn with_tasks(mut self, tasks: HashMap<String, ResolvedTask>) -> Self {
-        self.active_tasks = tasks;
+    /// Single canonical automation setter: installs resolved tasks, schedules
+    /// and event triggers with their unavailability sets.
+    pub(crate) fn with_automation(mut self, automation: ResolvedAutomation) -> Self {
+        self.active_tasks = automation.tasks;
+        self.active_schedules = automation.schedules;
+        self.unavailable_schedules = automation.unavailable_schedules;
+        self.active_event_triggers = automation.event_triggers;
+        self.unavailable_event_triggers = automation.unavailable_event_triggers;
         self
     }
 

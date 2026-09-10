@@ -33,7 +33,6 @@ pub mod config_client;
 pub mod defra_query;
 pub mod defra_write;
 pub mod descendant_graph;
-pub mod desired_fields;
 pub mod document_config;
 pub mod error;
 pub mod eth;
@@ -72,6 +71,62 @@ pub mod xai_oauth_refresh;
 /// Shared in-crate test utilities.
 #[cfg(test)]
 pub(crate) mod test_support {
+    /// Install an explicit, inert inference/context/tools chain for a named test behavior.
+    /// Schemas must already be registered. The principal's default is never changed.
+    pub(crate) async fn install_test_behavior(
+        node: &defra_node::EmbeddedNode,
+        owner: &str,
+        behavior_id: &str,
+    ) {
+        use crate::Collection;
+        use crate::config_client::{
+            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+        };
+        use serde_json::json;
+        crate::ensure_agent_principal(node, owner).await.unwrap();
+        let context = format!("{behavior_id}:context");
+        let tools = format!("{behavior_id}:tools");
+        let profile = format!("{behavior_id}:inference");
+        let backend = format!("{behavior_id}:backend");
+        let documents = [
+            (Collection::AgentBehavior, json!({"agent_did":owner,"behavior_id":behavior_id,"context_id":context,"inference_profile_id":profile})),
+            (Collection::AgentContext, json!({"agent_did":owner,"context_id":context,"tools_id":tools})),
+            (Collection::Tools, json!({"agent_did":owner,"tools_id":tools})),
+            (Collection::InferenceProfile, json!({"agent_did":owner,"profile_id":profile,"backend_id":backend,"model_name":"test-model"})),
+            (Collection::InferenceBackend, json!({"agent_did":owner,"backend_id":backend,"name":"Test inference","provider_kind":"OpenAiCompatible","endpoint":"http://127.0.0.1:1/v1","auth":{"kind":"unauthenticated"}})),
+        ].into_iter().map(|(collection,value)| DesiredStateApplyDocument {collection,add:value.clone(),update:value}).collect();
+        let plan = DesiredStateApplyPlan::new(documents).unwrap();
+        ConfigAccess::transact_local(node, None, "test.install_behavior", |txn| {
+            let plan = &plan;
+            Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+    }
+
+    pub(crate) fn load_test_graph_package(
+        name: &str,
+        options: &crate::pack::PackInstallOptions,
+    ) -> crate::graph_package::BundledGraphPackage {
+        crate::graph_package::load_package(
+            &crate::pack::resolve_pack(name).unwrap(),
+            options,
+            &|name| (name == "GENTS_REVIEW_MODEL").then(|| "test-model".to_owned()),
+        )
+        .unwrap()
+    }
+
+    pub(crate) async fn install_test_graph_package(
+        access: &crate::ConfigAccess,
+        actor: &str,
+        name: &str,
+        options: &crate::pack::PackInstallOptions,
+    ) -> anyhow::Result<crate::graph_package::GraphPackageInstallReceipt> {
+        let package = load_test_graph_package(name, options);
+        crate::graph_package::install_loaded_graph_package(access, actor, &package, options, None)
+            .await
+    }
+
     /// `OneOrMany::first_ref` stand-in for native `Vec` content: non-empty by
     /// convention in every shape the tests build.
     pub(crate) fn first_content<T>(items: &[T]) -> &T {
@@ -110,7 +165,8 @@ mod request_admission;
 #[doc(hidden)]
 pub use request_admission::final_claim_admission_disposition;
 pub use request_admission::{
-    sign_agent_request_create, sign_agent_request_create_as_registered_target,
+    SIGNED_REQUEST_FIELDS, sign_agent_request_create,
+    sign_agent_request_create_as_registered_target, verify_request_receipt_signature,
 };
 pub(crate) mod request_binding;
 pub mod retry;
@@ -140,108 +196,108 @@ pub mod workspace;
 pub use callback::reject_secret_bearing_callback_fields;
 pub use collection::{Collection, DESIRED_STATE_APPLY_ORDER};
 pub use eth::{
-    address_from_secret, attestation_payload, binding_storage_key, encode_attestation,
-    generate_secp256k1_secret, method_permitted, validate_eth_call_declarations,
-    validate_query_methods, ChainKeyMaterialStore, HttpEthRpc, KeyringChainKeyStore,
-    BUILTIN_QUERY_METHODS, ETH_USER_AGENT, KEYRING_SERVICE, KEY_BACKEND_KEYRING,
+    BUILTIN_QUERY_METHODS, ChainKeyMaterialStore, ETH_USER_AGENT, HttpEthRpc, KEY_BACKEND_KEYRING,
+    KEYRING_SERVICE, KeyringChainKeyStore, address_from_secret, attestation_payload,
+    binding_storage_key, encode_attestation, generate_secp256k1_secret, method_permitted,
+    validate_eth_call_declarations, validate_query_methods,
 };
 
 pub use adapter_projection::{
-    adapter_projection_eval_jsonl_record_schema, adapter_projection_eval_jsonl_records,
-    adapter_projection_json_schema, adapter_projection_jsonl_record_schema,
-    adapter_projection_jsonl_records, adapter_projection_native_json,
-    adapter_projection_native_json_schema, build_adapter_projection,
-    validate_adapter_projection_contract, AdapterProjection, AdapterProjectionContractError,
+    ATIF_SCHEMA_VERSION, AdapterProjection, AdapterProjectionContractError,
     AdapterProjectionEnvelope, AdapterProjectionEvalJsonlRecord, AdapterProjectionJsonlRecord,
     AdapterProjectionKind, AtifAgent, AtifFinalMetrics, AtifObservation, AtifObservationResult,
     AtifStep, AtifStepSource, AtifToolCall, AtifTrajectory, ProjectionContext,
-    ProjectionRedactionMode, ATIF_SCHEMA_VERSION,
+    ProjectionRedactionMode, adapter_projection_eval_jsonl_record_schema,
+    adapter_projection_eval_jsonl_records, adapter_projection_json_schema,
+    adapter_projection_jsonl_record_schema, adapter_projection_jsonl_records,
+    adapter_projection_native_json, adapter_projection_native_json_schema,
+    build_adapter_projection, validate_adapter_projection_contract,
 };
-pub use admission::call_state_holds_backend_slot;
 pub use admission::BackendAdmissionConfig;
-pub use admission::{document_configured_from_fields, InferenceCall, InferenceCallRecoveryReport};
+pub use admission::call_state_holds_backend_slot;
+pub use admission::{InferenceCall, InferenceCallRecoveryReport, document_configured_from_fields};
 pub use agent::{
     BehaviorBuilder, DocumentRuntimeOptions, Gents, GentsBuilder, ProcessLifecycleObserver,
     ProcessLifecycleState, RuntimeSnapshotObserver,
 };
 pub use backend_health::{
-    probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober, BackendHealthMap,
-    BackendHealthSnapshot, BackendHealthState, BackendProberOptions, ProbeCycleOutcome,
+    BackendHealthMap, BackendHealthSnapshot, BackendHealthState, BackendProberOptions,
+    ProbeCycleOutcome, probe_backends_cycle, run_backend_probe_cycle, spawn_backend_prober,
 };
-pub use backend_provider::{discover_models as discover_backend_models, BackendProviderKind};
-pub use backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS, UNKNOWN_PROBE_STATUS};
+pub use backend_provider::{BackendProviderKind, discover_models as discover_backend_models};
+pub use backend_registry::{
+    HEALTHY_PROBE_STATUS, InferenceBackend, UNKNOWN_PROBE_STATUS, record_model_catalog_in_txn,
+};
 pub use background_completion_diagnostics::{
-    load_background_completion_diagnostics, BackgroundCompletionDiagnostics,
-    BackgroundCompletionEpochDiagnostic,
+    BackgroundCompletionDiagnostics, BackgroundCompletionEpochDiagnostic,
+    load_background_completion_diagnostics,
 };
 pub use background_tools::subagent_control::{
-    cancel_session_subagent, CancelSubagentOutcome, SubagentCancellation,
+    CancelSubagentOutcome, SubagentCancellation, cancel_session_subagent,
 };
 pub use compaction::CompactionStrategy;
 pub use config::{
-    AgentBehavior, ReasoningEffort, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD,
-    DEFAULT_CONTEXT_WINDOW, DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS,
-    DEFAULT_MAX_TURNS, DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS,
-    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    AgentBehavior, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
+    DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
+    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    ReasoningEffort, SamplingConfig,
 };
 pub use config_client::ConfigAccess;
 pub use defra_node;
 pub use descendant_graph::{
-    resolve_descendant_edge, resolve_descendant_graph, resolve_descendant_root_request_id,
-    resolve_session_descendant_edge, resolve_session_descendant_graph,
     DescendantAuthorizationState, DescendantControlAuthority, DescendantEdge,
     DescendantGraphAccess, DescendantMaterializationState, DescendantPage, DescendantQuery,
-    DescendantScope, MAX_DESCENDANT_PAGE_LIMIT,
+    DescendantScope, MAX_DESCENDANT_PAGE_LIMIT, resolve_descendant_edge, resolve_descendant_graph,
+    resolve_descendant_root_request_id, resolve_session_descendant_edge,
+    resolve_session_descendant_graph,
 };
-pub use desired_fields::{DesiredFields, LiveFields};
 pub use document_config::{
+    AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument, ConfigReferences,
+    DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
+    QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, delete_chain_key_binding_mutation,
-    deserialize_dual_shape, ensure_agent_principal, eth_tool_by_id_query,
-    is_reserved_builtin_tool_name, list_agent_behaviors, list_chain_key_bindings_query,
-    list_datastore_tool_surfaces, list_eth_tools, list_inference_profile_records,
-    load_agent_behavior, load_agent_principal, load_inference_profile, load_tool_selection,
-    merge_datastore_tool_surfaces, subagent_target_entry, upsert_agent_behavior,
+    delete_chain_key_binding_mutation, deserialize_dual_shape, ensure_agent_principal,
+    eth_tool_by_id_query, is_reserved_builtin_tool_name, list_agent_behaviors,
+    list_chain_key_bindings_query, list_datastore_tool_surfaces, list_eth_tools,
+    list_inference_profile_records, load_agent_behavior, load_agent_principal,
+    load_inference_profile, merge_datastore_tool_surfaces, upsert_agent_behavior,
     upsert_agent_principal, upsert_chain_key_binding, upsert_chain_key_binding_mutation,
-    upsert_inference_profile, upsert_tool_selection, wide_open_tool_selection_document,
-    wide_open_tool_selection_id_for_agent, AgentBehavior as AgentBehaviorDocument,
-    ChainKeyBindingDocument, ConfigReferences, DatastoreToolSurfaceDocument, EthToolDocument,
-    InferenceProfile, MergedSurfaceTools, PrincipalBootstrap, QueryToolDecl, SubagentTarget,
-    SurfaceToolDecl, ToolSelectionDocument, WriteToolDecl, WriteToolField, WriteToolFieldFill,
-    WriteToolOutputObligation, WriteToolOutputObligationScope,
+    upsert_inference_profile,
 };
 pub use external_adapter_capture::{
-    import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
-    ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
+    ExternalAdapterCapture, ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
+    import_external_adapter_capture_to_timeline_rows,
 };
 pub use gents_protocol::client_protocol;
 pub use health_checker::{
-    run_health_check_cycle, spawn_health_checker, HealthCheckerOptions, HealthPersistenceContext,
-    HealthStatus, MCPServiceHealthSnapshot, McpHealthCheckService, ServiceHealth, ServiceHealthMap,
+    HealthCheckerOptions, HealthPersistenceContext, HealthStatus, MCPServiceHealthSnapshot,
+    McpHealthCheckService, ServiceHealth, ServiceHealthMap, run_health_check_cycle,
+    spawn_health_checker,
 };
 pub use hook::{
     BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook, FailurePolicy, HookStats,
 };
 pub use identity::{
+    AgentIdentity, AgentPrincipal, KeyIdentity, RegisteredIdentity, ServiceAccount,
     load_macos_keychain_identity, load_macos_secure_enclave_identity,
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
-    AgentIdentity, AgentPrincipal, KeyIdentity, RegisteredIdentity, ServiceAccount,
 };
-pub use interrupt::{fetch_interrupt_requested_at, interrupt_request};
+pub use interrupt::{fetch_interrupt_requested_at, interrupt_request, interrupt_request_by_doc_id};
 pub use lifecycle::{
+    BackgroundWakeRedriveReport, EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestIdentity,
+    RequestLifecycle, RequestSigner, RequestSpec, RetryLink, TERMINAL_REDRIVE_BATCH_LIMIT,
+    TERMINAL_REDRIVE_CAP, TerminalRedriveReport, TerminalRepairReport,
     background_wake_next_retry_at, background_wake_retry_delay,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
-    build_signed_request, task_run_conversation_title, write_manual_agent_request,
-    write_manual_agent_request_with_conversation_title, BackgroundWakeRedriveReport,
-    EnqueuedAgentRequest, ParentLink, RecoveryReport, RequestIdentity, RequestLifecycle,
-    RequestSigner, RequestSpec, RetryLink, SamplingCarryover, TerminalRedriveReport,
-    TerminalRepairReport, TERMINAL_REDRIVE_BATCH_LIMIT, TERMINAL_REDRIVE_CAP,
+    build_signed_request, task_session_title, write_manual_agent_request,
+    write_manual_agent_request_with_conversation_title,
 };
 pub use mcp_pool::McpPool;
 pub use meta_tools::build_meta_tools;
-pub use native_executor_status::{active_native_executors, NativeExecutorStatus};
-pub use oneshot::{run_openai_oneshot, run_openai_oneshot_with_tools, OneshotRunResult};
+pub use native_executor_status::{NativeExecutorStatus, active_native_executors};
+pub use oneshot::{OneshotRunResult, run_openai_oneshot, run_openai_oneshot_with_tools};
 pub use openai_wire::OpenAiWireApi;
 pub use p2p_observability::{
     JsonP2pSyncStatusAdapter, P2pPeerBacklogSnapshot, P2pPushBacklogSnapshot,
@@ -249,50 +305,45 @@ pub use p2p_observability::{
     P2pSyncStatusSnapshot,
 };
 pub use periodic_recovery::{
-    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps, PeriodicRecoverySweepMetadata,
-    PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+    PeriodicRecoverySweepMetadata, PeriodicRecoverySweepOutcome, PeriodicRecoverySweepRun,
+    periodic_recovery_sweep_metadata, run_periodic_recovery_sweeps,
 };
 pub use prompt::{LayeredPromptBuilder, PromptBuilder};
 pub use run_timeline::{
-    build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
-    TimelineConversationRow, TimelineGoalParentState, TimelineGoalState,
-    TimelineGoalTransitionEvent, TimelineGoalVersionRow, TimelineInferenceCallRow,
-    TimelineMessageRow, TimelineRequestRow, TimelineResponseRow, TimelineSessionRow,
-    TimelineToolCallRow,
+    RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows, TimelineGoalParentState,
+    TimelineGoalState, TimelineGoalTransitionEvent, TimelineGoalVersionRow,
+    TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow, TimelineResponseRow,
+    TimelineSessionRow, TimelineToolCallRow, build_run_timeline,
 };
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
-    ResolvedEventTrigger, ResolvedSchedule, ResolvedTask, ScheduleCadence,
-    MAX_EVENT_TRIGGER_GROUP_DOCS,
+    MAX_EVENT_TRIGGER_GROUP_DOCS, ResolvedEventTrigger, ResolvedSchedule, ResolvedTask,
+    ScheduleCadence,
 };
 #[cfg(feature = "agent-memory")]
 pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
-    ensure_runtime_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_CONVERSATION_SCHEMA, AGENT_MESSAGE_SCHEMA,
-    AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA,
-    AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA,
-    COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA,
-    INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA,
-    TASK_SCHEMA, TOOL_SELECTION_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA,
-    TOOL_SERVICE_REGISTRY_SCHEMA,
+    AGENT_BEHAVIOR_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
+    AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA,
+    AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA,
+    INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA,
+    SCHEDULE_SCHEMA, TASK_SCHEMA, TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
+    TOOLS_SCHEMA, ensure_runtime_schemas,
 };
 pub use session::load_history;
-pub use session::{
-    fork, fork_via_http, ForkError, ForkOutcome, ForkParams, GraphqlExecuteResponse,
-    GraphqlExecutor, HttpGraphqlExecutor,
-};
+pub use session::{ForkError, ForkOutcome, ForkParams, fork, fork_via_http};
 pub use streaming::{DefraStreamWriter, StreamWriter};
 pub use template::{
-    parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
+    TemplateError, TemplateScope, VariableRef, parse_template_for_validation, render_template,
 };
-pub use tool_control::{cancel_background_tool_call, CancelBackgroundToolCallOutcome};
+pub use tool_control::{CancelBackgroundToolCallOutcome, cancel_background_tool_call};
 pub use tool_surface::{
-    cli_tool, BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, ToolCeiling,
-    ToolPolicyVersion, ToolRuntimeContext, ToolSelection, ToolSurface, TOOL_POLICY_V1,
+    BashMode, BehaviorToolConfig, CustomToolFactory, FileToolMode, TOOL_POLICY_V1, ToolCeiling,
+    ToolPolicyVersion, ToolRuntimeContext, ToolSelection, ToolSurface, cli_tool,
 };
 pub use toolset::{
-    build_native_tools, enable_self_runner, CliToolConfig, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode, NativeTool, ToolSet, ToolSetBuilder,
+    CliToolConfig, CommandExecutionMode, CommandExecutionPolicy, CommandNetworkMode, NativeTool,
+    ToolSet, ToolSetBuilder, build_native_tools, enable_self_runner,
 };
 pub use trigger_engine::event_source::EventSource;
 pub use trigger_engine::goal_source::GoalSource;
@@ -300,25 +351,25 @@ pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
 pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
 pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
-pub use watcher::{workspace_bound_request_claimable, AgentRequest, DefraWatcher, Watcher};
+pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
 #[doc(hidden)]
 pub mod __test_internals {
     pub use crate::agent::principal_assembly::{
-        assemble_principal_and_behaviors, BehaviorBuildError,
+        BehaviorBuildError, assemble_principal_and_behaviors,
     };
     pub use crate::background_tools::r4c_args::{
         ListSubagentsArgs, ListSubagentsEntry, ListSubagentsResponse, ReadSubagentArgs,
         ReadSubagentResponse,
     };
     pub use crate::background_tools::{
-        handle_list_subagents, handle_read_subagent, load_steer_subagent_target, ChildEdge,
-        SteerSubagentTarget, AWAITING_CHILD_MATERIALIZATION,
+        AWAITING_CHILD_MATERIALIZATION, ChildEdge, SteerSubagentTarget, handle_list_subagents,
+        handle_read_subagent, load_steer_subagent_target,
     };
     pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
     pub use crate::lifecycle::queue::{
-        drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
+        QueueSource, drain_automated_wakeups, reconcile_coalesced_pending_request,
     };
     pub use crate::trigger_engine::run_subagent_source_for_test;
 

@@ -1,5 +1,4 @@
-
-use super::conversation::apply_title_in_txn;
+use super::observations::apply_title_in_txn;
 use super::query::load_agent_session;
 use super::*;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
@@ -181,11 +180,9 @@ async fn generated_user_title_cases_drive_the_shared_session_owner() {
         .filter(|case| case["operation"] == "rename")
         .collect::<Vec<_>>();
     assert!(cases.iter().any(|case| case["title"].is_null()));
-    assert!(
-        cases
-            .iter()
-            .any(|case| !case["before"]["title"].is_null() && !case["title"].is_null())
-    );
+    assert!(cases
+        .iter()
+        .any(|case| !case["before"]["title"].is_null() && !case["title"].is_null()));
     for case in cases {
         let before = model_session(&case["before"]);
         let expected = model_session(&case["after"]);

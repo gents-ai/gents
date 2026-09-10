@@ -1,13 +1,13 @@
 //! Task 39 Step 1 — external-crate integration test for the TriggerEngine +
 //! ScheduleSource pipeline.
 //!
-//! The full engine-level end-to-end assertion (a due Schedule driving
+//! The full engine-level end-to-end assertion (a due Schedule/Trigger driving
 //! materialization of an `AgentRequest` with populated trigger lineage) lives
 //! inside `crates/gents/src/trigger_engine/tests.rs` because the engine,
 //! source, and materializer types are crate-private (`pub(crate)`). From the
 //! outside, we can't construct an `ActiveRuntimeSnapshot` with a loaded
 //! behavior without going through the full `Gents` bootstrap; doing that
-//! here would effectively duplicate `tests/schedule_snapshot_reconcile.rs`.
+//! here would effectively duplicate `tests/e2e_runtime/schedule_snapshot_reconcile.rs`.
 //!
 //! Instead, this file asserts the externally-observable end of the
 //! pipeline: when `materialize_claimed_with_execution_binding` is called with

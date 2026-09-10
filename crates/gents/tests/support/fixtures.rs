@@ -3,13 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::__test_internals::run_subagent_source_for_test;
-use gents::compaction::CompactionStrategy;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, ActiveRuntimeSnapshot,
-    AgentBehavior, AgentIdentity, AgentPrincipal, BackendProviderKind, BehaviorToolConfig,
-    KeyIdentity,
+    ActiveRuntimeSnapshot, AgentBehavior, AgentIdentity, AgentPrincipal, BackendProviderKind,
+    BehaviorToolConfig, KeyIdentity, ensure_agent_principal,
 };
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -121,33 +118,15 @@ pub fn test_behavior(
 ) -> AgentBehavior {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity(name));
     let principal = test_principal_for(identity, name);
-    AgentBehavior {
-        skills: Vec::new(),
-        behavior_id: name.to_string(),
-        principal,
-        backend_id: Some(backend_id.to_string()),
-        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
-        backend_endpoint: "http://localhost:8000/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: backend_api_key_env_var.map(ToOwned::to_owned),
-        model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
-        context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: gents::config::DEFAULT_MAX_TURNS,
-        system_prompt: String::new(),
-        request_context_template: None,
-        tools: BehaviorToolConfig::default(),
-        compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: gents::config::DEFAULT_STREAM_BATCH_MS,
-        stream_liveness_timeout: Duration::from_secs(
-            gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-        ),
-        deadline_duration: Duration::from_secs(gents::config::DEFAULT_DEADLINE_DURATION_SECS),
-        completion_retry: gents::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: gents::config::SamplingConfig::default(),
-    }
+    let mut behavior = test_behavior_for_principal(name, principal);
+    behavior.backend_id = Some(backend_id.to_owned());
+    behavior.backend_auth = match backend_api_key_env_var {
+        Some(variable) => gents::document_config::BackendAuth::Environment {
+            variable: variable.into(),
+        },
+        None => gents::document_config::BackendAuth::Unauthenticated,
+    };
+    behavior
 }
 
 pub fn test_behavior_for_principal(
@@ -163,17 +142,16 @@ pub fn test_behavior_for_principal(
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: gents::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://localhost:8000/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
+        backend_auth: gents::document_config::BackendAuth::Unauthenticated,
         model_name: gents::config::DEFAULT_MODEL_NAME.to_string(),
         context_window: gents::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: gents::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: gents::config::DEFAULT_MAX_TURNS,
         system_prompt: String::new(),
-        request_context_template: None,
         tools: BehaviorToolConfig::default(),
-        compaction_threshold: gents::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
         stream_batch_ms: gents::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -190,42 +168,48 @@ pub async fn bind_default_behavior_backend(
     backend_id: &str,
     endpoint: &str,
 ) {
-    let bootstrap = ensure_agent_principal(node, agent_did).await.unwrap();
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    models: ["default"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-
-    let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-        .await
-        .unwrap()
-        .expect("default behavior document");
-    default_behavior.backend_id = Some(backend_id.to_string());
-    upsert_agent_behavior(node, &default_behavior)
+    ensure_agent_principal(node, agent_did).await.unwrap();
+    gents::config_client::ConfigAccess::transact_local(node, None, "test.bind_default_inference", |txn| {
+        Box::pin(async move {
+            use gents::config_client::{read_desired_state_record_in_txn as read, DesiredStateApplyDocument, DesiredStateApplyPlan};
+            use gents::Collection;
+            let (_, mut principal) = read(txn, Collection::AgentPrincipal, agent_did, agent_did)
+                .await?.expect("principal");
+            let behavior_id = principal["default_behavior_id"].as_str().unwrap_or("default").to_owned();
+            principal["default_behavior_id"] = behavior_id.clone().into();
+            let mut behavior = read(txn, Collection::AgentBehavior, agent_did, &behavior_id).await?
+                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
+                    "agent_did": agent_did, "behavior_id": behavior_id
+                }));
+            let profile_id = behavior["inference_profile_id"].as_str().map(str::to_owned)
+                .unwrap_or_else(|| format!("{behavior_id}-inference"));
+            behavior["inference_profile_id"] = profile_id.clone().into();
+            let mut profile = read(txn, Collection::InferenceProfile, agent_did, &profile_id).await?
+                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
+                    "agent_did": agent_did, "profile_id": profile_id, "model_name": "default"
+                }));
+            profile["backend_id"] = backend_id.into();
+            let mut backend = read(txn, Collection::InferenceBackend, agent_did, backend_id).await?
+                .map(|(_, value)| value).unwrap_or_else(|| serde_json::json!({
+                    "agent_did": agent_did, "backend_id": backend_id, "name": backend_id,
+                    "provider_kind": "OpenAiCompatible", "openai_wire_api": "chat_completions",
+                    "auth": {"kind": "unauthenticated"}
+                }));
+            backend["endpoint"] = endpoint.into();
+            backend["max_concurrent"] = 1.into();
+            backend["enabled"] = true.into();
+            let plan = DesiredStateApplyPlan::new([
+                (Collection::AgentPrincipal, principal),
+                (Collection::InferenceBackend, backend),
+                (Collection::InferenceProfile, profile),
+                (Collection::AgentBehavior, behavior),
+            ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+                collection, add: value.clone(), update: value,
+            }).collect())?;
+            gents::config_client::apply_desired_state_plan(txn, &plan).await
+        })
+    }).await.unwrap();
+    gents::backend_registry::set_backend_probe_status(node, agent_did, backend_id, "healthy")
         .await
         .unwrap();
 }

@@ -134,6 +134,9 @@ mod tests {
 
     fn capability() -> StageCapability {
         StageCapability {
+            agent_did: "did:key:owner".to_owned(),
+            tags: vec![],
+            workspace_authority: None,
             capability_id: "worker".to_owned(),
             revision: "v1".to_owned(),
             task_id: "existing-worker-task".to_owned(),
@@ -169,6 +172,9 @@ mod tests {
 
     fn review_capability() -> StageCapability {
         StageCapability {
+            agent_did: "did:key:owner".to_owned(),
+            tags: vec![],
+            workspace_authority: None,
             capability_id: "reviewer".to_owned(),
             revision: "v1".to_owned(),
             task_id: "existing-reviewer-task".to_owned(),
@@ -198,6 +204,8 @@ mod tests {
 
     fn intent(capability_id: &str) -> GraphIntent {
         GraphIntent {
+            agent_did: "did:key:owner".to_owned(),
+            tags: vec![],
             graph_id: "model-pipeline".to_owned(),
             nodes: vec![GraphNode {
                 node_id: "worker".to_owned(),
@@ -237,33 +245,20 @@ mod tests {
 
     async fn tool() -> CompileGraphTool {
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-        for schema in [
-            gents_protocol::schemas::GRAPH_DEFINITION,
-            gents_protocol::schemas::GRAPH_REVISION,
-            gents_protocol::schemas::GRAPH_RUN,
-            gents_protocol::schemas::AGENT_REQUEST,
-            gents_protocol::schemas::EVENT_TRIGGER_GROUP_STATE,
-            gents_protocol::schemas::TASK,
-            gents_protocol::schemas::EVENT_TRIGGER,
-        ] {
-            node.add_schema(schema).await.unwrap();
-        }
-        node.execute(
-            r#"mutation { create_Task(input: {
-                task_id: "existing-worker-task",
-                behavior_id: "worker",
-                prompt_template: "operator approved prompt",
-                enabled: true
-            }) { _docID } }"#,
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+
+        super::super::runtime::install_graph_test_tasks(
+            &node,
+            "did:key:owner",
+            "worker",
+            &["existing-worker-task"],
         )
         .await;
-        node.execute(
-            r#"mutation { create_Task(input: {
-                task_id: "existing-reviewer-task",
-                behavior_id: "reviewer",
-                prompt_template: "operator approved review prompt",
-                enabled: true
-            }) { _docID } }"#,
+        super::super::runtime::install_graph_test_tasks(
+            &node,
+            "did:key:owner",
+            "reviewer",
+            &["existing-reviewer-task"],
         )
         .await;
         CompileGraphTool::new(

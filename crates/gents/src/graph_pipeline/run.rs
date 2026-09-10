@@ -301,53 +301,50 @@ async fn load_groups(
     executor: &(impl GraphRunQuery + ?Sized),
     correlation: &str,
     plan: &GraphPlan,
+    owner_did: &str,
 ) -> Result<Vec<GraphRunGroupView>> {
+    use gents_protocol::event_delivery::{EventConsumer, EventGroupState};
     let trigger_ids = planned_trigger_nodes(plan)?.into_keys().collect::<Vec<_>>();
+    let consumers = trigger_ids
+        .iter()
+        .map(|id| {
+            format!(
+                r#"{{kind: "trigger", trigger_id: "{}"}}"#,
+                escape_graphql_string(id)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
     let limit = usize::try_from(plan.limits.max_total_invocations)
         .unwrap_or(usize::MAX)
         .saturating_add(1);
-    let response = executor
-        .execute_graph_query(&format!(
-            r#"{{
-                EventTriggerGroupState(
-                    filter: {{
-                        correlation: {{ _eq: "{}" }},
-                        trigger_id: {{ _in: {} }}
-                    }},
-                    order: {{ first_seen_at: ASC }}, limit: {limit}
-                ) {{ group_key trigger_id first_seen_at quiesced_at quiesced_reason }}
-            }}"#,
-            escape_graphql_string(correlation),
-            graphql_string_list_literal(&trigger_ids),
-        ))
-        .await?;
-    rows(&response, "EventTriggerGroupState")
+    let response = executor.execute_graph_query(&format!(r#"{{
+        EventGroupState(filter: {{ agent_did: {{_eq: "{}"}}, correlation: {{_eq: "{}"}},
+            consumer: {{_in: [{consumers}]}} }}, order: {{first_seen_at: ASC}}, limit: {limit}) {{
+            group_key agent_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason
+        }}
+    }}"#, escape_graphql_string(owner_did), escape_graphql_string(correlation))).await?;
+    rows(&response, "EventGroupState")
         .iter()
         .map(|row| {
+            let state: EventGroupState = serde_json::from_value(row.clone())?;
+            anyhow::ensure!(
+                state.agent_did == owner_did && state.correlation == correlation,
+                "group observation is outside the graph run scope"
+            );
+            let EventConsumer::Trigger { trigger_id } = state.consumer else {
+                anyhow::bail!("graph group observation names a callback binding");
+            };
+            anyhow::ensure!(
+                trigger_ids.contains(&trigger_id),
+                "group observation names an unplanned trigger"
+            );
             Ok(GraphRunGroupView {
-                group_key: row
-                    .get("group_key")
-                    .and_then(Value::as_str)
-                    .context("EventTriggerGroupState is missing group_key")?
-                    .to_owned(),
-                trigger_id: row
-                    .get("trigger_id")
-                    .and_then(Value::as_str)
-                    .context("EventTriggerGroupState is missing trigger_id")?
-                    .to_owned(),
-                first_seen_at: row
-                    .get("first_seen_at")
-                    .and_then(Value::as_str)
-                    .context("EventTriggerGroupState is missing first_seen_at")?
-                    .to_owned(),
-                quiesced_at: row
-                    .get("quiesced_at")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                quiesced_reason: row
-                    .get("quiesced_reason")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
+                group_key: state.group_key,
+                trigger_id,
+                first_seen_at: state.first_seen_at,
+                quiesced_at: state.quiesced_at,
+                quiesced_reason: state.quiesced_reason,
             })
         })
         .collect()
@@ -486,7 +483,7 @@ async fn load_graph_run_view_with(
         .invocations
         .iter()
         .find(|invocation| invocation.invalid);
-    let groups = load_groups(executor, correlation, &plan).await?;
+    let groups = load_groups(executor, correlation, &plan, owner_did).await?;
     let mut results = Vec::with_capacity(plan.results.len());
     for result in &plan.results {
         results.push(load_result(executor, correlation, result).await?);

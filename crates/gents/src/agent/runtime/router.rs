@@ -105,7 +105,6 @@ impl RuntimeAdmissionGate {
 pub(super) async fn run_router(
     node: Arc<defra_node::EmbeddedNode>,
     agent_did: String,
-    local_deployment_id: String,
     active_snapshot_rx: watch::Receiver<Arc<ActiveRuntimeSnapshot>>,
     mut shutdown: watch::Receiver<bool>,
     admission_gate: RuntimeAdmissionGate,
@@ -117,8 +116,7 @@ pub(super) async fn run_router(
     if !admission_gate.wait_open(&mut shutdown).await {
         return Ok(());
     }
-    let watcher =
-        DefraWatcher::new(node.clone(), &agent_did).with_local_deployment_id(local_deployment_id);
+    let watcher = DefraWatcher::new(node.clone(), &agent_did);
     let result = run_router_with_watcher(
         node,
         agent_did,
@@ -176,12 +174,7 @@ where
             return Ok(());
         };
 
-        let resolution = resolve_behavior_for_request(
-            node.as_ref(),
-            &request,
-            routed_snapshot.default_behavior_id.as_str(),
-        )
-        .await?;
+        let resolution = resolve_behavior_for_request(node.as_ref(), &request).await?;
         if let Some(reason) = resolution.rejection_reason.as_deref() {
             tracing::warn!(
                 request_id = %request.request_id,
@@ -402,26 +395,26 @@ where
 pub(super) async fn resolve_behavior_for_request(
     node: &defra_node::EmbeddedNode,
     request: &AgentRequest,
-    default_behavior_id: &str,
 ) -> Result<BehaviorResolution> {
-    let requested_behavior_id =
-        normalize_optional_string(request.behavior_id.as_deref()).map(ToOwned::to_owned);
-    let session_behavior_id =
-        crate::session::load_session_behavior_id(node, &request.session_id).await?;
-    let behavior_id = requested_behavior_id
-        .clone()
-        .or_else(|| session_behavior_id.clone())
-        .unwrap_or_else(|| default_behavior_id.to_string());
-
-    let rejection_reason = match (
-        session_behavior_id.as_deref(),
-        requested_behavior_id.as_deref(),
-    ) {
-        (Some(existing), Some(requested)) if existing != requested => Some(format!(
-            "session {} is pinned to behavior {} and cannot switch to {}",
-            request.session_id, existing, requested
-        )),
-        _ => None,
+    let behavior_id = request.behavior_id.clone();
+    let session_behavior_id = crate::session::load_session_behavior_id(
+        node,
+        &request.agent_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?;
+    let rejection_reason = if behavior_id.trim().is_empty() {
+        Some("request must select a behavior".to_string())
+    } else {
+        session_behavior_id
+            .filter(|existing| existing != &behavior_id)
+            .map(|existing| {
+                format!(
+                    "session {} is pinned to behavior {} and cannot switch to {}",
+                    request.session_id, existing, behavior_id
+                )
+            })
     };
 
     Ok(BehaviorResolution {

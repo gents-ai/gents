@@ -20,7 +20,7 @@ mod coalescing;
 mod draining;
 mod enqueue;
 mod goal_continuation;
-mod metadata;
+mod input;
 mod mutation;
 
 pub(crate) use atomic_inputs::persist_background_completion_with_message;
@@ -28,18 +28,25 @@ use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
 pub use coalescing::reconcile_coalesced_pending_request;
-use coalescing::{parent_behavior_id, queue_row_to_enqueued_request, queue_source_and_key_match};
+use coalescing::{
+    parent_behavior_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
+};
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
 pub(crate) use enqueue::enqueue_steering_request_with_message;
+pub use gents_protocol::request_input::{
+    GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
+};
 pub(crate) use goal_continuation::{
     goal_continuation_behavior, goal_continuation_identity, prepare_goal_continuation,
 };
-pub use metadata::QueueSource;
-pub(crate) use metadata::{
-    is_automated_wakeup, is_goal_queue, is_steering_input_message_key, is_subagent_owned_queue,
-    parse_queue_hints, queue_metadata_json, steering_input_message_key, QueueHints, QueuePolicy,
+pub(crate) use input::{
+    background_wake_queue, is_automated_wakeup, row_is_automated_wakeup,
+    row_is_subagent_owned_queue, row_queue,
 };
+pub use input::{is_steering_input_message_key, steering_input_message_key};
+#[cfg(test)]
+use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 use mutation::session_request_create_mutation;
 
 #[derive(Debug)]

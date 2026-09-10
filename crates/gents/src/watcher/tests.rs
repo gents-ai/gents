@@ -41,10 +41,7 @@ fn automated_trigger_lineage_excludes_scheduled_control_requests() {
 
     let background_wake = AgentRequest {
         execution_origin: Some("scheduled".to_string()),
-        metadata: Some(
-            r#"{"queue":{"source":"background_completion"},"background_completion_wake_version":1}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"background_completion","policy":"coalesce","background_completion_wake_version":1}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
         ..base_request()
@@ -78,10 +75,7 @@ fn validate_rejects_mixed_parent_linkage_request_id_only() {
 fn validate_accepts_steering_request_lineage_without_tool_call_link() {
     let req = AgentRequest {
         subagent_depth: 1,
-        metadata: Some(
-            r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
@@ -94,10 +88,7 @@ fn validate_accepts_steering_request_lineage_without_tool_call_link() {
 fn validate_accepts_background_completion_lineage_without_tool_call_link() {
     let req = AgentRequest {
         subagent_depth: 1,
-        metadata: Some(
-            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"child-1"},"background_completion_wake_version":1}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"child-1","background_completion_wake_version":1}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
@@ -116,10 +107,7 @@ fn validate_accepts_background_completion_lineage_without_tool_call_link() {
 fn validate_accepts_depth_zero_background_completion_control_lineage() {
     let req = AgentRequest {
         subagent_depth: 0,
-        metadata: Some(
-            r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"goal-1"},"background_completion_wake_version":1}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"background_completion","policy":"coalesce","key":"background_completion:session-1","queued_after_request_id":"goal-1","background_completion_wake_version":1}}"#).unwrap(),
         caused_by_parent_request_id: Some("goal-parent-1".to_string()),
         caused_by_parent_request_doc_id: Some("goal-parent-doc-1".to_string()),
         caused_by_parent_tool_call_id: None,
@@ -138,10 +126,7 @@ fn validate_accepts_depth_zero_background_completion_control_lineage() {
 fn validate_accepts_depth_zero_steering_control_lineage() {
     let req = AgentRequest {
         subagent_depth: 0,
-        metadata: Some(
-            r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"steering","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: Some("parent-req-doc-1".to_string()),
         ..base_request()
@@ -177,10 +162,7 @@ fn validate_rejects_subagent_depth_zero_with_parent_fields() {
 fn validate_rejects_logical_parent_without_physical_parent() {
     let req = AgentRequest {
         subagent_depth: 0,
-        metadata: Some(
-            r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":null}}"#
-                .to_string(),
-        ),
+        input: serde_json::from_str(r#"{"queue":{"source":"goal","policy":"append","key":null,"queued_after_request_id":null}}"#).unwrap(),
         caused_by_parent_request_id: Some("parent-req-1".to_string()),
         caused_by_parent_request_doc_id: None,
         ..base_request()
@@ -207,30 +189,27 @@ fn validate_accepts_top_level_request() {
 }
 
 #[test]
-fn validate_rejects_negative_sampling_seed() {
-    let req = AgentRequest {
-        seed: Some(-1),
-        ..base_request()
-    };
-    assert_eq!(
-        validate_agent_request(&req).unwrap_err().to_string(),
-        "agent request seed must be non-negative"
-    );
-}
-
-#[test]
-fn validate_rejects_non_positive_max_total_tokens() {
-    for invalid in [0, -1] {
+fn validate_rejects_negative_max_total_tokens() {
+    for invalid in [-1, i64::MIN] {
         let req = AgentRequest {
             max_total_tokens: Some(invalid),
             ..base_request()
         };
         assert_eq!(
             validate_agent_request(&req).unwrap_err().to_string(),
-            "agent request max_total_tokens must be positive",
+            "agent request max_total_tokens must be non-negative",
             "max_total_tokens={invalid}"
         );
     }
+}
+
+#[test]
+fn validate_accepts_durable_zero_budget_as_exhausted() {
+    let req = AgentRequest {
+        max_total_tokens: Some(0),
+        ..base_request()
+    };
+    assert!(validate_agent_request(&req).is_ok());
 }
 
 #[test]
@@ -244,49 +223,6 @@ fn validate_accepts_subagent_request() {
         ..base_request()
     };
     assert!(validate_agent_request(&req).is_ok());
-}
-
-#[test]
-fn agent_request_clone() {
-    let req = AgentRequest {
-        doc_id: "abc".into(),
-        request_id: "req-1".into(),
-        agent_did: "did:key:z123".into(),
-        requester_did: None,
-        behavior_id: Some("general".into()),
-        session_id: "sess-1".into(),
-        content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: "2026-03-12T00:00:00Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
-    let cloned = req.clone();
-    assert_eq!(cloned.doc_id, "abc");
-    assert_eq!(cloned.content, "hello");
 }
 
 #[test]
@@ -333,16 +269,11 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         request_id: request_id.to_string(),
         agent_did: "did:key:z123".into(),
         requester_did: None,
-        behavior_id: Some("general".into()),
+        behavior_id: "general".into(),
         session_id: session_id.to_string(),
         content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: None,
         created_at: "2026-03-12T00:00:00Z".into(),
         deadline: None,
@@ -360,8 +291,8 @@ fn request(request_id: &str, session_id: &str) -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
+        workspace_owner_agent_did: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
     }
 }
@@ -402,6 +333,7 @@ async fn insert_incoherent_agent_request(
                 request_id: "{escaped_request_id}",
                 agent_did: "{escaped_agent_did}",
                 session_id: "sess-incoherent",
+                behavior_id: "behavior",
                 content: "test",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -463,6 +395,7 @@ async fn insert_agent_request_row(
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
+                behavior_id: "behavior",
                 content: "test",
                 lifecycle_state: "{lifecycle_state}",
                 backend_id: "",
@@ -869,7 +802,7 @@ async fn try_fetch_request_terminalizes_incoherent_subagent_linkage() {
 }
 
 #[tokio::test]
-async fn pending_requests_skip_workspace_bound_rows_owned_elsewhere() {
+async fn pending_requests_are_scoped_by_principal_without_host_identity() {
     let node = test_node().await;
     crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let agent_did = "did:key:z-watcher-workspace-owner";
@@ -883,6 +816,7 @@ async fn pending_requests_skip_workspace_bound_rows_owned_elsewhere() {
                 retry_parent_request: "",
                 retry_root_request: "req-owned",
                 superseded_by_request: "",
+                behavior_id: "behavior",
                 content: "test",
                 lifecycle_state: "pending",
                 backend_id: "",
@@ -890,23 +824,16 @@ async fn pending_requests_skip_workspace_bound_rows_owned_elsewhere() {
                 retry_count: 0,
                 max_retries: 0,
                 workspace_id: "ws-1",
-                workspace_authority: "readWrite",
-                workspace_owner_deployment_id: "deploy-owner"
+                workspace_authority: "readWrite"
             }}) {{ _docID }}
         }}"#
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:?}", response.errors);
 
-    let replica =
-        DefraWatcher::new(node.clone(), agent_did).with_local_deployment_id("deploy-replica");
-    let pending = replica.pending_requests().await.unwrap();
-    assert!(
-        pending.is_empty(),
-        "non-owner watcher must not claim workspace-bound work: {pending:?}"
-    );
-
-    let owner = DefraWatcher::new(node, agent_did).with_local_deployment_id("deploy-owner");
+    let foreign = DefraWatcher::new(node.clone(), "did:key:foreign");
+    assert!(foreign.pending_requests().await.unwrap().is_empty());
+    let owner = DefraWatcher::new(node, agent_did);
     let pending = owner.pending_requests().await.unwrap();
     assert_eq!(
         pending
@@ -923,6 +850,7 @@ fn canonical_request_row_with_depth(depth: i64) -> gents_protocol::row::AgentReq
         request_id: "req-depth".to_string(),
         agent_did: Some("did:key:z-depth".to_string()),
         session_id: Some("session-depth".to_string()),
+        behavior_id: Some("behavior".to_string()),
         content: Some("depth test".to_string()),
         created_at: Some("2026-09-04T00:00:00Z".to_string()),
         subagent_depth: Some(depth),

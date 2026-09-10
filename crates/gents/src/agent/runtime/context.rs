@@ -120,13 +120,16 @@ impl RuntimeContext {
         shutdown: watch::Receiver<bool>,
     ) -> Result<()> {
         let tool_names = tool_surface.tool_names();
-        let api_key = behavior.completion_client_api_key()?;
+        let api_key = match &behavior.backend_auth {
+            crate::document_config::BackendAuth::PrincipalOAuth => "no-key".to_owned(),
+            _ => behavior.completion_client_api_key()?,
+        };
         let allowed_targets =
             tool_surface::resolve_subagent_target_descriptions(tool_surface.as_ref());
         let prompt_builder =
             LayeredPromptBuilder::new(behavior.as_ref(), tool_surface.as_ref(), &allowed_targets);
         let preamble = prompt_builder.preamble().to_string();
-        let mut loop_tools = tool_surface.build_tools(&self.tool_runtime)?;
+        let mut loop_tools = tool_surface.build_tools(&self.tool_runtime).await?;
         if tool_surface.includes_skills() && !behavior.skills.is_empty() {
             let ceiling = crate::skills::skill_tool_ceiling(
                 tool_surface.tool_names(),
@@ -142,7 +145,7 @@ impl RuntimeContext {
         // Background executions run through `call_tool_managed`, which owns
         // the deadline/cancellation envelope — no per-tool wrapper needed.
         let background_tool_registry = BackgroundToolRegistry::from_tools(
-            tool_surface.build_tools(&self.tool_runtime)?,
+            tool_surface.build_tools(&self.tool_runtime).await?,
             &tool_surface.background_tools().allowlist,
         );
         tracing::info!(
@@ -171,7 +174,7 @@ impl RuntimeContext {
                 preamble,
                 loop_tools.clone(),
                 background_tool_registry,
-                tool_surface.approval_required_tools().to_vec(),
+                tool_surface.remote_tools().cloned(),
                 tool_surface.output_obligations(),
                 client,
             ))
@@ -190,7 +193,7 @@ impl RuntimeContext {
         preamble: String,
         loop_tools: Arc<Vec<Box<dyn ToolDyn>>>,
         background_tool_registry: BackgroundToolRegistry,
-        approval_required_tools: Vec<String>,
+        remote_tools: Option<crate::document_config::RemoteTools>,
         output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
         client: C,
     ) -> Result<()>
@@ -208,6 +211,13 @@ impl RuntimeContext {
             behavior.principal_identity().clone(),
             self.enrollment_authority.clone(),
         );
+        let summary_compactor = crate::completion_factory::build_compaction_engine(
+            self.node.clone(),
+            &behavior,
+            self.admission_registry.clone(),
+            self.startup_readiness.build_timeout,
+        )
+        .await?;
         let mut daemon = BehaviorDaemon::new(
             self.node.clone(),
             behavior,
@@ -223,10 +233,13 @@ impl RuntimeContext {
             self.runtime_status.clone(),
             slot_generation,
             request_admission,
-        )
-        .with_approval_required_tools(approval_required_tools)
+        )?
+        .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
         .with_operator_tool_root(self.operator_tool_root.clone());
+        if let Some(compactor) = summary_compactor {
+            daemon = daemon.with_compactor(compactor);
+        }
         daemon.run(request_rx, shutdown).await
     }
 }

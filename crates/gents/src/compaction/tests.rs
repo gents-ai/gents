@@ -2766,8 +2766,8 @@ fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
     assert!(!safe_to_reduce(&messages, &StreamingIndex));
 }
 
-// Match the streaming owner's response_key == request_id identity so the real
-// per-turn query can exclude the current response.
+// Carry the physical request identity so the per-turn gate can exclude
+// exactly the current response within its canonical session scope.
 async fn seed_response_status(
     node: &defra_node::EmbeddedNode,
     session_id: &str,
@@ -2784,7 +2784,7 @@ async fn seed_response_status(
             upsert_AgentResponse(
                 filter: {{ response_key: {{ _eq: "{request_id}" }} }},
                 add: {{
-                    response_key: "{request_id}", request_id: "{request_id}",
+                    response_key: "{request_id}", request_id: "{request_id}", request_doc_id: "doc-{request_id}",
                     agent_did: "did:key:gate", requester_did: "did:key:gate",
                     behavior_id: "gate", session_id: "{session_id}",
                     content: "partial", status: "{status}", error_message: "",
@@ -2804,6 +2804,20 @@ async fn per_turn_gate_excludes_the_current_response_and_closes_on_others() {
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = format!("per-turn-gate-{}", uuid::Uuid::new_v4());
 
+    // Equal session labels on a foreign principal or requester route cannot
+    // close this session's gate. A logical request label also cannot replace
+    // the exact physical request used for self-exclusion.
+    for (key, owner, requester) in [
+        ("foreign-owner", "did:key:foreign", "\"did:key:gate\""),
+        ("foreign-requester", "did:key:gate", "null"),
+    ] {
+        let result = node.execute(&format!(r#"mutation {{create_AgentResponse(input: {{
+            response_key: "{key}", request_id: "self", request_doc_id: "doc-foreign",
+            agent_did: "{owner}", requester_did: {requester}, session_id: "{session_id}", status: "streaming"
+        }}) {{_docID}}}}"#)).await;
+        assert!(!result.has_errors(), "{:?}", result.errors);
+    }
+
     // Query both scopes after each real document change. Own streaming output
     // closes the session gate; only a streaming sibling closes the per-turn gate.
     for (response, session_live, other_live) in [
@@ -2816,16 +2830,27 @@ async fn per_turn_gate_excludes_the_current_response_and_closes_on_others() {
             seed_response_status(&node, &session_id, request_id, status).await;
         }
         assert_eq!(
-            session::session_has_live_response(&node, &session_id)
-                .await
-                .unwrap(),
+            session::session_has_live_response(
+                &node,
+                "did:key:gate",
+                &session_id,
+                Some("did:key:gate")
+            )
+            .await
+            .unwrap(),
             session_live,
             "session scope after {response:?}"
         );
         assert_eq!(
-            session::session_has_other_live_response(&node, &session_id, Some("self"))
-                .await
-                .unwrap(),
+            session::session_has_other_live_response(
+                &node,
+                "did:key:gate",
+                &session_id,
+                Some("did:key:gate"),
+                Some("doc-self")
+            )
+            .await
+            .unwrap(),
             other_live,
             "per-turn scope after {response:?}"
         );
@@ -2952,7 +2977,9 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         sequence += 1;
     }
 
-    let history = session::load_history(&node, "session-1").await.unwrap();
+    let history = session::load_history(&node, "session-1", "did:test:test", None)
+        .await
+        .unwrap();
     let durable_before = history.clone();
     let (provider_history, _) = provider_view(history);
     let result = compactor
@@ -2997,13 +3024,15 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     .await
     .unwrap();
 
-    let entries = session::load_compaction_entries(&node, "session-1")
+    let entries = session::load_compaction_entries(&node, "session-1", "did:test:test", None)
         .await
         .unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].summary.contains("inspected the source files"));
 
-    let resumed_history = session::load_history(&node, "session-1").await.unwrap();
+    let resumed_history = session::load_history(&node, "session-1", "did:test:test", None)
+        .await
+        .unwrap();
     // Compaction is a projection: it writes a summary entry and drops a prefix
     // from the *provider view*. The durable AgentMessage rows that
     // `run_timeline` reconstructs a request's event stream from must be
@@ -3362,4 +3391,82 @@ fn compaction_strategy_default_and_labels_share_one_vocabulary() {
         CompactionStrategy::StripToolResults.as_str(),
         "StripToolResults"
     );
+}
+
+#[tokio::test]
+async fn selected_summary_provider_uses_its_context_and_output_ceiling() {
+    let model = SentinelCheckpointModel::default();
+    let requests = model.requests.clone();
+    let mut selected = gate_test_loop_config();
+    selected.context_window = 6_000;
+    let selected_counter = selected.provider_input_counter.clone();
+    let source_counter = gate_test_loop_config().provider_input_counter;
+    let engine: Arc<dyn ReductionEngine> = Arc::new(
+        ProviderReductionEngine::new(Arc::new(model), selected)
+            .with_source_input_counter(source_counter)
+            .with_summary_output_limit(512),
+    );
+    let mut messages = (0..20)
+        .map(|index| {
+            text_msg(
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("sentinel-{index}: {}", "x".repeat(2_000)),
+            )
+        })
+        .collect::<Vec<_>>();
+    messages.push(text_msg("user", "retained prompt"));
+    engine
+        .reduce(
+            messages,
+            100_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                summary_max_output_tokens: 20_000,
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .unwrap();
+    let requests = requests.lock().unwrap();
+    assert!(
+        requests.len() > 1,
+        "small selected summary context must roll the prefix"
+    );
+    for request in requests.iter() {
+        let output = request.max_tokens.unwrap();
+        assert!(output > 0 && output <= 512);
+        assert!(selected_counter.estimate_request(request).unwrap() + output as usize <= 6_000);
+    }
+}
+
+#[tokio::test]
+async fn selected_summary_provider_cannot_replace_exhausted_parent_budget() {
+    let model = SentinelCheckpointModel::default();
+    let requests = model.requests.clone();
+    let mut selected = gate_test_loop_config();
+    selected.context_window = 6_000;
+    // A separately configured allowance must be replaced by the enclosing
+    // request's exact handle before summary dispatch.
+    selected.aggregate_token_budget = Some(crate::agent::loop_stream::AggregateTokenBudget::new(
+        100_000,
+    ));
+    let engine = ProviderReductionEngine::new(Arc::new(model), selected)
+        .with_source_input_counter(gate_test_loop_config().provider_input_counter);
+    let parent = crate::agent::loop_stream::AggregateTokenBudget::with_prior_usage(10, 10);
+    let result = engine
+        .reduce(
+            summary_worthy_messages(),
+            100_000,
+            &ReductionOptions {
+                keep_recent_tokens: 20,
+                aggregate_token_budget: Some(parent.clone()),
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(requests.lock().unwrap().is_empty());
+    assert_eq!(parent.snapshot().unwrap().used, 10);
 }

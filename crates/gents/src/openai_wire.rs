@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::backend_provider::BackendProviderKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum OpenAiWireApi {
     #[serde(rename = "responses")]
     Responses,

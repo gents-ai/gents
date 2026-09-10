@@ -268,19 +268,14 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         let title = title.trim();
         (!title.is_empty()).then(|| title.to_string())
     });
-    let mut metadata = serde_json::Map::new();
-    if !prompt_selection.selected_skill_ids.is_empty() {
-        metadata.insert(
-            "selected_skill_ids".to_string(),
-            serde_json::json!(prompt_selection.selected_skill_ids),
-        );
-    }
-    if let Some(title) = conversation_title.as_deref() {
-        metadata.insert(
-            "conversation_title".to_string(),
-            serde_json::Value::String(title.to_string()),
-        );
-    }
+    let input = gents_protocol::request_input::RequestInput {
+        selected_skill_ids: prompt_selection.selected_skill_ids,
+        initial_title: conversation_title.map(|text| gents_protocol::session::SessionTitle {
+            text,
+            source: gents_protocol::session::SessionTitleSource::Task,
+        }),
+        ..Default::default()
+    };
     let admission = match trigger_lineage.trigger_kind.as_deref() {
         Some("manual") | None => {
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did)
@@ -316,7 +311,7 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         trigger_lineage,
         trigger_doc_id: trigger_doc_id.map(str::to_owned),
         workspace: workspace_lineage.cloned(),
-        metadata: (!metadata.is_empty()).then(|| serde_json::Value::Object(metadata).to_string()),
+        input,
         retry_key: retry_key.map(str::to_owned),
         ..RequestSpec::new(identity, admission)
     };
@@ -361,19 +356,6 @@ pub struct RetryLink {
     pub max_retries: i64,
 }
 
-/// Sampling parameters and backend carried over from a prior request (used
-/// by background-wake redrive; unset for a fresh request).
-#[derive(Default)]
-pub struct SamplingCarryover {
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
-    pub max_total_tokens: Option<i64>,
-    pub backend_id: Option<String>,
-}
-
 /// Every input a writer decides before an `AgentRequestCreate` is built and
 /// signed. This is the single seam every production writer should build
 /// through; `build_signed_request` alone owns which of its fields become
@@ -393,8 +375,7 @@ pub struct RequestSpec {
     /// `None` means this is not a retry: `retry_root_request` defaults to
     /// this request's own id and `max_retries` to `DEFAULT_REQUEST_MAX_RETRIES`.
     pub retry: Option<RetryLink>,
-    pub sampling: Option<SamplingCarryover>,
-    pub metadata: Option<String>,
+    pub input: gents_protocol::request_input::RequestInput,
     pub retry_key: Option<String>,
     pub valid_until: Option<String>,
 }
@@ -403,7 +384,7 @@ impl RequestSpec {
     /// A `RequestSpec` with only identity and admission decided; every
     /// other field takes the default a writer wants when it isn't a
     /// trigger-lineage-carrying, workspace-bound, subagent-linked, retried,
-    /// or sampling-carried-over request. Callers set only what they need
+    /// request. Callers set only what they need
     /// via struct-update syntax:
     /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(identity, admission) }`.
     pub fn new(
@@ -419,8 +400,7 @@ impl RequestSpec {
             workspace: None,
             subagent: None,
             retry: None,
-            sampling: None,
-            metadata: None,
+            input: Default::default(),
             retry_key: None,
             valid_until: None,
         }
@@ -457,8 +437,7 @@ pub(crate) fn build_request(
         workspace,
         subagent,
         retry,
-        sampling,
-        metadata,
+        input,
         retry_key,
         valid_until,
     } = spec;
@@ -479,7 +458,7 @@ pub(crate) fn build_request(
     );
 
     create.initial_lifecycle_state = initial_lifecycle_state;
-    create.metadata = metadata;
+    create.input = input;
     create.retry_key = retry_key;
     create.valid_until = valid_until;
 
@@ -492,8 +471,8 @@ pub(crate) fn build_request(
 
     if let Some(workspace) = workspace {
         create.workspace_id = workspace.workspace_id;
+        create.workspace_owner_agent_did = workspace.workspace_owner_agent_did;
         create.workspace_authority = workspace.workspace_authority;
-        create.workspace_owner_deployment_id = workspace.workspace_owner_deployment_id;
         create.workspace_seal_hash = workspace.workspace_seal_hash;
     }
 
@@ -519,16 +498,6 @@ pub(crate) fn build_request(
     if let Some(link) = retry {
         create.retry_parent_request = link.parent_request_id;
         create.retry_parent_request_doc_id = link.parent_request_doc_id;
-    }
-
-    if let Some(sampling) = sampling {
-        create.temperature = sampling.temperature;
-        create.top_p = sampling.top_p;
-        create.top_k = sampling.top_k;
-        create.seed = sampling.seed;
-        create.max_tokens = sampling.max_tokens;
-        create.max_total_tokens = sampling.max_total_tokens;
-        create.backend_id = sampling.backend_id;
     }
 
     Ok(create)
@@ -660,7 +629,7 @@ impl RequestLifecycle {
         execution_origin: ExecutionOrigin,
         backend_id: impl Into<String>,
     ) -> Self {
-        let behavior_id = resolve_behavior_id(agent_name, request.behavior_id.as_deref());
+        let behavior_id = request.behavior_id.clone();
         Self {
             node,
             agent_name: agent_name.to_string(),
@@ -674,6 +643,7 @@ impl RequestLifecycle {
             response_doc_id: None,
             progress_seq: 0,
             deadline_duration_secs,
+            configured_max_total_tokens: None,
             claimed_deadline_at: None,
             background_completion_input_through_sequence: None,
             state: LocalLifecycleState::Pending,
@@ -745,10 +715,6 @@ impl RequestLifecycle {
         };
         let spec = RequestSpec {
             trigger_lineage,
-            sampling: Some(SamplingCarryover {
-                backend_id: (!backend_id.is_empty()).then(|| backend_id.clone()),
-                ..Default::default()
-            }),
             ..RequestSpec::new(request_identity, admission)
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
@@ -775,16 +741,11 @@ impl RequestLifecycle {
             request_id,
             agent_did: agent_did.clone(),
             requester_did: Some(agent_did.clone()),
-            behavior_id: Some(behavior_id),
+            behavior_id,
             session_id,
             content: content.to_string(),
-            temperature: None,
-            top_p: None,
-            top_k: None,
-            seed: None,
-            max_tokens: None,
             max_total_tokens: None,
-            metadata: None,
+            input: create.input.clone(),
             execution_origin: Some(execution_origin.as_str().to_string()),
             created_at,
             deadline: None,
@@ -802,8 +763,8 @@ impl RequestLifecycle {
             caused_by_correlation: create.caused_by_correlation,
             caused_by_trigger_context: create.caused_by_trigger_context,
             workspace_id: None,
+            workspace_owner_agent_did: None,
             workspace_authority: None,
-            workspace_owner_deployment_id: None,
             workspace_seal_hash: None,
         };
         let request = crate::request_admission::verify_fresh_local_self_request(
@@ -849,169 +810,74 @@ impl RequestLifecycle {
     }
 }
 
-fn conversation_title_from_metadata(metadata: Option<&str>) -> Option<String> {
-    serde_json::from_str::<serde_json::Value>(metadata?)
-        .ok()?
-        .get("conversation_title")?
-        .as_str()
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(str::to_string)
-}
-
-pub(super) struct RequestSessionProjection {
-    session_id: String,
-    behavior_id: String,
-    session_update: String,
-    session_create: String,
-    conversation_update: String,
-    conversation_create: String,
-}
-
-pub(super) fn request_session_projection(
-    request: &AgentRequest,
-    agent_name: &str,
-    agent_did: &str,
-    behavior_id: &str,
-    started: &str,
-) -> RequestSessionProjection {
-    let session_id = escape_graphql_string(&request.session_id);
-    let escaped_agent_name = escape_graphql_string(agent_name);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_started = escape_graphql_string(started);
-    let requester_did_field = session::requester_did_create_field(request.requester_did.as_deref());
-    let session_update = format!(
-        r#"mutation {{
-            update_AgentSession(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                input: {{
-                    agent_name: "{escaped_agent_name}",
-                    behavior_id: "{escaped_behavior_id}",
-                    status: "active",
-                    ended: null
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let session_create = format!(
-        r#"mutation {{
-            create_AgentSession(input: {{
-                session_id: "{session_id}",
-                agent_name: "{escaped_agent_name}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                started: "{escaped_started}",
-                status: "active"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let title = conversation_title_from_metadata(request.metadata.as_deref());
-    let preview = session::derive_conversation_preview(&request.content);
-    let (title, title_source) = title
-        .as_deref()
-        .map(|title| (title, session::CONVERSATION_TITLE_SOURCE_TASK))
-        .unwrap_or(("", session::CONVERSATION_TITLE_SOURCE_FALLBACK));
-    let escaped_title = escape_graphql_string(title);
-    let escaped_title_source = escape_graphql_string(title_source);
-    let escaped_preview = escape_graphql_string(&preview);
-    let escaped_request_id = escape_graphql_string(&request.request_id);
-    let conversation_update = format!(
-        r#"mutation {{
-            update_AgentConversation(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                input: {{
-                    agent_name: "{escaped_agent_name}",
-                    preview_text: "{escaped_preview}",
-                    status: "processing",
-                    updated_at: "{escaped_started}",
-                    latest_request_id: "{escaped_request_id}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let conversation_create = format!(
-        r#"mutation {{
-            create_AgentConversation(input: {{
-                session_id: "{session_id}",
-                agent_name: "{escaped_agent_name}",
-                agent_did: "{escaped_agent_did}",
-                {requester_did_field}
-                behavior_id: "{escaped_behavior_id}",
-                title: "{escaped_title}",
-                title_source: "{escaped_title_source}",
-                preview_text: "{escaped_preview}",
-                status: "processing",
-                created_at: "{escaped_started}",
-                updated_at: "{escaped_started}",
-                latest_request_id: "{escaped_request_id}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    RequestSessionProjection {
-        session_id: request.session_id.clone(),
-        behavior_id: behavior_id.to_string(),
-        session_update,
-        session_create,
-        conversation_update,
-        conversation_create,
-    }
-}
-
+/// Materialize the single session through its owner in the claim transaction.
+/// Creation intent is consumed once; request observations come from the exact
+/// authoritative request row after the claim mutation.
 pub(super) async fn apply_request_session_projection(
     txn: &crate::config_client::ConfigApplyTxn<'_>,
-    projection: &RequestSessionProjection,
+    request: &AgentRequest,
+    now: &str,
 ) -> Result<()> {
-    let escaped_session_id = escape_graphql_string(&projection.session_id);
-    let binding_query = format!(
-        r#"{{
-            AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}) {{
-                behavior_id
-            }}
-        }}"#
-    );
-    let binding = txn.execute_local_response(&binding_query).await?;
-    let sessions = binding
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentSession"))
-        .and_then(serde_json::Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    if let Some(existing_behavior_id) = sessions
-        .iter()
-        .filter_map(|row| row.get("behavior_id").and_then(serde_json::Value::as_str))
-        .map(str::trim)
-        .find(|value| !value.is_empty() && *value != projection.behavior_id)
+    if let Some(existing) = session::load_agent_session_row_in_txn(
+        txn,
+        &request.agent_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?
     {
-        return Err(ClaimAdmissionError::SessionBehaviorMismatch {
-            session_id: projection.session_id.clone(),
-            existing_behavior_id: existing_behavior_id.to_string(),
-            requested_behavior_id: projection.behavior_id.clone(),
+        if existing.session.behavior_id != request.behavior_id {
+            return Err(ClaimAdmissionError::SessionBehaviorMismatch {
+                session_id: request.session_id.clone(),
+                existing_behavior_id: existing.session.behavior_id,
+                requested_behavior_id: request.behavior_id.clone(),
+            }
+            .into());
         }
-        .into());
     }
-    if sessions.is_empty() {
-        txn.execute_local_response(&projection.session_create)
-            .await?;
-    } else {
-        txn.execute_local_response(&projection.session_update)
-            .await?;
-    }
-
-    let conversation = txn
-        .execute_local_response(&projection.conversation_update)
+    session::ensure_session_in_txn(
+        txn,
+        &request.session_id,
+        &request.agent_did,
+        &request.behavior_id,
+        request.requester_did.as_deref(),
+        request.input.initial_title.clone(),
+        request
+            .caused_by_parent_request_doc_id
+            .as_ref()
+            .map(|parent| gents_protocol::session::SessionProvenance {
+                parent_request_doc_id: Some(parent.clone()),
+                ..Default::default()
+            }),
+        now,
+    )
+    .await?;
+    session::reopen_session_in_txn(
+        txn,
+        &request.session_id,
+        &request.agent_did,
+        request.requester_did.as_deref(),
+        now,
+    )
+    .await?;
+    let owner = session::load_agent_session_row_in_txn(
+        txn,
+        &request.agent_did,
+        &request.session_id,
+        request.requester_did.as_deref(),
+    )
+    .await?
+    .context("claimed session disappeared")?;
+    let facts = session::load_scoped_request_facts_in_txn(txn, &owner.session, false).await?;
+    let incoming = facts
+        .iter()
+        .find(|fact| {
+            fact.observed.request_doc_id == request.doc_id
+                && fact.observed.request_id == request.request_id
+        })
+        .context("claimed request missing from its exact session scope")?;
+    session::advance_session_request_observation_in_txn(txn, incoming, &request.content, now)
         .await?;
-    if !conversation
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentConversation"))
-        .is_some_and(response_has_documents)
-    {
-        txn.execute_local_response(&projection.conversation_create)
-            .await?;
-    }
     Ok(())
 }
 
@@ -1117,8 +983,8 @@ mod pin_tests {
         };
         let workspace_lineage = WorkspaceLineage {
             workspace_id: Some("ws-1".to_string()),
+            workspace_owner_agent_did: Some("did:key:workspace-owner".to_string()),
             workspace_authority: Some("readWrite".to_string()),
-            workspace_owner_deployment_id: Some("dep-1".to_string()),
             workspace_seal_hash: Some("seal-1".to_string()),
         };
 
@@ -1144,7 +1010,7 @@ mod pin_tests {
         let normalized = normalize_dynamic_fields(&create, &fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-materialize-pending-event\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", metadata: \"{\\\"conversation_title\\\":\\\"My Conversation\\\"}\", execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_authority: \"readWrite\", workspace_owner_deployment_id: \"dep-1\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
+            "request_id: \"req-materialize-pending-event\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", metadata: \"{\\\"conversation_title\\\":\\\"My Conversation\\\"}\", execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
         );
     }
 
@@ -1184,10 +1050,6 @@ mod pin_tests {
             gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&agent_did);
         let spec = RequestSpec {
             trigger_lineage,
-            sampling: Some(SamplingCarryover {
-                backend_id: Some("backend-1".to_string()),
-                ..Default::default()
-            }),
             ..RequestSpec::new(request_identity, admission)
         };
         let create = build_signed_request(spec, RequestSigner::Identity(&identity))

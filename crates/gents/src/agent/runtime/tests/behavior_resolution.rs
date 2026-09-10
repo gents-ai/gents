@@ -19,7 +19,7 @@ async fn resolve_behavior_rejects_missing_or_blank_explicit_selection() {
     .unwrap();
     for session in ["session-unbound", "session-bound"] {
         for behavior in [None, Some(""), Some("   ")] {
-            match resolve_behavior_for_request(node.as_ref(), &request(behavior, session), "general").await {
+            match resolve_behavior_for_request(node.as_ref(), &request(behavior, session)).await {
                 Err(_) => {}
                 Ok(resolved) => assert!(resolved.rejection_reason.is_some(),
                     "missing/blank selection must not inherit default or session behavior: {session}, {behavior:?}"),
@@ -59,7 +59,6 @@ async fn explicit_behavior_resolution_matches_lean_binding_cases() {
         let resolved = resolve_behavior_for_request(
             node.as_ref(),
             &request(Some(&selected), "session-binding"),
-            &default,
         )
         .await
         .unwrap();

@@ -150,8 +150,8 @@ fn diff_inner(m: &Manifest, l: &LiveState, prune: bool) -> DiffReport {
         }
     }
 
-    steps.sort_by_key(|s| (s.target().collection.apply_order(), s.target().id.clone()));
-    delete.sort_by_key(|d| (std::cmp::Reverse(d.collection.apply_order()), d.id.clone()));
+    steps.sort_by_key(|s| (s.target().collection, s.target().id.clone()));
+    delete.sort_by_key(|d| (std::cmp::Reverse(d.collection), d.id.clone()));
     steps.extend(delete.iter().cloned().map(ApplyStep::Delete));
 
     DiffReport {

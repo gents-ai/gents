@@ -139,7 +139,8 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
             identity,
             crate::agent::p2p_reconcile::enrollment_authority_channel().1,
         ),
-    );
+    )
+    .expect("construct daemon with valid execution configuration");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     for _ in 0..8 {
         let request = create_routed_request(&node, &behavior, &agent_did).await;

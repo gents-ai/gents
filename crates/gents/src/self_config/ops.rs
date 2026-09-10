@@ -15,11 +15,14 @@ use identity::Did;
 use serde_json::{Map, Value};
 
 use crate::config_client::patch::{
-    apply_patch, create_doc_in_txn, diff_docs, ensure_admissible, read_doc_in_txn,
-    update_doc_fields_in_txn, FieldDelta, SelfConfigPatch, SelfConfigTarget,
+    apply_patch, diff_docs, ensure_admissible, FieldDelta, SelfConfigPatch, SelfConfigTarget,
+};
+use crate::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, validate_desired_state_plan,
+    DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
-use crate::document_config::ToolSelectionDocument;
+use crate::document_config::Tools;
 
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
@@ -50,18 +53,23 @@ pub struct PatchOutcome {
 }
 
 /// Behavior anchor loaded fresh per call, so a prior `configure_behavior`
-/// re-pointing `tool_selection_id`/`inference_profile_id`/`backend_id` is
+/// re-pointing `context_id`/`inference_profile_id` is
 /// honored by the next call.
 pub(crate) struct BehaviorAnchor {
     pub(crate) doc: Map<String, Value>,
+    pub(crate) context: Map<String, Value>,
+    pub(crate) profile: Map<String, Value>,
+    pub(crate) execution: Map<String, Value>,
 }
 
 impl BehaviorAnchor {
     pub(crate) fn ref_id(&self, field: &str) -> Option<String> {
         self.doc
             .get(field)
+            .or_else(|| self.context.get(field))
+            .or_else(|| self.profile.get(field))
+            .or_else(|| self.execution.get(field))
             .and_then(Value::as_str)
-            .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     }
@@ -110,8 +118,13 @@ impl SelfConfigCore {
         &self,
         txn: &ConfigApplyTxn<'_>,
     ) -> Result<BehaviorAnchor> {
-        let Some((_doc_id, doc)) =
-            read_doc_in_txn(txn, SelfConfigTarget::AgentBehavior, &self.behavior_id).await?
+        let Some((_doc_id, doc)) = read_owned_doc(
+            txn,
+            SelfConfigTarget::AgentBehavior,
+            &self.agent_did,
+            &self.behavior_id,
+        )
+        .await?
         else {
             bail!(
                 "behavior {} not found; self-config is anchored on the running behavior document",
@@ -125,14 +138,59 @@ impl SelfConfigCore {
                 self.behavior_id
             );
         }
-        Ok(BehaviorAnchor { doc })
+        let context_id = doc
+            .get("context_id")
+            .and_then(Value::as_str)
+            .context("behavior context is missing")?;
+        let profile_id = doc
+            .get("inference_profile_id")
+            .and_then(Value::as_str)
+            .context("behavior inference profile is missing")?;
+        let context = read_owned_doc(
+            txn,
+            SelfConfigTarget::AgentContext,
+            &self.agent_did,
+            context_id,
+        )
+        .await?
+        .context("context not found")?
+        .1;
+        let profile = read_owned_doc(
+            txn,
+            SelfConfigTarget::InferenceProfile,
+            &self.agent_did,
+            profile_id,
+        )
+        .await?
+        .context("profile not found")?
+        .1;
+        let execution = match profile.get("execution_id").and_then(Value::as_str) {
+            Some(id) => {
+                read_owned_doc(
+                    txn,
+                    SelfConfigTarget::InferenceExecution,
+                    &self.agent_did,
+                    id,
+                )
+                .await?
+                .context("execution not found")?
+                .1
+            }
+            None => Map::new(),
+        };
+        Ok(BehaviorAnchor {
+            doc,
+            context,
+            profile,
+            execution,
+        })
     }
 
-    /// The write operation: load owned doc → merge patch → validate → write
-    /// exactly the patched fields → commit; abort wholesale on any failure.
+    /// The write operation: load owned doc → merge patch → validate → publish
+    /// the canonical candidate through the common desired-state owner → commit; abort wholesale on any failure.
     ///
     /// `resolve_unique` maps the behavior anchor to the target document's
-    /// unique value (e.g. `tool_selection_id` for the tools category).
+    /// unique value (e.g. `tools_id` for the tools category).
     /// `allow_create` permits upsert-create (automation only); `on_create`
     /// injects identity/link fields the patch surface deliberately excludes.
     pub(crate) async fn apply(&self, request: ApplyRequest<'_>) -> Result<PatchOutcome> {
@@ -168,8 +226,8 @@ impl SelfConfigCore {
         let anchor = self.load_behavior_anchor(txn).await?;
         let unique_value = (request.resolve_unique)(&anchor)?;
 
-        let stored = read_doc_in_txn(txn, request.target, &unique_value).await?;
-        let (doc_id, stored_doc, creating) = match stored {
+        let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
+        let (_doc_id, stored_doc, creating) = match stored {
             Some((doc_id, doc)) => (Some(doc_id), doc, false),
             None if request.allow_create => (None, Map::new(), true),
             None => bail!(
@@ -187,16 +245,17 @@ impl SelfConfigCore {
 
         if self.no_lockout {
             (request.guard)(&anchor, &merged)?;
+            self.guard_candidate_chain(txn, request.target, &merged)
+                .await?;
         }
 
-        let changed = diff_docs(request.target, &stored_doc, &merged);
-        let doc_id = match (&doc_id, creating) {
-            (Some(doc_id), _) => {
-                update_doc_fields_in_txn(txn, request.target, doc_id, &request.patch, &merged)
-                    .await?
-            }
-            (None, _) => create_doc_in_txn(txn, request.target, &merged).await?,
-        };
+        let changed = safe_diff(request.target, &stored_doc, &merged);
+        let plan = replacement_plan(request.target, &merged)?;
+        apply_desired_state_plan(txn, &plan).await?;
+        let doc_id = read_owned_doc(txn, request.target, &self.agent_did, &unique_value)
+            .await?
+            .context("published config is missing")?
+            .0;
 
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
@@ -206,6 +265,85 @@ impl SelfConfigCore {
             changed,
             effect: EFFECT_TIMING_NOTE,
         })
+    }
+
+    async fn guard_candidate_chain(
+        &self,
+        txn: &ConfigApplyTxn<'_>,
+        target: SelfConfigTarget,
+        merged: &Map<String, Value>,
+    ) -> Result<()> {
+        let behavior = candidate_doc(
+            txn,
+            self.agent_did(),
+            SelfConfigTarget::AgentBehavior,
+            self.behavior_id(),
+            target,
+            merged,
+        )
+        .await?;
+        anyhow::ensure!(
+            behavior.get("enabled").and_then(Value::as_bool) != Some(false),
+            "no-lockout: behavior disabled"
+        );
+        let context_id = behavior
+            .get("context_id")
+            .and_then(Value::as_str)
+            .context("no-lockout: context missing")?;
+        let context = candidate_doc(
+            txn,
+            self.agent_did(),
+            SelfConfigTarget::AgentContext,
+            context_id,
+            target,
+            merged,
+        )
+        .await?;
+        let tools_id = context
+            .get("tools_id")
+            .and_then(Value::as_str)
+            .context("no-lockout: tools missing")?;
+        let tools = candidate_doc(
+            txn,
+            self.agent_did(),
+            SelfConfigTarget::Tools,
+            tools_id,
+            target,
+            merged,
+        )
+        .await?;
+        guard_selection_keeps_gate(&tools)?;
+        let profile_id = behavior
+            .get("inference_profile_id")
+            .and_then(Value::as_str)
+            .context("no-lockout: profile missing")?;
+        let profile = candidate_doc(
+            txn,
+            self.agent_did(),
+            SelfConfigTarget::InferenceProfile,
+            profile_id,
+            target,
+            merged,
+        )
+        .await?;
+        let backend_id = profile
+            .get("backend_id")
+            .and_then(Value::as_str)
+            .context("no-lockout: backend missing")?;
+        let backend = candidate_doc(
+            txn,
+            self.agent_did(),
+            SelfConfigTarget::InferenceBackend,
+            backend_id,
+            target,
+            merged,
+        )
+        .await?;
+        anyhow::ensure!(
+            backend.get("enabled").and_then(Value::as_bool) != Some(false),
+            "no-lockout: backend disabled"
+        );
+        Ok(())
     }
 
     /// Dry-run preview: merge + validate in memory, return the diff. Nothing
@@ -231,7 +369,7 @@ impl SelfConfigCore {
     ) -> Result<PatchOutcome> {
         let anchor = self.load_behavior_anchor(txn).await?;
         let unique_value = (request.resolve_unique)(&anchor)?;
-        let stored = read_doc_in_txn(txn, request.target, &unique_value).await?;
+        let stored = read_owned_doc(txn, request.target, &self.agent_did, &unique_value).await?;
         let (stored_doc, creating) = match stored {
             Some((_, doc)) => (doc, false),
             None if request.allow_create => (Map::new(), true),
@@ -247,13 +385,16 @@ impl SelfConfigCore {
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
         if self.no_lockout {
             (request.guard)(&anchor, &merged)?;
+            self.guard_candidate_chain(txn, request.target, &merged)
+                .await?;
         }
+        validate_desired_state_plan(txn, &replacement_plan(request.target, &merged)?).await?;
         Ok(PatchOutcome {
             collection: request.target.collection_name(),
             doc_id: None,
             created: creating,
             committed: false,
-            changed: diff_docs(request.target, &stored_doc, &merged),
+            changed: safe_diff(request.target, &stored_doc, &merged),
             effect: "dry-run: nothing was written",
         })
     }
@@ -310,29 +451,90 @@ pub(crate) fn decode_merged<T: serde::de::DeserializeOwned>(
         .map_err(|error| anyhow!("merged {collection} document is not valid: {error}"))
 }
 
-/// Shared no-lockout slice for ToolSelection patches: the merged selection
-/// must keep the self-config gate on (Lean `gateOn`).
 pub(crate) fn guard_selection_keeps_gate(merged: &Map<String, Value>) -> Result<()> {
-    let gate_on = merged
-        .get("enable_self_config")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    if !gate_on {
-        bail!(
-            "no-lockout guard: this patch would disable enable_self_config and strip \
-             the agent's own reconfigure ability; ask the operator to lift the guard \
-             (self_config_no_lockout) if this is intended"
-        );
-    }
+    let tools: Tools = decode_merged("Tools", merged)?;
+    anyhow::ensure!(
+        tools
+            .self_config
+            .as_ref()
+            .and_then(|config| config.enable_self_config)
+            .unwrap_or(false),
+        "no-lockout guard: self-config must remain enabled"
+    );
     Ok(())
 }
-
-/// Structural + reference validation for a merged ToolSelection.
 pub(crate) fn validate_merged_selection(merged: &Map<String, Value>) -> Result<()> {
-    let selection: ToolSelectionDocument = decode_merged("ToolSelection", merged)?;
-    if let Some(raw) = selection.lsp_config.as_deref() {
-        crate::toolset::lsp::LspConfigDocument::parse_self_config(Some(raw))
-            .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let tools = decode_merged::<Tools>("Tools", merged)?;
+    if let Some(lsp) = tools
+        .integrations
+        .as_ref()
+        .and_then(|group| group.lsp.as_ref())
+    {
+        crate::toolset::lsp::LspConfigDocument::parse_self_config(lsp.config.as_deref())
+            .map_err(anyhow::Error::msg)?;
     }
-    selection.validate()
+    tools.validate()
+}
+pub(crate) async fn read_owned_doc(
+    txn: &ConfigApplyTxn<'_>,
+    target: SelfConfigTarget,
+    owner: &str,
+    id: &str,
+) -> Result<Option<(String, Map<String, Value>)>> {
+    read_desired_state_record_in_txn(txn, target.collection(), owner, id)
+        .await?
+        .map(|(id, value)| {
+            let doc = value.as_object().context("config object required")?.clone();
+            Ok((id, doc))
+        })
+        .transpose()
+}
+fn replacement_plan(
+    target: SelfConfigTarget,
+    merged: &Map<String, Value>,
+) -> Result<DesiredStateApplyPlan> {
+    let value = Value::Object(merged.clone());
+    DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: target.collection(),
+        add: value.clone(),
+        update: value,
+    }])
+}
+
+async fn candidate_doc(
+    txn: &ConfigApplyTxn<'_>,
+    owner: &str,
+    wanted: SelfConfigTarget,
+    id: &str,
+    target: SelfConfigTarget,
+    merged: &Map<String, Value>,
+) -> Result<Map<String, Value>> {
+    if wanted == target && merged.get(target.unique_field()).and_then(Value::as_str) == Some(id) {
+        return Ok(merged.clone());
+    }
+    Ok(read_owned_doc(txn, wanted, owner, id)
+        .await?
+        .context("candidate chain reference missing")?
+        .1)
+}
+fn safe_diff(
+    target: SelfConfigTarget,
+    before: &Map<String, Value>,
+    after: &Map<String, Value>,
+) -> Vec<FieldDelta> {
+    let mut deltas = diff_docs(target, before, after);
+    if target == SelfConfigTarget::InferenceBackend {
+        for delta in &mut deltas {
+            if delta.field == "auth" {
+                for value in [&mut delta.from, &mut delta.to] {
+                    if let Some(auth) = value.as_object_mut() {
+                        if auth.contains_key("key") {
+                            auth.insert("key".into(), Value::String("[redacted]".into()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    deltas
 }

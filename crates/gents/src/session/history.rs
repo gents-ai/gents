@@ -1,25 +1,54 @@
 use super::retry::execute_query_timed;
 use super::rows::AgentMessageRow;
 use super::*;
+use anyhow::Context;
 use gents_protocol::transcript::decode_persisted_message;
 use serde_json::Value;
 
-pub async fn load_history(node: &EmbeddedNode, session_id: &str) -> Result<Vec<Message>> {
-    load_history_through_sequence(node, session_id, None).await
+/// Injective key for a sequence within one canonical session scope.
+/// Explicit caller-owned keys keep their own vocabulary (steering, receipts).
+pub fn sequence_message_key(
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    sequence: u32,
+) -> String {
+    format!(
+        "message:{}",
+        serde_json::to_string(&(agent_did, session_id, requester_did, sequence))
+            .expect("session scope serializes")
+    )
+}
+
+pub async fn load_history(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<Message>> {
+    load_history_through_sequence(node, session_id, agent_did, requester_did, None).await
 }
 
 pub(crate) async fn load_history_through_sequence(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     through_sequence: Option<u32>,
 ) -> Result<Vec<Message>> {
-    Ok(
-        load_sequenced_history_projection(node, session_id, through_sequence, None, None)
-            .await?
-            .into_iter()
-            .map(|row| row.message)
-            .collect(),
+    Ok(load_sequenced_history_projection(
+        node,
+        session_id,
+        agent_did,
+        requester_did,
+        through_sequence,
+        None,
+        None,
     )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
 }
 
 pub(crate) async fn load_sequenced_history_for_request(
@@ -31,6 +60,8 @@ pub(crate) async fn load_sequenced_history_for_request(
     load_sequenced_history_projection(
         node,
         &request.session_id,
+        &request.agent_did,
+        request.requester_did.as_deref(),
         through_sequence,
         after_sequence,
         Some((&request.request_id, Message::user(request.content.clone()))),
@@ -42,26 +73,36 @@ pub(crate) async fn load_sequenced_history_for_request(
 pub(super) async fn load_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     through_sequence: Option<u32>,
     current_input: Option<(&str, Message)>,
 ) -> Result<Vec<Message>> {
-    Ok(
-        load_sequenced_history_projection(node, session_id, through_sequence, None, current_input)
-            .await?
-            .into_iter()
-            .map(|row| row.message)
-            .collect(),
+    Ok(load_sequenced_history_projection(
+        node,
+        session_id,
+        agent_did,
+        requester_did,
+        through_sequence,
+        None,
+        current_input,
     )
+    .await?
+    .into_iter()
+    .map(|row| row.message)
+    .collect())
 }
 
 pub(super) async fn load_sequenced_history_projection(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     through_sequence: Option<u32>,
     after_sequence: Option<u32>,
     current_input: Option<(&str, Message)>,
 ) -> Result<Vec<SequencedMessage>> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let mut sequence_bounds = Vec::new();
     if let Some(sequence) = after_sequence {
         sequence_bounds.push(format!("_gt: {sequence}"));
@@ -75,7 +116,7 @@ pub(super) async fn load_sequenced_history_projection(
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }}{sequence_filter} }},
+                filter: {{ {scope}{sequence_filter} }},
                 order: {{ sequence: ASC }}
             ) {{
                 sequence
@@ -98,11 +139,13 @@ pub(super) async fn load_sequenced_history_projection(
         );
     }
 
-    let messages: Vec<AgentMessageRow> =
-        match resp.data.as_ref().and_then(|data| data.get("AgentMessage")) {
-            Some(value) => serde_json::from_value(value.clone())?,
-            None => Vec::new(),
-        };
+    let messages: Vec<AgentMessageRow> = serde_json::from_value(
+        resp.data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .context("history query omitted message rows")?
+            .clone(),
+    )?;
 
     let mut history = Vec::with_capacity(messages.len());
     for msg in messages {
@@ -154,8 +197,12 @@ pub(crate) async fn save_message_with_requester_did(
     request_id: Option<&str>,
     request_doc_id: Option<&str>,
 ) -> Result<()> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let message_key = format!("{escaped_session_id}:{sequence}");
+    let message_key = escape_graphql_string(&sequence_message_key(
+        agent_did,
+        session_id,
+        requester_did,
+        sequence,
+    ));
     save_message_inner(
         node,
         session_id,
@@ -198,12 +245,14 @@ async fn save_message_inner(
     // reasoning is written as "" so the field round-trips deterministically.
     let escaped_reasoning = escape_graphql_string(reasoning.unwrap_or(""));
 
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
+
     // `agent_did` is only written in the `add` branch: it is the immutable scope
     // key, stamped once at create. The `update` branch must not rewrite it.
     let mutation = format!(
         r#"mutation {{
             upsert_AgentMessage(
-                filter: {{ message_key: {{ _eq: "{escaped_message_key}" }} }},
+                filter: {{ {scope}, message_key: {{ _eq: "{escaped_message_key}" }} }},
                 add: {{
                     message_key: "{escaped_message_key}",
                     session_id: "{escaped_session_id}",
@@ -243,38 +292,31 @@ pub(crate) async fn append_message_with_requester_did(
     request_id: Option<&str>,
     request_doc_id: Option<&str>,
 ) -> Result<u32> {
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-        let sequence = next_append_sequence(node, session_id).await?;
-        match create_message(
-            node,
-            session_id,
-            agent_did,
-            requester_did,
-            sequence,
-            role,
-            content,
-            reasoning,
-            request_id,
-            request_doc_id,
-            None,
-        )
-        .await
-        {
-            Ok(()) => return Ok(sequence),
-            Err(error) if attempts < 5 => {
-                tracing::debug!(
-                    session_id = %session_id,
-                    sequence,
-                    error = %error,
-                    "append_message create failed; retrying with refreshed sequence"
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "session.append_message",
+        |txn| {
+            Box::pin(async move {
+                append_message_in_txn(
+                    txn,
+                    session_id,
+                    agent_did,
+                    requester_did,
+                    role,
+                    content,
+                    reasoning,
+                    request_id,
+                    request_doc_id,
+                    None,
+                    None,
+                )
+                .await
+                .map(|(sequence, _)| sequence)
+            })
+        },
+    )
+    .await
 }
 
 /// Append a message exactly once under a caller-owned stable key.
@@ -296,127 +338,154 @@ pub(crate) async fn append_message_once_with_key_and_requester_did(
     message_key: &str,
     preferred_sequence: Option<u32>,
 ) -> Result<(u32, bool)> {
-    if let Some(sequence) = message_sequence_for_key(node, session_id, message_key).await? {
-        return Ok((sequence, false));
-    }
-
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-        let sequence = match preferred_sequence {
-            Some(sequence) if !message_sequence_exists(node, session_id, sequence).await? => {
-                sequence
-            }
-            Some(_) | None => next_append_sequence(node, session_id).await?,
-        };
-        match create_message(
-            node,
-            session_id,
-            agent_did,
-            requester_did,
-            sequence,
-            role,
-            content,
-            reasoning,
-            request_id,
-            request_doc_id,
-            Some(message_key),
-        )
-        .await
-        {
-            Ok(()) => return Ok((sequence, true)),
-            Err(error) => {
-                if let Some(existing) =
-                    message_sequence_for_key(node, session_id, message_key).await?
-                {
-                    return Ok((existing, false));
-                }
-                if attempts >= 5 {
-                    return Err(error);
-                }
-                tracing::debug!(
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::FiveAttempts,
+        "session.append_message_once",
+        |txn| {
+            Box::pin(async move {
+                append_message_in_txn(
+                    txn,
                     session_id,
-                    message_key,
-                    sequence,
-                    error = %error,
-                    "keyed append lost a sequence race; retrying"
-                );
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+                    agent_did,
+                    requester_did,
+                    role,
+                    content,
+                    reasoning,
+                    request_id,
+                    request_doc_id,
+                    Some(message_key),
+                    preferred_sequence,
+                )
+                .await
+            })
+        },
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn append_message_in_txn(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    role: &str,
+    content: &str,
+    reasoning: Option<&str>,
+    request_id: Option<&str>,
+    request_doc_id: Option<&str>,
+    message_key: Option<&str>,
+    preferred_sequence: Option<u32>,
+) -> Result<(u32, bool)> {
+    if let Some(key) = message_key {
+        if let Some(sequence) =
+            message_sequence_for_key(txn, session_id, agent_did, requester_did, key).await?
+        {
+            return Ok((sequence, false));
         }
     }
+    let sequence = match preferred_sequence {
+        Some(sequence)
+            if !message_sequence_exists(txn, session_id, agent_did, requester_did, sequence)
+                .await? =>
+        {
+            sequence
+        }
+        _ => next_append_sequence(txn, session_id, agent_did, requester_did).await?,
+    };
+    let mutation = create_message_mutation(
+        session_id,
+        agent_did,
+        requester_did,
+        sequence,
+        role,
+        content,
+        reasoning,
+        request_id,
+        request_doc_id,
+        message_key,
+    );
+    let response = txn.execute(&mutation).await?;
+    let response = defra_node::QueryResponse::success(
+        response
+            .get("data")
+            .context("message create omitted data")?
+            .clone(),
+    );
+    anyhow::ensure!(
+        crate::graphql::single_mutation_document(&response, "create_AgentMessage")?.is_some(),
+        "message create returned no document"
+    );
+    Ok((sequence, true))
 }
 
 async fn message_sequence_exists(
-    node: &EmbeddedNode,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     sequence: u32,
 ) -> Result<bool> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    {scope},
                     sequence: {{ _eq: {sequence} }}
                 }},
                 limit: 1
             ) {{ sequence }}
         }}"#
     );
-    let response = execute_query_timed(node, &query, "message_sequence_exists").await?;
-    if response.has_errors() {
-        anyhow::bail!(
-            "checking AgentMessage sequence for session_id={} sequence={}: {:?}",
-            session_id,
-            sequence,
-            response.errors
-        );
-    }
+    let response = txn.execute(&query).await?;
     Ok(response
-        .data
-        .as_ref()
+        .get("data")
         .and_then(|data| data.get("AgentMessage"))
         .and_then(Value::as_array)
-        .is_some_and(|rows| !rows.is_empty()))
+        .context("message sequence query omitted rows")?
+        .is_empty()
+        == false)
 }
 
 async fn message_sequence_for_key(
-    node: &EmbeddedNode,
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     message_key: &str,
 ) -> Result<Option<u32>> {
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let escaped_message_key = escape_graphql_string(message_key);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    {scope},
                     message_key: {{ _eq: "{escaped_message_key}" }}
                 }},
                 limit: 1
             ) {{ sequence }}
         }}"#
     );
-    let response = execute_query_timed(node, &query, "message_sequence_for_key").await?;
-    if response.has_errors() {
-        anyhow::bail!(
-            "keyed AgentMessage lookup failed for session_id={} message_key={}: {:?}",
-            session_id,
-            message_key,
-            response.errors
-        );
-    }
-    Ok(response
-        .data
-        .as_ref()
+    let response = txn.execute(&query).await?;
+    let rows = response
+        .get("data")
         .and_then(|data| data.get("AgentMessage"))
         .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("sequence"))
-        .and_then(Value::as_u64)
-        .and_then(|sequence| u32::try_from(sequence).ok()))
+        .context("message key query omitted rows")?;
+    rows.first()
+        .map(|row| {
+            u32::try_from(
+                row.get("sequence")
+                    .and_then(Value::as_u64)
+                    .context("message key has invalid sequence")?,
+            )
+            .context("message sequence exceeds u32")
+        })
+        .transpose()
 }
 
 /// #497: durable request-scoped dedup. Return the sequence of an already-persisted
@@ -427,20 +496,22 @@ async fn message_sequence_for_key(
 pub(crate) async fn message_sequence_for_request_content(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     request_id: &str,
     content: &str,
 ) -> Result<Option<u32>> {
     if request_id.is_empty() {
         return Ok(None);
     }
-    let escaped_session_id = escape_graphql_string(session_id);
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_content = escape_graphql_string(content);
     let query = format!(
         r#"{{
             AgentMessage(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }},
+                    {scope},
                     request_id: {{ _eq: "{escaped_request_id}" }},
                     content: {{ _eq: "{escaped_content}" }}
                 }},
@@ -460,24 +531,35 @@ pub(crate) async fn message_sequence_for_request_content(
         );
     }
 
-    let rows: Vec<ToolCallSequenceRow2> = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<MessageSequenceRow> = serde_json::from_value(
+        resp.data
+            .as_ref()
+            .and_then(|data| data.get("AgentMessage"))
+            .context("request message query omitted rows")?
+            .clone(),
+    )?;
     Ok(rows.first().map(|row| row.sequence))
 }
 
 #[derive(Deserialize)]
-struct ToolCallSequenceRow2 {
+struct MessageSequenceRow {
     sequence: u32,
 }
 
-async fn next_append_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
-    let message_max = super::sessions::max_sequence(node, session_id).await?;
-    let tool_call_reserved_max = max_tool_call_reserved_sequence(node, session_id).await?;
-    Ok(message_max.max(tool_call_reserved_max) + 1)
+async fn next_append_sequence(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<u32> {
+    let message_max =
+        super::sessions::max_sequence_in_txn(txn, session_id, agent_did, requester_did).await?;
+    let tool_call_reserved_max =
+        max_tool_call_reserved_sequence(txn, session_id, agent_did, requester_did).await?;
+    message_max
+        .max(tool_call_reserved_max)
+        .checked_add(1)
+        .ok_or_else(|| anyhow::anyhow!("message sequence exhausted"))
 }
 
 #[derive(Deserialize)]
@@ -485,34 +567,32 @@ struct ToolCallSequenceRow {
     message_sequence: u32,
 }
 
-async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) -> Result<u32> {
-    let escaped_session_id = escape_graphql_string(session_id);
+async fn max_tool_call_reserved_sequence(
+    txn: &crate::config_client::ConfigApplyTxn<'_>,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<u32> {
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentToolCall(
                 filter: {{
-                    session_id: {{ _eq: "{escaped_session_id}" }}
+                    {scope}
                     await_mode: {{ _eq: "background" }}
                 }}
             ) {{ message_sequence }}
         }}"#
     );
 
-    let resp = execute_query_timed(node, &query, "max_tool_call_reserved_sequence").await?;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading tool-call message sequences for session_id={}: {:?}",
-            session_id,
-            resp.errors
-        );
-    }
+    let resp = txn.execute(&query).await?;
 
-    let rows: Vec<ToolCallSequenceRow> = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<ToolCallSequenceRow> = serde_json::from_value(
+        resp.get("data")
+            .and_then(|data| data.get("AgentToolCall"))
+            .context("tool reservation query omitted rows")?
+            .clone(),
+    )?;
     // Background spawns reserve one result position after their assistant
     // turn so an independently appended completion cannot overtake the
     // immediate receipt. Foreground results do not reserve a position: they
@@ -528,39 +608,6 @@ async fn max_tool_call_reserved_sequence(node: &EmbeddedNode, session_id: &str) 
         .unwrap_or(0))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn create_message(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    sequence: u32,
-    role: &str,
-    content: &str,
-    reasoning: Option<&str>,
-    request_id: Option<&str>,
-    request_doc_id: Option<&str>,
-    message_key: Option<&str>,
-) -> Result<()> {
-    let mutation = create_message_mutation(
-        session_id,
-        agent_did,
-        requester_did,
-        sequence,
-        role,
-        content,
-        reasoning,
-        request_id,
-        request_doc_id,
-        message_key,
-    );
-
-    crate::config_client::ConfigAccess::write_local(node, "session.append_message", &mutation)
-        .await?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_message_mutation(
     session_id: &str,
     agent_did: &str,
@@ -587,9 +634,14 @@ pub(crate) fn create_message_mutation(
     // write is not request-scoped (background/fork paths).
     let escaped_request_id = escape_graphql_string(request_id.unwrap_or(""));
     let request_doc_id_field = super::request_doc_id_create_field(request_doc_id);
-    let message_key = message_key
-        .map(escape_graphql_string)
-        .unwrap_or_else(|| format!("{escaped_session_id}:{sequence}"));
+    let message_key = message_key.map(escape_graphql_string).unwrap_or_else(|| {
+        escape_graphql_string(&sequence_message_key(
+            agent_did,
+            session_id,
+            requester_did,
+            sequence,
+        ))
+    });
 
     format!(
         r#"mutation {{
@@ -610,30 +662,55 @@ pub(crate) fn create_message_mutation(
     )
 }
 
+/// Attach transcript materialization only to the active physical request in
+/// its exact session scope. A missing or ambiguous response aborts the write.
 pub(crate) async fn mark_response_materialized(
     node: &EmbeddedNode,
-    request_id: &str,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    request_doc_id: &str,
     sequence: u32,
 ) -> Result<()> {
+    anyhow::ensure!(
+        !request_doc_id.is_empty(),
+        "response materialization requires a request document"
+    );
+    let scope = super::query::session_scope_filter(agent_did, session_id, requester_did);
     let now = chrono::Utc::now().to_rfc3339();
-    let escaped_request_id = escape_graphql_string(request_id);
     let mutation = format!(
         r#"mutation {{
             update_AgentResponse(
-                filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
+                filter: {{ {scope}, request_doc_id: {{ _eq: "{}" }} }},
                 input: {{
                     materialized_message_sequence: {sequence},
                     materialized_at: "{now}"
                 }}
             ) {{ _docID }}
-        }}"#
+        }}"#,
+        escape_graphql_string(request_doc_id),
     );
-
-    crate::config_client::ConfigAccess::write_local(
+    crate::config_client::ConfigAccess::transact_local(
         node,
+        None,
         "session.mark_response_materialized",
-        &mutation,
+        |txn| {
+            let mutation = mutation.clone();
+            Box::pin(async move {
+                let response = txn.execute(&mutation).await?;
+                let rows = response
+                    .get("data")
+                    .and_then(|data| data.get("update_AgentResponse"))
+                    .and_then(Value::as_array)
+                    .context("response materialization omitted mutation rows")?;
+                anyhow::ensure!(
+                    rows.len() == 1,
+                    "response materialization requires exactly one scoped response; found {}",
+                    rows.len()
+                );
+                Ok(())
+            })
+        },
     )
-    .await?;
-    Ok(())
+    .await
 }

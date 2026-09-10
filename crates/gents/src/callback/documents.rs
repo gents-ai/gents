@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::graphql::{escape_graphql_string, first_row, rows};
@@ -21,70 +21,14 @@ use crate::workspace::{
     MemoryWorkspaceDocuments, RepositoryPlacementRef, WorkspaceDocuments, WorkspacePlacementDoc,
 };
 
-use super::BUILTIN_CREATE_WORKSPACE;
-
 /// Crash-window bound for succeeded-without-result repair. Happy-path
 /// succeeded rows are excluded by a batched CallbackResult lookup, not by
 /// probing every historical invocation.
 pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
-const BINDING_FIELDS: &str = r#"
-    binding_id
-    source_collection
-    event_kind
-    filter
-    source_fields
-    module_id
-    builtin_emitter
-    principal_did
-    capability_set
-    retry_policy
-    owner_deployment_id
-    enabled
-"#;
-
-const MODULE_FIELDS: &str = r#"
-    module_id
-    abi_version
-    wasm_bytes
-    canonical_args
-    signer_did
-    provenance
-    enabled
-    fuel_limit
-    memory_pages
-    max_input_bytes
-    max_output_bytes
-"#;
-
-const INVOCATION_FIELDS: &str = r#"
-    invocation_id
-    owner_deployment_id
-    binding_id
-    source_collection
-    source_doc_id
-    source_version
-    idempotency_key
-    lifecycle_state
-    attempts
-    action_plan
-    action_journal
-    error
-    claimed_at
-    created_at
-"#;
-
-const RESULT_FIELDS: &str = r#"
-    result_id
-    invocation_id
-    binding_id
-    owner_deployment_id
-    workspace_id
-    work_unit_id
-    caused_by_correlation
-    created_at
-"#;
+const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key lifecycle_state attempts action_plan action_journal error claimed_at created_at";
+const RESULT_FIELDS: &str = "result_id invocation_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -94,7 +38,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     branch
     creation_policy
     adapter
-    owner_deployment_id
+    owner_agent_did
     writer_principal
     integrator_principal
     instruction_manifest
@@ -107,7 +51,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
 
 const PLACEMENT_FIELDS: &str = r#"
     workspace_id
-    deployment_id
+    owner_agent_did
     host_path
     repository_placement_id
     adapter
@@ -118,25 +62,15 @@ const PLACEMENT_FIELDS: &str = r#"
     observed_tree_hash
 "#;
 
-// Canonical desired configuration is shared with packs and task hooks.
+// Canonical event callback configuration is shared with packs.
 pub use crate::document_config::{
     CallbackBinding as CallbackBindingDoc, CallbackModule as CallbackModuleDoc,
 };
 
 impl CallbackBindingDoc {
-    #[allow(dead_code)]
-    pub fn enabled(&self) -> bool {
-        self.enabled.unwrap_or(true)
-    }
-
-    pub fn capabilities(&self) -> BTreeSet<String> {
-        parse_string_list(self.capability_set.as_deref())
-            .into_iter()
-            .collect()
-    }
-
     pub fn projected_fields(&self) -> Result<Vec<String>> {
-        Ok(parse_string_list(self.source_fields.as_deref()))
+        validate_callback_binding(self)?;
+        Ok(self.input_fields.clone())
     }
 }
 
@@ -189,15 +123,6 @@ pub(super) struct CallbackResultInvocationRow {
     pub invocation_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RepositoryPlacementRow {
-    repository_id: String,
-    deployment_id: String,
-    host_path: String,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
 pub fn idempotency_key(binding_id: &str, source_doc_id: &str, source_version: &str) -> String {
     format!("{binding_id}:{source_doc_id}:{source_version}")
 }
@@ -226,54 +151,31 @@ pub fn parse_string_list(raw: Option<&str>) -> Vec<String> {
 
 /// Bindings that list secret-bearing source fields fail closed at apply/load.
 pub fn validate_callback_binding(binding: &CallbackBindingDoc) -> Result<()> {
-    crate::graphql::validate_collection_identifier(&binding.source_collection)?;
-    if binding.binding_id.trim().is_empty() {
-        anyhow::bail!("CallbackBinding.binding_id must be non-empty");
-    }
-    if binding.owner_deployment_id.trim().is_empty() {
-        anyhow::bail!("CallbackBinding.owner_deployment_id must be non-empty");
-    }
-    if binding.principal_did.trim().is_empty() {
-        anyhow::bail!("CallbackBinding.principal_did must be non-empty");
-    }
-    if binding.event_kind.trim() != "created" {
-        anyhow::bail!(
-            "CallbackBinding {} event_kind must be created, got {}",
-            binding.binding_id,
-            binding.event_kind
+    for (name, value) in [
+        ("binding_id", &binding.binding_id),
+        ("agent_did", &binding.agent_did),
+        ("callback_id", &binding.callback_id),
+        ("event_source_id", &binding.event_source_id),
+    ] {
+        anyhow::ensure!(
+            !value.trim().is_empty(),
+            "CallbackBinding {name} must be non-empty"
         );
     }
-    reject_secret_bearing_callback_fields(
-        &binding.binding_id,
-        binding.filter.as_deref(),
-        binding.source_fields.as_deref(),
-    )?;
-    let builtin = binding
-        .builtin_emitter
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let module = binding
-        .module_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    match (builtin, module) {
-        (None, None) => anyhow::bail!(
-            "CallbackBinding {} needs builtin_emitter or module_id",
+    let mut unique = HashSet::new();
+    for field in &binding.input_fields {
+        crate::graphql::validate_graphql_name(field)?;
+        anyhow::ensure!(
+            unique.insert(field),
+            "duplicate callback input field {field}"
+        );
+        anyhow::ensure!(
+            !crate::toolset::is_secret_env_name(field),
+            "CallbackBinding {} source field `{field}` is secret-bearing",
             binding.binding_id
-        ),
-        (Some(_), Some(_)) => anyhow::bail!(
-            "CallbackBinding {} module_id and builtin_emitter are mutually exclusive",
-            binding.binding_id
-        ),
-        (None, Some(_)) => Ok(()),
-        (Some(name), None) if name != BUILTIN_CREATE_WORKSPACE => anyhow::bail!(
-            "CallbackBinding {} unknown builtin_emitter `{name}`",
-            binding.binding_id
-        ),
-        (Some(_), None) => Ok(()),
+        );
     }
+    Ok(())
 }
 
 pub fn reject_secret_bearing_callback_fields(
@@ -353,55 +255,74 @@ pub fn strip_secret_fields(value: Value) -> Value {
     }
 }
 
-pub async fn list_enabled_bindings(node: &EmbeddedNode) -> Result<Vec<CallbackBindingDoc>> {
+async fn load_config<T: serde::de::DeserializeOwned + Send>(
+    node: &EmbeddedNode,
+    collection: crate::Collection,
+    owner: &str,
+    id: &str,
+) -> Result<Option<T>> {
+    crate::config_client::ConfigAccess::transact_local(node, None, "callback.read_config", |txn| {
+        Box::pin(async move {
+            crate::config_client::read_desired_state_record_in_txn(txn, collection, owner, id)
+                .await?
+                .map(|(_, value)| serde_json::from_value(value).map_err(Into::into))
+                .transpose()
+        })
+    })
+    .await
+}
+
+pub async fn list_enabled_bindings(
+    node: &EmbeddedNode,
+    owner: &str,
+) -> Result<Vec<CallbackBindingDoc>> {
+    let (fields, _) =
+        crate::config_client::config_projection(crate::Collection::CallbackBinding, None)?;
     let query = format!(
-        r#"{{
-            CallbackBinding(
-                filter: {{ enabled: {{ _eq: true }} }}
-            ) {{ {BINDING_FIELDS} }}
-        }}"#
+        "{{ CallbackBinding(filter: {{ agent_did: {{ _eq: \"{}\" }} }}) {{ {} }} }}",
+        escape_graphql_string(owner),
+        fields.join(" ")
     );
     let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!("query CallbackBinding failed: {:?}", response.errors);
+    anyhow::ensure!(
+        !response.has_errors(),
+        "query CallbackBinding failed: {:?}",
+        response.errors
+    );
+    let mut bindings: Vec<CallbackBindingDoc> = rows(&response, "CallbackBinding")?;
+    let mut ids = HashSet::new();
+    for binding in &bindings {
+        anyhow::ensure!(
+            binding.agent_did == owner && ids.insert(&binding.binding_id),
+            "ambiguous or foreign CallbackBinding"
+        );
+        validate_callback_binding(binding)?;
     }
-    let rows: Vec<CallbackBindingDoc> = rows(&response, "CallbackBinding")?;
-    let mut out = Vec::new();
-    for binding in rows {
-        match validate_callback_binding(&binding) {
-            Ok(()) => out.push(binding),
-            Err(error) => tracing::warn!(
-                binding_id = %binding.binding_id,
-                %error,
-                "skipping invalid CallbackBinding"
-            ),
-        }
-    }
-    out.sort_by(|left, right| left.binding_id.cmp(&right.binding_id));
-    Ok(out)
+    bindings.retain(|binding| binding.enabled);
+    bindings.sort_by(|a, b| a.binding_id.cmp(&b.binding_id));
+    Ok(bindings)
 }
 
 pub async fn load_callback_module(
     node: &EmbeddedNode,
     module_id: &str,
+    owner: &str,
 ) -> Result<Option<CallbackModuleDoc>> {
-    let query = format!(
-        r#"{{
-            CallbackModule(
-                filter: {{ module_id: {{ _eq: "{id}" }} }},
-                limit: 1
-            ) {{ {MODULE_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(module_id),
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackModule {module_id} failed: {:?}",
-            response.errors
-        );
-    }
-    first_row(&response, "CallbackModule")
+    load_config(node, crate::Collection::CallbackModule, owner, module_id).await
+}
+pub async fn load_callback(
+    node: &EmbeddedNode,
+    callback_id: &str,
+    owner: &str,
+) -> Result<Option<crate::document_config::Callback>> {
+    load_config(node, crate::Collection::Callback, owner, callback_id).await
+}
+pub async fn load_event_source(
+    node: &EmbeddedNode,
+    source_id: &str,
+    owner: &str,
+) -> Result<Option<crate::document_config::EventSource>> {
+    load_config(node, crate::Collection::EventSource, owner, source_id).await
 }
 
 pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeSet<String>> {
@@ -433,38 +354,25 @@ pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeS
 pub async fn load_binding(
     node: &EmbeddedNode,
     binding_id: &str,
+    owner: &str,
 ) -> Result<Option<CallbackBindingDoc>> {
-    let query = format!(
-        r#"{{
-            CallbackBinding(
-                filter: {{ binding_id: {{ _eq: "{id}" }} }},
-                limit: 1
-            ) {{ {BINDING_FIELDS} }}
-        }}"#,
-        id = escape_graphql_string(binding_id),
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackBinding {binding_id} failed: {:?}",
-            response.errors
-        );
-    }
-    first_row(&response, "CallbackBinding")
+    load_config(node, crate::Collection::CallbackBinding, owner, binding_id).await
 }
 
 pub async fn load_invocation(
     node: &EmbeddedNode,
     invocation_id: &str,
+    owner: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ invocation_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
         id = escape_graphql_string(invocation_id),
+        owner = escape_graphql_string(owner),
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -473,21 +381,27 @@ pub async fn load_invocation(
             response.errors
         );
     }
+    anyhow::ensure!(
+        rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
+        "ambiguous principal-scoped callback/workspace document"
+    );
     first_row(&response, "CallbackInvocation")
 }
 
 pub async fn load_invocation_by_key(
     node: &EmbeddedNode,
     key: &str,
+    owner: &str,
 ) -> Result<Option<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
             CallbackInvocation(
-                filter: {{ idempotency_key: {{ _eq: "{key}" }} }},
-                limit: 1
+                filter: {{ idempotency_key: {{ _eq: "{key}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
         key = escape_graphql_string(key),
+        owner = escape_graphql_string(owner),
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -496,33 +410,37 @@ pub async fn load_invocation_by_key(
             response.errors
         );
     }
+    anyhow::ensure!(
+        rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
+        "ambiguous principal-scoped callback/workspace document"
+    );
     first_row(&response, "CallbackInvocation")
 }
 
 pub async fn list_recoverable_invocations(
     node: &EmbeddedNode,
-    owner_deployment_id: &str,
+    owner_agent_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let mut invocations = query_owner_invocations(
         node,
-        owner_deployment_id,
+        owner_agent_did,
         r#"["pending", "claimed", "running"]"#,
     )
     .await?;
-    invocations.extend(list_recent_succeeded_missing_result(node, owner_deployment_id).await?);
+    invocations.extend(list_recent_succeeded_missing_result(node, owner_agent_did).await?);
     Ok(invocations)
 }
 
 async fn list_recent_succeeded_missing_result(
     node: &EmbeddedNode,
-    owner_deployment_id: &str,
+    owner_agent_did: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let cutoff = succeeded_repair_cutoff(chrono::Utc::now());
     let query = format!(
         r#"{{
             CallbackInvocation(
                 filter: {{
-                    owner_deployment_id: {{ _eq: "{owner}" }},
+                    owner_agent_did: {{ _eq: "{owner}" }},
                     lifecycle_state: {{ _eq: "succeeded" }},
                     created_at: {{ _ge: "{cutoff}" }}
                 }},
@@ -530,7 +448,7 @@ async fn list_recent_succeeded_missing_result(
                 limit: {limit}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_deployment_id),
+        owner = escape_graphql_string(owner_agent_did),
         cutoff = escape_graphql_string(&cutoff),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
@@ -548,6 +466,7 @@ async fn list_recent_succeeded_missing_result(
     let results = load_callback_results_for_invocations(
         node,
         succeeded.iter().map(|row| row.invocation_id.as_str()),
+        owner_agent_did,
     )
     .await?;
     Ok(succeeded_missing_result(succeeded, &results))
@@ -573,6 +492,7 @@ pub(crate) fn succeeded_missing_result(
 async fn load_callback_results_for_invocations(
     node: &EmbeddedNode,
     invocation_ids: impl IntoIterator<Item = &str>,
+    owner: &str,
 ) -> Result<HashSet<String>> {
     let ids: Vec<String> = invocation_ids
         .into_iter()
@@ -584,11 +504,12 @@ async fn load_callback_results_for_invocations(
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _in: [{ids}] }} }},
+                filter: {{ invocation_id: {{ _in: [{ids}] }}, owner_agent_did: {{ _eq: "{owner}" }} }},
                 limit: {limit}
             ) {{ invocation_id }}
         }}"#,
         ids = ids.join(", "),
+        owner = escape_graphql_string(owner),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
     let response = node.execute(&query).await;
@@ -604,20 +525,20 @@ async fn load_callback_results_for_invocations(
 
 async fn query_owner_invocations(
     node: &EmbeddedNode,
-    owner_deployment_id: &str,
+    owner_agent_did: &str,
     states: &str,
 ) -> Result<Vec<CallbackInvocationDoc>> {
     let query = format!(
         r#"{{
             CallbackInvocation(
                 filter: {{
-                    owner_deployment_id: {{ _eq: "{owner}" }},
+                    owner_agent_did: {{ _eq: "{owner}" }},
                     lifecycle_state: {{ _in: {states} }}
                 }},
                 order: {{ created_at: ASC }}
             ) {{ {INVOCATION_FIELDS} }}
         }}"#,
-        owner = escape_graphql_string(owner_deployment_id),
+        owner = escape_graphql_string(owner_agent_did),
         states = states,
     );
     let response = node.execute(&query).await;
@@ -633,15 +554,17 @@ async fn query_owner_invocations(
 pub async fn load_callback_result(
     node: &EmbeddedNode,
     invocation_id: &str,
+    owner: &str,
 ) -> Result<Option<CallbackResultDoc>> {
     let query = format!(
         r#"{{
             CallbackResult(
-                filter: {{ invocation_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ invocation_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {RESULT_FIELDS} }}
         }}"#,
         id = escape_graphql_string(invocation_id),
+        owner = escape_graphql_string(owner),
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -650,6 +573,10 @@ pub async fn load_callback_result(
             response.errors
         );
     }
+    anyhow::ensure!(
+        rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
+        "ambiguous principal-scoped callback/workspace document"
+    );
     first_row(&response, "CallbackResult")
 }
 
@@ -657,49 +584,52 @@ pub async fn create_pending_invocation(
     node: &EmbeddedNode,
     invocation: &CallbackInvocationDoc,
 ) -> Result<CallbackInvocationDoc> {
-    if let Some(existing) = load_invocation_by_key(node, &invocation.idempotency_key).await? {
+    if let Some(existing) = load_invocation_by_key(
+        node,
+        &invocation.idempotency_key,
+        &invocation.owner_agent_did,
+    )
+    .await?
+    {
         return Ok(existing);
     }
     let now = invocation
         .created_at
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
-    let mutation = format!(
-        r#"mutation {{
-            create_CallbackInvocation(input: {{
-                invocation_id: "{invocation_id}",
-                owner_deployment_id: "{owner_deployment_id}",
-                binding_id: "{binding_id}",
-                source_collection: "{source_collection}",
-                source_doc_id: "{source_doc_id}",
-                source_version: "{source_version}",
-                idempotency_key: "{idempotency_key}",
-                lifecycle_state: "pending",
-                attempts: 0,
-                action_plan: "",
-                action_journal: "[]",
-                error: "",
-                claimed_at: "",
-                created_at: "{created_at}"
-            }}) {{ _docID }}
-        }}"#,
-        invocation_id = escape_graphql_string(&invocation.invocation_id),
-        owner_deployment_id = escape_graphql_string(&invocation.owner_deployment_id),
-        binding_id = escape_graphql_string(&invocation.binding_id),
-        source_collection = escape_graphql_string(&invocation.source_collection),
-        source_doc_id = escape_graphql_string(&invocation.source_doc_id),
-        source_version =
-            escape_graphql_string(invocation.source_version.as_deref().unwrap_or("created")),
-        idempotency_key = escape_graphql_string(&invocation.idempotency_key),
-        created_at = escape_graphql_string(&now),
-    );
-    match committed_mutation(node, "callback.create_invocation", &mutation).await {
-        Ok(_) => load_invocation_by_key(node, &invocation.idempotency_key)
-            .await?
-            .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
+    let input = serde_json::json!({
+        "invocation_id": invocation.invocation_id, "owner_agent_did": invocation.owner_agent_did,
+        "callback_id": invocation.callback_id, "origin": invocation.origin, "input": invocation.input,
+        "idempotency_key": invocation.idempotency_key, "lifecycle_state": "pending", "attempts": 0,
+        "action_plan": "", "action_journal": "[]", "error": "", "claimed_at": "", "created_at": now
+    });
+    let variables = serde_json::json!({"input": input});
+    let mutation = "mutation($input: CallbackInvocationMutationInputArg!) { create_CallbackInvocation(input: $input) { _docID } }";
+    let written = crate::config_client::ConfigAccess::transact_local(
+        node,
+        None,
+        "callback.create_invocation",
+        |txn| {
+            let variables = &variables;
+            Box::pin(async move { txn.execute_with_variables(mutation, variables).await })
+        },
+    )
+    .await;
+    match written {
+        Ok(_) => load_invocation_by_key(
+            node,
+            &invocation.idempotency_key,
+            &invocation.owner_agent_did,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("created CallbackInvocation missing after write")),
         Err(error) => {
-            if let Some(existing) =
-                load_invocation_by_key(node, &invocation.idempotency_key).await?
+            if let Some(existing) = load_invocation_by_key(
+                node,
+                &invocation.idempotency_key,
+                &invocation.owner_agent_did,
+            )
+            .await?
             {
                 return Ok(existing);
             }
@@ -730,7 +660,7 @@ pub async fn update_invocation(
             update_CallbackInvocation(
                 filter: {{
                     invocation_id: {{ _eq: "{id}" }},
-                    owner_deployment_id: {{ _eq: "{owner}" }}
+                    owner_agent_did: {{ _eq: "{owner}" }}
                     {state_filter}
                 }},
                 input: {{
@@ -744,7 +674,7 @@ pub async fn update_invocation(
             ) {{ _docID }}
         }}"#,
         id = escape_graphql_string(&invocation.invocation_id),
-        owner = escape_graphql_string(&invocation.owner_deployment_id),
+        owner = escape_graphql_string(&invocation.owner_agent_did),
         state = escape_graphql_string(&invocation.lifecycle_state),
         attempts = invocation.attempts.unwrap_or(0),
         plan = escape_graphql_string(plan),
@@ -760,7 +690,9 @@ pub async fn create_callback_result(
     node: &EmbeddedNode,
     result: &CallbackResultDoc,
 ) -> Result<CallbackResultDoc> {
-    if let Some(existing) = load_callback_result(node, &result.invocation_id).await? {
+    if let Some(existing) =
+        load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
+    {
         return Ok(existing);
     }
     let now = result
@@ -775,8 +707,7 @@ pub async fn create_callback_result(
             create_CallbackResult(input: {{
                 result_id: "{result_id}",
                 invocation_id: "{invocation_id}",
-                binding_id: "{binding_id}",
-                owner_deployment_id: "{owner}",
+                owner_agent_did: "{owner}",
                 workspace_id: "{workspace}",
                 work_unit_id: "{work_unit_id}",
                 caused_by_correlation: "{correlation}",
@@ -785,19 +716,20 @@ pub async fn create_callback_result(
         }}"#,
         result_id = escape_graphql_string(&result.result_id),
         invocation_id = escape_graphql_string(&result.invocation_id),
-        binding_id = escape_graphql_string(&result.binding_id),
-        owner = escape_graphql_string(&result.owner_deployment_id),
+        owner = escape_graphql_string(&result.owner_agent_did),
         workspace = escape_graphql_string(workspace),
         work_unit_id = escape_graphql_string(work_unit_id),
         correlation = escape_graphql_string(correlation),
         created_at = escape_graphql_string(&now),
     );
     match committed_mutation(node, "callback.create_result", &mutation).await {
-        Ok(_) => load_callback_result(node, &result.invocation_id)
+        Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_agent_did)
             .await?
             .ok_or_else(|| anyhow!("created CallbackResult missing after write")),
         Err(error) => {
-            if let Some(existing) = load_callback_result(node, &result.invocation_id).await? {
+            if let Some(existing) =
+                load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
+            {
                 return Ok(existing);
             }
             Err(error).context("create_CallbackResult")
@@ -808,56 +740,33 @@ pub async fn create_callback_result(
 pub async fn load_repository_placement(
     node: &EmbeddedNode,
     repository_id: &str,
-    deployment_id: &str,
+    owner: &str,
 ) -> Result<Option<RepositoryPlacementRef>> {
-    let query = format!(
-        r#"{{
-            RepositoryPlacement(
-                filter: {{ repository_id: {{ _eq: "{id}" }} }},
-                limit: 1
-            ) {{
-                repository_id
-                deployment_id
-                host_path
-                enabled
-            }}
-        }}"#,
-        id = escape_graphql_string(repository_id),
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query RepositoryPlacement {repository_id} failed: {:?}",
-            response.errors
-        );
-    }
-    let Some(row) = first_row::<RepositoryPlacementRow>(&response, "RepositoryPlacement")? else {
-        return Ok(None);
-    };
-    if row.deployment_id != deployment_id {
-        anyhow::bail!(
-            "RepositoryPlacement {} belongs to deployment {}, not {deployment_id}",
-            row.repository_id,
-            row.deployment_id
-        );
-    }
-    Ok(Some(RepositoryPlacementRef {
+    let row: Option<crate::document_config::RepositoryPlacement> = load_config(
+        node,
+        crate::Collection::RepositoryPlacement,
+        owner,
+        repository_id,
+    )
+    .await?;
+    Ok(row.map(|row| RepositoryPlacementRef {
         repository_id: row.repository_id,
-        deployment_id: row.deployment_id,
+        owner_agent_did: row.agent_did,
         host_path: PathBuf::from(row.host_path),
-        enabled: row.enabled.unwrap_or(true),
+        enabled: row.enabled,
     }))
 }
 
 pub async fn load_memory_workspace_docs(
     node: &EmbeddedNode,
     workspace_id: &str,
+    owner: &str,
 ) -> Result<MemoryWorkspaceDocuments> {
     let mut docs = MemoryWorkspaceDocuments::default();
-    if let Some(workspace) = load_isolated_workspace(node, workspace_id).await? {
+    if let Some(workspace) = load_isolated_workspace(node, workspace_id, owner).await? {
         docs.write_isolated_workspace(workspace)?;
     }
-    if let Some(placement) = load_workspace_placement(node, workspace_id).await? {
+    if let Some(placement) = load_workspace_placement(node, workspace_id, owner).await? {
         docs.write_placement(placement)?;
     }
     Ok(docs)
@@ -886,15 +795,17 @@ pub async fn flush_workspace_docs(
 pub(crate) async fn load_isolated_workspace(
     node: &EmbeddedNode,
     workspace_id: &str,
+    owner: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
     let query = format!(
         r#"{{
             IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {ISOLATED_WORKSPACE_FIELDS} }}
         }}"#,
         id = escape_graphql_string(workspace_id),
+        owner = escape_graphql_string(owner),
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -903,21 +814,27 @@ pub(crate) async fn load_isolated_workspace(
             response.errors
         );
     }
+    anyhow::ensure!(
+        rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
+        "ambiguous principal-scoped callback/workspace document"
+    );
     first_row(&response, "IsolatedWorkspace")
 }
 
 pub(crate) async fn load_workspace_placement(
     node: &EmbeddedNode,
     workspace_id: &str,
+    owner: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
     let query = format!(
         r#"{{
             WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {PLACEMENT_FIELDS} }}
         }}"#,
         id = escape_graphql_string(workspace_id),
+        owner = escape_graphql_string(owner),
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -926,5 +843,9 @@ pub(crate) async fn load_workspace_placement(
             response.errors
         );
     }
+    anyhow::ensure!(
+        rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
+        "ambiguous principal-scoped callback/workspace document"
+    );
     first_row(&response, "WorkspacePlacement")
 }

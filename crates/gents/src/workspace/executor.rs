@@ -189,7 +189,7 @@ pub fn execute_create_workspace_plan(
             return Err(HostExecuteError::denied(format!(
                 "create_workspace executor cannot run {}",
                 other.type_name()
-            )))
+            )));
         }
     };
     if ctx.repository.repository_id != action.repository_id {
@@ -204,9 +204,9 @@ pub fn execute_create_workspace_plan(
             ctx.repository.repository_id
         )));
     }
-    if ctx.repository.deployment_id != ctx.deployment_id {
+    if ctx.repository.owner_agent_did != ctx.owner_agent_did {
         return Err(HostExecuteError::denied(
-            "RepositoryPlacement.deployment_id does not match this host deployment_id",
+            "RepositoryPlacement.owner_agent_did does not match the executing agent DID",
         ));
     }
 
@@ -242,7 +242,7 @@ fn create_workspace_action(
         .load_isolated_workspace(&identity.workspace_id)
         .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
     if let Some(existing) = &existing {
-        if existing.identity() != identity || existing.owner_deployment_id != ctx.deployment_id {
+        if existing.identity() != identity || existing.owner_agent_did != ctx.owner_agent_did {
             return Err(HostExecuteError::failed(
                 "workspace creation identity/capability does not match the admitted workspace",
                 true,
@@ -474,7 +474,7 @@ fn persist_docs(
         identity,
         action.creation_policy,
         action.adapter,
-        &ctx.deployment_id,
+        &ctx.owner_agent_did,
         &ctx.writer_principal,
         &ctx.integrator_principal,
         &ctx.caused_by_invocation_id,
@@ -489,7 +489,7 @@ fn persist_docs(
         .to_string();
     let placement = WorkspacePlacementDoc {
         workspace_id: identity.workspace_id.clone(),
-        deployment_id: ctx.deployment_id.clone(),
+        owner_agent_did: ctx.owner_agent_did.clone(),
         host_path,
         repository_placement_id: ctx.repository.repository_id.clone(),
         adapter: action.adapter.as_str().to_string(),
@@ -556,12 +556,12 @@ fn freeze_workspace_base_action(
         .load_placement(&action.workspace_id)
         .map_err(failed)?
         .ok_or_else(|| HostExecuteError::denied("base freeze placement is missing"))?;
-    if !(workspace.owner_deployment_id == ctx.deployment_id
+    if !(workspace.owner_agent_did == ctx.owner_agent_did
         && ctx.repository.enabled
-        && ctx.repository.deployment_id == ctx.deployment_id
+        && ctx.repository.owner_agent_did == ctx.owner_agent_did
         && workspace.repository_id == ctx.repository.repository_id
         && placement.workspace_id == workspace.workspace_id
-        && placement.deployment_id == ctx.deployment_id
+        && placement.owner_agent_did == ctx.owner_agent_did
         && placement.repository_placement_id == ctx.repository.repository_id
         && placement.adapter == workspace.adapter)
     {
@@ -726,7 +726,7 @@ pub fn execute_seal_workspace_plan(
             return Err(HostExecuteError::denied(format!(
                 "seal_workspace executor cannot run {}",
                 other.type_name()
-            )))
+            )));
         }
     };
     if journal::current_state(journal, 0).is_none() {
@@ -746,9 +746,9 @@ fn seal_workspace_action(
     ) {
         let outcome = load_written_seal(&action.workspace_id, action, ctx.documents)
             .map_err(|err| HostExecuteError::failed(err.to_string(), false, None))?;
-        if outcome.workspace.owner_deployment_id != ctx.deployment_id {
+        if outcome.workspace.owner_agent_did != ctx.owner_agent_did {
             return Err(HostExecuteError::denied(
-                "receipt replay belongs to another host",
+                "receipt replay belongs to another agent",
             ));
         }
         return Ok(outcome);
@@ -783,10 +783,10 @@ fn seal_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_deployment_id != ctx.deployment_id {
+    if workspace.owner_agent_did != ctx.owner_agent_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not this host {}",
-            action.workspace_id, workspace.owner_deployment_id, ctx.deployment_id
+            "workspace {} is owned by {}, not executing agent {}",
+            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
         )));
     }
 
@@ -949,7 +949,9 @@ fn validate_receipt_binding(
         || receipt.produced_by_request_id != request_id
         || receipt.produced_by_request_doc_id != request_doc_id
     {
-        bail!("workspace receipt does not match immutable workspace/base/capability/seal/request binding");
+        bail!(
+            "workspace receipt does not match immutable workspace/base/capability/seal/request binding"
+        );
     }
     Ok(())
 }
@@ -1055,7 +1057,7 @@ pub fn execute_integrate_workspace_plan(
             return Err(HostExecuteError::denied(format!(
                 "integrate_workspace executor cannot run {}",
                 other.type_name()
-            )))
+            )));
         }
     };
     restore_integrate_journal(journal, &ctx.repository.host_path, &action.workspace_id);
@@ -1108,10 +1110,10 @@ fn integrate_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_deployment_id != ctx.deployment_id {
+    if workspace.owner_agent_did != ctx.owner_agent_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not this host {}",
-            action.workspace_id, workspace.owner_deployment_id, ctx.deployment_id
+            "workspace {} is owned by {}, not executing agent {}",
+            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
         )));
     }
     let lifecycle = normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
@@ -1267,7 +1269,8 @@ fn integrate_workspace_action(
     });
     if !writer_matches {
         return Err(HostExecuteError::denied(
-            "integration requires a matching writer receipt for the sealed workspace/base/capability/tree"));
+            "integration requires a matching writer receipt for the sealed workspace/base/capability/tree",
+        ));
     }
 
     let marker = load_integrate_marker(&trunk, &action.workspace_id);
@@ -1531,7 +1534,7 @@ pub fn execute_cleanup_workspace_plan(
             return Err(HostExecuteError::denied(format!(
                 "cleanup_workspace executor cannot run {}",
                 other.type_name()
-            )))
+            )));
         }
     };
     if journal::current_state(journal, 0).is_none() {
@@ -1582,10 +1585,10 @@ fn cleanup_workspace_action(
                 None,
             )
         })?;
-    if workspace.owner_deployment_id != ctx.deployment_id {
+    if workspace.owner_agent_did != ctx.owner_agent_did {
         return Err(HostExecuteError::denied(format!(
-            "workspace {} is owned by {}, not this host {}",
-            action.workspace_id, workspace.owner_deployment_id, ctx.deployment_id
+            "workspace {} is owned by {}, not executing agent {}",
+            action.workspace_id, workspace.owner_agent_did, ctx.owner_agent_did
         )));
     }
 
@@ -1606,14 +1609,14 @@ fn cleanup_workspace_action(
             return Err(HostExecuteError::denied(format!(
                 "workspace {} is ready; cleanup would leave a bindable Ready workspace without a placement",
                 action.workspace_id
-            )))
+            )));
         }
         other => {
             return Err(HostExecuteError::denied(format!(
                 "workspace {} in state {} cannot be cleaned",
                 action.workspace_id,
                 other.unwrap_or(workspace.lifecycle_state.as_str())
-            )))
+            )));
         }
     }
 

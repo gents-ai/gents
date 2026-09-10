@@ -12,21 +12,27 @@ use super::serde_helpers::{
 /// operating convention; runtime enforcement is deferred to #1435. No host identity.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct AgentPrincipal {
     pub agent_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub default_behavior_id: Option<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_by: Option<String>,
     /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
@@ -34,6 +40,7 @@ pub struct AgentPrincipal {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }
 
@@ -71,36 +78,6 @@ pub(crate) async fn load_agent_principal_record(
     let resp = node.execute(&query).await;
     if resp.has_errors() {
         anyhow::bail!("query AgentPrincipal failed: {:?}", resp.errors);
-    }
-
-    Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentPrincipal"))
-}
-
-pub(crate) async fn load_agent_principal_by_doc_id(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> Result<Option<(String, AgentPrincipal)>> {
-    let escaped_doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentPrincipal(
-                filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
-                limit: 1
-            ) {{
-                _docID
-                agent_did
-                display_name
-                default_behavior_id
-                enabled
-                created_at
-                created_by
-            }}
-        }}"#
-    );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query AgentPrincipal by _docID failed: {:?}", resp.errors);
     }
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentPrincipal"))

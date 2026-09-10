@@ -4,11 +4,15 @@ impl DefraSessionHook {
     pub(super) async fn cancel_live_subagent_descendants(
         &self,
         child_session_id: &str,
+        child_agent_did: &str,
+        child_requester_did: Option<&str>,
         cause: CancelCause,
     ) -> anyhow::Result<usize> {
         crate::background_tools::subagent_control::cancel_live_subagent_descendants(
             self.node.clone(),
             child_session_id,
+            child_agent_did,
+            child_requester_did,
             &self.agent_did,
             cause,
         )
@@ -350,10 +354,18 @@ impl DefraSessionHook {
                             .await;
                     }
                     if let Some(dispatch) = dispatch {
-                        if let CascadeDispatch::Local(intent) = dispatch {
-                            if let Err(error) = crate::interrupt::interrupt_request(
+                        if let CascadeDispatch::Local { intent, child } = dispatch {
+                            if let Err(error) = crate::interrupt::interrupt_request_by_doc_id(
                                 &self.node,
-                                &intent.child_request_id,
+                                child
+                                    .doc_id
+                                    .as_deref()
+                                    .expect("verified physical cascade child"),
+                                child
+                                    .agent_did
+                                    .as_deref()
+                                    .expect("verified local child principal"),
+                                child.requester_did.as_deref(),
                             )
                             .await
                             {

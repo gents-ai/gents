@@ -6,28 +6,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-use super::serde_helpers::{first_row_with_doc_id, rows_with_doc_id};
 use super::surface_tool::{deserialize_optional_surface_tools, SurfaceToolDecl};
 
 /// Document-layer view of a `DatastoreToolSurface` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct DatastoreToolSurfaceDocument {
     pub surface_id: String,
     pub agent_did: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub display_name: Option<String>,
     #[serde(
         default = "super::serde_helpers::default_enabled",
         deserialize_with = "super::serde_helpers::deserialize_enabled",
         skip_serializing_if = "super::serde_helpers::is_enabled"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional = nullable))]
     pub enabled: bool,
     /// Canonical create/query tool declarations selected through Tools.datastore.
     #[serde(default, deserialize_with = "deserialize_optional_surface_tools")]
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub entries: Option<Vec<SurfaceToolDecl>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub created_at: Option<String>,
     /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
@@ -35,72 +39,45 @@ pub struct DatastoreToolSurfaceDocument {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }
 
-const SURFACE_FIELDS: &str = r#"
-                _docID
-                surface_id
-                agent_did
-                display_name
-                enabled
-                entries
-                created_at
-"#;
-
-/// List all surfaces owned by `agent_did`.
-pub(crate) async fn list_datastore_tool_surface_records(
-    node: &EmbeddedNode,
-    agent_did: &str,
-) -> Result<Vec<(String, DatastoreToolSurfaceDocument)>> {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            DatastoreToolSurface(
-                filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}
-            ) {{{SURFACE_FIELDS}}}
-        }}"#
-    );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("list DatastoreToolSurface failed: {:?}", resp.errors);
-    }
-
-    Ok(rows_with_doc_id(resp.data.as_ref(), "DatastoreToolSurface"))
-}
-
+/// List canonical surface configurations owned by the selected principal.
 pub async fn list_datastore_tool_surfaces(
     node: &EmbeddedNode,
     agent_did: &str,
 ) -> Result<Vec<DatastoreToolSurfaceDocument>> {
-    Ok(list_datastore_tool_surface_records(node, agent_did)
-        .await?
-        .into_iter()
-        .map(|(_, surface)| surface)
-        .collect())
-}
-
-/// Load one surface by DefraDB `_docID` (control-watcher hot-reload).
-pub(crate) async fn load_datastore_tool_surface_by_doc_id(
-    node: &EmbeddedNode,
-    doc_id: &str,
-) -> Result<Option<(String, DatastoreToolSurfaceDocument)>> {
-    let escaped_doc_id = escape_graphql_string(doc_id);
+    anyhow::ensure!(!agent_did.trim().is_empty(), "surface owner is required");
+    let (fields, _) =
+        crate::config_client::config_projection(crate::Collection::DatastoreToolSurface, None)?;
+    let owner = escape_graphql_string(agent_did);
     let query = format!(
-        r#"{{
-            DatastoreToolSurface(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{{SURFACE_FIELDS}}}
-        }}"#
+        "{{ DatastoreToolSurface(filter: {{ agent_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
+        fields.join(" "),
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "query DatastoreToolSurface by _docID failed: {:?}",
-            resp.errors
-        );
-    }
-    Ok(first_row_with_doc_id(
-        resp.data.as_ref(),
-        "DatastoreToolSurface",
-    ))
+    let response = node.execute(&query).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "list DatastoreToolSurface failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("DatastoreToolSurface"))
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("surface query returned no row array"))?;
+    let mut ids = std::collections::HashSet::new();
+    rows.iter()
+        .map(|row| {
+            let surface: DatastoreToolSurfaceDocument = serde_json::from_value(row.clone())?;
+            anyhow::ensure!(surface.agent_did == agent_did, "surface owner mismatch");
+            anyhow::ensure!(
+                ids.insert(surface.surface_id.clone()),
+                "duplicate surface identity within owner"
+            );
+            Ok(surface)
+        })
+        .collect()
 }

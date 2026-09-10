@@ -8,7 +8,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
-use crate::compaction::{ReductionEngine, ReductionOptions};
+use crate::compaction::ReductionOptions;
 use crate::config::AgentBehavior;
 use crate::hook::DefraSessionHook;
 use crate::llm::message::Message;
@@ -49,46 +49,12 @@ fn ensure_request_deadline_open(deadline: RequestDeadline, context: &str) -> Res
 }
 
 pub(super) fn render_request_context_message(
-    node: &defra_node::EmbeddedNode,
+    _node: &defra_node::EmbeddedNode,
     behavior: &AgentBehavior,
     request: &AgentRequest,
     frozen_instruction_manifest: Option<&str>,
 ) -> Result<Option<Message>> {
-    let template_body = match behavior.request_context_template.as_deref() {
-        Some(template) if !template.trim().is_empty() => {
-            let mut ctx = serde_json::Map::new();
-            ctx.insert(
-                "now".to_string(),
-                serde_json::json!(Utc::now().to_rfc3339()),
-            );
-            if template.contains("collection_summary") {
-                ctx.insert(
-                    "collection_summary".to_string(),
-                    serde_json::json!(crate::template::collection_summary(node)?),
-                );
-            }
-
-            let rendered = crate::template::render_request_context_template(
-                template,
-                serde_json::json!({
-                    "node_did": behavior.agent_did(),
-                    "behavior_id": behavior.behavior_id.as_str(),
-                }),
-                serde_json::Value::Object(ctx),
-                &crate::template::catalog::default_catalog(),
-            )
-            .map_err(|error| anyhow!("request_context_template render failed: {error}"))?;
-            tracing::debug!(
-                request_id = %request.request_id,
-                behavior_id = %behavior.behavior_id,
-                "rendered request context template"
-            );
-            Some(rendered)
-        }
-        _ => None,
-    };
     Ok(assemble_request_context_message(
-        template_body,
         frozen_instruction_manifest,
         crate::workspace::request_workspace_cwd(request).as_deref(),
         behavior.tools.host_tools().read_root(),
@@ -96,33 +62,18 @@ pub(super) fn render_request_context_message(
 }
 
 fn assemble_request_context_message(
-    template_body: Option<String>,
     frozen_instruction_manifest: Option<&str>,
     live_cwd: Option<&std::path::Path>,
     live_tool_root: Option<&std::path::Path>,
 ) -> Option<Message> {
-    // Bound requests keep frozen base_sha provenance; unbound walks live cwd→tool-root.
-    let instruction_body = crate::workspace::instruction_body_for_request(
+    // Workspace instructions retain their existing frozen/live ownership.
+    // Dynamic prompt templates belong to tasks, not per-request context.
+    crate::workspace::instruction_body_for_request(
         frozen_instruction_manifest,
         live_cwd,
         live_tool_root,
-    );
-    match (template_body, instruction_body) {
-        (None, None) => None,
-        (template, instructions) => {
-            let mut body = String::new();
-            if let Some(template) = template {
-                body.push_str(&template);
-            }
-            if let Some(instructions) = instructions {
-                if !body.is_empty() {
-                    body.push_str("\n\n");
-                }
-                body.push_str(&instructions);
-            }
-            Some(Message::user(format!("<context>\n{body}\n</context>")))
-        }
-    }
+    )
+    .map(|body| Message::user(format!("<context>\n{body}\n</context>")))
 }
 
 async fn await_with_request_deadline<F, T>(
@@ -204,12 +155,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     &request.session_id,
                     &self.behavior.behavior_id,
                     self.behavior.agent_did(),
+                    request.requester_did.as_deref(),
                     self.hook_failure_policy,
                 )
                 .await?
                 .with_background_tool_registry(self.background_tool_registry.clone())
                 .with_background_execution_registry(self.background_execution_registry.clone())
                 .with_operator_tool_root(self.operator_tool_root.clone())
+                .with_remote_tools(self.remote_tools.clone())
                 .with_goal_tool_authority(
                     self.behavior.tools.goal_tools_requested(),
                     self.behavior.tools.goal_creation_requested(),
@@ -222,8 +175,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 )
                 .await;
                 hook.set_request_deadline_at(request_deadline).await;
-                hook.set_approval_required_tools(self.approval_required_tools.as_ref().clone())
-                    .await;
                 let persistence_hook = hook.clone();
 
                 let model = (*self.model).clone();
@@ -273,8 +224,10 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         )?;
                         if crate::session::session_has_other_live_response(
                             node.as_ref(),
+                            &request.agent_did,
                             &request.session_id,
-                            Some(&request.request_id),
+                            request.requester_did.as_deref(),
+                            Some(&request.doc_id),
                         )
                         .await?
                         {
@@ -708,7 +661,6 @@ mod tests {
     use crate::agent::completion_retry::CompletionRetryProfileFields;
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::compaction::CompactionStrategy;
     use crate::config::{AgentBehavior, SamplingConfig};
     use crate::hook::{BackgroundExecutionRegistry, BackgroundToolRegistry, FailurePolicy};
     use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
@@ -815,17 +767,16 @@ mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_api_key: None,
-            backend_api_key_env_var: None,
+            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
             system_prompt: "system".to_string(),
-            request_context_template: None,
             tools: BehaviorToolConfig::meta_only(),
-            compaction_threshold: 0.75,
-            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            compaction: None,
+            compaction_inference: None,
+            max_total_tokens: None,
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
@@ -856,7 +807,6 @@ mod tests {
                 behavior.agent_did(),
             ),
         );
-        create.backend_id = Some("backend-general".into());
         create.subagent_depth = 1;
         create.caused_by_parent_request_id = Some("parent-request".into());
         create.caused_by_parent_request_doc_id = Some("parent-request-doc".into());
@@ -871,43 +821,12 @@ mod tests {
             "create routed AgentRequest failed: {:?}",
             response.errors
         );
-        let doc_id = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("create_AgentRequest"))
-            .and_then(|value| value.get("_docID"))
-            .and_then(serde_json::Value::as_str)
-            .map(ToOwned::to_owned);
-        let doc_id = match doc_id {
-            Some(doc_id) => doc_id,
-            None => {
-                let query = format!(
-                    r#"{{
-                        AgentRequest(
-                            filter: {{ request_id: {{ _eq: "{}" }} }},
-                            limit: 1
-                        ) {{ _docID }}
-                    }}"#,
-                    crate::graphql::escape_graphql_string(&create.request_id),
-                );
-                let response = node.execute(&query).await;
-                assert!(
-                    !response.has_errors(),
-                    "query created AgentRequest failed: {:?}",
-                    response.errors
-                );
-                response
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("AgentRequest"))
-                    .and_then(serde_json::Value::as_array)
-                    .and_then(|rows| rows.first())
-                    .and_then(|row| row.get("_docID"))
-                    .and_then(serde_json::Value::as_str)
-                    .expect("created request _docID")
-                    .to_string()
-            }
-        };
+        let doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")
+            .unwrap()
+            .expect("created request receipt")["_docID"]
+            .as_str()
+            .expect("created request physical ID")
+            .to_owned();
 
         crate::request_admission::load_request_for_admission_test(node, &doc_id)
             .await
@@ -939,7 +858,6 @@ mod tests {
                 &fence.authorization_expires_at,
             ),
         );
-        create.backend_id = behavior.backend_id.clone();
         crate::sign_agent_request_create(member, &mut create)
             .await
             .unwrap();
@@ -992,7 +910,6 @@ mod tests {
             )],
         );
         let message = assemble_request_context_message(
-            None,
             Some(&manifest.to_json_string()),
             Some(&nested),
             Some(&root),
@@ -1008,14 +925,9 @@ mod tests {
     #[test]
     fn bound_empty_manifest_does_not_include_live_agents_md() {
         let (_tmp, root, nested) = live_instruction_tree();
-        assert!(
-            assemble_request_context_message(None, Some("{}"), Some(&nested), Some(&root))
-                .is_none()
-        );
-        assert!(
-            assemble_request_context_message(None, Some(""), Some(&nested), Some(&root)).is_none()
-        );
-        let live = assemble_request_context_message(None, None, Some(&nested), Some(&root))
+        assert!(assemble_request_context_message(Some("{}"), Some(&nested), Some(&root)).is_none());
+        assert!(assemble_request_context_message(Some(""), Some(&nested), Some(&root)).is_none());
+        let live = assemble_request_context_message(None, Some(&nested), Some(&root))
             .expect("unbound live");
         let encoded = serde_json::to_string(&live).expect("serialize");
         assert!(encoded.contains("nested-live-instructions"));
@@ -1024,8 +936,8 @@ mod tests {
     #[test]
     fn unbound_request_includes_live_agents_md() {
         let (_tmp, root, nested) = live_instruction_tree();
-        let message = assemble_request_context_message(None, None, Some(&nested), Some(&root))
-            .expect("context");
+        let message =
+            assemble_request_context_message(None, Some(&nested), Some(&root)).expect("context");
         let encoded = serde_json::to_string(&message).expect("serialize");
         assert!(encoded.contains("root-live-instructions"));
         assert!(encoded.contains("nested-live-instructions"));
@@ -1048,7 +960,6 @@ mod tests {
             )],
         );
         let message = assemble_request_context_message(
-            None,
             Some(&manifest.to_json_string()),
             Some(&nested),
             Some(&root),
@@ -1157,7 +1068,8 @@ mod tests {
                 request_identity,
                 crate::agent::p2p_reconcile::enrollment_authority_channel().1,
             ),
-        );
+        )
+        .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         daemon.process_request(request.clone(), shutdown_rx).await;
@@ -1282,7 +1194,8 @@ mod tests {
                 request_identity,
                 authority_handle,
             ),
-        );
+        )
+        .unwrap();
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
         authority.replace(None).await;

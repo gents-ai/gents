@@ -12,7 +12,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 use crate::defra_node::EmbeddedNode;
-use crate::document_config::{load_chain_key_binding, load_eth_tool};
+use crate::document_config::{ChainKeyBindingDocument, EthToolDocument};
 use crate::llm::tool::{BoxFuture, ToolDefinition, ToolDyn, ToolError};
 use crate::tool_call_lifecycle::FailureClass;
 
@@ -35,6 +35,7 @@ pub struct ResolvedEthCall {
     pub(crate) tool_name: String,
     pub(crate) chain_id: u64,
     pub(crate) rpc_url: String,
+    pub(crate) rpc_timeout: std::time::Duration,
     pub(crate) description: String,
     pub(crate) kind: ResolvedCallKind,
     pub(crate) principal_did: String,
@@ -80,7 +81,11 @@ impl ResolvedEthCall {
         decls: &[CallDecl],
         principal_did: &str,
         binding_id: Option<&str>,
+        rpc_timeout: std::time::Duration,
     ) -> Result<Vec<Self>> {
+        if rpc_timeout.is_zero() {
+            bail!("eth rpc_timeout_secs must be positive");
+        }
         let mut out = Vec::new();
         let binding_id = binding_id
             .map(str::trim)
@@ -93,6 +98,7 @@ impl ResolvedEthCall {
                     tool_name: format!("{tool_id}_any_read"),
                     chain_id,
                     rpc_url: rpc_url.to_string(),
+                    rpc_timeout,
                     description: "ABI-encoded primitive eth_call. Supply a signature and arguments; raw calldata is never accepted."
                         .to_string(),
                     kind: ResolvedCallKind::AnyRead,
@@ -114,6 +120,7 @@ impl ResolvedEthCall {
                         tool_name: tool_name.clone(),
                         chain_id,
                         rpc_url: rpc_url.to_string(),
+                    rpc_timeout,
                         description: description
                             .clone()
                             .unwrap_or_else(|| format!("eth_call {signature} on {to}")),
@@ -146,6 +153,7 @@ impl ResolvedEthCall {
                         tool_name: tool_name.clone(),
                         chain_id,
                         rpc_url: rpc_url.to_string(),
+                    rpc_timeout,
                         description: description
                             .clone()
                             .unwrap_or_else(|| format!("send {signature} to {to}")),
@@ -175,6 +183,7 @@ impl ResolvedEthCall {
                         tool_name: tool_name.clone(),
                         chain_id,
                         rpc_url: rpc_url.to_string(),
+                    rpc_timeout,
                         description: description
                             .clone()
                             .unwrap_or_else(|| "send native value".to_string()),
@@ -214,6 +223,7 @@ impl ResolvedEthCall {
                         tool_name: tool_name.clone(),
                         chain_id,
                         rpc_url: rpc_url.to_string(),
+                    rpc_timeout,
                         description: description.clone().unwrap_or_else(|| {
                             format!("sign EIP-712 {primary_type}; nothing is submitted")
                         }),
@@ -331,8 +341,13 @@ async fn execute_call(
     resolved: &ResolvedEthCall,
     args: &str,
 ) -> Result<String, ToolError> {
-    let client = HttpEthRpc::http(&resolved.rpc_url, resolved.chain_id, &[])
-        .map_err(|error| reported(FailureClass::Transport, error.to_string()))?;
+    let client = HttpEthRpc::http_with_timeout(
+        &resolved.rpc_url,
+        resolved.chain_id,
+        &[],
+        resolved.rpc_timeout,
+    )
+    .map_err(|error| reported(FailureClass::Transport, error.to_string()))?;
     match &resolved.kind {
         ResolvedCallKind::AnyRead => {
             let parsed: AnyReadArgs = crate::llm::tool::parse_tool_args(args)?;
@@ -617,13 +632,51 @@ fn require_runtime_principal(resolved: &ResolvedEthCall) -> Result<(), ToolError
 }
 
 async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Result<[u8; 32]> {
+    load_signing_key_with_store(node, resolved, &KeyringChainKeyStore).await
+}
+
+async fn load_signing_key_with_store(
+    node: &EmbeddedNode,
+    resolved: &ResolvedEthCall,
+    store: &dyn ChainKeyMaterialStore,
+) -> Result<[u8; 32]> {
     let binding_id = resolved
         .binding_id
         .as_deref()
         .ok_or_else(|| anyhow!("write tool has no chain key binding"))?;
-    let tool = load_eth_tool(node, &resolved.eth_tool_id)
-        .await?
-        .ok_or_else(|| anyhow!("EthTool {:?} no longer exists", resolved.eth_tool_id))?;
+    let (tool, binding): (EthToolDocument, ChainKeyBindingDocument) =
+        crate::config_client::ConfigAccess::transact_local(
+            node,
+            None,
+            "eth.signing_config.read",
+            |txn| {
+                Box::pin(async move {
+                    let tool = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        crate::Collection::EthTool,
+                        &resolved.principal_did,
+                        &resolved.eth_tool_id,
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        anyhow!("EthTool {:?} no longer exists", resolved.eth_tool_id)
+                    })?;
+                    let binding = crate::config_client::read_desired_state_document_in_txn(
+                        txn,
+                        crate::Collection::ChainKeyBinding,
+                        &resolved.principal_did,
+                        binding_id,
+                    )
+                    .await?
+                    .ok_or_else(|| anyhow!("chain key binding {binding_id:?} does not exist"))?;
+                    Ok((
+                        serde_json::from_value(tool)?,
+                        serde_json::from_value(binding)?,
+                    ))
+                })
+            },
+        )
+        .await?;
     if !tool.enabled {
         bail!("EthTool {:?} is disabled", resolved.eth_tool_id);
     }
@@ -642,10 +695,7 @@ async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Re
             resolved.eth_tool_id
         );
     }
-    let binding = load_chain_key_binding(node, binding_id)
-        .await?
-        .ok_or_else(|| anyhow!("chain key binding {binding_id:?} does not exist"))?;
-    if binding.principal_did != resolved.principal_did {
+    if binding.agent_did != resolved.principal_did {
         bail!("chain key binding {binding_id:?} belongs to another principal");
     }
     if binding
@@ -671,21 +721,20 @@ async fn load_signing_key(node: &EmbeddedNode, resolved: &ResolvedEthCall) -> Re
     )?;
     let payload = attestation_payload(
         binding_id,
-        &binding.principal_did,
+        &binding.agent_did,
         &binding.address,
         KEY_BACKEND_KEYRING,
         created_at,
     );
-    if !crate::identity::verify_did_signature(&binding.principal_did, &payload, &attestation)? {
+    if !crate::identity::verify_did_signature(&binding.agent_did, &payload, &attestation)? {
         bail!("chain key binding {binding_id:?} has an invalid attestation");
     }
-    let secret =
-        KeyringChainKeyStore.load(&binding_storage_key(&binding.principal_did, binding_id))?;
+    let secret = Zeroizing::new(store.load(&binding_storage_key(&binding.agent_did, binding_id))?);
     let address = address_from_secret(&secret)?;
     if !address.eq_ignore_ascii_case(&binding.address) {
         bail!("chain key material does not match binding {binding_id:?}");
     }
-    Ok(secret)
+    Ok(*secret)
 }
 
 fn reported(class: FailureClass, text: String) -> ToolError {
@@ -1006,6 +1055,173 @@ mod tests {
     use super::super::calls::ParamDecl;
     use super::*;
 
+    async fn signing_fixture() -> (
+        EmbeddedNode,
+        ChainKeyBindingDocument,
+        ResolvedEthCall,
+        super::super::keys::MemoryChainKeyStore,
+    ) {
+        use crate::identity::AgentIdentity;
+        let dir = tempfile::tempdir().unwrap();
+        let identity =
+            crate::identity::KeyIdentity::load_or_create(dir.path().join("key"), None).unwrap();
+        let node = EmbeddedNode::builder().build().await.unwrap();
+        crate::ensure_runtime_schemas(&node).await.unwrap();
+        let secret = [1u8; 32];
+        let address = address_from_secret(&secret).unwrap();
+        let created = "2026-09-09T00:00:00Z";
+        let binding = ChainKeyBindingDocument {
+            binding_id: "signing".into(),
+            agent_did: identity.did().into(),
+            address: address.clone(),
+            key_backend: Some(KEY_BACKEND_KEYRING.into()),
+            attestation: Some(super::super::keys::encode_attestation(
+                &identity
+                    .sign(&attestation_payload(
+                        "signing",
+                        identity.did(),
+                        &address,
+                        KEY_BACKEND_KEYRING,
+                        created,
+                    ))
+                    .await
+                    .unwrap(),
+            )),
+            created_at: Some(created.into()),
+            revoked_at: None,
+            tags: vec!["payments".into()],
+        };
+        // Foreign logical IDs are deliberately inserted first.
+        for owner in ["did:test:foreign", identity.did()] {
+            let mut record = binding.clone();
+            record.agent_did = owner.into();
+            let response = node
+                .execute(&crate::create_chain_key_binding_mutation(&record).unwrap())
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            let value = json!({"tool_id":"payments","agent_did":owner,"chain_id":8453,"key_binding_id":"signing","enabled":true});
+            let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
+            let response = node
+                .execute(&format!(
+                    "mutation {{ create_EthTool(input: {input}) {{ _docID }} }}"
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+        }
+        let store = super::super::keys::MemoryChainKeyStore::default();
+        store
+            .store_new(&binding_storage_key(identity.did(), "signing"), &secret)
+            .unwrap();
+        let resolved = ResolvedEthCall {
+            eth_tool_id: "payments".into(),
+            tool_name: "send".into(),
+            chain_id: 8453,
+            rpc_url: "http://unused".into(),
+            rpc_timeout: std::time::Duration::from_secs(30),
+            description: String::new(),
+            kind: ResolvedCallKind::Write {
+                to: None,
+                function: None,
+                params: Vec::new(),
+            },
+            principal_did: identity.did().into(),
+            binding_id: Some("signing".into()),
+            caps: GasCaps::default(),
+        };
+        (node, binding, resolved, store)
+    }
+
+    #[tokio::test]
+    async fn signing_reads_exact_scope_and_checks_attestation_revocation_and_material() {
+        let (node, mut binding, resolved, store) = signing_fixture().await;
+        assert_eq!(
+            load_signing_key_with_store(&node, &resolved, &store)
+                .await
+                .unwrap(),
+            [1u8; 32]
+        );
+        let valid = binding.clone();
+        binding.attestation = Some("00".into());
+        crate::upsert_chain_key_binding(&node, &binding)
+            .await
+            .unwrap();
+        assert!(load_signing_key_with_store(&node, &resolved, &store)
+            .await
+            .is_err());
+        crate::upsert_chain_key_binding(&node, &valid)
+            .await
+            .unwrap();
+        store
+            .delete(&binding_storage_key(&valid.agent_did, "signing"))
+            .unwrap();
+        store
+            .store_new(
+                &binding_storage_key(&valid.agent_did, "signing"),
+                &[2u8; 32],
+            )
+            .unwrap();
+        assert!(load_signing_key_with_store(&node, &resolved, &store)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+        store
+            .delete(&binding_storage_key(&valid.agent_did, "signing"))
+            .unwrap();
+        store
+            .store_new(
+                &binding_storage_key(&valid.agent_did, "signing"),
+                &[1u8; 32],
+            )
+            .unwrap();
+        binding = valid.clone();
+        binding.revoked_at = Some("revoked".into());
+        crate::upsert_chain_key_binding(&node, &binding)
+            .await
+            .unwrap();
+        crate::upsert_chain_key_binding(&node, &valid)
+            .await
+            .unwrap();
+        assert!(load_signing_key_with_store(&node, &resolved, &store)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("revoked"));
+        let records =
+            crate::document_config::list_chain_key_binding_records(&node, &binding.agent_did)
+                .await
+                .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].1.tags, vec!["payments"]);
+        assert_eq!(records[0].1.revoked_at.as_deref(), Some("revoked"));
+    }
+
+    #[tokio::test]
+    async fn signing_rejects_same_owner_duplicate_documents() {
+        for collection in ["ChainKeyBinding", "EthTool"] {
+            let (node, binding, resolved, store) = signing_fixture().await;
+            let mut value = if collection == "ChainKeyBinding" {
+                serde_json::to_value(&binding).unwrap()
+            } else {
+                json!({"tool_id":"payments","agent_did":binding.agent_did,"chain_id":8453,"key_binding_id":"signing","enabled":true})
+            };
+            // Different tag forces a distinct physical doc with the same logical key.
+            value["tags"] = json!(["duplicate"]);
+            let input = gents_protocol::graphql::graphql_input_literal(&value).unwrap();
+            let response = node
+                .execute(&format!(
+                    "mutation {{ create_{collection}(input: {input}) {{_docID}} }}"
+                ))
+                .await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            assert!(load_signing_key_with_store(&node, &resolved, &store)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("multiple live"));
+        }
+    }
+
     #[test]
     fn any_read_schema_has_no_data_field() {
         let resolved = ResolvedEthCall {
@@ -1013,6 +1229,7 @@ mod tests {
             tool_name: "base_any_read".to_string(),
             chain_id: 8453,
             rpc_url: "http://127.0.0.1".to_string(),
+            rpc_timeout: std::time::Duration::from_secs(30),
             description: "any".to_string(),
             kind: ResolvedCallKind::AnyRead,
             principal_did: "did:key:zAlice".to_string(),
@@ -1055,6 +1272,7 @@ mod tests {
             &decls,
             "did:key:zAlice",
             Some("bind-1"),
+            std::time::Duration::from_secs(30),
         )
         .unwrap();
         assert_eq!(resolved.len(), 1);
@@ -1076,6 +1294,7 @@ mod tests {
             &decls,
             "did:key:zAlice",
             Some("bind-1"),
+            std::time::Duration::from_secs(30),
         )
         .unwrap();
         assert_eq!(resolved.len(), 1);
@@ -1099,6 +1318,7 @@ mod tests {
             &decls,
             "did:key:zAlice",
             Some("bind-1"),
+            std::time::Duration::from_secs(30),
         )
         .unwrap_err();
         assert!(error.to_string().contains("does not match"));
@@ -1114,6 +1334,7 @@ mod tests {
             &decls,
             "did:key:zAlice",
             Some("bind-1"),
+            std::time::Duration::from_secs(30),
         )
         .unwrap_err();
         assert!(error.to_string().contains("requires chainId"));

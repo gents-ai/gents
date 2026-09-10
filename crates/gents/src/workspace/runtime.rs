@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 
-use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::WorkspaceLineage;
 use crate::toolset::WorkspaceAuthority;
 use crate::watcher::AgentRequest;
@@ -36,7 +36,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     branch
     creation_policy
     adapter
-    owner_deployment_id
+    owner_agent_did
     writer_principal
     integrator_principal
     instruction_manifest
@@ -49,7 +49,7 @@ const ISOLATED_WORKSPACE_FIELDS: &str = r#"
 
 const PLACEMENT_FIELDS: &str = r#"
     workspace_id
-    deployment_id
+    owner_agent_did
     host_path
     repository_placement_id
     adapter
@@ -65,6 +65,7 @@ const PLACEMENT_FIELDS: &str = r#"
 /// ReadWrite after Sealed / Integrate before Sealed.
 pub async fn stamp_workspace_lineage(
     node: &EmbeddedNode,
+    agent_did: &str,
     lineage: &mut WorkspaceLineage,
 ) -> Result<()> {
     let Some(workspace_id) = lineage
@@ -75,7 +76,13 @@ pub async fn stamp_workspace_lineage(
     else {
         return Ok(());
     };
-    let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id)
+    // Bootstrap has an explicit caller-selected principal scope; inherited
+    // lineage already carries its authenticated owner and must retain it.
+    let owner = lineage
+        .workspace_owner_agent_did
+        .as_deref()
+        .unwrap_or(agent_did);
+    let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id, owner)
         .await?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     apply_workspace_lineage_stamp(lineage, &workspace)
@@ -85,15 +92,18 @@ pub(crate) fn apply_workspace_lineage_stamp(
     lineage: &mut WorkspaceLineage,
     workspace: &IsolatedWorkspaceRecord,
 ) -> Result<()> {
-    if lineage
-        .workspace_owner_deployment_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .is_none()
-    {
-        lineage.workspace_owner_deployment_id = Some(workspace.owner_deployment_id.clone());
-    }
+    anyhow::ensure!(
+        lineage.workspace_id.as_deref() == Some(workspace.workspace_id.as_str()),
+        "workspace stamp identity differs from resolved workspace"
+    );
+    anyhow::ensure!(
+        lineage
+            .workspace_owner_agent_did
+            .as_deref()
+            .is_none_or(|owner| owner == workspace.owner_agent_did),
+        "workspace stamp owner differs from resolved workspace"
+    );
+    lineage.workspace_owner_agent_did = Some(workspace.owner_agent_did.clone());
     let state = crate::toolset::normalize_workspace_lifecycle_state(&workspace.lifecycle_state);
     let authority = lineage
         .workspace_authority
@@ -159,20 +169,23 @@ pub async fn seal_on_writer_success(
         return Ok(());
     }
 
-    let mut docs = load_docs(node, workspace_id).await?;
+    let mut docs = load_docs(
+        node,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?;
     let workspace = docs
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    let placement = docs
-        .load_placement(workspace_id)?
+    anyhow::ensure!(
+        workspace.writer_principal.trim() == request.agent_did.trim(),
+        "request principal no longer holds the workspace writer_principal grant"
+    );
+    docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
-    let repository = load_repository(
-        node,
-        &workspace.repository_id,
-        &workspace.owner_deployment_id,
-        Path::new(&placement.host_path),
-    )
-    .await?;
+    let repository =
+        load_repository(node, &workspace.repository_id, &workspace.owner_agent_did).await?;
 
     let plan = emit_seal_workspace_plan(SealWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -184,7 +197,7 @@ pub async fn seal_on_writer_success(
     capabilities.insert(CAP_SEAL_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            deployment_id: workspace.owner_deployment_id.clone(),
+            owner_agent_did: workspace.owner_agent_did.clone(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
@@ -219,20 +232,23 @@ pub async fn integrate_on_integrator_success(
         return Ok(());
     }
 
-    let mut docs = load_docs(node, workspace_id).await?;
+    let mut docs = load_docs(
+        node,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?;
     let workspace = docs
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    let placement = docs
-        .load_placement(workspace_id)?
+    anyhow::ensure!(
+        workspace.integrator_principal.trim() == request.agent_did.trim(),
+        "request principal no longer holds the workspace integrator_principal grant"
+    );
+    docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
-    let repository = load_repository(
-        node,
-        &workspace.repository_id,
-        &workspace.owner_deployment_id,
-        Path::new(&placement.host_path),
-    )
-    .await?;
+    let repository =
+        load_repository(node, &workspace.repository_id, &workspace.owner_agent_did).await?;
 
     let plan = emit_integrate_workspace_plan(IntegrateWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -246,7 +262,7 @@ pub async fn integrate_on_integrator_success(
     let trunk = PathBuf::from(&ctx_repository_path(&repository));
     let outcome = {
         let mut ctx = HostExecutorContext {
-            deployment_id: workspace.owner_deployment_id.clone(),
+            owner_agent_did: workspace.owner_agent_did.clone(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
@@ -273,25 +289,20 @@ fn ctx_repository_path(repository: &RepositoryPlacementRef) -> PathBuf {
 /// Explicit operator/ack cleanup. Never invoked from request terminal.
 pub async fn cleanup_workspace(
     node: &EmbeddedNode,
+    agent_did: &str,
     workspace_id: &str,
     operator_tool_root: Option<&Path>,
 ) -> Result<()> {
     let workspace_id = optional_id(Some(workspace_id))
         .ok_or_else(|| anyhow::anyhow!("cleanup_workspace requires a workspace_id"))?;
-    let mut docs = load_docs(node, workspace_id).await?;
+    let mut docs = load_docs(node, workspace_id, agent_did).await?;
     let workspace = docs
         .load_isolated_workspace(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
-    let placement = docs
-        .load_placement(workspace_id)?
+    docs.load_placement(workspace_id)?
         .ok_or_else(|| anyhow::anyhow!("workspace placement {workspace_id} not found"))?;
-    let repository = load_repository(
-        node,
-        &workspace.repository_id,
-        &workspace.owner_deployment_id,
-        Path::new(&placement.host_path),
-    )
-    .await?;
+    let repository =
+        load_repository(node, &workspace.repository_id, &workspace.owner_agent_did).await?;
 
     let plan = emit_cleanup_workspace_plan(CleanupWorkspaceAction {
         workspace_id: workspace_id.to_string(),
@@ -301,7 +312,7 @@ pub async fn cleanup_workspace(
     capabilities.insert(CAP_CLEANUP_WORKSPACE.to_string());
     let outcome = {
         let mut ctx = HostExecutorContext {
-            deployment_id: workspace.owner_deployment_id.clone(),
+            owner_agent_did: workspace.owner_agent_did.clone(),
             repository,
             ceiling: operator_tool_root,
             capabilities,
@@ -333,18 +344,28 @@ pub async fn writer_request_already_sealed(
     if !matches!(authority, WorkspaceAuthority::ReadWrite) {
         return Ok(false);
     }
-    let Some(workspace) =
-        super::overlay::load_isolated_workspace_record(node, workspace_id).await?
+    let Some(workspace) = super::overlay::load_isolated_workspace_record(
+        node,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?
     else {
         return Ok(false);
     };
     let receipts = load_receipts(node, workspace_id).await?;
-    let bindings = super::overlay::load_workspace_bindings_for(node, workspace_id).await?;
+    let bindings = super::overlay::load_workspace_bindings_for(
+        node,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?;
     Ok(writer_already_sealed(
         &workspace.lifecycle_state,
         &receipts,
         &bindings,
         &request.request_id,
+        &request.doc_id,
     ))
 }
 
@@ -353,13 +374,18 @@ fn writer_already_sealed(
     receipts: &[WorkspaceReceiptDoc],
     bindings: &[WorkspaceBindingDoc],
     request_id: &str,
+    request_doc_id: &str,
 ) -> bool {
     crate::toolset::normalize_workspace_lifecycle_state(lifecycle_state) == Some(LIFECYCLE_SEALED)
         && (receipts.iter().any(|receipt| {
-            receipt.kind == RECEIPT_KIND_WRITER && receipt.produced_by_request_id == request_id
-        }) || bindings
-            .iter()
-            .any(|binding| binding.request_id == request_id))
+            receipt.kind == RECEIPT_KIND_WRITER
+                && receipt.produced_by_request_id == request_id
+                && receipt.produced_by_request_doc_id == request_doc_id
+        }) || bindings.iter().any(|binding| {
+            binding.request_id == request_id
+                && binding.request_doc_id == request_doc_id
+                && binding.authority == WorkspaceAuthority::ReadWrite.as_str()
+        }))
 }
 
 pub async fn materialize_workspace_binding(
@@ -368,7 +394,6 @@ pub async fn materialize_workspace_binding(
     request_doc_id: &str,
     principal_did: &str,
     lineage: &WorkspaceLineage,
-    local_deployment_id: Option<&str>,
 ) -> Result<()> {
     let Some(workspace_id) = lineage
         .workspace_id
@@ -378,24 +403,45 @@ pub async fn materialize_workspace_binding(
     else {
         return Ok(());
     };
+    lineage.require_authority_if_workspace_id()?;
+    let workspace_owner = lineage
+        .workspace_owner_agent_did
+        .as_deref()
+        .context("workspace owner is missing")?;
     let authority = match lineage.workspace_authority.as_deref().map(str::trim) {
         Some(value) if !value.is_empty() => WorkspaceAuthority::parse(value)?,
         _ => anyhow::bail!("workspace-bound request {workspace_id} is missing workspace_authority"),
     };
-    let deployment_id = optional_id(local_deployment_id).ok_or_else(|| {
-        anyhow::anyhow!("workspace-bound request {workspace_id} is missing local deployment_id")
-    })?;
-    let workspace = super::overlay::load_isolated_workspace_record(node, workspace_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
+    let response = graphql_with_transaction_retry(node, &format!(
+        r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{}"}}}},limit:1) {{request_id agent_did workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash}} }}"#,
+        escape_graphql_string(request_doc_id)), "bind exact workspace request").await?;
+    let actual = crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(
+        &response,
+        "AgentRequest",
+    )?
+    .context("workspace binding request document missing")?;
+    anyhow::ensure!(
+        actual.request_id == request_id
+            && actual.agent_did.as_deref() == Some(principal_did)
+            && actual.workspace_id.as_deref() == Some(workspace_id)
+            && actual.workspace_owner_agent_did == lineage.workspace_owner_agent_did
+            && actual.workspace_authority.as_deref() == Some(authority.as_str())
+            && actual.workspace_seal_hash == lineage.workspace_seal_hash,
+        "workspace binding must match exact physical request principal and lineage"
+    );
+    let workspace =
+        super::overlay::load_isolated_workspace_record(node, workspace_id, workspace_owner)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("isolated workspace {workspace_id} not found"))?;
     super::overlay::require_workspace_principal(&workspace, principal_did, authority)?;
-    let existing = super::overlay::load_workspace_bindings_for(node, workspace_id).await?;
+    let existing =
+        super::overlay::load_workspace_bindings_for(node, workspace_id, workspace_owner).await?;
     let candidate = new_binding(
         workspace_id,
         request_id,
         request_doc_id,
         authority,
-        deployment_id,
+        workspace_owner,
         optional_id(lineage.workspace_seal_hash.as_deref())
             .or(optional_id(workspace.seal_hash.as_deref())),
     );
@@ -431,24 +477,40 @@ pub async fn release_writer_binding(node: &EmbeddedNode, request: &AgentRequest)
     let Some(workspace_id) = optional_id(request.workspace_id.as_deref()) else {
         return Ok(());
     };
-    let bindings = super::overlay::load_workspace_bindings_for(node, workspace_id).await?;
+    let bindings = super::overlay::load_workspace_bindings_for(
+        node,
+        workspace_id,
+        super::overlay::request_workspace_owner(request)?,
+    )
+    .await?;
     for binding in bindings {
-        if binding.is_active() && binding.request_id == request.request_id {
+        if binding.is_active()
+            && binding.request_id == request.request_id
+            && binding.request_doc_id == request.doc_id
+            && Some(binding.owner_agent_did.as_str())
+                == request.workspace_owner_agent_did.as_deref()
+        {
             super::overlay::persist_workspace_binding_doc(node, &release_binding(binding)).await?;
         }
     }
     Ok(())
 }
 
-async fn load_docs(node: &EmbeddedNode, workspace_id: &str) -> Result<MemoryWorkspaceDocuments> {
+async fn load_docs(
+    node: &EmbeddedNode,
+    workspace_id: &str,
+    agent_did: &str,
+) -> Result<MemoryWorkspaceDocuments> {
     let mut docs = MemoryWorkspaceDocuments::default();
-    if let Some(workspace) = load_isolated_workspace_doc(node, workspace_id).await? {
+    if let Some(workspace) = load_isolated_workspace_doc(node, workspace_id, agent_did).await? {
         docs.write_isolated_workspace(workspace)?;
     }
-    if let Some(placement) = load_placement_doc(node, workspace_id).await? {
+    if let Some(placement) = load_placement_doc(node, workspace_id, agent_did).await? {
         docs.write_placement(placement)?;
     }
-    for binding in super::overlay::load_workspace_bindings_for(node, workspace_id).await? {
+    for binding in
+        super::overlay::load_workspace_bindings_for(node, workspace_id, agent_did).await?
+    {
         docs.write_binding(binding)?;
     }
     for receipt in load_receipts(node, workspace_id).await? {
@@ -492,81 +554,82 @@ async fn load_receipts(
 async fn load_isolated_workspace_doc(
     node: &EmbeddedNode,
     workspace_id: &str,
+    agent_did: &str,
 ) -> Result<Option<IsolatedWorkspaceDoc>> {
     let query = format!(
         r#"{{
             IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {ISOLATED_WORKSPACE_FIELDS} }}
         }}"#,
         id = escape_graphql_string(workspace_id),
+        owner = escape_graphql_string(agent_did),
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load IsolatedWorkspace for seal").await?;
-    first_row(&response, "IsolatedWorkspace")
+    {
+        let mut found =
+            crate::graphql::rows::<IsolatedWorkspaceDoc>(&response, "IsolatedWorkspace")?;
+        anyhow::ensure!(
+            found.len() <= 1,
+            "ambiguous principal-scoped IsolatedWorkspace"
+        );
+        Ok(found.pop())
+    }
 }
 
 async fn load_placement_doc(
     node: &EmbeddedNode,
     workspace_id: &str,
+    agent_did: &str,
 ) -> Result<Option<WorkspacePlacementDoc>> {
     let query = format!(
         r#"{{
             WorkspacePlacement(
-                filter: {{ workspace_id: {{ _eq: "{id}" }} }},
-                limit: 1
+                filter: {{ workspace_id: {{ _eq: "{id}" }}, owner_agent_did: {{ _eq: "{owner}" }} }},
+                limit: 2
             ) {{ {PLACEMENT_FIELDS} }}
         }}"#,
         id = escape_graphql_string(workspace_id),
+        owner = escape_graphql_string(agent_did),
     );
     let response =
         graphql_with_transaction_retry(node, &query, "load WorkspacePlacement for seal").await?;
-    first_row(&response, "WorkspacePlacement")
+    {
+        let mut found =
+            crate::graphql::rows::<WorkspacePlacementDoc>(&response, "WorkspacePlacement")?;
+        anyhow::ensure!(
+            found.len() <= 1,
+            "ambiguous principal-scoped WorkspacePlacement"
+        );
+        Ok(found.pop())
+    }
 }
 
 async fn load_repository(
     node: &EmbeddedNode,
     repository_id: &str,
-    deployment_id: &str,
-    fallback_path: &Path,
+    agent_did: &str,
 ) -> Result<RepositoryPlacementRef> {
-    let query = format!(
-        r#"{{
-            RepositoryPlacement(
-                filter: {{ repository_id: {{ _eq: "{id}" }} }},
-                limit: 1
-            ) {{
-                repository_id
-                deployment_id
-                host_path
-                enabled
-            }}
-        }}"#,
-        id = escape_graphql_string(repository_id),
+    let response = graphql_with_transaction_retry(node, &format!(
+        r#"{{ RepositoryPlacement(filter: {{repository_id: {{_eq:"{}"}},agent_did: {{_eq:"{}"}}}},limit:2) {{repository_id agent_did host_path enabled}} }}"#,
+        escape_graphql_string(repository_id), escape_graphql_string(agent_did)), "load scoped RepositoryPlacement").await?;
+    let mut found = crate::graphql::rows::<crate::document_config::RepositoryPlacement>(
+        &response,
+        "RepositoryPlacement",
+    )?;
+    anyhow::ensure!(
+        found.len() == 1,
+        "repository placement missing or ambiguous for principal"
     );
-    let response =
-        graphql_with_transaction_retry(node, &query, "load RepositoryPlacement for seal").await?;
-    #[derive(serde::Deserialize)]
-    struct Row {
-        repository_id: String,
-        deployment_id: String,
-        host_path: String,
-        enabled: Option<bool>,
-    }
-    if let Some(row) = first_row::<Row>(&response, "RepositoryPlacement")? {
-        return Ok(RepositoryPlacementRef {
-            repository_id: row.repository_id,
-            deployment_id: row.deployment_id,
-            host_path: PathBuf::from(row.host_path),
-            enabled: row.enabled.unwrap_or(true),
-        });
-    }
+    let row = found.pop().unwrap();
+    anyhow::ensure!(row.enabled, "repository placement is disabled");
     Ok(RepositoryPlacementRef {
-        repository_id: repository_id.to_string(),
-        deployment_id: deployment_id.to_string(),
-        host_path: fallback_path.to_path_buf(),
-        enabled: true,
+        repository_id: row.repository_id,
+        owner_agent_did: row.agent_did,
+        host_path: PathBuf::from(row.host_path),
+        enabled: row.enabled,
     })
 }
 
@@ -695,7 +758,7 @@ mod tests {
     fn sealed_workspace() -> IsolatedWorkspaceRecord {
         IsolatedWorkspaceRecord {
             workspace_id: "ws-1".into(),
-            owner_deployment_id: "dep-1".into(),
+            owner_agent_did: "dep-1".into(),
             writer_principal: "did:key:zWriter".into(),
             integrator_principal: "did:key:zIntegrator".into(),
             lifecycle_state: "sealed".into(),
@@ -707,8 +770,8 @@ mod tests {
     fn lineage(authority: &str, hash: Option<&str>) -> WorkspaceLineage {
         WorkspaceLineage {
             workspace_id: Some("ws-1".into()),
+            workspace_owner_agent_did: Some("dep-1".into()),
             workspace_authority: Some(authority.into()),
-            workspace_owner_deployment_id: None,
             workspace_seal_hash: hash.map(str::to_string),
         }
     }
@@ -718,7 +781,6 @@ mod tests {
         let mut ro = lineage(WorkspaceAuthority::ReadOnly.as_str(), None);
         apply_workspace_lineage_stamp(&mut ro, &sealed_workspace()).unwrap();
         assert_eq!(ro.workspace_seal_hash.as_deref(), Some("hash-1"));
-        assert_eq!(ro.workspace_owner_deployment_id.as_deref(), Some("dep-1"));
 
         let mut rw = lineage(WorkspaceAuthority::ReadWrite.as_str(), Some("hash-1"));
         let err = apply_workspace_lineage_stamp(&mut rw, &sealed_workspace()).unwrap_err();
@@ -790,26 +852,37 @@ mod tests {
             "sealed",
             &[writer_receipt("req-1")],
             &[],
-            "req-1"
+            "req-1",
+            "doc-1"
         ));
         assert!(writer_already_sealed(
             "sealed",
             &[],
             &[writer_binding("req-1")],
-            "req-1"
+            "req-1",
+            "doc-1"
         ));
-        assert!(!writer_already_sealed("sealed", &[], &[], "req-1"));
+        assert!(!writer_already_sealed("sealed", &[], &[], "req-1", "doc-1"));
+        assert!(!writer_already_sealed(
+            "sealed",
+            &[writer_receipt("req-1")],
+            &[writer_binding("req-1")],
+            "req-1",
+            "foreign-doc"
+        ));
         assert!(!writer_already_sealed(
             "ready",
             &[writer_receipt("req-1")],
             &[writer_binding("req-1")],
-            "req-1"
+            "req-1",
+            "doc-1"
         ));
         assert!(!writer_already_sealed(
             "sealed",
             &[writer_receipt("other")],
             &[writer_binding("other")],
-            "req-1"
+            "req-1",
+            "doc-1"
         ));
     }
 }

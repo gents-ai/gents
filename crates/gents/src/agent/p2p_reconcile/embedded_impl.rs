@@ -318,7 +318,6 @@ mod tests {
     use crate::agent::p2p_reconcile::{resolve_template, scope_filter};
     use crate::agent::runtime::StartupBarrier;
     use crate::backend_provider::BackendProviderKind;
-    use crate::compaction::CompactionStrategy;
     use crate::config::{AgentBehavior, SamplingConfig};
     use crate::defra_node::P2PConfig;
     use crate::ensure_runtime_schemas;
@@ -651,17 +650,16 @@ mod tests {
             backend_provider_kind: BackendProviderKind::OpenAiCompatible,
             openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
             backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-            backend_api_key: None,
-            backend_api_key_env_var: None,
+            backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             model_name: "scripted".to_string(),
             context_window: 8_192,
             max_output_tokens: 1_024,
             max_turns: 2,
             system_prompt: "system".to_string(),
-            request_context_template: None,
             tools: BehaviorToolConfig::meta_only(),
-            compaction_threshold: 0.75,
-            compaction_strategy: CompactionStrategy::StripThenSummarize,
+            compaction: None,
+            compaction_inference: None,
+            max_total_tokens: None,
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
@@ -708,6 +706,7 @@ mod tests {
                 authority,
             ),
         )
+        .expect("valid canonical daemon fixture")
     }
 
     async fn seed_cross_deployment_bridge(
@@ -912,30 +911,7 @@ mod tests {
         )
         .await
         .expect("create routed AgentSession");
-        let requester_did_field = crate::session::requester_did_create_field(requester_did);
-        let escaped_session_id = escape_graphql_string(&session_id);
         let escaped_request_id = escape_graphql_string(&request_id);
-        let escaped_agent_did = escape_graphql_string(agent_did);
-        let escaped_behavior_id = escape_graphql_string(behavior_id);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentConversation(input: {{
-                    session_id: "{escaped_session_id}",
-                    agent_name: "default",
-                    agent_did: "{escaped_agent_did}",
-                    {requester_did_field}
-                    behavior_id: "{escaped_behavior_id}",
-                    title: "",
-                    title_source: "placeholder",
-                    preview_text: "child prompt",
-                    status: "completed",
-                    created_at: "2026-07-06T00:00:00Z",
-                    updated_at: "2026-07-06T00:00:00Z",
-                    latest_request_id: "{escaped_request_id}"
-                }}) {{ _docID }}
-            }}"#
-        );
-        exec(node, &mutation, "create routed AgentConversation").await;
         crate::session::save_message_with_requester_did(
             node,
             &session_id,
@@ -1384,27 +1360,37 @@ mod tests {
             "bridge parent request identity must be immutable"
         );
 
-        let policy_response = host
-            .execute(&format!(
-                r#"mutation {{
-                    selection: create_ToolSelection(input: {{
-                        selection_id: "host-selection", agent_did: "{}",
-                        subagent_allow_cross_deployment: true
-                    }}) {{ _docID }}
-                    behavior: create_AgentBehavior(input: {{
-                        behavior_id: "behavior-1", agent_did: "{}",
-                        tool_selection_id: "host-selection", enabled: true
-                    }}) {{ _docID }}
-                }}"#,
-                escape_graphql_string(&host_did),
-                escape_graphql_string(&host_did),
-            ))
+        // The receiving principal's explicit context selects cross-principal
+        // admission through canonical Tools, not a parallel behavior flag.
+        let tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+            "tools_id":"host-tools","agent_did":host_did,
+            "subagents":{"allow_cross_principal":true}
+        }))
+        .unwrap();
+        let context: crate::document_config::AgentContext =
+            serde_json::from_value(serde_json::json!({
+                "context_id":"host-context","agent_did":host_did,"tools_id":"host-tools"
+            }))
+            .unwrap();
+        let behavior: crate::document_config::AgentBehavior =
+            serde_json::from_value(serde_json::json!({
+                "behavior_id":"behavior-1","agent_did":host_did,"context_id":"host-context",
+                "inference_profile_id":"host-profile"
+            }))
+            .unwrap();
+        for (collection, document) in [
+            ("Tools", serde_json::to_value(tools).unwrap()),
+            ("AgentContext", serde_json::to_value(context).unwrap()),
+            ("AgentBehavior", serde_json::to_value(behavior).unwrap()),
+        ] {
+            let input = gents_protocol::graphql::graphql_input_literal(&document).unwrap();
+            exec(
+                &host,
+                &format!("mutation {{create_{collection}(input:{input}){{_docID}}}}"),
+                "seed target context policy",
+            )
             .await;
-        assert!(
-            !policy_response.has_errors(),
-            "seed target policy: {:?}",
-            policy_response.errors
-        );
+        }
 
         let template =
             resolve_template(SUBAGENT_COORDINATOR_TEMPLATE).expect("subagent-coordinator template");
@@ -1627,7 +1613,12 @@ mod tests {
             &receiver,
             "AgentMessage",
             "message_key",
-            "return-match-session:1",
+            &crate::session::sequence_message_key(
+                "did:key:host",
+                "return-match-session",
+                Some("did:key:coord"),
+                1,
+            ),
         )
         .await;
         assert_eq!(
@@ -1636,17 +1627,17 @@ mod tests {
         );
         assert_eq!(
             collection_values(&receiver, "AgentMessage", "message_key").await,
-            BTreeSet::from(["return-match-session:1".to_string()])
+            BTreeSet::from([crate::session::sequence_message_key(
+                "did:key:host",
+                "return-match-session",
+                Some("did:key:coord"),
+                1
+            )])
         );
         assert_eq!(
             collection_values(&receiver, "AgentSession", "session_id").await,
             BTreeSet::new(),
             "host-local session ownership must not cross the return leg"
-        );
-        assert_eq!(
-            collection_values(&receiver, "AgentConversation", "session_id").await,
-            BTreeSet::new(),
-            "host-local conversation metadata must not cross the return leg"
         );
 
         sender.shutdown().await;

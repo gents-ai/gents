@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 
 pub mod interpolate;
 mod loader;
-pub use loader::load_pack_config;
+pub use loader::{decode_pack_config, load_pack_config};
 
 #[path = "pack_asset_path.rs"]
 mod asset_path;

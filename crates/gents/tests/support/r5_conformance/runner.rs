@@ -1,20 +1,28 @@
-use anyhow::{bail, Result};
+use anyhow::{Context, Result, bail};
 use gents::background_completion::{
     observe_cancel_cascade_ack, project_background_subagent_completion,
     reconcile_unclaimed_cross_deployment_spawns,
 };
+use gents::config_client::{
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    read_desired_state_record_in_txn as read_desired_state_record,
+};
+use gents::document_config::{
+    AgentBehavior, AgentContext, BackendAuth, InferenceBackend, SubagentTools,
+};
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{
-    interrupt_request, upsert_agent_behavior, upsert_tool_selection, AgentBehaviorDocument,
-    RequestLifecycle, ToolSelectionDocument,
+    BackendProviderKind, InferenceProfile, OpenAiWireApi, RequestLifecycle, SubagentTargetDocument,
+    Tools,
 };
+use gents_protocol::request_input::QueueSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::support::{first_optional_row, test_db, TestDb};
+use crate::support::{TestDb, first_optional_row, test_db};
 
 use super::scenario::{Action, NodeId, Scenario};
 
@@ -303,6 +311,49 @@ impl Harness {
     }
 }
 
+/// The delegation destination for fixture targets is the paired peer's actual
+/// DID, read from the PeerPairingDesired the harness writes as its first
+/// actions. Fixtures never invent a destination principal.
+async fn peer_did_from_pairing(node: &HarnessNode) -> Result<String> {
+    let peer_id = match node.id.as_str() {
+        "A" => "B",
+        "B" => "A",
+        other => bail!("unknown R5 fixture node {other}"),
+    };
+    let query = format!(
+        "{{ PeerPairingDesired(filter: {{ peer_id: {{ _eq: \"{}\" }} }}, limit: 2) {{ agent_did }} }}",
+        escape_graphql_string(peer_id)
+    );
+    let response = node.db.node.execute(&query).await;
+    if response.has_errors() {
+        bail!("query PeerPairingDesired failed: {:?}", response.errors);
+    }
+    #[derive(Deserialize)]
+    struct Row {
+        agent_did: String,
+    }
+    let rows: Vec<Row> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("PeerPairingDesired"))
+            .context("pairing query omitted PeerPairingDesired")?
+            .clone(),
+    )
+    .context("decoding R5 fixture pairing")?;
+    let [peer] = rows.as_slice() else {
+        bail!(
+            "expected one pairing for R5 peer {peer_id}, found {}",
+            rows.len()
+        );
+    };
+    anyhow::ensure!(
+        !peer.agent_did.trim().is_empty() && peer.agent_did != node.did(),
+        "R5 pairing must identify the distinct peer principal"
+    );
+    Ok(peer.agent_did.clone())
+}
+
 async fn write_pairing(
     node: &HarnessNode,
     peer: &str,
@@ -350,7 +401,19 @@ async fn write_agent_request(
     parent_request_id: Option<&str>,
     parent_tool_call_id: Option<&str>,
 ) -> Result<()> {
-    ensure_behavior(node, behavior_id, agent_did).await?;
+    // R5 explicitly pairs two principals. A foreign fixture owner must be
+    // that exact peer; fixture installation must not authorize arbitrary actors.
+    let peer_did = peer_did_from_pairing(node).await?;
+    let target_agent_did = if agent_did == node.did() {
+        peer_did
+    } else {
+        anyhow::ensure!(
+            agent_did == peer_did,
+            "request fixture owner is not a paired principal"
+        );
+        node.did().to_string()
+    };
+    ensure_behavior(node, behavior_id, agent_did, &target_agent_did).await?;
 
     let (parent_request_doc_id, parent_tool_call_doc_id) =
         match (parent_request_id, parent_tool_call_id) {
@@ -721,64 +784,196 @@ async fn import_message(node: &HarnessNode, row: &serde_json::Value) -> Result<(
     exec(node, &mutation, "import AgentMessage").await
 }
 
-async fn ensure_behavior(node: &HarnessNode, behavior_id: &str, agent_did: &str) -> Result<()> {
-    let selection_id = format!("{behavior_id}-tools");
-    upsert_tool_selection(
+/// Install the R5 behavior chain in one canonical configuration transaction.
+/// Targets name the paired principal used by the A-to-B delegation scenarios.
+async fn ensure_behavior(
+    node: &HarnessNode,
+    behavior_id: &str,
+    agent_did: &str,
+    target_agent_did: &str,
+) -> Result<()> {
+    let context_id = format!("{behavior_id}:context");
+    let tools_id = format!("{behavior_id}:tools");
+    let profile_id = format!("{behavior_id}-inference");
+    let backend_id = format!("{behavior_id}-backend");
+
+    ConfigAccess::transact_local(
         node.db.node.as_ref(),
-        &ToolSelectionDocument {
-            selection_id: selection_id.clone(),
-            agent_did: agent_did.to_string(),
-            subagent_targets: Some(
-                [
-                    "child-behavior",
-                    "child-behavior-1",
-                    "child-behavior-2",
-                    behavior_id,
-                ]
-                .into_iter()
-                .map(|target_behavior_id| {
-                    gents::subagent_target_entry(
-                        target_behavior_id,
-                        agent_did,
-                        target_behavior_id,
-                        None,
-                    )
-                })
-                .collect(),
-            ),
-            subagent_spawn_enabled: Some(true),
-            subagent_background_enabled: Some(true),
-            cross_deployment_spawn_timeout_seconds: Some(60),
-            enable_defra_query: None,
-            defra_query_collections: None,
-            ..Default::default()
+        None,
+        "r5_conformance.ensure_behavior",
+        |txn| {
+            let tools_id = tools_id.clone();
+            let context_id = context_id.clone();
+            let profile_id = profile_id.clone();
+            let backend_id = backend_id.clone();
+            Box::pin(async move {
+                // Preserve the full current canonical documents inside this
+                // scoped transaction before deciding the replacement values.
+                let mut tools =
+                    read_desired_state_record(txn, gents::Collection::Tools, agent_did, &tools_id)
+                        .await?
+                        .map(|(_, value)| serde_json::from_value::<Tools>(value))
+                        .transpose()?
+                        .unwrap_or_else(|| Tools {
+                            tools_id: tools_id.clone(),
+                            agent_did: agent_did.to_string(),
+                            ..Default::default()
+                        });
+                let mut target_behavior_ids: Vec<String> =
+                    ["child-behavior", "child-behavior-1", "child-behavior-2"]
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect();
+                if !target_behavior_ids.iter().any(|id| id == behavior_id) {
+                    target_behavior_ids.push(behavior_id.to_string());
+                }
+                let targets: Vec<SubagentTargetDocument> = target_behavior_ids
+                    .iter()
+                    .map(|target_behavior_id| SubagentTargetDocument {
+                        target_id: format!("{behavior_id}:{target_behavior_id}"),
+                        agent_did: agent_did.to_string(),
+                        target_agent_did: target_agent_did.to_string(),
+                        behavior_id: target_behavior_id.clone(),
+                        name: target_behavior_id.clone(),
+                        description: None,
+                        tags: Vec::new(),
+                    })
+                    .collect();
+                tools.subagents = Some(SubagentTools {
+                    target_ids: targets
+                        .iter()
+                        .map(|target| target.target_id.clone())
+                        .collect(),
+                    spawn_enabled: Some(true),
+                    background_enabled: Some(true),
+                    allow_cross_principal: Some(true),
+                    cross_principal_spawn_timeout_secs: Some(60),
+                    ..Default::default()
+                });
+                let mut context = read_desired_state_record(
+                    txn,
+                    gents::Collection::AgentContext,
+                    agent_did,
+                    &context_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<AgentContext>(value))
+                .transpose()?
+                .unwrap_or_else(|| AgentContext {
+                    context_id: context_id.clone(),
+                    agent_did: agent_did.to_string(),
+                    display_name: None,
+                    description: None,
+                    system_prompt: None,
+                    tools_id: Some(tools_id.clone()),
+                    compaction_id: None,
+                    skill_ids: Vec::new(),
+                    tags: Vec::new(),
+                });
+                context.tools_id = Some(tools_id.clone());
+                let behavior = AgentBehavior {
+                    behavior_id: behavior_id.to_string(),
+                    agent_did: agent_did.to_string(),
+                    display_name: Some(behavior_id.to_string()),
+                    description: None,
+                    context_id: Some(context_id.clone()),
+                    inference_profile_id: profile_id.clone(),
+                    enabled: true,
+                    tags: Vec::new(),
+                    created_at: None,
+                };
+                let mut profile = read_desired_state_record(
+                    txn,
+                    gents::Collection::InferenceProfile,
+                    agent_did,
+                    &profile_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<InferenceProfile>(value))
+                .transpose()?
+                .unwrap_or_else(|| InferenceProfile {
+                    agent_did: agent_did.to_string(),
+                    profile_id: profile_id.clone(),
+                    backend_id: backend_id.clone(),
+                    model_name: "test-model".to_string(),
+                    display_name: None,
+                    description: None,
+                    reasoning_effort: None,
+                    context_window: None,
+                    max_output_tokens: None,
+                    sampling_id: None,
+                    execution_id: None,
+                    tags: Vec::new(),
+                });
+                profile.backend_id = backend_id.clone();
+                let mut backend = read_desired_state_record(
+                    txn,
+                    gents::Collection::InferenceBackend,
+                    agent_did,
+                    &backend_id,
+                )
+                .await?
+                .map(|(_, value)| serde_json::from_value::<InferenceBackend>(value))
+                .transpose()?
+                .unwrap_or_else(|| InferenceBackend {
+                    agent_did: agent_did.to_string(),
+                    backend_id: backend_id.clone(),
+                    name: format!("{behavior_id} backend"),
+                    provider_kind: BackendProviderKind::OpenAiCompatible,
+                    openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
+                    endpoint: "http://127.0.0.1:1/v1".to_string(),
+                    auth: BackendAuth::Unauthenticated,
+                    connect_timeout_secs: None,
+                    discovery_timeout_secs: None,
+                    max_concurrent: None,
+                    max_queue_depth: None,
+                    enabled: true,
+                    tags: Vec::new(),
+                });
+                backend.enabled = true;
+                // Stage the canonical documents together, then validate their
+                // references against the complete retained same-owner candidate.
+                let mut documents = Vec::new();
+                for target in targets {
+                    let value = serde_json::to_value(&target)?;
+                    documents.push(DesiredStateApplyDocument {
+                        collection: gents::Collection::SubagentTarget,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                for (collection, value) in [
+                    (gents::Collection::Tools, serde_json::to_value(&tools)?),
+                    (
+                        gents::Collection::AgentContext,
+                        serde_json::to_value(&context)?,
+                    ),
+                    (
+                        gents::Collection::InferenceBackend,
+                        serde_json::to_value(&backend)?,
+                    ),
+                    (
+                        gents::Collection::InferenceProfile,
+                        serde_json::to_value(&profile)?,
+                    ),
+                    (
+                        gents::Collection::AgentBehavior,
+                        serde_json::to_value(&behavior)?,
+                    ),
+                ] {
+                    documents.push(DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    });
+                }
+                let plan = DesiredStateApplyPlan::new(documents)?;
+                apply_desired_state_plan(txn, &plan).await?;
+                Ok(())
+            })
         },
     )
-    .await?;
-    upsert_agent_behavior(
-        node.db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some(behavior_id.to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: Some(selection_id),
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: Some("2026-05-14T00:00:00Z".to_string()),
-        },
-    )
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn terminalize_child_on_b(
@@ -827,8 +1022,20 @@ async fn cancel_parent_on_a(node: &HarnessNode, parent_tool_call_id: &str) -> Re
         .cancel_during_run(CancelCause::Interrupted)
         .await?;
     if let Some(dispatch) = lifecycle.bridge_cancel_cascade_dispatch(node.did()).await? {
-        if let CascadeDispatch::Local(intent) = dispatch {
-            interrupt_request(node.db.node.as_ref(), &intent.child_request_id).await?;
+        if let CascadeDispatch::Local { child, .. } = dispatch {
+            gents::interrupt_request_by_doc_id(
+                node.db.node.as_ref(),
+                child
+                    .doc_id
+                    .as_deref()
+                    .expect("verified physical cascade child"),
+                child
+                    .agent_did
+                    .as_deref()
+                    .expect("verified local child principal"),
+                child.requester_did.as_deref(),
+            )
+            .await?;
         }
     }
     Ok(())
@@ -1069,19 +1276,48 @@ async fn load_subagent_notifications(node: &HarnessNode) -> Result<Vec<String>> 
 }
 
 async fn load_background_wakeup_keys(node: &HarnessNode) -> Result<Vec<String>> {
-    let query = r#"{ AgentRequest(filter: { execution_origin: { _eq: "scheduled" } }) { request_id metadata } }"#;
-    let response = node.db.node.execute(query).await;
-    let rows: Vec<AgentRequestRow> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentRequest"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| row.metadata)
-        .filter(|metadata| metadata.contains("background_completion"))
-        .collect())
+    let query = format!(
+        r#"{{
+        AgentRequest(filter: {{ agent_did: {{ _eq: "{}" }}, execution_origin: {{ _eq: "scheduled" }} }}) {{
+            request_id input
+        }}
+    }}"#,
+        escape_graphql_string(node.did())
+    );
+    let response = node.db.node.execute(&query).await;
+    if response.has_errors() {
+        bail!("load background wakeup keys failed: {:?}", response.errors);
+    }
+    let rows: Vec<AgentRequestRow> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .context("background wake query omitted AgentRequest")?
+            .clone(),
+    )
+    .context("decode background wake AgentRequestRow")?;
+    let mut keys = Vec::new();
+    for row in rows {
+        let Some(queue) = row.input.as_ref().and_then(|input| input.queue.as_ref()) else {
+            // Ordinary scheduled tasks do not carry queue input.
+            continue;
+        };
+        if queue.source == QueueSource::BackgroundCompletion {
+            let key = queue
+                .key
+                .as_ref()
+                .filter(|key| !key.trim().is_empty())
+                .with_context(|| {
+                    format!(
+                        "background wake request {} has no queue key",
+                        row.request_id
+                    )
+                })?;
+            keys.push(key.clone());
+        }
+    }
+    Ok(keys)
 }
 
 struct HarnessRequest {

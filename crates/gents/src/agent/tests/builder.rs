@@ -57,7 +57,7 @@ async fn builder_includes_custom_tools_in_resolved_tool_surface() {
 
     let tool_surface = agent.behaviors()[0]
         .tools
-        .resolve(node.as_ref())
+        .resolve(node.as_ref(), identity.did())
         .await
         .unwrap();
     assert!(tool_surface

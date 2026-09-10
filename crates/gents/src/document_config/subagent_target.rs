@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// remains explicit for local and cross-principal delegation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct SubagentTargetDocument {
     pub target_id: String,
     /// Principal that owns this target configuration (DefraDB ACP applies).
@@ -19,6 +20,7 @@ pub struct SubagentTargetDocument {
     /// Friendly callable name exposed to the model.
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub description: Option<String>,
     /// Optional UI/discovery labels. References, never tags, determine execution.
     #[serde(
@@ -26,5 +28,6 @@ pub struct SubagentTargetDocument {
         deserialize_with = "super::serde_helpers::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }

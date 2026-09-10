@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::thread::JoinHandle;
 
-pub(super) use crate::document_config::ToolSelectionDocument;
+pub(super) use crate::document_config::Tools;
 pub(super) use crate::ensure_runtime_schemas;
 pub(super) use crate::graphql::escape_graphql_string;
 pub(super) use crate::identity::AgentIdentity;
@@ -42,16 +42,11 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
         request_id: "req-1".to_string(),
         agent_did: "did:test:test".to_string(),
         requester_did: None,
-        behavior_id: behavior_id.map(ToOwned::to_owned),
+        behavior_id: behavior_id.unwrap_or_default().to_owned(),
         session_id: session_id.to_string(),
         content: "hello".to_string(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: None,
         created_at: "2026-04-09T00:00:00Z".to_string(),
         deadline: None,
@@ -69,8 +64,8 @@ pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentReque
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
+        workspace_owner_agent_did: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
     }
 }
@@ -446,52 +441,46 @@ pub(super) async fn bind_default_behavior_backend_with_capacity_and_probe_status
     max_concurrent: i64,
     probe_status: &str,
 ) {
-    let bootstrap = crate::ensure_agent_principal(node, agent_did)
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    use crate::Collection;
+    let mut principal = crate::ensure_agent_principal(node, agent_did)
         .await
         .unwrap();
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let escaped_probe_status = escape_graphql_string(probe_status);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    enabled: true,
-                    models: ["default"],
-                    probe_status: "{escaped_probe_status}"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: {max_concurrent},
-                    enabled: true,
-                    probe_status: "{escaped_probe_status}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert InferenceBackend failed: {:?}",
-        response.errors
-    );
-
-    let mut default_behavior =
-        crate::load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-            .await
-            .unwrap()
-            .expect("default behavior document");
-    default_behavior.backend_id = Some(backend_id.to_string());
-    crate::upsert_agent_behavior(node, &default_behavior)
-        .await
-        .unwrap();
+    let behavior_id = crate::default_behavior_id_for_agent(agent_did);
+    principal.default_behavior_id = Some(behavior_id.clone());
+    let context_id = format!("{behavior_id}:context");
+    let tools_id = format!("{behavior_id}:tools");
+    let profile_id = format!("{behavior_id}:inference");
+    let documents = [
+        (Collection::AgentPrincipal, serde_json::to_value(principal).unwrap()),
+        (Collection::AgentBehavior, serde_json::json!({"agent_did":agent_did,
+            "behavior_id":behavior_id, "context_id":context_id, "inference_profile_id":profile_id})),
+        (Collection::AgentContext, serde_json::json!({"agent_did":agent_did,
+            "context_id":context_id, "tools_id":tools_id})),
+        (Collection::Tools, serde_json::json!({"agent_did":agent_did, "tools_id":tools_id})),
+        (Collection::InferenceProfile, serde_json::json!({"agent_did":agent_did,
+            "profile_id":profile_id, "backend_id":backend_id, "model_name":"default"})),
+        (Collection::InferenceBackend, serde_json::json!({"agent_did":agent_did,
+            "backend_id":backend_id, "name":backend_id, "provider_kind":"OpenAiCompatible",
+            "endpoint":endpoint, "max_concurrent":max_concurrent, "auth":{"kind":"unauthenticated"}})),
+    ].into_iter().map(|(collection, value)| DesiredStateApplyDocument {
+        collection, add:value.clone(), update:value,
+    }).collect();
+    let plan = DesiredStateApplyPlan::new(documents).unwrap();
+    ConfigAccess::transact_local(node, None, "test.runtime.configure", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
+    let backend_id = escape_graphql_string(backend_id);
+    let owner = escape_graphql_string(agent_did);
+    let status = escape_graphql_string(probe_status);
+    let response = node.execute(&format!(r#"mutation {{
+        update_InferenceBackend(filter: {{agent_did: {{_eq: "{owner}"}}, backend_id: {{_eq: "{backend_id}"}}}},
+            input: {{probe_status: "{status}"}}) {{_docID}}
+    }}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
 }
 
 pub(super) async fn create_agent_request(

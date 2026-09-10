@@ -216,7 +216,9 @@ async fn spawn_subagent_skip_payload_is_persisted_to_transcript() {
     .await
     .unwrap();
 
-    let history = load_history(db.node.as_ref(), &session_id).await.unwrap();
+    let history = load_history(db.node.as_ref(), &session_id, &agent_did, None)
+        .await
+        .unwrap();
     assert!(history.iter().any(|message| {
         matches!(
             message,

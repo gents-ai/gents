@@ -158,11 +158,8 @@ impl Gents {
                 "Gents runtime requires an EmbeddedNode configured with a node signing DID"
             );
         }
-        // Run the AgentBehavior migration before any behavior read so that
-        // desktops, embedders, and CLI serve paths all see description/summary
-        // even when the DB was created before branch #377. This is idempotent
-        // (field-presence-checked) and cheap on already-migrated DBs.
-        migration::ensure_agent_behavior_migrations(node.clone()).await?;
+        // Register the runtime schema through the shared migration engine.
+        migration::ensure_all_runtime_migrations(node.clone()).await?;
         let backend_health = options.backend_health.clone().unwrap_or_default();
         let document_runtime_context = DocumentResolveContext {
             identity: identity.clone(),
@@ -323,93 +320,63 @@ pub(crate) async fn resolve_document_runtime_snapshot(
 pub(crate) fn behavior_config_from_documents(
     principal: Arc<AgentPrincipal>,
     behavior: &crate::document_config::AgentBehavior,
-    backend: &crate::backend_registry::InferenceBackend,
-    inference_profile: &crate::document_config::InferenceProfile,
+    context: Option<&crate::document_config::AgentContext>,
+    compaction: Option<crate::document_config::CompactionConfig>,
+    compaction_inference: Option<crate::config::ResolvedInference>,
+    inference: &crate::config::ResolvedInference,
     tool_selection: ToolSelection,
     subagent_tools: SubagentToolConfig,
     tool_ceiling: &ToolCeiling,
     skills: Vec<crate::skills::Skill>,
 ) -> anyhow::Result<AgentBehavior> {
-    let compaction_strategy = parse_compaction_strategy(behavior.compaction_strategy.as_deref())?;
-    let stream_batch_ms = inference_profile
-        .stream_batch_ms
-        .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or(DEFAULT_STREAM_BATCH_MS);
-    let deadline_duration_secs = inference_profile
-        .deadline_duration_secs
-        .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or(DEFAULT_DEADLINE_DURATION_SECS);
-    let stream_liveness_timeout_secs = positive_duration_secs_or_default(
-        inference_profile.stream_liveness_timeout_secs,
+    let execution = inference.execution.clone().unwrap_or_default();
+    let retry = inference.retry_policy.clone().unwrap_or_default();
+    let stream_batch_ms = positive_duration_secs_or_default(
+        execution.stream_batch_ms,
+        "stream_batch_ms",
+        DEFAULT_STREAM_BATCH_MS,
+    )?;
+    let deadline_duration_secs = positive_duration_secs_or_default(
+        execution.deadline_duration_secs,
+        "deadline_duration_secs",
+        DEFAULT_DEADLINE_DURATION_SECS,
+    )?;
+    let liveness_secs = positive_duration_secs_or_default(
+        execution.stream_liveness_timeout_secs,
         "stream_liveness_timeout_secs",
         DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-    )?
-    .min(deadline_duration_secs.max(1));
-    let profile_max_tokens = inference_profile
-        .max_output_tokens
-        .and_then(|value| u64::try_from(value).ok());
-
-    let raw_system_prompt = behavior.system_prompt.clone().unwrap_or_default();
-    let rendered_system_prompt = crate::template::render_system_prompt(
-        &raw_system_prompt,
-        serde_json::json!({
-            "node_did": principal.agent_did.as_str(),
-            "behavior_id": behavior.behavior_id.as_str(),
-        }),
-        &crate::template::catalog::default_catalog(),
     )?;
-    let backend_fields = backend.backend_fields();
-    let sampling = SamplingConfig {
-        temperature: inference_profile.temperature,
-        top_p: inference_profile.top_p,
-        top_k: inference_profile.top_k,
-        seed: inference_profile.seed,
-        min_p: inference_profile.min_p,
-        frequency_penalty: inference_profile.frequency_penalty,
-        presence_penalty: inference_profile.presence_penalty,
-        repetition_penalty: inference_profile.repetition_penalty,
-        reasoning_effort: inference_profile
-            .reasoning_effort
-            .as_deref()
-            // Older/default Defra rows may materialize nullable strings as an
-            // empty value. That is the wire equivalent of an unset profile
-            // field, not an invalid reasoning level.
-            .filter(|value| !value.trim().is_empty())
-            .map(crate::config::ReasoningEffort::parse)
-            .transpose()?,
-        max_tokens: profile_max_tokens,
-    };
-    sampling.validate_for_provider(
-        backend_fields.backend_provider_kind,
-        backend_fields.openai_wire_api,
-    )?;
-
+    anyhow::ensure!(
+        liveness_secs < deadline_duration_secs,
+        "stream liveness must be shorter than request deadline"
+    );
+    let max_total_tokens = execution
+        .max_total_tokens
+        .map(|limit| {
+            anyhow::ensure!(limit > 0, "configured max_total_tokens must be positive");
+            Ok::<_, anyhow::Error>(u64::try_from(limit)?)
+        })
+        .transpose()?;
+    if let Some(config) = &compaction {
+        config.validate()?;
+    }
+    let backend = inference.backend.backend_fields();
     Ok(AgentBehavior {
         behavior_id: behavior.behavior_id.clone(),
         principal,
-        backend_id: backend_fields.backend_id,
-        backend_provider_kind: backend_fields.backend_provider_kind,
-        openai_wire_api: backend_fields.openai_wire_api,
-        backend_endpoint: backend_fields.backend_endpoint,
-        backend_api_key: backend_fields.backend_api_key,
-        backend_api_key_env_var: backend_fields.backend_api_key_env_var,
-        model_name: normalize_optional_string(behavior.model_name.as_deref())
-            .unwrap_or(DEFAULT_MODEL_NAME)
-            .to_string(),
-        context_window: inference_profile
-            .context_window
-            .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(DEFAULT_CONTEXT_WINDOW),
-        max_output_tokens: inference_profile
-            .max_output_tokens
-            .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(DEFAULT_MAX_OUTPUT_TOKENS),
-        max_turns: inference_profile
-            .max_turns
-            .and_then(|value| usize::try_from(value).ok())
-            .unwrap_or(DEFAULT_MAX_TURNS),
-        system_prompt: rendered_system_prompt,
-        request_context_template: behavior.request_context_template.clone(),
+        backend_id: backend.backend_id,
+        backend_provider_kind: backend.backend_provider_kind,
+        openai_wire_api: backend.openai_wire_api,
+        backend_endpoint: backend.backend_endpoint,
+        backend_auth: backend.backend_auth,
+        model_name: inference.profile.model_name.clone(),
+        context_window: inference.context_window()?,
+        max_output_tokens: inference.max_output_tokens()?,
+        max_turns: inference.max_turns()?,
+        max_total_tokens,
+        system_prompt: context
+            .and_then(|context| context.system_prompt.clone())
+            .unwrap_or_default(),
         tools: BehaviorToolConfig::from_selection_with_subagent_tools(
             &behavior.behavior_id,
             tool_selection,
@@ -417,29 +384,21 @@ pub(crate) fn behavior_config_from_documents(
             subagent_tools,
             Vec::new(),
         )?,
-        compaction_threshold: behavior
-            .compaction_threshold
-            .unwrap_or(DEFAULT_COMPACTION_THRESHOLD),
-        compaction_strategy,
+        compaction,
+        compaction_inference,
         stream_batch_ms,
-        stream_liveness_timeout: Duration::from_secs(stream_liveness_timeout_secs),
+        stream_liveness_timeout: Duration::from_secs(liveness_secs),
         deadline_duration: Duration::from_secs(deadline_duration_secs),
-        completion_retry: completion_retry_fields_from_profile(inference_profile),
-        sampling,
+        completion_retry: completion_retry::CompletionRetryProfileFields {
+            retry_max_transport: retry.max_transport_retries,
+            retry_backoff_ms: retry.backoff_ms,
+            retry_max_resample: retry.max_resample_retries,
+            retry_allow_repair: retry.allow_repair,
+            retry_interactive_max: retry.interactive_max_retries,
+        },
+        sampling: inference.sampling_config()?,
         skills,
     })
-}
-
-fn completion_retry_fields_from_profile(
-    inference_profile: &crate::document_config::InferenceProfile,
-) -> completion_retry::CompletionRetryProfileFields {
-    completion_retry::CompletionRetryProfileFields {
-        retry_max_transport: inference_profile.retry_max_transport,
-        retry_backoff_ms: inference_profile.retry_backoff_ms.clone(),
-        retry_max_resample: inference_profile.retry_max_resample,
-        retry_allow_repair: inference_profile.retry_allow_repair,
-        retry_interactive_max: inference_profile.retry_interactive_max,
-    }
 }
 
 fn positive_duration_secs_or_default(
@@ -455,15 +414,6 @@ fn positive_duration_secs_or_default(
     }
 }
 
-fn parse_compaction_strategy(value: Option<&str>) -> anyhow::Result<CompactionStrategy> {
-    match normalize_optional_string(value) {
-        None => Ok(CompactionStrategy::StripThenSummarize),
-        Some("StripToolResults") => Ok(CompactionStrategy::StripToolResults),
-        Some("StripThenSummarize") => Ok(CompactionStrategy::StripThenSummarize),
-        Some(other) => anyhow::bail!("unknown compaction strategy {other}"),
-    }
-}
-
 fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
     value.and_then(|value| {
         let trimmed = value.trim();
@@ -472,13 +422,13 @@ fn normalize_optional_string(value: Option<&str>) -> Option<&str> {
 }
 
 pub(crate) fn tool_selection_from_document(
-    selection: &crate::document_config::ToolSelectionDocument,
+    selection: &crate::document_config::Tools,
 ) -> anyhow::Result<ToolSelection> {
     ToolSelection::from_document(selection)
 }
 
 pub(crate) fn subagent_tool_config_from_document(
-    selection: &crate::document_config::ToolSelectionDocument,
-) -> SubagentToolConfig {
+    selection: &crate::document_config::Tools,
+) -> anyhow::Result<SubagentToolConfig> {
     SubagentToolConfig::from_document(selection)
 }

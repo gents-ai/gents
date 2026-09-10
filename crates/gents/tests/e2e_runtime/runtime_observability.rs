@@ -2,14 +2,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gents::{
-    ensure_agent_principal, load_agent_behavior, upsert_agent_behavior, AgentIdentity,
-    DocumentRuntimeOptions, Gents, KeyIdentity, ProcessLifecycleObserver, ProcessLifecycleState,
-    RuntimeSnapshotObserver, ToolCeiling,
+    AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ProcessLifecycleObserver,
+    ProcessLifecycleState, RuntimeSnapshotObserver, ToolCeiling,
 };
 use tokio::sync::watch;
 
+use crate::support::fixtures::bind_default_behavior_backend;
 use crate::support::interrupt::TEST_RUNTIME_READY_TIMEOUT;
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::snapshots::{RuntimeSnapshot, fetch_runtime_snapshot};
 use crate::support::test_db;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -67,56 +67,6 @@ async fn wait_for_observed<T>(
             receiver.borrow().clone()
         ),
     }
-}
-
-async fn bind_default_behavior_backend(
-    node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
-    backend_id: &str,
-    endpoint: &str,
-) {
-    let bootstrap = ensure_agent_principal(node, agent_did).await.unwrap();
-    let escaped_backend_id = gents::graphql::escape_graphql_string(backend_id);
-    let escaped_endpoint = gents::graphql::escape_graphql_string(endpoint);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    models: ["default"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert InferenceBackend failed: {:?}",
-        response.errors
-    );
-
-    let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-        .await
-        .unwrap()
-        .expect("default behavior document");
-    default_behavior.backend_id = Some(backend_id.to_string());
-    upsert_agent_behavior(node, &default_behavior)
-        .await
-        .unwrap();
 }
 
 async fn wait_for_runtime_snapshot<F>(
@@ -197,14 +147,54 @@ async fn runtime_status_surfaces_startup_reconcile_and_shutdown() {
     assert_eq!(startup.default_behavior_id, default_behavior_id);
     assert!(startup.last_reconcile_error.is_empty());
 
-    let mut behavior = load_agent_behavior(db.node.as_ref(), &default_behavior_id)
-        .await
-        .unwrap()
-        .expect("default behavior document");
-    behavior.system_prompt = Some("runtime observability update".to_string());
-    upsert_agent_behavior(db.node.as_ref(), &behavior)
-        .await
-        .unwrap();
+    gents::config_client::ConfigAccess::transact_local(
+        db.node.as_ref(),
+        None,
+        "test.update_context",
+        |txn| {
+            let agent_did = &agent_did;
+            let behavior_id = &default_behavior_id;
+            Box::pin(async move {
+                use gents::Collection;
+                use gents::config_client::{
+                    DesiredStateApplyDocument, DesiredStateApplyPlan,
+                    read_desired_state_record_in_txn as read,
+                };
+                let (_, mut behavior) =
+                    read(txn, Collection::AgentBehavior, agent_did, behavior_id)
+                        .await?
+                        .expect("behavior");
+                let context_id = behavior["context_id"]
+                    .as_str()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("{behavior_id}:context"));
+                let mut context = read(txn, Collection::AgentContext, agent_did, &context_id)
+                    .await?
+                    .map(|(_, value)| value)
+                    .unwrap_or_else(
+                        || serde_json::json!({"agent_did":agent_did,"context_id":context_id}),
+                    );
+                context["system_prompt"] = "runtime observability update".into();
+                behavior["context_id"] = context_id.into();
+                let plan = DesiredStateApplyPlan::new(
+                    [
+                        (Collection::AgentBehavior, behavior),
+                        (Collection::AgentContext, context),
+                    ]
+                    .into_iter()
+                    .map(|(collection, value)| DesiredStateApplyDocument {
+                        collection,
+                        add: value.clone(),
+                        update: value,
+                    })
+                    .collect(),
+                )?;
+                gents::config_client::apply_desired_state_plan(txn, &plan).await
+            })
+        },
+    )
+    .await
+    .unwrap();
 
     wait_for_observed(&mut generation_rx, "runtime generation 2", |generation| {
         *generation >= 2

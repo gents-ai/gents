@@ -6,6 +6,7 @@ pub const COMPILER_VERSION: &str = "graph-intent-v3";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum PortCardinality {
     One,
     Many,
@@ -13,6 +14,7 @@ pub enum PortCardinality {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PortSpec {
     pub name: String,
     /// Existing DefraDB collection carried on this port.
@@ -23,6 +25,7 @@ pub struct PortSpec {
     pub correlation_field: String,
     pub cardinality: PortCardinality,
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
     pub required: bool,
 }
 
@@ -32,9 +35,10 @@ pub struct PortSpec {
 /// behavior, prompt, tools, model, or output permissions.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct StageCapability {
-    /// Owner of this capability and its referenced task; explicit foreign use
-    /// requires existing caller admission and ACP, never owner rewriting.
+    /// Owner of this capability and its referenced task. Every caller,
+    /// including this owner, needs explicit allowed_callers admission and ACP.
     pub agent_did: String,
     pub capability_id: String,
     pub revision: String,
@@ -44,12 +48,14 @@ pub struct StageCapability {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<PortSpec>>", optional = nullable))]
     pub input_ports: Vec<PortSpec>,
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<PortSpec>>", optional = nullable))]
     pub output_ports: Vec<PortSpec>,
     /// Empty means nobody, not everybody.
     #[serde(
@@ -57,10 +63,12 @@ pub struct StageCapability {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub allowed_callers: Vec<String>,
     /// Optional graph execution ceiling; does not select a different behavior
     /// or inference profile from the referenced task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub workspace_authority: Option<WorkspaceAuthority>,
     /// UI/discovery metadata; explicit task/capability references define topology.
     #[serde(
@@ -68,6 +76,7 @@ pub struct StageCapability {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }
 
@@ -75,6 +84,7 @@ pub struct StageCapability {
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct PortRef {
     pub node_id: String,
     pub port: String,
@@ -89,6 +99,7 @@ pub type DeliveryConcurrency = crate::document_config::ConcurrencyMode;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphNode {
     pub node_id: String,
     pub capability_id: String,
@@ -97,30 +108,38 @@ pub struct GraphNode {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphEdge {
     pub from: PortRef,
     pub to: PortRef,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<crate::document_config::EventGroup>", optional = nullable))]
     pub delivery: DeliveryMode,
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<DeliveryConcurrency>", optional))]
     pub concurrency: DeliveryConcurrency,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub predicate: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct EntryBinding {
     pub name: String,
     pub collection: String,
     pub schema: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub input_contract: Option<String>,
     pub to: PortRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case", tag = "kind", deny_unknown_fields)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum ResultCardinality {
     Exactly { count: u32 },
     AtMost { count: u32 },
@@ -128,16 +147,19 @@ pub enum ResultCardinality {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct ResultContract {
     pub name: String,
     pub from: PortRef,
     pub cardinality: ResultCardinality,
     #[serde(default)]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<bool>", optional))]
     pub terminal: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphLimits {
     pub max_nodes: u32,
     pub max_edges: u32,
@@ -151,6 +173,7 @@ pub struct GraphLimits {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct GraphIntent {
     pub agent_did: String,
     pub graph_id: String,
@@ -160,6 +183,7 @@ pub struct GraphIntent {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<GraphEdge>>", optional = nullable))]
     pub edges: Vec<GraphEdge>,
     pub entries: Vec<EntryBinding>,
     #[serde(
@@ -167,6 +191,7 @@ pub struct GraphIntent {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<ResultContract>>", optional = nullable))]
     pub results: Vec<ResultContract>,
     pub limits: GraphLimits,
     /// UI/discovery metadata; explicit task/capability references define topology.
@@ -175,6 +200,7 @@ pub struct GraphIntent {
         deserialize_with = "crate::document_config::deserialize_default_on_null",
         skip_serializing_if = "Vec::is_empty"
     )]
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional = nullable))]
     pub tags: Vec<String>,
 }
 
@@ -283,26 +309,12 @@ pub struct BundledProvenance {
 pub use crate::toolset::WorkspaceAuthority;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PackageArtifactKind {
-    Behavior,
-    ToolSelection,
-    ToolSurface,
-    Task,
-    Trigger,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlannedPackageArtifact {
-    /// Stable package-local identity. The physical document ID is derived
-    /// from this value and the final revision digest.
+    /// Canonical collection and owner-scoped authored identity. Resolve the
+    /// physical Defra document through the shared configuration owner.
+    pub collection: crate::Collection,
     pub logical_id: String,
-    /// Immutable configuration-scoped document identity. This is derived
-    /// before graph compilation from package digest plus typed bindings, so it
-    /// may participate in the final graph digest without a circular hash.
-    pub physical_id: String,
-    pub kind: PackageArtifactKind,
     pub content_digest: String,
 }
 

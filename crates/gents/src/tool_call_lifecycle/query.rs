@@ -92,6 +92,8 @@ pub async fn load_tool_call_result(
 struct ToolCallRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    session_id: String,
+    tool_call_id: String,
     #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
@@ -129,16 +131,28 @@ impl ToolCallLifecycle {
     ) -> Result<Option<Self>> {
         let escaped_session_id = escape_graphql_string(session_id);
         let escaped_tool_call_id = escape_graphql_string(tool_call_id);
+        Self::load_filtered(node, format!("session_id:{{_eq:\"{escaped_session_id}\"}},tool_call_id:{{_eq:\"{escaped_tool_call_id}\"}}")).await
+    }
+
+    /// Rehydrate the exact authorized bridge within its canonical session scope.
+    pub async fn load_by_doc_id(
+        node: Arc<EmbeddedNode>,
+        doc_id: &str,
+        agent_did: &str,
+        session_id: &str,
+        requester_did: Option<&str>,
+    ) -> Result<Option<Self>> {
+        let physical = escape_graphql_string(doc_id);
+        let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+        Self::load_filtered(node, format!("{scope},_docID:{{_eq:\"{physical}\"}}")).await
+    }
+
+    async fn load_filtered(node: Arc<EmbeddedNode>, filter: String) -> Result<Option<Self>> {
         let query = format!(
-            r#"{{
-                AgentToolCall(
-                    filter: {{
-                        session_id: {{ _eq: "{escaped_session_id}" }},
-                        tool_call_id: {{ _eq: "{escaped_tool_call_id}" }}
-                    }},
-                    limit: 1
-                ) {{
+            r#"{{AgentToolCall(filter:{{{filter}}},limit:2){{
                     _docID
+                    session_id
+                    tool_call_id
                     request_id
                     request_doc_id
                     agent_did
@@ -158,8 +172,7 @@ impl ToolCallLifecycle {
                     child_request_id
                     spawn_target_did
                     unclaimed_deadline_at
-                }}
-            }}"#
+        }}}}"#
         );
 
         let resp = node.execute(&query).await;
@@ -170,16 +183,17 @@ impl ToolCallLifecycle {
             ));
         }
 
-        let rows: Vec<ToolCallRow> = resp
-            .data
-            .as_ref()
-            .and_then(|d| d.get("AgentToolCall"))
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
-            .unwrap_or_default();
-
-        let row = match rows.into_iter().next() {
-            Some(r) => r,
-            None => return Ok(None),
+        anyhow::ensure!(
+            resp.data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .is_some(),
+            "lifecycle query omitted AgentToolCall rows"
+        );
+        let mut rows: Vec<ToolCallRow> = crate::graphql::rows(&resp, "AgentToolCall")?;
+        anyhow::ensure!(rows.len() <= 1, "ambiguous tool-call lifecycle identity");
+        let Some(row) = rows.pop() else {
+            return Ok(None);
         };
 
         let state = row
@@ -246,13 +260,13 @@ impl ToolCallLifecycle {
             node,
             request_id,
             request_doc_id: row.request_doc_id.filter(|value| !value.trim().is_empty()),
-            session_id: session_id.to_string(),
+            session_id: row.session_id,
             agent_did,
             // Current recovery paths only update the existing immutable row,
             // but preserve its route key so a future create transition cannot
             // silently rehydrate the lifecycle as unrouted.
-            requester_did: row.requester_did.filter(|value| !value.trim().is_empty()),
-            tool_call_id: tool_call_id.to_string(),
+            requester_did: row.requester_did,
+            tool_call_id: row.tool_call_id,
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,
             args: row.args,
@@ -345,3 +359,6 @@ mod tests {
         node.shutdown().await;
     }
 }
+
+#[cfg(test)]
+mod cascade_scope_tests;

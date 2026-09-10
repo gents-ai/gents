@@ -14,13 +14,6 @@
 
 use super::*;
 
-/// A trigger's key as emitted by the dispatch contract.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub(crate) struct LeanTriggerKeyContract {
-    pub(crate) trigger_id: String,
-    pub(crate) trigger_kind: String,
-}
-
 /// A trigger-dispatch case. `intent_task_id` is the task named by the dispatch
 /// intent; `selected_task_id` is the task the dispatcher actually selected.
 /// Schedules and event sources select their configured task before common
@@ -36,7 +29,7 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) active_event_trigger_ids: Vec<String>,
     pub(crate) intent_task_id: String,
     pub(crate) selected_task_id: Option<String>,
-    pub(crate) prior_nonterminal_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) prior_nonterminal_keys: Vec<String>,
     pub(crate) expected_result: String,
     pub(crate) expected_skip_reason: Option<String>,
     pub(crate) expected_materialize_trigger_id: Option<String>,
@@ -44,7 +37,7 @@ pub(crate) struct LeanTriggerDispatchCase {
     pub(crate) expected_request_caused_by_id: Option<String>,
     pub(crate) expected_request_caused_by_kind: Option<String>,
     pub(crate) expected_execution_origin: Option<String>,
-    pub(crate) expected_supersede_call_keys: Vec<LeanTriggerKeyContract>,
+    pub(crate) expected_supersede_call_keys: Vec<String>,
     pub(crate) superseded_prior_ids: Vec<String>,
     pub(crate) target_nonterminal_count_after: Option<usize>,
     pub(crate) request_count_before: usize,

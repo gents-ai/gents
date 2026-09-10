@@ -4,112 +4,27 @@
 
 use super::*;
 
-// -- configure_persona short-id normalization (#1052) --
-//
-// Pure functions, tested independently of the tool/network: matrix covers
-// qualified passthrough, unqualified resolution, model bare-name
-// unique/ambiguous/unknown, and profile pair-stripping.
-
+// Identifiers are exact and scoped by the shared config owner.
 #[test]
-fn resolve_persona_ref_passes_through_qualified_id() {
-    assert_eq!(
-        resolve_persona_ref("did:key:zAgent", "did:key:zAgent:existing"),
-        "did:key:zAgent:existing"
-    );
+fn persona_and_profile_ids_preserve_exact_authored_values() {
+    for id in [
+        "default",
+        "did:key:zAgent:existing",
+        "did:key:zOther:default",
+        " profile ",
+        "profile|display",
+        "",
+    ] {
+        assert_eq!(resolve_persona_ref("did:key:zAgent", id), id);
+        assert_eq!(resolve_profile_id("did:key:zAgent", id), id);
+    }
 }
-
 #[test]
-fn resolve_persona_ref_qualifies_short_name() {
-    assert_eq!(
-        resolve_persona_ref("did:key:zAgent", "default"),
-        "did:key:zAgent:default"
-    );
-}
-
-#[test]
-fn resolve_persona_ref_trims_and_leaves_empty_empty() {
-    assert_eq!(resolve_persona_ref("did:key:zAgent", "   "), "");
-    assert_eq!(
-        resolve_persona_ref("did:key:zAgent", "  default  "),
-        "did:key:zAgent:default"
-    );
-}
-
-#[test]
-fn resolve_persona_ref_does_not_double_qualify_a_different_agent_prefixed_value() {
-    // A value qualified under ANOTHER agent's DID is left alone — admission,
-    // not this pure resolver, is the place that rejects a foreign reference.
-    assert_eq!(
-        resolve_persona_ref("did:key:zAgent", "did:key:zOther:default"),
-        "did:key:zAgent:did:key:zOther:default"
-    );
-}
-
-#[test]
-fn resolve_profile_id_qualifies_short_name() {
-    assert_eq!(
-        resolve_profile_id("did:key:zAgent", "default-profile"),
-        "did:key:zAgent:default-profile"
-    );
-}
-
-#[test]
-fn resolve_profile_id_passes_through_qualified_id() {
-    assert_eq!(
-        resolve_profile_id("did:key:zAgent", "did:key:zAgent:default-profile"),
-        "did:key:zAgent:default-profile"
-    );
-}
-
-#[test]
-fn resolve_profile_id_strips_display_pair_suffix() {
-    // Guards against a model copying the "id|display" shape it sees in
-    // available_models pairs into profile_id.
-    assert_eq!(
-        resolve_profile_id("did:key:zAgent", "default-profile|Fast"),
-        "did:key:zAgent:default-profile"
-    );
-}
-
-#[test]
-fn resolve_profile_id_strips_pair_suffix_then_still_qualifies() {
-    assert_eq!(
-        resolve_profile_id("did:key:zAgent", "did:key:zAgent:default-profile|Fast"),
-        "did:key:zAgent:default-profile"
-    );
-}
-
-#[test]
-fn resolve_model_passes_through_qualified_pair_unchanged() {
-    let available = BTreeSet::new();
-    assert_eq!(
-        resolve_model("did:key:zAgent:openai|gpt-5.5", &available),
-        "did:key:zAgent:openai|gpt-5.5"
-    );
-}
-
-#[test]
-fn resolve_model_unique_bare_name_resolves() {
-    let available = BTreeSet::from(["did:key:zAgent:openai|gpt-5.5".to_string()]);
-    assert_eq!(
-        resolve_model("gpt-5.5", &available),
-        "did:key:zAgent:openai|gpt-5.5"
-    );
-}
-
-#[test]
-fn resolve_model_ambiguous_bare_name_passes_through_unchanged() {
-    let available = BTreeSet::from([
-        "did:key:zAgent:openai|gpt-5.5".to_string(),
-        "did:key:zAgent:anthropic|gpt-5.5".to_string(),
-    ]);
-    assert_eq!(resolve_model("gpt-5.5", &available), "gpt-5.5");
-}
-
-#[test]
-fn resolve_model_unknown_bare_name_passes_through_unchanged() {
-    let available = BTreeSet::from(["did:key:zAgent:openai|gpt-5.5".to_string()]);
-    assert_eq!(resolve_model("no-such-model", &available), "no-such-model");
+fn persona_rejects_retired_parallel_model_selection() {
+    assert!(serde_json::from_value::<ConfigurePersonaParams>(
+        json!({"action":"create","model":"backend|model"})
+    )
+    .is_err());
 }
 
 fn config(categories: &[&str]) -> SelfConfigToolConfig {
@@ -343,29 +258,8 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let identity = persona_identity("persona-create");
     let agent_did = identity.did().to_string();
 
-    let seed = format!(
-        r#"mutation {{
-            create_AgentPrincipal(input: {{
-                agent_did: "{agent_did}",
-                display_name: "Persona Create Agent",
-                enabled: true,
-                created_at: "2026-07-23T00:00:00Z"
-            }}) {{ _docID }}
-            create_InferenceBackend(input: {{
-                backend_id: "openai",
-                name: "OpenAI",
-                provider_kind: "OpenAiCompatible",
-                enabled: true,
-                models: ["gpt-5"]
-            }}) {{ _docID }}
-            create_InferenceProfile(input: {{
-                profile_id: "{agent_did}:profile-1",
-                display_name: "Fast"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&seed).await;
-    assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
+    crate::test_support::install_test_behavior(&node, &agent_did, "seed").await;
+    let profile_id = "seed:inference";
 
     let tools = build_self_config_tools(
         node.clone(),
@@ -378,11 +272,10 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let args = serde_json::json!({
         "action": "create",
         "persona_name": "Research Assistant",
-        "model": "openai|gpt-5",
         "preset": "write",
         // Short id — exercises the #1052 normalization end-to-end: the tool
         // must resolve this to "{agent_did}:profile-1" before admission sees it.
-        "profile_id": "profile-1",
+        "profile_id": profile_id,
     })
     .to_string();
 
@@ -426,9 +319,13 @@ async fn persona_create_authors_row_and_applies_after_manual_tick() {
     let behaviors = crate::list_agent_behaviors(&node, &agent_did)
         .await
         .expect("list behaviors");
-    assert_eq!(behaviors.len(), 1, "exactly one behavior materialized");
+    let created: Vec<_> = behaviors
+        .iter()
+        .filter(|behavior| behavior.behavior_id != "seed")
+        .collect();
+    assert_eq!(created.len(), 1, "exactly one new behavior materialized");
     assert_eq!(
-        behaviors[0].display_name,
+        created[0].display_name,
         Some("Research Assistant".to_string())
     );
 
@@ -448,72 +345,9 @@ async fn persona_clone_accepts_sibling_behavior_id() {
     let node = build_persona_node().await;
     let identity = persona_identity("persona-clone");
     let agent_did = identity.did().to_string();
-    let access = crate::config_client::ConfigAccess::Local(node.clone());
-
-    let seed = format!(
-        r#"mutation {{
-            create_AgentPrincipal(input: {{
-                agent_did: "{agent_did}",
-                display_name: "Persona Clone Agent",
-                enabled: true,
-                created_at: "2026-07-23T00:00:00Z"
-            }}) {{ _docID }}
-            create_InferenceBackend(input: {{
-                backend_id: "openai",
-                name: "OpenAI",
-                provider_kind: "OpenAiCompatible",
-                enabled: true,
-                models: ["gpt-5"]
-            }}) {{ _docID }}
-            create_InferenceProfile(input: {{
-                profile_id: "{agent_did}:profile-1",
-                display_name: "Fast"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&seed).await;
-    assert!(!response.has_errors(), "seed failed: {:?}", response.errors);
-
-    // A sibling behavior/selection this agent already owns — cloning FROM a
-    // sibling of the same principal is the whole point of this tool. Seeded
-    // with the agent-DID-qualified id real behavior ids carry, so the short
-    // "sibling-behavior" passed as clone_from below exercises #1052's
-    // normalization end-to-end.
-    let sibling_selection = crate::document_config::ToolSelectionDocument {
-        selection_id: "sel-sibling".to_string(),
-        agent_did: agent_did.to_string(),
-        enable_bash: Some(true),
-        bash_mode: Some("ReadOnly".to_string()),
-        enable_file_tools: Some(true),
-        file_tools_mode: Some("ReadOnly".to_string()),
-        ..Default::default()
-    };
-    crate::config_client::write_tool_selection_document(&access, &sibling_selection)
-        .await
-        .expect("seed sibling selection");
-    let qualified_sibling_id = format!("{agent_did}:sibling-behavior");
-    let sibling_behavior = crate::AgentBehaviorDocument {
-        behavior_id: qualified_sibling_id.clone(),
-        agent_did: agent_did.to_string(),
-        display_name: None,
-        description: None,
-        summary: None,
-        system_prompt: None,
-        request_context_template: None,
-        backend_id: None,
-        model_name: None,
-        tool_selection_id: Some("sel-sibling".to_string()),
-        inference_profile_id: None,
-        compaction_strategy: None,
-        compaction_threshold: None,
-        enabled: true,
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        created_at: None,
-    };
-    crate::config_client::write_agent_behavior_document(&access, &sibling_behavior)
-        .await
-        .expect("seed sibling behavior");
+    let qualified_sibling_id = "sibling-behavior".to_owned();
+    crate::test_support::install_test_behavior(&node, &agent_did, &qualified_sibling_id).await;
+    let profile_id = "sibling-behavior:inference";
 
     let tools = build_self_config_tools(
         node.clone(),
@@ -528,8 +362,7 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         // Short id — exercises #1052 normalization: the tool must resolve
         // this to `qualified_sibling_id` before admission sees it.
         "clone_from": "sibling-behavior",
-        "model": "openai|gpt-5",
-        "profile_id": "profile-1",
+        "profile_id": profile_id,
     })
     .to_string();
     let call_handle = tokio::spawn(async move { tool.call(args).await });
@@ -570,4 +403,169 @@ async fn persona_clone_accepts_sibling_behavior_id() {
         .expect("tool call task joins")
         .expect("configure_persona clone call succeeds");
     assert!(output.contains("\"status\": \"applied\""), "{output}");
+}
+
+#[tokio::test]
+async fn canonical_self_config_preview_and_apply_preserve_scope_and_reject_lockout() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("canonical-self-config");
+    let other = persona_identity("other-self-config");
+    let owner = identity.did().to_string();
+    let foreign = other.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "same").await;
+    crate::test_support::install_test_behavior(&node, &foreign, "same").await;
+    crate::test_support::install_test_behavior(&node, &owner, "unconfigured").await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "same".into()).unwrap();
+    let patch = vec![(
+        "self_config".into(),
+        Some(json!({"enable_self_config":true})),
+    )];
+    let preview = core
+        .preview(tools_request(&core, patch.clone()))
+        .await
+        .unwrap();
+    assert!(!preview.committed);
+    let read = core
+        .read_effective_config(&BTreeSet::new(), false, true)
+        .await
+        .unwrap();
+    assert!(read["documents"]["Tools"]["self_config"].is_null());
+    core.apply(tools_request(&core, patch)).await.unwrap();
+    let guarded = core.clone().with_no_lockout(true);
+    assert!(guarded
+        .apply(tools_request(&guarded, vec![("self_config".into(), None)]))
+        .await
+        .is_err());
+    assert!(guarded
+        .preview(behavior_request(
+            &guarded,
+            vec![("context_id".into(), Some(json!("unconfigured:context")))]
+        ))
+        .await
+        .is_err());
+    assert!(core
+        .apply(anchored_request(
+            SelfConfigTarget::AgentContext,
+            "context_id",
+            vec![("tools_id".into(), Some(json!("missing")))]
+        ))
+        .await
+        .is_err());
+    assert!(core
+        .preview(tools_request(
+            &core,
+            vec![("host".into(), Some(json!({"unexpected":true})))]
+        ))
+        .await
+        .is_err());
+    let own = core
+        .read_effective_config(&BTreeSet::new(), true, true)
+        .await
+        .unwrap();
+    assert_eq!(own["context"]["tools_id"], "same:tools");
+    assert_eq!(
+        own["documents"]["Tools"]["self_config"]["enable_self_config"],
+        true
+    );
+    let foreign_core = SelfConfigCore::new(node.clone(), foreign, "same".into()).unwrap();
+    let foreign_read = foreign_core
+        .read_effective_config(&BTreeSet::new(), false, false)
+        .await
+        .unwrap();
+    assert!(foreign_read["documents"]["Tools"]["self_config"].is_null());
+}
+
+#[tokio::test]
+async fn backend_self_config_protects_raw_keys_in_writes_reads_and_diffs() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("self-config-secret");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "secret").await;
+    let core = SelfConfigCore::new(node.clone(), owner.clone(), "secret".into()).unwrap();
+    let raw = vec![(
+        "auth".into(),
+        Some(json!({"kind":"api_key","key":"do-not-expose"})),
+    )];
+    assert!(core.preview(backend_request(raw.clone())).await.is_err());
+    assert!(core.apply(backend_request(raw)).await.is_err());
+    let owner = escape_graphql_string(&owner);
+    let response=node.execute(&format!(r#"mutation {{update_InferenceBackend(filter:{{agent_did:{{_eq:"{owner}"}},backend_id:{{_eq:"secret:backend"}}}},input:{{auth:{{kind:"api_key",key:"operator-secret"}}}}) {{_docID}}}}"#)).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    // Lean authPatchAllowed permits preserving an existing raw key exactly.
+    core.preview(backend_request(vec![(
+        "auth".into(),
+        Some(json!({"kind":"api_key","key":"operator-secret"})),
+    )]))
+    .await
+    .unwrap();
+    assert!(core
+        .apply(backend_request(vec![(
+            "auth".into(),
+            Some(json!({"kind":"api_key","key":"replacement-secret"}))
+        )]))
+        .await
+        .is_err());
+    let read = core
+        .read_effective_config(&BTreeSet::new(), false, true)
+        .await
+        .unwrap();
+    assert!(!read.to_string().contains("operator-secret"));
+    let patch = vec![(
+        "auth".into(),
+        Some(json!({"kind":"environment","variable":"GENTS_TEST_KEY_REFERENCE"})),
+    )];
+    let preview = core.preview(backend_request(patch)).await.unwrap();
+    assert!(!serde_json::to_string(&preview)
+        .unwrap()
+        .contains("operator-secret"));
+}
+
+#[tokio::test]
+async fn explicit_tools_grant_preserves_lsp_settings_guard_for_preview_and_apply() {
+    let node = build_persona_node().await;
+    let identity = persona_identity("self-config-lsp-guard");
+    let owner = identity.did().to_string();
+    crate::test_support::install_test_behavior(&node, &owner, "beh-test").await;
+    let tools = build_self_config_tools(node, owner, None, &config(&["tools"]));
+    let configure = tools
+        .iter()
+        .find(|tool| tool.name() == CONFIGURE_TOOLS_TOOL_NAME)
+        .unwrap();
+    let inspect = tools
+        .iter()
+        .find(|tool| tool.name() == GET_MY_CONFIG_TOOL_NAME)
+        .unwrap();
+    let safe = json!({"integrations":{"lsp":{"config":json!({"servers":{"rust-analyzer":{"disabled":true,"priority":2}}}).to_string()}}});
+    inspect
+        .call(json!({"preview":{"category":"tools","patch":safe}}).to_string())
+        .await
+        .unwrap();
+    configure
+        .call(json!({"patch":safe}).to_string())
+        .await
+        .unwrap();
+    let baseline: Value = serde_json::from_str(&inspect.call("{}".into()).await.unwrap()).unwrap();
+    assert_eq!(
+        baseline["documents"]["Tools"]["integrations"],
+        safe["integrations"]
+    );
+    for field in ["settings", "init_options", "initOptions"] {
+        let server = json!({field:{"check":{"overrideCommand":["custom-check"]}}});
+        let raw = json!({"servers":{"rust-analyzer":server}}).to_string();
+        // Operator configuration keeps its existing broader admission.
+        crate::toolset::lsp::LspConfigDocument::parse_operator(Some(&raw)).unwrap();
+        let patch = json!({"integrations":{"lsp":{"config":raw}}});
+        let preview = inspect
+            .call(json!({"preview":{"category":"tools","patch":patch}}).to_string())
+            .await
+            .unwrap_err();
+        assert!(preview.to_string().contains(field), "{preview}");
+        let apply = configure
+            .call(json!({"patch":patch}).to_string())
+            .await
+            .unwrap_err();
+        assert!(apply.to_string().contains(field), "{apply}");
+        let after: Value = serde_json::from_str(&inspect.call("{}".into()).await.unwrap()).unwrap();
+        assert_eq!(after["documents"]["Tools"], baseline["documents"]["Tools"]);
+    }
 }

@@ -101,7 +101,14 @@ async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel +
     model: Arc<M>,
     config: crate::agent::loop_stream::LoopConfig,
 ) -> Result<()> {
-    if !session::conversation_needs_generated_title(&node, &request.session_id).await? {
+    if !session::session_needs_generated_title(
+        &node,
+        behavior_did,
+        request.requester_did.as_deref(),
+        &request.session_id,
+    )
+    .await?
+    {
         return Ok(());
     }
 
@@ -117,11 +124,13 @@ async fn maybe_generate_conversation_title<M: rig::completion::CompletionModel +
     let prompt = title_generation_prompt(&request.content, &recent_titles);
     let title = generate_title_with_fallback(&request, model, config, prompt).await;
 
-    session::update_conversation_title_with_source(
+    session::update_session_title_with_source(
         &node,
+        behavior_did,
+        request.requester_did.as_deref(),
         &request.session_id,
         &title,
-        session::CONVERSATION_TITLE_SOURCE_GENERATED,
+        gents_protocol::session::SessionTitleSource::Generated,
     )
     .await?;
 

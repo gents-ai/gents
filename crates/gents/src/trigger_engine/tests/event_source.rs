@@ -56,6 +56,13 @@ fn resolved_event_trigger_with_filter(
     }
 }
 
+fn event_test_behavior() -> Arc<AgentBehavior> {
+    static BEHAVIOR: std::sync::OnceLock<Arc<AgentBehavior>> = std::sync::OnceLock::new();
+    BEHAVIOR
+        .get_or_init(|| integration_test_behavior("general"))
+        .clone()
+}
+
 /// Build an `ActiveRuntimeSnapshot` carrying the supplied event triggers and
 /// no other live state. Mirrors `snapshot_with_schedules` for the event-source
 /// tests.
@@ -65,12 +72,15 @@ fn snapshot_with_event_triggers(
 ) -> Arc<ActiveRuntimeSnapshot> {
     let resolved = ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
         "general".to_string(),
-        vec![integration_test_behavior("general")],
+        vec![event_test_behavior()],
         HashMap::new(),
         HashMap::new(),
         HashMap::new(),
     )
-    .with_event_triggers(triggers, HashSet::new())
+    .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+        event_triggers: triggers,
+        ..Default::default()
+    })
     .with_principal(stub_principal());
     Arc::new(resolved.activate(generation, HashMap::new()))
 }
@@ -363,22 +373,25 @@ async fn per_group_timeout_uses_durable_first_seen_clock() {
         group_min_count: 1,
         ..resolved_event_trigger("durable-group-trigger", "DurableGroupMember", task)
     };
-    let (group_key, trigger_config_key) = EventSource::group_state_keys(&trigger, "run-old");
+    let (group_key, trigger_config_key) =
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-old");
     let first_seen_at =
         (Utc::now() - ChronoDuration::seconds(120)).to_rfc3339_opts(SecondsFormat::Millis, true);
     let mutation = format!(
         r#"mutation {{
-            create_EventTriggerGroupState(input: {{
+            create_EventGroupState(input: {{
                 group_key: "{}"
-                trigger_id: "durable-group-trigger"
+                agent_did: "{owner}"
+                consumer: {{kind:"trigger",trigger_id:"durable-group-trigger"}}
                 correlation: "run-old"
-                trigger_config_key: "{}"
+                consumer_config_key: "{}"
                 first_seen_at: "{}"
             }}) {{ _docID }}
         }}"#,
         escape_graphql_string(&group_key),
         escape_graphql_string(&trigger_config_key),
         escape_graphql_string(&first_seen_at),
+        owner = escape_graphql_string(event_test_behavior().agent_did()),
     );
     let response = node.execute(&mutation).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
@@ -722,8 +735,8 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let response = node
         .execute(
             r#"query {
-                EventTriggerGroupState(
-                    filter: { trigger_id: { _eq: "quiesced-group-trigger" } }
+                EventGroupState(
+                    limit: 2
                 ) { quiesced_at quiesced_reason }
             }"#,
         )
@@ -732,7 +745,7 @@ async fn invalid_group_is_durably_quiesced_and_pruned_after_restart() {
     let row = response
         .data
         .as_ref()
-        .and_then(|data| data.get("EventTriggerGroupState"))
+        .and_then(|data| data.get("EventGroupState"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
         .expect("durable group state");
@@ -761,19 +774,20 @@ fn group_state_identity_changes_only_with_membership_definition() {
         expected_count: Some(2),
         ..resolved_event_trigger("group-trigger", "GroupMember", task)
     };
-    let initial = EventSource::group_state_keys(&trigger, "run-a");
+    let initial =
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a");
 
     trigger.task.prompt_template = "changed prompt".into();
     trigger.expected_count = Some(3);
     assert_eq!(
-        EventSource::group_state_keys(&trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
         initial,
         "task and policy changes must not restart a group's first-seen clock",
     );
 
     trigger.filter = Some(r#"{ kind: { _eq: "include" } }"#.into());
     assert_ne!(
-        EventSource::group_state_keys(&trigger, "run-a"),
+        EventSource::group_state_keys(event_test_behavior().agent_did(), &trigger, "run-a"),
         initial,
         "membership filter changes must use fresh recovery state",
     );
@@ -1072,7 +1086,7 @@ async fn event_source_hydrates_doc_vars_from_source_doc_fields() {
     cancel.cancel();
 }
 
-/// Helper: create an `EventTrigger` document keyed by `trigger_id` via a raw
+/// Helper: create an `Trigger` document keyed by `trigger_id` via a raw
 /// GraphQL mutation, matching the shape used by the CLI apply path and the
 /// `schedule_snapshot_reconcile` integration test. The `fire_count: 0` seed
 /// is required so the runtime's `fire_count += 1` increment has a value to
@@ -1083,28 +1097,32 @@ async fn create_event_trigger_doc(
     task_id: &str,
     source_collection: &str,
 ) {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventTrigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                task_id: "{escaped_task_id}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "created",
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
+    let input = serde_json::json!({"agent_did":event_test_behavior().agent_did(),"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":source_collection},"enabled":true,"concurrency":"serial","fire_count":0});
+    crate::config_client::ConfigAccess::transact_local(node, None, "test.trigger_fixture", |txn| {
+        let input = &input;
+        Box::pin(async move {
+            txn.execute_with_variables(
+                "mutation($input:TriggerMutationInputArg!){create_Trigger(input:$input){_docID}}",
+                &serde_json::json!({"input":input}),
+            )
+            .await?;
+            Ok(())
+        })
+    })
+    .await
+    .unwrap();
+}
+
+async fn observed_trigger(node: &defra_node::EmbeddedNode, id: &str) -> serde_json::Value {
+    let query = format!(
+        "{{Trigger(filter:{{agent_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}},limit:2){{task_id source enabled concurrency last_status last_error last_attempt_at last_fired_source_doc_id fire_count}}}}",
+        escape_graphql_string(event_test_behavior().agent_did()),
+        escape_graphql_string(id)
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create EventTrigger failed: {:?}",
-        response.errors,
-    );
+    let response = node.execute(&query).await;
+    let rows = crate::graphql::rows::<serde_json::Value>(&response, "Trigger").unwrap();
+    assert_eq!(rows.len(), 1, "scoped trigger disappeared or is ambiguous");
+    rows[0].clone()
 }
 
 /// Task 22: a Fired result dispatched through the `on_result` callback must
@@ -1129,7 +1147,7 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
         .await
         .expect("add_schema for WebhookEvent");
 
-    // Seed the EventTrigger doc so `update_event_trigger_runtime_fields` has
+    // Seed the Trigger doc so `update_trigger_runtime_fields` has
     // a row to write back against. Apply-path fields are set here; the
     // runtime writeback must leave them alone.
     create_event_trigger_doc(
@@ -1196,40 +1214,39 @@ async fn event_source_on_result_writes_runtime_fields_on_fired() {
     let mut fired_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-fired")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("fired") {
+        let trig = observed_trigger(node.as_ref(), "trigger-fired").await;
+        if trig["last_status"].as_str() == Some("fired") {
             fired_trigger = Some(trig);
             break;
         }
     }
-    let fired = fired_trigger.expect("EventTrigger.last_status never became \"fired\"");
-    assert_eq!(fired.last_status.as_deref(), Some("fired"));
-    assert_eq!(fired.fire_count, Some(1));
+    let fired = fired_trigger.expect("Trigger.last_status never became \"fired\"");
+    assert_eq!(fired["last_status"].as_str(), Some("fired"));
+    assert_eq!(fired["fire_count"].as_i64(), Some(1));
     assert_eq!(
-        fired.last_fired_source_doc_id.as_deref(),
+        fired["last_fired_source_doc_id"].as_str(),
         Some(fired_source_doc_id.as_str()),
         "last_fired_source_doc_id should match the source doc id carried \
          by the intent",
     );
     assert!(
-        fired.last_attempt_at.is_some(),
+        fired["last_attempt_at"].as_str().is_some(),
         "last_attempt_at should be set after a fire",
     );
     assert_eq!(
-        fired.last_error, None,
+        fired["last_error"],
+        serde_json::Value::Null,
         "last_error must be cleared on a successful fire",
     );
     // Apply-owned fields must not be clobbered by the runtime writeback.
-    assert_eq!(fired.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(fired.source_collection.as_deref(), Some("WebhookEvent"));
-    assert_eq!(fired.event_kind.as_deref(), Some("created"));
-    assert_eq!(fired.enabled, Some(true));
-    assert_eq!(fired.concurrency.as_deref(), Some("serial"));
+    assert_eq!(fired["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(
+        fired["source"]["event_source_id"].as_str(),
+        Some("WebhookEvent")
+    );
+    assert_eq!(fired["source"]["kind"].as_str(), Some("event"));
+    assert_eq!(fired["enabled"].as_bool(), Some(true));
+    assert_eq!(fired["concurrency"].as_str(), Some("serial"));
 
     cancel.cancel();
 }
@@ -1324,39 +1341,34 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut skipped_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("skipped") {
+        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        if trig["last_status"].as_str() == Some("skipped") {
             skipped_trigger = Some(trig);
             break;
         }
     }
-    let skipped = skipped_trigger.expect("EventTrigger.last_status never became \"skipped\"");
-    assert_eq!(skipped.last_status.as_deref(), Some("skipped"));
+    let skipped = skipped_trigger.expect("Trigger.last_status never became \"skipped\"");
+    assert_eq!(skipped["last_status"].as_str(), Some("skipped"));
     // fire_count MUST NOT advance on skip.
-    assert_eq!(skipped.fire_count, Some(0));
+    assert_eq!(skipped["fire_count"].as_i64(), Some(0));
     assert_eq!(
-        skipped.last_error.as_deref(),
+        skipped["last_error"].as_str(),
         Some("serial: prior fire still in-flight"),
         "last_error should carry the skip reason for operator visibility",
     );
     assert!(
-        skipped.last_attempt_at.is_some(),
+        skipped["last_attempt_at"].as_str().is_some(),
         "last_attempt_at should be set on a skip",
     );
     assert_eq!(
-        skipped.last_fired_source_doc_id.as_deref(),
+        skipped["last_fired_source_doc_id"].as_str(),
         Some(source_doc_id.as_str()),
         "last_fired_source_doc_id should record the candidate even on skip",
     );
     // Apply-owned fields intact.
-    assert_eq!(skipped.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(skipped.enabled, Some(true));
-    assert_eq!(skipped.concurrency.as_deref(), Some("serial"));
+    assert_eq!(skipped["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(skipped["enabled"].as_bool(), Some(true));
+    assert_eq!(skipped["concurrency"].as_str(), Some("serial"));
 
     // ---- Errored phase ----
     // Drive the same writeback path with an Errored result. The helper is
@@ -1364,6 +1376,7 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     // exactly the path the `on_result` closure takes internally.
     EventSource::spawn_runtime_field_write(
         node.clone(),
+        event_test_behavior().agent_did().to_owned(),
         trigger_id.clone(),
         source_doc_id.clone(),
         FireResult::Errored {
@@ -1374,30 +1387,25 @@ async fn event_source_on_result_writes_runtime_fields_on_skipped_or_errored() {
     let mut errored_trigger = None;
     for _ in 0..40 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let records = list_event_trigger_records(node.as_ref()).await.unwrap();
-        let (_doc_id, trig) = records
-            .iter()
-            .find(|(_d, t)| t.trigger_id == "trigger-skip-err")
-            .cloned()
-            .expect("EventTrigger doc disappeared");
-        if trig.last_status.as_deref() == Some("error") {
+        let trig = observed_trigger(node.as_ref(), "trigger-skip-err").await;
+        if trig["last_status"].as_str() == Some("error") {
             errored_trigger = Some(trig);
             break;
         }
     }
-    let errored = errored_trigger.expect("EventTrigger.last_status never became \"error\"");
-    assert_eq!(errored.last_status.as_deref(), Some("error"));
+    let errored = errored_trigger.expect("Trigger.last_status never became \"error\"");
+    assert_eq!(errored["last_status"].as_str(), Some("error"));
     // fire_count MUST still not advance on error.
-    assert_eq!(errored.fire_count, Some(0));
+    assert_eq!(errored["fire_count"].as_i64(), Some(0));
     assert_eq!(
-        errored.last_error.as_deref(),
+        errored["last_error"].as_str(),
         Some("materializer failed: backend timeout"),
         "last_error should carry the failure string on Errored",
     );
     // Apply-owned fields intact.
-    assert_eq!(errored.task_id.as_deref(), Some("task-webhook"));
-    assert_eq!(errored.enabled, Some(true));
-    assert_eq!(errored.concurrency.as_deref(), Some("serial"));
+    assert_eq!(errored["task_id"].as_str(), Some("task-webhook"));
+    assert_eq!(errored["enabled"].as_bool(), Some(true));
+    assert_eq!(errored["concurrency"].as_str(), Some("serial"));
 
     cancel.cancel();
 }

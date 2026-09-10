@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::completion_retry::CompletionRetryProfileFields;
-use crate::compaction::CompactionStrategy;
 use crate::config::SamplingConfig;
 use crate::identity::{AgentIdentity, AgentPrincipal, KeyIdentity};
 use crate::tool_surface::BehaviorToolConfig;
@@ -15,16 +14,11 @@ fn request() -> AgentRequest {
         request_id: "request-123".to_string(),
         agent_did: String::new(),
         requester_did: None,
-        behavior_id: Some("behavior-test".to_owned()),
+        behavior_id: "behavior-test".to_owned(),
         session_id: "session-456".to_string(),
         content: String::new(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: Some("interactive".to_string()),
         created_at: String::new(),
         deadline: None,
@@ -42,8 +36,8 @@ fn request() -> AgentRequest {
         caused_by_correlation: None,
         caused_by_trigger_context: None,
         workspace_id: None,
+        workspace_owner_agent_did: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
         workspace_seal_hash: None,
     }
 }
@@ -405,17 +399,16 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> AgentB
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
+        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: crate::config::DEFAULT_MODEL_NAME.to_string(),
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: "system".to_string(),
-        request_context_template: None,
         tools: BehaviorToolConfig::meta_only(),
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: CompactionStrategy::StripThenSummarize,
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -434,7 +427,7 @@ fn runtime_budget_construction_preserves_zero_and_rejects_negative_values() {
         let error = parse_aggregate_token_limit(Some(invalid))
             .err()
             .expect("negative aggregate budget must be rejected");
-        assert!(error.to_string().contains("must be a positive integer"));
+        assert!(error.to_string().contains("must not be negative"));
     }
 
     assert_eq!(parse_aggregate_token_limit(None).unwrap(), None);

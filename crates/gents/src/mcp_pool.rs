@@ -196,7 +196,8 @@ impl ResumeStatsRegistry {
 
 #[derive(Clone)]
 pub struct McpPool {
-    inner: Arc<RwLock<HashMap<String, McpConnection>>>,
+    owner_agent_did: Option<String>,
+    inner: Arc<RwLock<HashMap<ParkKey, Arc<McpConnection>>>>,
     connect_fn: Arc<ConnectFn>,
     trace_context_headers_fn: Arc<TraceContextHeadersFn>,
     idle_ttl: Option<std::time::Duration>,
@@ -212,6 +213,7 @@ pub struct McpPool {
 /// failure partition.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ParkKey {
+    owner_agent_did: Option<String>,
     service_id: String,
     endpoint: String,
     agent_did_header: Option<String>,
@@ -220,6 +222,7 @@ struct ParkKey {
 impl ParkKey {
     fn new(service_id: &str, endpoint: &str, agent_did_header: Option<&str>) -> Self {
         Self {
+            owner_agent_did: None,
             service_id: service_id.to_string(),
             endpoint: endpoint.to_string(),
             agent_did_header: agent_did_header.map(ToOwned::to_owned),
@@ -274,6 +277,7 @@ impl McpPool {
     pub fn new() -> Self {
         let resume_stats = ResumeStatsRegistry::default();
         Self {
+            owner_agent_did: None,
             inner: Arc::new(RwLock::new(HashMap::new())),
             connect_fn: default_connect_fn(resume_stats.clone()),
             trace_context_headers_fn: Arc::new(crate::runtime_trace::current_trace_context_headers),
@@ -281,6 +285,19 @@ impl McpPool {
             resume_stats,
             park: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Bind the cache/parking namespace independently of outbound header policy.
+    pub fn for_agent(&self, agent_did: &str) -> Self {
+        let mut pool = self.clone();
+        pool.owner_agent_did = Some(agent_did.to_string());
+        pool
+    }
+
+    fn scoped_key(&self, service: &str, endpoint: &str, header: Option<&str>) -> ParkKey {
+        let mut key = ParkKey::new(service, endpoint, header);
+        key.owner_agent_did = self.owner_agent_did.clone();
+        key
     }
 
     pub fn with_idle_ttl(mut self, ttl: std::time::Duration) -> Self {
@@ -302,6 +319,7 @@ impl McpPool {
         Fut: Future<Output = Result<McpConnection>> + Send + 'static,
     {
         Self {
+            owner_agent_did: None,
             inner: Arc::new(RwLock::new(HashMap::new())),
             connect_fn: Arc::new(
                 move |service_id, endpoint, agent_did_header, trace_headers| {
@@ -335,10 +353,25 @@ impl McpPool {
         F: Fn(String, String) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
     {
+        Self::new_with_tool_handlers(handler, |_| async {
+            anyhow::bail!("call_tool was not expected")
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_tool_handlers<F, Fut, C, CFut>(handler: F, call: C) -> Self
+    where
+        F: Fn(String, String) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<ListToolsResult>> + Send + 'static,
+        C: Fn(CallToolRequestParams) -> CFut + Send + Sync + 'static,
+        CFut: Future<Output = Result<CallToolResult>> + Send + 'static,
+    {
+        let call = Arc::new(call);
         let handler = Arc::new(handler);
         Self::new_with_connector(
             move |service_id, endpoint, agent_did_header, trace_headers| {
                 let handler = Arc::clone(&handler);
+                let call = Arc::clone(&call);
                 async move {
                     let service_id_for_list = service_id.clone();
                     let endpoint_for_list = endpoint.clone();
@@ -354,8 +387,9 @@ impl McpPool {
                             let endpoint = endpoint_for_list.clone();
                             Box::pin(async move { handler(service_id, endpoint).await })
                         }),
-                        call_tool_fn: Box::new(|_params| {
-                            Box::pin(async { anyhow::bail!("call_tool was not expected") })
+                        call_tool_fn: Box::new(move |params| {
+                            let call = Arc::clone(&call);
+                            Box::pin(async move { call(params).await })
                         }),
                     })
                 }
@@ -374,10 +408,38 @@ impl McpPool {
         endpoint: &str,
         agent_did: Option<&str>,
     ) -> Result<ListToolsResult> {
+        self.list_tools_with_limits(
+            service_id,
+            endpoint,
+            agent_did,
+            MCP_CONNECT_TIMEOUT,
+            MCP_LIST_TOOLS_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn list_tools_with_limits(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        agent_did: Option<&str>,
+        connect_timeout: std::time::Duration,
+        discovery_timeout: std::time::Duration,
+    ) -> Result<ListToolsResult> {
         async {
-            self.get_or_connect(service_id, endpoint, agent_did, ParkAdmission::Normal)
+            let connection = self
+                .get_or_connect(
+                    service_id,
+                    endpoint,
+                    agent_did,
+                    ParkAdmission::Normal,
+                    connect_timeout,
+                )
                 .await?;
-            match self.list_tools_once(service_id).await {
+            match self
+                .list_tools_once(service_id, &connection, discovery_timeout)
+                .await
+            {
                 Ok(result) => {
                     tracing::Span::current().record("tool_count", result.tools.len() as i64);
                     Ok(result)
@@ -390,14 +452,18 @@ impl McpPool {
                         "MCP list_tools failed, evicting connection and retrying"
                     );
                     self.remove(service_id).await;
-                    self.get_or_connect(
-                        service_id,
-                        endpoint,
-                        agent_did,
-                        ParkAdmission::SafeReadRetry,
-                    )
-                    .await?;
-                    let result = self.list_tools_once(service_id).await?;
+                    let connection = self
+                        .get_or_connect(
+                            service_id,
+                            endpoint,
+                            agent_did,
+                            ParkAdmission::SafeReadRetry,
+                            connect_timeout,
+                        )
+                        .await?;
+                    let result = self
+                        .list_tools_once(service_id, &connection, discovery_timeout)
+                        .await?;
                     tracing::Span::current().record("tool_count", result.tools.len() as i64);
                     Ok(result)
                 }
@@ -442,12 +508,39 @@ impl McpPool {
         arguments: serde_json::Value,
         agent_did: Option<&str>,
     ) -> Result<CallToolResult> {
+        self.call_tool_with_connect_timeout(
+            service_id,
+            endpoint,
+            tool_name,
+            arguments,
+            agent_did,
+            MCP_CONNECT_TIMEOUT,
+        )
+        .await
+    }
+
+    pub async fn call_tool_with_connect_timeout(
+        &self,
+        service_id: &str,
+        endpoint: &str,
+        tool_name: &str,
+        arguments: serde_json::Value,
+        agent_did: Option<&str>,
+        connect_timeout: std::time::Duration,
+    ) -> Result<CallToolResult> {
         let argument_count = argument_count(&arguments);
         async {
-            self.get_or_connect(service_id, endpoint, agent_did, ParkAdmission::Normal)
+            let connection = self
+                .get_or_connect(
+                    service_id,
+                    endpoint,
+                    agent_did,
+                    ParkAdmission::Normal,
+                    connect_timeout,
+                )
                 .await?;
             let result = self
-                .call_tool_once(service_id, build_call_tool_params(tool_name, arguments))
+                .call_tool_once(&connection, build_call_tool_params(tool_name, arguments))
                 .await;
             if let Ok(result) = &result {
                 tracing::Span::current()
@@ -469,46 +562,35 @@ impl McpPool {
 
     pub async fn remove(&self, service_id: &str) {
         let mut guard = self.inner.write().await;
-        guard.remove(service_id);
+        guard.retain(|key, _| {
+            key.service_id != service_id || key.owner_agent_did != self.owner_agent_did
+        });
     }
 
-    async fn list_tools_once(&self, service_id: &str) -> Result<ListToolsResult> {
-        // The closure's future owns an Arc of the client, so it can be
-        // awaited after the guard drops — a slow list call must not hold the
-        // pool lock and block unrelated services (#622).
-        let list_tools = {
-            let guard = self.inner.read().await;
-            let conn = guard
-                .get(service_id)
-                .context("connection disappeared after get_or_connect")?;
-            (conn.list_tools_fn)()
-        };
-        tokio::time::timeout(MCP_LIST_TOOLS_TIMEOUT, list_tools)
+    async fn list_tools_once(
+        &self,
+        service_id: &str,
+        connection: &McpConnection,
+        timeout: std::time::Duration,
+    ) -> Result<ListToolsResult> {
+        tokio::time::timeout(timeout, (connection.list_tools_fn)())
             .await
             .map_err(|_| {
                 anyhow::anyhow!(
                     "MCP list_tools on '{service_id}' timed out after {}s",
-                    MCP_LIST_TOOLS_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )
             })?
     }
 
     async fn call_tool_once(
         &self,
-        service_id: &str,
+        connection: &McpConnection,
         params: CallToolRequestParams,
     ) -> Result<CallToolResult> {
-        // No pool-level timeout here — tool calls are bounded by the caller's
-        // health-keyed budget (meta_tools/call.rs). The guard still must not
-        // be held across the await (#622).
-        let call_tool = {
-            let guard = self.inner.read().await;
-            let conn = guard
-                .get(service_id)
-                .context("connection disappeared after get_or_connect")?;
-            (conn.call_tool_fn)(params)
-        };
-        call_tool.await
+        // The caller owns the call deadline. The exact scoped connection stays
+        // pinned through dispatch even if another request updates the cache.
+        (connection.call_tool_fn)(params).await
     }
 
     async fn get_or_connect(
@@ -517,12 +599,14 @@ impl McpPool {
         endpoint: &str,
         agent_did: Option<&str>,
         park_admission: ParkAdmission,
-    ) -> Result<()> {
+        connect_timeout: std::time::Duration,
+    ) -> Result<Arc<McpConnection>> {
+        let key = self.scoped_key(service_id, endpoint, agent_did);
         let agent_did_header = agent_did.map(ToOwned::to_owned);
         let trace_context_headers = (self.trace_context_headers_fn)();
         {
             let guard = self.inner.read().await;
-            if let Some(conn) = guard.get(service_id) {
+            if let Some(conn) = guard.get(&key) {
                 if conn.endpoint == endpoint
                     && conn.agent_did_header == agent_did_header
                     && conn.trace_context_headers == trace_context_headers
@@ -530,7 +614,7 @@ impl McpPool {
                     && !conn.resume_poisoned()
                 {
                     conn.touch();
-                    return Ok(());
+                    return Ok(Arc::clone(conn));
                 }
             }
         }
@@ -541,7 +625,7 @@ impl McpPool {
         let mut poison_detected_for_key = None;
         {
             let mut guard = self.inner.write().await;
-            if let Some(conn) = guard.get(service_id) {
+            if let Some(conn) = guard.get(&key) {
                 let old_endpoint = conn.endpoint.clone();
                 let old_agent_did_header = conn.agent_did_header.clone();
                 let endpoint_changed = conn.endpoint != endpoint;
@@ -556,7 +640,7 @@ impl McpPool {
                     && !resume_poisoned
                 {
                     conn.touch();
-                    return Ok(());
+                    return Ok(Arc::clone(conn));
                 }
                 tracing::info!(
                     service_id,
@@ -574,7 +658,9 @@ impl McpPool {
                         .stats_for(service_id)
                         .session_reinits
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    guard.remove(service_id);
+                    guard.retain(|key, _| {
+                        key.service_id != service_id || key.owner_agent_did != self.owner_agent_did
+                    });
                     poison_detected_for_key = Some((old_endpoint, old_agent_did_header));
                 }
             }
@@ -599,7 +685,7 @@ impl McpPool {
 
         tracing::info!(service_id, endpoint, "connecting MCP client");
         let connection = match tokio::time::timeout(
-            MCP_CONNECT_TIMEOUT,
+            connect_timeout,
             (self.connect_fn)(
                 service_id.to_string(),
                 endpoint.to_string(),
@@ -613,7 +699,7 @@ impl McpPool {
                 self.record_connect_failure(service_id, endpoint, park_agent_did_header.as_deref());
                 anyhow::bail!(
                     "MCP connect to '{service_id}' ({endpoint}) timed out after {}s",
-                    MCP_CONNECT_TIMEOUT.as_secs()
+                    connect_timeout.as_secs()
                 );
             }
             Ok(Err(error)) => {
@@ -624,8 +710,9 @@ impl McpPool {
         };
 
         let mut guard = self.inner.write().await;
-        guard.insert(service_id.to_string(), connection);
-        Ok(())
+        let connection = Arc::new(connection);
+        guard.insert(key, Arc::clone(&connection));
+        Ok(connection)
     }
 
     fn reserve_dial_if_struck(
@@ -636,7 +723,7 @@ impl McpPool {
         admission: ParkAdmission,
     ) -> Result<DialReservation> {
         let mut park = self.park.lock().expect("park lock");
-        let key = ParkKey::new(service_id, endpoint, agent_did_header);
+        let key = self.scoped_key(service_id, endpoint, agent_did_header);
         if let Some(state) = park.get_mut(&key) {
             let now = tokio::time::Instant::now();
             if now < state.parked_until {
@@ -704,7 +791,7 @@ impl McpPool {
         let mut park = self.park.lock().expect("park lock");
         let now = tokio::time::Instant::now();
         let state = park
-            .entry(ParkKey::new(service_id, endpoint, agent_did_header))
+            .entry(self.scoped_key(service_id, endpoint, agent_did_header))
             .or_insert_with(|| ParkState {
                 strikes: 0,
                 last_strike: now,

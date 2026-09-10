@@ -26,16 +26,11 @@ pub struct AgentRequest {
     pub request_id: String,
     pub agent_did: String,
     pub requester_did: Option<String>,
-    pub behavior_id: Option<String>,
+    pub behavior_id: String,
     pub session_id: String,
     pub content: String,
-    pub temperature: Option<f64>,
-    pub top_p: Option<f64>,
-    pub top_k: Option<i64>,
-    pub seed: Option<i64>,
-    pub max_tokens: Option<i64>,
     pub max_total_tokens: Option<i64>,
-    pub metadata: Option<String>,
+    pub input: gents_protocol::request_input::RequestInput,
     pub execution_origin: Option<String>,
     pub created_at: String,
     pub deadline: Option<String>,
@@ -53,8 +48,8 @@ pub struct AgentRequest {
     pub caused_by_correlation: Option<String>,
     pub caused_by_trigger_context: Option<String>,
     pub workspace_id: Option<String>,
+    pub workspace_owner_agent_did: Option<String>,
     pub workspace_authority: Option<String>,
-    pub workspace_owner_deployment_id: Option<String>,
     pub workspace_seal_hash: Option<String>,
 }
 
@@ -89,18 +84,15 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
                 .agent_did
                 .context("agent request is missing agent_did")?,
             requester_did: normalize_optional_string(row.requester_did),
-            behavior_id: normalize_optional_string(row.behavior_id),
+            behavior_id: row
+                .behavior_id
+                .context("agent request is missing behavior_id")?,
             session_id: row
                 .session_id
                 .context("agent request is missing session_id")?,
             content: row.content.context("agent request is missing content")?,
-            temperature: row.temperature,
-            top_p: row.top_p,
-            top_k: row.top_k,
-            seed: row.seed,
-            max_tokens: row.max_tokens,
             max_total_tokens: row.max_total_tokens,
-            metadata: row.metadata,
+            input: row.input.unwrap_or_default(),
             execution_origin: normalize_optional_string(row.execution_origin),
             created_at: row
                 .created_at
@@ -125,10 +117,8 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             caused_by_correlation: normalize_optional_string(row.caused_by_correlation),
             caused_by_trigger_context: normalize_optional_string(row.caused_by_trigger_context),
             workspace_id: normalize_optional_string(row.workspace_id),
+            workspace_owner_agent_did: row.workspace_owner_agent_did,
             workspace_authority: normalize_optional_string(row.workspace_authority),
-            workspace_owner_deployment_id: normalize_optional_string(
-                row.workspace_owner_deployment_id,
-            ),
             workspace_seal_hash: normalize_optional_string(row.workspace_seal_hash),
         };
         validate_agent_request(&request)?;
@@ -144,11 +134,12 @@ fn normalize_optional_string(value: Option<String>) -> Option<String> {
 }
 
 pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
-    if req.seed.is_some_and(|seed| seed < 0) {
-        anyhow::bail!("agent request seed must be non-negative");
-    }
-    if req.max_total_tokens.is_some_and(|limit| limit <= 0) {
-        anyhow::bail!("agent request max_total_tokens must be positive");
+    anyhow::ensure!(
+        !req.behavior_id.is_empty() && req.behavior_id.trim() == req.behavior_id,
+        "agent request behavior_id must be a canonical nonblank identifier"
+    );
+    if req.max_total_tokens.is_some_and(|limit| limit < 0) {
+        anyhow::bail!("agent request max_total_tokens must be non-negative");
     }
     let has_parent_req = req.caused_by_parent_request_id.is_some();
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
@@ -156,9 +147,14 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
     let request_only_control_link = has_parent_req
         && !has_parent_tc
-        && (is_steering_queue(req)
-            || is_goal_queue(req)
-            || crate::lifecycle::is_background_completion_request(req.metadata.as_deref()));
+        && req.input.queue.as_ref().is_some_and(|queue| {
+            matches!(
+                queue.source,
+                gents_protocol::request_input::QueueSource::Steering
+                    | gents_protocol::request_input::QueueSource::Goal
+                    | gents_protocol::request_input::QueueSource::BackgroundCompletion
+            )
+        });
     if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }
@@ -181,29 +177,6 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     Ok(())
 }
 
-fn is_steering_queue(req: &AgentRequest) -> bool {
-    let Some(metadata) = req
-        .metadata
-        .as_deref()
-        .map(str::trim)
-        .filter(|m| !m.is_empty())
-    else {
-        return false;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(metadata) else {
-        return false;
-    };
-    value
-        .get("queue")
-        .and_then(|queue| queue.get("source"))
-        .and_then(serde_json::Value::as_str)
-        == Some("steering")
-}
-
-fn is_goal_queue(req: &AgentRequest) -> bool {
-    crate::lifecycle::queue::is_goal_queue(req.metadata.as_deref())
-}
-
 pub trait Watcher: Send + Sync {
     fn next_request(
         &mut self,
@@ -213,36 +186,8 @@ pub trait Watcher: Send + Sync {
 pub struct DefraWatcher {
     node: Arc<EmbeddedNode>,
     agent_did: String,
-    local_deployment_id: Option<String>,
     subscription: events::Subscription,
     processed_request_ids: HashMap<String, Instant>,
-}
-
-/// Workspace-bound requests are claimable only on the owning HostDeployment.
-/// Unbound requests (no workspace_id / owner) keep today's behavior.
-pub fn workspace_bound_request_claimable(
-    local_deployment_id: Option<&str>,
-    workspace_id: Option<&str>,
-    workspace_owner_deployment_id: Option<&str>,
-) -> bool {
-    let workspace_id = workspace_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let owner = workspace_owner_deployment_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    if workspace_id.is_none() && owner.is_none() {
-        return true;
-    }
-    match (
-        owner,
-        local_deployment_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty()),
-    ) {
-        (Some(owner), Some(local)) => owner == local,
-        _ => false,
-    }
 }
 
 impl DefraWatcher {
@@ -259,26 +204,9 @@ impl DefraWatcher {
         Self {
             node,
             agent_did: agent_did.to_string(),
-            local_deployment_id: None,
             subscription,
             processed_request_ids: HashMap::new(),
         }
-    }
-
-    pub fn with_local_deployment_id(mut self, deployment_id: impl Into<String>) -> Self {
-        let deployment_id = deployment_id.into();
-        if !deployment_id.trim().is_empty() {
-            self.local_deployment_id = Some(deployment_id);
-        }
-        self
-    }
-
-    fn request_is_locally_claimable(&self, request: &AgentRequest) -> bool {
-        workspace_bound_request_claimable(
-            self.local_deployment_id.as_deref(),
-            request.workspace_id.as_deref(),
-            request.workspace_owner_deployment_id.as_deref(),
-        )
     }
 }
 

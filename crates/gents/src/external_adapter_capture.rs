@@ -8,8 +8,8 @@ use crate::adapter_projection::{
     validate_adapter_projection_contract, AdapterProjectionEnvelope, AdapterProjectionKind,
 };
 use crate::run_timeline::{
-    RunTimelineRows, TimelineConversationRow, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    RunTimelineRows, TimelineMessageRow, TimelineRequestRow, TimelineResponseRow,
+    TimelineSessionRow, TimelineToolCallRow,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,8 +305,7 @@ fn import_langgraph_capture(
     let lifecycle_state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(&status)
         .with_context(|| format!("invalid mapped request lifecycle state {status:?}"))?;
     let started_at = "2026-06-05T00:00:00Z";
-    let hint = langgraph_state_history_hint(capture, mapping, &session_id)
-        .context("building LangGraph state/history projection hint")?;
+    langgraph_state_history_projection(capture, mapping, &session_id)?;
     let latest_values = latest_langgraph_values(&capture.native);
     let child_request_id = langgraph_child_request_id(latest_values, mapping);
     let child_tool_call_id = latest_values
@@ -325,16 +324,6 @@ fn import_langgraph_capture(
                 .map(|_| format!("langgraph:child:{}", mapping.request_id))
         });
 
-    let root_metadata = serde_json::to_string(&json!({
-        "adapter_projection": {
-            "source_system": capture.source.system,
-            "source_package": capture.source.package,
-            "source_package_version": capture.source.package_version,
-            "scenario_id": mapping.scenario_id,
-            "langgraph_state_history": hint,
-        }
-    }))
-    .context("serializing LangGraph root metadata")?;
     let mut requests = vec![TimelineRequestRow {
         request_id: mapping.request_id.clone(),
         agent_did: mapping.agent_did.clone(),
@@ -344,7 +333,6 @@ fn import_langgraph_capture(
             .and_then(|values| values.get("topic"))
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        metadata: Some(root_metadata),
         lifecycle_state: Some(lifecycle_state),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
@@ -444,41 +432,19 @@ fn import_langgraph_capture(
         scenario_id,
         rows: RunTimelineRows {
             request: root,
-            session: Some(TimelineSessionRow {
-                session_id: session_id.clone(),
-                agent_name: mapping
-                    .agent_did
-                    .clone()
-                    .or_else(|| mapping.behavior_id.clone()),
-                behavior_id: mapping.behavior_id.clone(),
-                started: Some(started_at.to_string()),
-                status: Some(status.clone()),
-                ..Default::default()
-            }),
-            conversation: Some(TimelineConversationRow {
-                session_id,
-                agent_name: mapping
-                    .agent_did
-                    .clone()
-                    .or_else(|| mapping.behavior_id.clone()),
-                agent_did: mapping.agent_did.clone(),
-                behavior_id: mapping.behavior_id.clone(),
-                title: Some("Imported LangGraph state history".to_string()),
-                title_source: Some("external_adapter_capture".to_string()),
-                preview_text: latest_values
+            session: imported_session(
+                &session_id,
+                mapping.agent_did.as_deref(),
+                mapping.behavior_id.as_deref(),
+                started_at,
+                "Imported LangGraph state history".to_string(),
+                latest_values
                     .and_then(|values| values.get("topic"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned),
-                status: Some(status),
-                created_at: Some(started_at.to_string()),
-                updated_at: Some(timestamp_for_index(messages.len() + 1)),
-                latest_request_id: Some(mapping.request_id.clone()),
-                ..Default::default()
-            }),
+                    .and_then(Value::as_str),
+            ),
             requests,
             messages,
             tool_calls,
-            tool_approvals: Vec::new(),
             goal_versions: Vec::new(),
             inference_calls: Vec::new(),
             compactions: Vec::new(),
@@ -490,11 +456,11 @@ fn import_langgraph_capture(
     })
 }
 
-fn langgraph_state_history_hint(
+pub(crate) fn langgraph_state_history_projection(
     capture: &ExternalAdapterCapture,
     mapping: &ExternalAdapterMapping,
     session_id: &str,
-) -> Result<Value> {
+) -> Result<crate::adapter_projection::LangGraphStateHistoryProjection> {
     let latest_snapshot = capture
         .native
         .get("history")
@@ -525,7 +491,7 @@ fn langgraph_state_history_hint(
         values.insert("provider".to_string(), provider.clone());
     }
 
-    Ok(json!({
+    serde_json::from_value(json!({
         "thread_id": capture
             .native
             .get("thread_id")
@@ -545,6 +511,7 @@ fn langgraph_state_history_hint(
             .unwrap_or_else(|| json!([])),
         "tasks": langgraph_projection_tasks(&capture.native, mapping),
     }))
+    .context("decoding captured LangGraph projection")
 }
 
 fn latest_langgraph_values(native: &Value) -> Option<&serde_json::Map<String, Value>> {
@@ -873,7 +840,6 @@ fn import_multi_agent_capture(
         behavior_id: root_behavior_id.clone(),
         session_id: Some(session_id.clone()),
         content: external_task_text(&capture.native),
-        metadata: Some(root_metadata(capture, mapping)?),
         lifecycle_state: Some(lifecycle_state),
         backend_id: capture.source.package.clone(),
         created_at: Some(started_at.to_string()),
@@ -900,10 +866,6 @@ fn import_multi_agent_capture(
             content: participant
                 .and_then(|participant| participant.native_name.as_deref())
                 .map(|name| format!("Imported external participant {name}")),
-            metadata: participant
-                .map(participant_metadata)
-                .transpose()
-                .context("serializing child request participant metadata")?,
             lifecycle_state: Some(lifecycle_state),
             backend_id: capture.source.package.clone(),
             created_at: Some(started_at.to_string()),
@@ -1001,7 +963,7 @@ fn import_multi_agent_capture(
             agent_did: request.agent_did.clone(),
             behavior_id: request.behavior_id.clone(),
             session_id: Some(session_id.clone()),
-            content: Some(response_content_for_request(request, &messages)),
+            content: Some(response_content_for_request(request, &messages, mapping)),
             status: Some(status.clone()),
             materialized_message_sequence: (request.request_id == mapping.request_id)
                 .then_some(messages.len() as i64),
@@ -1037,38 +999,17 @@ fn import_multi_agent_capture(
         scenario_id,
         rows: RunTimelineRows {
             request: root,
-            session: Some(TimelineSessionRow {
-                session_id: session_id.clone(),
-                agent_name: root_agent_did
-                    .as_deref()
-                    .or(root_behavior_id.as_deref())
-                    .map(ToOwned::to_owned),
-                behavior_id: root_behavior_id.clone(),
-                started: Some(started_at.to_string()),
-                status: Some(status.clone()),
-                ..Default::default()
-            }),
-            conversation: Some(TimelineConversationRow {
-                session_id,
-                agent_name: root_agent_did
-                    .as_deref()
-                    .or(root_behavior_id.as_deref())
-                    .map(ToOwned::to_owned),
-                agent_did: root_agent_did,
-                behavior_id: root_behavior_id,
-                title: Some(format!("Imported {}", capture.source.system)),
-                title_source: Some("external_adapter_capture".to_string()),
-                preview_text: external_task_text(&capture.native),
-                status: Some(status),
-                created_at: Some(started_at.to_string()),
-                updated_at: Some(timestamp_for_index(messages.len() + 1)),
-                latest_request_id: Some(mapping.request_id.clone()),
-                ..Default::default()
-            }),
+            session: imported_session(
+                &session_id,
+                root_agent_did.as_deref(),
+                root_behavior_id.as_deref(),
+                started_at,
+                format!("Imported {}", capture.source.system),
+                external_task_text(&capture.native).as_deref(),
+            ),
             requests,
             messages,
             tool_calls,
-            tool_approvals: Vec::new(),
             goal_versions: Vec::new(),
             inference_calls: Vec::new(),
             compactions: Vec::new(),
@@ -1102,43 +1043,6 @@ fn external_task_text(native: &Value) -> Option<String> {
         .get("task")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
-}
-
-fn root_metadata(
-    capture: &ExternalAdapterCapture,
-    mapping: &ExternalAdapterMapping,
-) -> Result<String> {
-    serde_json::to_string(&json!({
-        "adapter_projection": {
-            "source_system": capture.source.system,
-            "source_package": capture.source.package,
-            "source_package_version": capture.source.package_version,
-            "scenario_id": mapping.scenario_id,
-            "role": mapping
-                .participants
-                .iter()
-                .find(|participant| {
-                    participant
-                        .request_id
-                        .as_deref()
-                        .is_none_or(|request_id| request_id == mapping.request_id)
-                })
-                .map(|participant| participant.role.as_str())
-                .unwrap_or("owner"),
-            "participants": mapping.participants,
-        }
-    }))
-    .context("serializing external adapter root metadata")
-}
-
-fn participant_metadata(participant: &ExternalParticipantMapping) -> Result<String> {
-    serde_json::to_string(&json!({
-        "adapter_projection": {
-            "role": participant.role,
-            "native_name": participant.native_name,
-        }
-    }))
-    .context("serializing external adapter participant metadata")
 }
 
 fn native_messages(
@@ -1397,18 +1301,16 @@ fn strip_final_answer_prefix(value: &str) -> &str {
 fn response_content_for_request(
     request: &TimelineRequestRow,
     messages: &[TimelineMessageRow],
+    mapping: &ExternalAdapterMapping,
 ) -> String {
-    let Some(metadata) = request.metadata.as_deref() else {
+    let participant = mapping
+        .participants
+        .iter()
+        .find(|participant| participant.request_id.as_deref() == Some(request.request_id.as_str()));
+    if request.request_id != mapping.request_id && participant.is_none() {
         return "external framework request imported".to_string();
-    };
-    let native_name = serde_json::from_str::<Value>(metadata)
-        .ok()
-        .and_then(|value| {
-            value
-                .pointer("/adapter_projection/native_name")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        });
+    }
+    let native_name = participant.and_then(|participant| participant.native_name.as_deref());
     if let Some(native_name) = native_name {
         if let Some(message) = messages
             .iter()
@@ -1449,4 +1351,43 @@ fn first_owned<'a>(values: impl IntoIterator<Item = Option<&'a str>>) -> Option<
         .map(str::trim)
         .find(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Captures with partial mappings remain usable without inventing a session owner.
+/// This is a read-only projection of supplied capture identity, never a persisted doc.
+fn imported_session(
+    session_id: &str,
+    agent_did: Option<&str>,
+    behavior_id: Option<&str>,
+    created_at: &str,
+    title: String,
+    preview: Option<&str>,
+) -> Option<TimelineSessionRow> {
+    use gents_protocol::session::{
+        AgentSession, SessionObservation, SessionTitle, SessionTitleSource,
+    };
+    let agent_did = agent_did.filter(|value| !value.trim().is_empty())?;
+    let behavior_id = behavior_id.filter(|value| !value.trim().is_empty())?;
+    Some(TimelineSessionRow {
+        doc_id: None,
+        session: AgentSession {
+            session_id: session_id.to_owned(),
+            agent_did: agent_did.to_owned(),
+            requester_did: None,
+            behavior_id: behavior_id.to_owned(),
+            created_at: created_at.to_owned(),
+            closed_at: None,
+            title: Some(SessionTitle {
+                text: title,
+                source: SessionTitleSource::Generated,
+            }),
+            tags: Vec::new(),
+            provenance: None,
+            observation: Some(SessionObservation {
+                last_activity_at: created_at.to_owned(),
+                preview: preview.map(crate::session::derive_session_preview),
+                latest_request: None,
+            }),
+        },
+    })
 }

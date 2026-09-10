@@ -93,17 +93,23 @@ pub struct DescendantEdge {
     pub cursor: String,
     pub root_request_id: String,
     pub immediate_parent_request_id: String,
+    pub immediate_parent_request_doc_id: String,
+    pub immediate_parent_agent_did: String,
+    pub immediate_parent_requester_did: Option<String>,
+    pub immediate_parent_tool_call_doc_id: String,
     pub immediate_parent_session_id: String,
     pub immediate_parent_tool_call_id: String,
     pub child_request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_request_doc_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_requester_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub child_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_did: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub behavior_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub deployment_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<String>,
     pub await_mode: String,
@@ -297,6 +303,38 @@ pub async fn resolve_descendant_graph(
     page_descendant_edges(query, edges)
 }
 
+/// Traverse from a previously selected physical request without resolving its
+/// logical label again. The existing corroboration and paging owners apply.
+pub async fn resolve_descendant_graph_by_doc_id(
+    access: DescendantGraphAccess<'_>,
+    query: &DescendantQuery,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<DescendantPage> {
+    anyhow::ensure!(
+        !request_doc_id.trim().is_empty() && !agent_did.trim().is_empty(),
+        "descendant root requires physical identity and principal"
+    );
+    let physical = escape_graphql_string(request_doc_id);
+    let owner = escape_graphql_string(agent_did);
+    let requester = requester_did
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    let mut rows = load_requests_filtered(&access, format!("_docID:{{_eq:\"{physical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}")).await?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "selected physical descendant root is missing or ambiguous within scope"
+    );
+    let root = rows.pop().expect("one root");
+    anyhow::ensure!(
+        root.request_id == query.root_request_id,
+        "selected physical descendant root has a different logical identity"
+    );
+    let edges = collect_descendant_edges(&access, root, query.scope).await?;
+    page_descendant_edges(query, edges)
+}
+
 async fn collect_descendant_edges(
     access: &DescendantGraphAccess<'_>,
     root: AgentRequestRow,
@@ -345,15 +383,17 @@ async fn collect_descendant_edges(
                 .or_default()
                 .push(child);
         }
-        let parents_by_id = level
-            .iter()
-            .map(|parent| (parent.row.request_id.clone(), parent))
-            .collect::<BTreeMap<_, _>>();
-
         for bridge in bridges {
-            let Some(parent) = parents_by_id.get(&bridge.request_id) else {
+            let mut matching = level
+                .iter()
+                .filter(|parent| bridge_corroborates_parent(parent, &bridge));
+            let Some(parent) = matching.next() else {
                 continue;
             };
+            anyhow::ensure!(
+                matching.next().is_none(),
+                "physical bridge has ambiguous parent identity"
+            );
             let Some(child_request_id) = clean(bridge.child_request_id.as_deref()) else {
                 continue;
             };
@@ -677,15 +717,24 @@ fn project_descendant_edge(
             cursor,
             root_request_id: root.request_id.clone(),
             immediate_parent_request_id: bridge.request_id.clone(),
+            immediate_parent_request_doc_id: request_doc_id(&parent.row).to_owned(),
+            immediate_parent_agent_did: parent
+                .row
+                .agent_did
+                .clone()
+                .context("bridge parent missing principal")?,
+            immediate_parent_requester_did: parent.row.requester_did.clone(),
+            immediate_parent_tool_call_doc_id: bridge.doc_id.clone(),
             immediate_parent_session_id: request_session_id(&parent.row).to_string(),
             immediate_parent_tool_call_id: bridge.tool_call_id.clone(),
             child_request_id,
+            child_request_doc_id: child.as_ref().and_then(|row| row.doc_id.clone()),
+            child_requester_did: child.as_ref().and_then(|row| row.requester_did.clone()),
             child_session_id: child
                 .as_ref()
                 .map(|row| request_session_id(row).to_string()),
             principal_did: principal_did.clone(),
             behavior_id,
-            deployment_id: principal_did,
             target: clean(args.name.as_deref()),
             await_mode: clean(bridge.await_mode.as_deref())
                 .unwrap_or_else(|| "foreground".to_string()),
@@ -887,6 +936,46 @@ pub async fn resolve_descendant_root_request_id(
     }
 }
 
+/// Resolve the child of an already selected physical bridge using the same
+/// reciprocal joins as descendant visibility/control. No logical-ID fallback.
+pub async fn resolve_physical_bridge_child(
+    access: DescendantGraphAccess<'_>,
+    parent_request_doc_id: &str,
+    bridge_doc_id: &str,
+) -> Result<Option<AgentRequestRow>> {
+    let parent_id = escape_graphql_string(parent_request_doc_id);
+    let mut parents =
+        load_requests_filtered(&access, format!("_docID:{{_eq:\"{parent_id}\"}}")).await?;
+    anyhow::ensure!(parents.len() <= 1, "ambiguous physical bridge parent");
+    let Some(parent) = parents.pop() else {
+        return Ok(None);
+    };
+    let Some(bridge) = load_unique_bridge_by_doc_id(&access, bridge_doc_id).await? else {
+        return Ok(None);
+    };
+    let parent = ParentNode {
+        row: parent,
+        depth: 0,
+    };
+    anyhow::ensure!(
+        bridge_corroborates_parent(&parent, &bridge),
+        "physical bridge does not corroborate parent scope"
+    );
+    let Some(child_id) = bridge.child_request_id.as_ref() else {
+        return Ok(None);
+    };
+    let children = load_requests(&access, std::slice::from_ref(child_id)).await?;
+    let mut matching = children
+        .into_iter()
+        .filter(|child| child_corroborates(&parent, &bridge, child));
+    let child = matching.next();
+    anyhow::ensure!(
+        matching.next().is_none(),
+        "ambiguous physically corroborated bridge child"
+    );
+    Ok(child)
+}
+
 fn child_corroborates(parent: &ParentNode, bridge: &BridgeRow, child: &AgentRequestRow) -> bool {
     clean(child.caused_by_parent_request_id.as_deref()).as_deref()
         == Some(parent.row.request_id.as_str())
@@ -928,10 +1017,17 @@ async fn load_requests(
         return Ok(Vec::new());
     }
     let list = graphql_string_list(request_ids);
+    load_requests_filtered(access, format!("request_id:{{_in:[{list}]}}")).await
+}
+
+async fn load_requests_filtered(
+    access: &DescendantGraphAccess<'_>,
+    filter: String,
+) -> Result<Vec<AgentRequestRow>> {
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _in: [{list}] }} }},
+                filter: {{ {filter} }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
                 _docID
@@ -1086,7 +1182,7 @@ async fn load_rows<T: for<'de> Deserialize<'de>>(
     let value = response
         .pointer(&format!("/data/{collection}"))
         .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
+        .with_context(|| format!("descendant query omitted {collection} rows"))?;
     serde_json::from_value(value)
         .with_context(|| format!("decoding canonical descendant {collection} rows"))
 }

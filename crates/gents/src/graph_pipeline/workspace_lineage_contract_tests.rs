@@ -39,38 +39,21 @@ fn git(repo: &std::path::Path, args: &[&str]) -> String {
 
 impl Fixture {
     async fn new(bound: bool, conflicting_input: bool) -> Self {
-        use crate::graph_package::{install_bundled_graph_package, GraphPackageInstallBindings};
+        use crate::graph_package::GraphPackageInstallBindings;
+        use crate::test_support::install_test_graph_package;
         let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(&node).await.unwrap();
         let identity = super::super::runtime::graph_test_identity();
         crate::document_config::ensure_agent_principal(&node, identity.did())
             .await
             .unwrap();
-        for mutation in [
-            r#"mutation { create_HostDeployment(input: {deployment_id:"graph-test-host",display_name:"Graph test"}) {_docID} }"#,
-            r#"mutation { create_InferenceBackend(input: {backend_id:"graph-test-backend",name:"Graph test",provider_kind:"OpenAiCompatible",endpoint:"http://127.0.0.1:1/v1",max_concurrent:4,enabled:true,models:["test-model"]}) {_docID} }"#,
-            r#"mutation { create_InferenceProfile(input: {profile_id:"graph-test-profile",display_name:"Graph test",max_turns:8}) {_docID} }"#,
-        ] {
-            execute(&node, mutation).await;
-        }
-        let role = super::super::PackageRoleBinding {
-            principal_did: identity.did().into(),
-            deployment_id: "graph-test-host".into(),
-            backend_id: Some("graph-test-backend".into()),
-            profile_id: Some("graph-test-profile".into()),
-            model_name: Some("test-model".into()),
-        };
         let access = ConfigAccess::Local(node.clone());
-        let installed = install_bundled_graph_package(
+        let installed = install_test_graph_package(
             &access,
             identity.did(),
             "code_review",
             &GraphPackageInstallBindings {
-                owner_did: identity.did().into(),
-                roles: BTreeMap::from([
-                    ("coordinator".into(), role.clone()),
-                    ("reviewer".into(), role),
-                ]),
+                agent_did: identity.did().into(),
             },
         )
         .await
@@ -95,15 +78,10 @@ impl Fixture {
         git(&repo, &["add", "README.md"]);
         git(&repo, &["commit", "-qm", "base"]);
         let head = git(&repo, &["rev-parse", "HEAD"]);
-        let workspace = crate::workspace::provision_read_only_workspace(
-            &access,
-            &repo,
-            &head,
-            "graph-test-host",
-            identity.did(),
-        )
-        .await
-        .unwrap();
+        let workspace =
+            crate::workspace::provision_read_only_workspace(&access, &repo, &head, identity.did())
+                .await
+                .unwrap();
         assert_eq!(workspace.workspace.lifecycle_state, "sealed");
         assert!(workspace.workspace.seal_hash.is_some());
         let mut input = json!({"repository_path":".","base_ref":head,"head_ref":head,
@@ -114,7 +92,7 @@ impl Fixture {
             } else {
                 &workspace.workspace.workspace_id
             });
-            input["workspace_owner_deployment_id"] = json!("graph-test-host");
+            input["workspace_owner_agent_did"] = json!(identity.did());
             input["workspace_authority"] = json!("readOnly");
         }
         let run = super::super::start_graph_run(
@@ -144,7 +122,7 @@ impl Fixture {
         WorkspaceLineage {
             workspace_id: Some(self.workspace.workspace.workspace_id.clone()),
             workspace_authority: Some("readOnly".into()),
-            workspace_owner_deployment_id: Some("graph-test-host".into()),
+            workspace_owner_agent_did: Some(self.identity.did().into()),
             workspace_seal_hash: self.workspace.workspace.seal_hash.clone(),
         }
     }
@@ -166,16 +144,18 @@ impl Fixture {
         let response = execute(
             &self.node,
             &format!(
-                "{{ EventTrigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}) {{_docID task_id}} }}",
+                "{{ Trigger(filter:{{agent_did:{{_eq:\"{}\"}},trigger_id:{{_eq:\"{}\"}}}}) {{_docID task_id}} }}",
+                escape_graphql_string(self.identity.did()),
                 escape_graphql_string(&trigger)
             ),
         )
         .await;
-        let row = &response["EventTrigger"][0];
+        let row = &response["Trigger"][0];
         let task = execute(
             &self.node,
             &format!(
-                "{{ Task(filter:{{task_id:{{_eq:\"{}\"}}}}) {{behavior_id}} }}",
+                "{{ Task(filter:{{agent_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{behavior_id}} }}",
+                escape_graphql_string(self.identity.did()),
                 escape_graphql_string(row["task_id"].as_str().unwrap())
             ),
         )
@@ -200,7 +180,7 @@ impl Fixture {
         request.caused_by_source_doc_id = Some(self.run.seed_doc_id.clone());
         request.workspace_id = lineage.workspace_id.clone();
         request.workspace_authority = lineage.workspace_authority.clone();
-        request.workspace_owner_deployment_id = lineage.workspace_owner_deployment_id.clone();
+        request.workspace_owner_agent_did = lineage.workspace_owner_agent_did.clone();
         request.workspace_seal_hash = lineage.workspace_seal_hash.clone();
         crate::sign_agent_request_create(&self.identity, &mut request)
             .await
@@ -228,8 +208,8 @@ fn abstract_tuple(fx: &Fixture, lineage: &WorkspaceLineage) -> Value {
     let workspace = lineage.workspace_id.as_ref().map(|id| {
         assert_eq!(id, &fx.workspace.workspace.workspace_id);
         assert_eq!(
-            lineage.workspace_owner_deployment_id.as_deref(),
-            Some("graph-test-host")
+            lineage.workspace_owner_agent_did.as_deref(),
+            Some(fx.identity.did())
         );
         assert_eq!(
             lineage.workspace_seal_hash,
@@ -256,7 +236,7 @@ fn explicit_from_case(fx: &Fixture, explicit: &Value) -> WorkspaceLineage {
             11,
             fx.workspace.workspace.workspace_id.clone(),
         ),
-        workspace_owner_deployment_id: id("owner", 21, "graph-test-host".into()),
+        workspace_owner_agent_did: id("owner", 21, fx.identity.did().into()),
         workspace_seal_hash: id(
             "seal_hash",
             31,
@@ -668,12 +648,17 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     };
     use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolSelection};
     use crate::trigger_engine::{MaterializerHandle, TriggerKind, TriggerSource};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use tokio::sync::watch;
     use tokio_util::sync::CancellationToken;
 
     let fx = Fixture::new(true, false).await;
-    let package = crate::graph_package::load_bundled_graph_package("code_review").unwrap();
+    let package = crate::test_support::load_test_graph_package(
+        "code_review",
+        &crate::pack::PackInstallOptions {
+            agent_did: fx.identity.did().into(),
+        },
+    );
     let mut tasks = HashMap::new();
     let mut routes = HashMap::new();
     let mut behaviors = Vec::new();
@@ -682,40 +667,41 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     for stage in ["recon", "scan"] {
         let trigger = fx.route(stage);
         let stored = execute(&fx.node, &format!(
-            "{{ EventTrigger(filter:{{trigger_id:{{_eq:\"{}\"}}}}) {{_docID task_id source_collection}} }}",
-            escape_graphql_string(&trigger),
+            "{{ Trigger(filter:{{agent_did:{{_eq:\"{owner}\"}},trigger_id:{{_eq:\"{trigger}\"}}}}) {{_docID task_id source}} EventSource(filter:{{agent_did:{{_eq:\"{owner}\"}},event_source_id:{{_eq:\"{trigger}\"}}}}) {{event_source_id source_collection}} }}",
+            owner=escape_graphql_string(fx.identity.did()), trigger=escape_graphql_string(&trigger),
         )).await;
-        let trigger_row = &stored["EventTrigger"][0];
+        let trigger_row = &stored["Trigger"][0];
+        assert_eq!(
+            trigger_row["source"]["event_source_id"],
+            stored["EventSource"][0]["event_source_id"]
+        );
         let task_rows = execute(&fx.node, &format!(
-            "{{ Task(filter:{{task_id:{{_eq:\"{}\"}}}}) {{task_id name behavior_id prompt_template goal_objective_template goal_token_budget output_schema_ref}} }}",
+            "{{ Task(filter:{{agent_did:{{_eq:\"{}\"}},task_id:{{_eq:\"{}\"}}}}) {{task_id display_name behavior_id prompt_template goal_objective_template goal_token_budget output_schema_ref hooks}} }}",
+            escape_graphql_string(fx.identity.did()),
             escape_graphql_string(trigger_row["task_id"].as_str().unwrap()),
         )).await;
         let row = &task_rows["Task"][0];
         let task = ResolvedTask {
             task_id: row["task_id"].as_str().unwrap().into(),
-            name: row["name"].as_str().map(str::to_owned),
+            name: row["display_name"].as_str().map(str::to_owned),
             behavior_id: row["behavior_id"].as_str().unwrap().into(),
             prompt_template: row["prompt_template"].as_str().unwrap().into(),
             goal_objective_template: row["goal_objective_template"].as_str().map(str::to_owned),
             goal_token_budget: row["goal_token_budget"].as_i64(),
             output_schema_ref: row["output_schema_ref"].as_str().map(str::to_owned),
+            hooks: if row["hooks"].is_null() {
+                vec![]
+            } else {
+                serde_json::from_value(row["hooks"].clone()).unwrap()
+            },
         };
-        let declared: Value = serde_json::from_str(
-            package
-                .asset_text(&format!(
-                    "datastore_tool_surfaces/review_{stage}_writes/object.json"
-                ))
-                .unwrap(),
-        )
-        .unwrap();
-        let entries: Vec<SurfaceToolDecl> = declared["entries"]
-            .as_array()
-            .unwrap()
+        let declared = package
+            .config
+            .datastore_tool_surfaces
             .iter()
-            .cloned()
-            .map(serde_json::from_value)
-            .collect::<Result<_, _>>()
-            .unwrap();
+            .find(|surface| surface.surface_id == format!("review-{stage}-writes"))
+            .expect("canonical installed surface");
+        let entries = declared.entries.clone().unwrap_or_default();
         let mut selection = ToolSelection::default();
         // Include the installed query declarations: their runtime source fills
         // tell EventSource which evidence fields the scanner must inherit.
@@ -742,7 +728,13 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         .unwrap();
         surfaces.insert(
             task.behavior_id.clone(),
-            Arc::new(behavior.tools.resolve(&fx.node).await.unwrap()),
+            Arc::new(
+                behavior
+                    .tools
+                    .resolve(&fx.node, behavior.agent_did())
+                    .await
+                    .unwrap(),
+            ),
         );
         behaviors.push(Arc::new(behavior));
         routes.insert(
@@ -750,7 +742,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             (
                 trigger,
                 trigger_row["_docID"].as_str().unwrap().to_owned(),
-                trigger_row["source_collection"]
+                stored["EventSource"][0]["source_collection"]
                     .as_str()
                     .unwrap()
                     .to_owned(),
@@ -787,10 +779,10 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
             HashMap::new(),
             HashMap::new(),
         )
-        .with_event_triggers(
-            HashMap::from([(scan_route.0.clone(), trigger)]),
-            HashSet::new(),
-        )
+        .with_automation(crate::runtime_snapshot::ResolvedAutomation {
+            event_triggers: HashMap::from([(scan_route.0.clone(), trigger)]),
+            ..Default::default()
+        })
         .with_principal(principal)
         .activate(1, HashMap::new()),
     );
@@ -798,8 +790,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
     let materializer = crate::trigger_engine::production_materializer::ProductionMaterializer::new(
         fx.node.clone(),
         snapshot_rx.clone(),
-    )
-    .with_local_deployment_id("graph-test-host");
+    );
     let mut source = crate::trigger_engine::event_source::EventSource::new(
         snapshot_rx,
         fx.node.clone(),
@@ -818,10 +809,7 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
                 fx.workspace.workspace.workspace_id.clone(),
             ),
             ("workspace_authority".into(), "readOnly".into()),
-            (
-                "workspace_owner_deployment_id".into(),
-                "graph-test-host".into(),
-            ),
+            ("workspace_owner_agent_did".into(), fx.identity.did().into()),
             (
                 "workspace_seal_hash".into(),
                 fx.workspace.workspace.seal_hash.clone().unwrap(),
@@ -938,8 +926,8 @@ async fn installed_review_area_handoff_materializes_bound_goal_scanner() {
         assert_eq!(row.workspace_id, fx.tuple().workspace_id);
         assert_eq!(row.workspace_authority.as_deref(), Some("readOnly"));
         assert_eq!(
-            row.workspace_owner_deployment_id.as_deref(),
-            Some("graph-test-host")
+            row.workspace_owner_agent_did.as_deref(),
+            Some(fx.identity.did())
         );
         assert_eq!(row.workspace_seal_hash, fx.workspace.workspace.seal_hash);
     }

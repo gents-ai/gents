@@ -1,324 +1,180 @@
-use gents::graphql::escape_graphql_string;
-use gents::{
-    default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    ensure_agent_principal, list_agent_behaviors, load_agent_behavior, load_inference_profile,
-    upsert_agent_behavior, upsert_inference_profile, AgentBehaviorDocument, InferenceProfile,
+use gents::config_client::{
+    apply_desired_state_plan, read_desired_state_record_in_txn, ConfigAccess, DesiredStateApplyPlan,
 };
+use gents::document_config::PackConfig;
+use gents::{ensure_agent_principal, Collection};
+use serde_json::json;
 
 use crate::support::test_db;
 
 #[tokio::test]
-async fn ensure_agent_principal_creates_and_reuses_default_behavior() {
-    let db = test_db("principal-bootstrap-create").await;
-    let agent_did = "did:test:amy";
-
-    let created = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect("bootstrap succeeds");
-    assert!(created.created_principal);
-    assert!(created.created_default_behavior);
-    assert!(created.created_default_inference_profile);
-    assert_eq!(created.principal.agent_did, agent_did);
-    assert_eq!(created.principal.display_name.as_deref(), Some("amy"));
-    assert_eq!(
-        created.principal.default_behavior_id.as_deref(),
-        Some(default_behavior_id_for_agent(agent_did).as_str())
-    );
-    assert_eq!(
-        created.default_behavior.behavior_id,
-        default_behavior_id_for_agent(agent_did)
-    );
-    assert_eq!(
-        created.default_behavior.display_name.as_deref(),
-        Some("Default")
-    );
-    assert_eq!(
-        created.default_behavior.inference_profile_id.as_deref(),
-        Some(
-            default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(agent_did))
-                .as_str()
-        )
-    );
-    assert_eq!(
-        created.default_inference_profile.profile_id,
-        default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(agent_did))
-    );
-    assert!(created.default_behavior.enabled);
-
-    let reused = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect("second bootstrap succeeds");
-    assert!(!reused.created_principal);
-    assert!(!reused.created_default_behavior);
-    assert!(!reused.created_default_inference_profile);
-
-    let behaviors = list_agent_behaviors(db.node.as_ref(), agent_did)
-        .await
-        .expect("list behaviors");
-    assert_eq!(behaviors.len(), 1);
-    assert_eq!(
-        behaviors[0].behavior_id,
-        default_behavior_id_for_agent(agent_did)
-    );
+async fn canonical_config_roundtrips_scoped_references_and_preserves_explicit_default() {
+    let db = test_db("document-config-scoped-roundtrip").await;
+    let access = ConfigAccess::Local(db.node.clone());
+    // Equal logical IDs under different principals must resolve independently.
+    for (owner, model) in [
+        ("did:test:roundtrip", "model-a"),
+        ("did:test:other", "model-b"),
+    ] {
+        let config: PackConfig = serde_json::from_value(json!({
+            "agent_principal": {
+                "agent_did": owner, "display_name": "Explicit configuration",
+                "default_behavior_id": "general", "tags": ["authored"]
+            },
+            "agent_behaviors": [{
+                "agent_did": owner, "behavior_id": "general",
+                "context_id": "context", "inference_profile_id": "balanced"
+            }],
+            "contexts": [{
+                "agent_did": owner, "context_id": "context",
+                "system_prompt": "Be precise. {{literal}}", "compaction_id": "compact"
+            }],
+            "compactions": [{
+                "agent_did": owner, "compaction_id": "compact",
+                "strategy": "StripThenSummarize", "threshold": 0.6
+            }],
+            "inference_backends": [{
+                "agent_did": owner, "backend_id": "local", "name": "Local",
+                "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:1/v1",
+                "auth": {"kind": "unauthenticated"}, "max_concurrent": 1, "max_queue_depth": 0
+            }],
+            "inference_profiles": [{
+                "agent_did": owner, "profile_id": "balanced", "display_name": "Balanced",
+                "backend_id": "local", "model_name": model,
+                "context_window": 32768, "max_output_tokens": 4096,
+                "reasoning_effort": "max", "sampling_id": "sampling", "execution_id": "execution"
+            }],
+            "inference_sampling": [{
+                "agent_did": owner, "sampling_id": "sampling",
+                "temperature": 0.2, "top_p": 0.95, "top_k": 40, "seed": 1234,
+                "min_p": 0.05, "frequency_penalty": 0.5,
+                "presence_penalty": -0.25, "repetition_penalty": 1.1
+            }],
+            "inference_execution": [{
+                "agent_did": owner, "execution_id": "execution", "max_turns": 8,
+                "stream_batch_ms": 500, "stream_liveness_timeout_secs": 45,
+                "deadline_duration_secs": 120
+            }]
+        }))
+        .unwrap();
+        let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
+        access
+            .transact("test.canonical_config.apply", |txn| {
+                let plan = plan.clone();
+                Box::pin(async move { apply_desired_state_plan(txn, &plan).await })
+            })
+            .await
+            .unwrap();
+        let expected = config.clone();
+        access
+            .transact("test.canonical_config.read", |txn| {
+                let expected = expected.clone();
+                Box::pin(async move {
+                    for (collection, id, value) in [
+                        (
+                            Collection::AgentPrincipal,
+                            owner,
+                            serde_json::to_value(&expected.agent_principal)?,
+                        ),
+                        (
+                            Collection::AgentBehavior,
+                            "general",
+                            serde_json::to_value(&expected.agent_behaviors[0])?,
+                        ),
+                        (
+                            Collection::AgentContext,
+                            "context",
+                            serde_json::to_value(&expected.contexts[0])?,
+                        ),
+                        (
+                            Collection::Compaction,
+                            "compact",
+                            serde_json::to_value(&expected.compactions[0])?,
+                        ),
+                        (
+                            Collection::InferenceBackend,
+                            "local",
+                            serde_json::to_value(&expected.inference_backends[0])?,
+                        ),
+                        (
+                            Collection::InferenceProfile,
+                            "balanced",
+                            serde_json::to_value(&expected.inference_profiles[0])?,
+                        ),
+                        (
+                            Collection::InferenceSampling,
+                            "sampling",
+                            serde_json::to_value(&expected.inference_sampling[0])?,
+                        ),
+                        (
+                            Collection::InferenceExecution,
+                            "execution",
+                            serde_json::to_value(&expected.inference_execution[0])?,
+                        ),
+                    ] {
+                        let (_, actual) =
+                            read_desired_state_record_in_txn(txn, collection, owner, id)
+                                .await?
+                                .unwrap();
+                        // Compare canonical values, including every configured sampling,
+                        // execution and context property, through the public read owner.
+                        let expected = DesiredStateApplyPlan::new(vec![
+                            gents::config_client::DesiredStateApplyDocument {
+                                collection,
+                                add: value.clone(),
+                                update: value,
+                            },
+                        ])?;
+                        assert_eq!(
+                            actual,
+                            expected.documents()[0].add,
+                            "{owner} {collection:?}"
+                        );
+                    }
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+        let principal = ensure_agent_principal(db.node.as_ref(), owner)
+            .await
+            .unwrap();
+        assert_eq!(
+            principal, config.agent_principal,
+            "identity bootstrap must preserve authored configuration"
+        );
+    }
+    let rows = access.execute("{ AgentPrincipal { agent_did } AgentBehavior { behavior_id } InferenceProfile { model_name } }").await.unwrap();
+    for collection in ["AgentPrincipal", "AgentBehavior", "InferenceProfile"] {
+        assert_eq!(rows["data"][collection].as_array().unwrap().len(), 2);
+    }
+    let mut models = rows["data"]["InferenceProfile"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["model_name"].as_str().unwrap())
+        .collect::<Vec<_>>();
+    models.sort_unstable();
+    assert_eq!(models, ["model-a", "model-b"]);
 }
 
 #[tokio::test]
-async fn ensure_agent_principal_rejects_missing_default_behavior_binding() {
-    let db = test_db("principal-bootstrap-unbound").await;
-    let agent_did = "did:test:unbound";
-    insert_principal(db.node.as_ref(), agent_did, "").await;
-
-    let error = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect_err("partial principal must fail closed");
-    assert!(error.to_string().contains("has no default_behavior_id"));
-    assert!(list_agent_behaviors(db.node.as_ref(), agent_did)
-        .await
-        .expect("list behaviors")
-        .is_empty());
-}
-
-#[tokio::test]
-async fn ensure_agent_principal_rejects_default_behavior_without_profile_binding() {
-    let db = test_db("principal-bootstrap-unbound-profile").await;
-    let agent_did = "did:test:unbound-profile";
-    let behavior_id = "unbound-profile-behavior";
-    insert_principal(db.node.as_ref(), agent_did, behavior_id).await;
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: behavior_id.to_string(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Unbound profile".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: None,
-            request_context_template: None,
-            backend_id: None,
-            model_name: None,
-            tool_selection_id: None,
-            inference_profile_id: None,
-            compaction_strategy: None,
-            compaction_threshold: None,
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .expect("seed behavior");
-
-    let error = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect_err("partial behavior must fail closed");
-    assert!(error.to_string().contains("has no inference_profile_id"));
-}
-
-#[tokio::test]
-async fn ensure_agent_principal_rejects_missing_referenced_default_behavior() {
-    let db = test_db("principal-bootstrap-missing-default").await;
-    let agent_did = "did:test:broken";
-    insert_principal(db.node.as_ref(), agent_did, "custom-behavior").await;
-
-    let error = ensure_agent_principal(db.node.as_ref(), agent_did)
-        .await
-        .expect_err("bootstrap should fail");
-    assert!(error
-        .to_string()
-        .contains("references missing default behavior custom-behavior"));
-}
-
-#[tokio::test]
-async fn load_inference_profile_reads_document_fields() {
-    let db = test_db("inference-profile-load").await;
-    let profile_id = "balanced";
-    insert_inference_profile(db.node.as_ref(), profile_id).await;
-
-    let profile = load_inference_profile(db.node.as_ref(), profile_id)
-        .await
-        .expect("load succeeds")
-        .expect("profile exists");
-    assert_eq!(profile.profile_id, profile_id);
-    assert_eq!(profile.display_name.as_deref(), Some("Balanced"));
-    assert_eq!(profile.context_window, Some(32768));
-    assert_eq!(profile.max_output_tokens, Some(4096));
-    assert_eq!(profile.temperature, Some(0.2));
-    assert_eq!(profile.top_p, Some(0.95));
-    assert_eq!(profile.top_k, Some(40));
-    assert_eq!(profile.min_p, Some(0.05));
-    assert_eq!(profile.frequency_penalty, Some(0.5));
-    assert_eq!(profile.presence_penalty, Some(-0.25));
-    assert_eq!(profile.repetition_penalty, Some(1.1));
-    assert_eq!(profile.reasoning_effort.as_deref(), Some("max"));
-    assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
-    assert_eq!(profile.deadline_duration_secs, Some(120));
-}
-
-#[tokio::test]
-async fn upsert_helpers_roundtrip_behavior_and_profile() {
-    let db = test_db("document-config-upsert-roundtrip").await;
-    let agent_did = "did:test:roundtrip";
-    let behavior_id = default_behavior_id_for_agent(agent_did);
-
-    let backend = db
-        .node
-        .execute(
-            r#"mutation { create_InferenceBackend(input: {
-                backend_id: "backend-local", name: "Local",
-                provider_kind: "OpenAiCompatible", endpoint: "http://127.0.0.1:1/v1",
-                max_concurrent: 1, max_queue_depth: 1, enabled: true,
-                models: ["gpt-local"]
-            }) { _docID } }"#,
-        )
-        .await;
-    assert!(!backend.has_errors(), "{:?}", backend.errors);
-
-    upsert_inference_profile(
-        db.node.as_ref(),
-        &InferenceProfile {
-            profile_id: "balanced".to_string(),
-            display_name: Some("Balanced".to_string()),
-            context_window: Some(32768),
-            max_output_tokens: Some(4096),
-            max_turns: Some(8),
-            temperature: Some(0.2),
-            stream_batch_ms: Some(500),
-            stream_liveness_timeout_secs: Some(45),
-            deadline_duration_secs: Some(120),
-            retry_max_transport: None,
-            retry_backoff_ms: None,
-            retry_max_resample: None,
-            retry_allow_repair: None,
-            retry_interactive_max: None,
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("upsert inference profile");
-
-    upsert_agent_behavior(
-        db.node.as_ref(),
-        &AgentBehaviorDocument {
-            behavior_id: behavior_id.clone(),
-            agent_did: agent_did.to_string(),
-            display_name: Some("Default".to_string()),
-            description: None,
-            summary: None,
-            system_prompt: Some("Be precise".to_string()),
-            request_context_template: None,
-            backend_id: Some("backend-local".to_string()),
-            model_name: Some("gpt-local".to_string()),
-            tool_selection_id: None,
-            inference_profile_id: Some("balanced".to_string()),
-            compaction_strategy: Some("Summarize".to_string()),
-            compaction_threshold: Some(0.6),
-            skill_refs: Vec::new(),
-            skill_excludes: Vec::new(),
-            enabled: true,
-            created_at: None,
-        },
-    )
-    .await
-    .expect("upsert behavior");
-
-    let behavior = load_agent_behavior(db.node.as_ref(), &behavior_id)
-        .await
-        .expect("load behavior")
-        .expect("behavior exists");
-    assert_eq!(behavior.agent_did, agent_did);
-    assert_eq!(behavior.system_prompt.as_deref(), Some("Be precise"));
-    assert_eq!(behavior.backend_id.as_deref(), Some("backend-local"));
-    assert_eq!(behavior.inference_profile_id.as_deref(), Some("balanced"));
-
-    let profile = load_inference_profile(db.node.as_ref(), "balanced")
-        .await
-        .expect("load profile")
-        .expect("profile exists");
-    assert_eq!(profile.context_window, Some(32768));
-    assert_eq!(profile.stream_liveness_timeout_secs, Some(45));
-    assert_eq!(profile.deadline_duration_secs, Some(120));
-}
-
-#[tokio::test]
-async fn tool_service_registry_schema_does_not_expose_broken_tools_relation() {
-    let db = test_db("tool-service-registry-tools-relation").await;
-    let response = db
-        .node
-        .execute(
-            r#"{
-                ToolServiceRegistry {
-                    service_id
-                    tools { name }
-                }
-            }"#,
-        )
-        .await;
-
-    assert!(
-        response.has_errors(),
-        "querying the removed tools relation should fail validation"
-    );
-    let errors = format!("{:?}", response.errors);
-    assert!(
-        errors.contains("tools"),
-        "expected validation error to mention tools field, got {errors}"
-    );
-    assert!(
-        !errors.contains("TypeJoinMany"),
-        "schema should not expose a tools relation that fails during join planning: {errors}"
-    );
-}
-
-async fn insert_principal(
-    node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
-    default_behavior_id: &str,
-) {
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_default_behavior_id = escape_graphql_string(default_behavior_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentPrincipal(input: {{
-                agent_did: "{escaped_agent_did}",
-                display_name: "Preset",
-                default_behavior_id: "{escaped_default_behavior_id}",
-                enabled: true,
-                created_by: "{escaped_agent_did}"
-            }}) {{ _docID }}
-        }}"#
-    );
-
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
-}
-
-async fn insert_inference_profile(node: &gents::defra_node::EmbeddedNode, profile_id: &str) {
-    let escaped_profile_id = escape_graphql_string(profile_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_InferenceProfile(input: {{
-                profile_id: "{escaped_profile_id}",
-                display_name: "Balanced",
-                context_window: 32768,
-                max_output_tokens: 4096,
-                max_turns: 8,
-                temperature: 0.2,
-                top_p: 0.95,
-                top_k: 40,
-                seed: 1234,
-                min_p: 0.05,
-                frequency_penalty: 0.5,
-                presence_penalty: -0.25,
-                repetition_penalty: 1.1,
-                reasoning_effort: "max",
-                stream_batch_ms: 500,
-                stream_liveness_timeout_secs: 45,
-                deadline_duration_secs: 120
-            }}) {{ _docID }}
-        }}"#
-    );
-
-    let resp = node.execute(&mutation).await;
-    assert!(!resp.has_errors(), "{:?}", resp.errors);
+async fn session_create_returns_its_physical_receipt() {
+    let db = test_db("session-create-receipt").await;
+    ConfigAccess::Local(db.node.clone()).transact("test.session.create_receipt", |txn| {
+        Box::pin(async move {
+            let response = txn.execute_with_variables(
+                "mutation($input:AgentSessionMutationInputArg!){create_AgentSession(input:$input){_docID}}",
+                &json!({"input":{"session_id":"receipt-session","agent_did":"did:test:receipt","requester_did":null,"behavior_id":"general","created_at":"2026-01-01T00:00:00Z","title":null,"provenance":{"fork":{"source_session_id":"parent","at_user_turn":0}}}}),
+            ).await?;
+            let response = gents::defra_node::QueryResponse::success(response["data"].clone());
+            let created = gents::graphql::single_mutation_document(&response, "create_AgentSession")?.expect("create must return a physical document");
+            let id = created["_docID"].as_str().expect("physical ID");
+            let stored = txn.execute("{ AgentSession { _docID session_id provenance } }").await?;
+            assert_eq!(stored["data"]["AgentSession"].as_array().unwrap().len(), 1);
+            assert_eq!(stored["data"]["AgentSession"][0]["_docID"], id);
+            assert_eq!(stored["data"]["AgentSession"][0]["provenance"]["fork"]["at_user_turn"], 0);
+            Ok(())
+        })
+    }).await.unwrap();
 }

@@ -1,6 +1,5 @@
 use gents::lifecycle::ClaimOutcome;
 use gents::lifecycle::RequestTerminalOutcome;
-use gents::watcher::AgentRequest;
 use gents::RequestLifecycle;
 use serde::Deserialize;
 
@@ -68,7 +67,7 @@ async fn missing_session_observation_does_not_block_terminal_request() {
 }
 
 #[tokio::test]
-async fn complete_does_not_overwrite_conversation_for_newer_request() {
+async fn complete_does_not_overwrite_session_observation_for_newer_request() {
     let db = test_db("lifecycle-stale-complete").await;
     let session_id = "session-stale";
     let first_doc_id = create_request(
@@ -79,42 +78,12 @@ async fn complete_does_not_overwrite_conversation_for_newer_request() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    let first_request = AgentRequest {
-        doc_id: first_doc_id,
-        request_id: "req-first".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id: session_id.into(),
-        content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: "2026-03-23T00:00:00Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let first_request = crate::support::build_request(
+        first_doc_id,
+        "req-first".into(),
+        session_id.into(),
+        "2026-03-23T00:00:00Z".into(),
+    );
     let mut lifecycle = RequestLifecycle::new_with_agent_did(
         db.node.clone(),
         AGENT_NAME,
@@ -174,42 +143,12 @@ async fn advance_increments_progress_seq() {
         "2026-03-23T00:00:00Z",
     )
     .await;
-    let request = AgentRequest {
-        doc_id: request_doc_id,
-        request_id: "req-1".into(),
-        agent_did: AGENT_DID.into(),
-        requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
-        session_id: "session-1".into(),
-        content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
-        max_total_tokens: None,
-        metadata: None,
-        execution_origin: None,
-        created_at: "2026-03-23T00:00:00Z".into(),
-        deadline: None,
-        execution_generation: None,
-        execution_lease_expires_at: None,
-        execution_progress_seq: 0,
-        subagent_depth: 0,
-        caused_by_parent_request_id: None,
-        caused_by_parent_request_doc_id: None,
-        caused_by_parent_tool_call_id: None,
-        caused_by_parent_tool_call_doc_id: None,
-        caused_by_trigger_id: None,
-        caused_by_trigger_kind: None,
-        caused_by_source_doc_id: None,
-        caused_by_correlation: None,
-        caused_by_trigger_context: None,
-        workspace_id: None,
-        workspace_authority: None,
-        workspace_owner_deployment_id: None,
-        workspace_seal_hash: None,
-    };
+    let request = crate::support::build_request(
+        request_doc_id,
+        "req-1".into(),
+        "session-1".into(),
+        "2026-03-23T00:00:00Z".into(),
+    );
 
     let mut lifecycle =
         RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);

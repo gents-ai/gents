@@ -10,25 +10,32 @@ pub(crate) async fn enqueue_steering_request_with_message(
     node: &EmbeddedNode,
     parent: &AgentRequest,
     content: &str,
-    queue_hints: QueueHints,
+    queue: RequestQueue,
 ) -> Result<EnqueuedAgentRequest> {
     anyhow::ensure!(
-        queue_hints.source == QueueSource::Steering
-            && queue_hints.policy == QueuePolicy::Append
-            && queue_hints.key.is_none(),
+        queue.source == QueueSource::Steering
+            && queue.policy == QueuePolicy::Append
+            && queue.key.is_none(),
         "atomic steering enqueue requires an unkeyed append"
     );
+    anyhow::ensure!(
+        queue.background_completion_wake_version.is_none(),
+        "steering enqueue must not carry the background wake marker"
+    );
 
-    let behavior_id = parent_behavior_id(node, parent).await?;
+    let behavior_id = parent_behavior_id(parent)?;
     let request_id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-    let metadata = queue_metadata_json(&queue_hints);
+    let input = RequestInput {
+        queue: Some(queue),
+        ..Default::default()
+    };
     let request_mutation = session_request_create_mutation(
         parent,
         &behavior_id,
         content,
         ExecutionOrigin::Interactive,
-        &metadata,
+        input,
         &request_id,
         &now,
         None,

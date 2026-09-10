@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::graphql::escape_graphql_string;
-use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
+use gents::{AgentIdentity, KeyIdentity, ensure_runtime_schemas, watcher::AgentRequest};
 use serde::Deserialize;
 use tempfile::TempDir;
 
@@ -578,16 +578,11 @@ pub fn build_request(
         request_id,
         agent_did: AGENT_DID.into(),
         requester_did: None,
-        behavior_id: Some(AGENT_NAME.into()),
+        behavior_id: AGENT_NAME.into(),
         session_id,
         content: "hello".into(),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: None,
         created_at,
         deadline: None,
@@ -606,7 +601,7 @@ pub fn build_request(
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
+        workspace_owner_agent_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -729,18 +724,44 @@ pub async fn create_agent_message(
     content: &str,
     timestamp: &str,
 ) {
+    create_agent_message_in_scope(
+        node, AGENT_DID, None, session_id, sequence, role, content, timestamp,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_agent_message_in_scope(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    session_id: &str,
+    sequence: u32,
+    role: &str,
+    content: &str,
+    timestamp: &str,
+) {
+    let agent_did_escaped = escape_graphql_string(agent_did);
+    let requester = requester_did
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
     let session_id_escaped = escape_graphql_string(session_id);
     let role_escaped = escape_graphql_string(role);
     let content_escaped = escape_graphql_string(content);
     let timestamp_escaped = escape_graphql_string(timestamp);
-    let message_key = format!("{session_id_escaped}:{sequence}");
+    let message_key = escape_graphql_string(&gents::session::sequence_message_key(
+        agent_did,
+        session_id,
+        requester_did,
+        sequence,
+    ));
     let mutation = format!(
         r#"mutation {{
             create_AgentMessage(input: {{
                 message_key: "{message_key}",
                 session_id: "{session_id_escaped}",
-                agent_did: "{AGENT_DID}",
-                requester_did: null,
+                agent_did: "{agent_did_escaped}",
+                requester_did: {requester},
                 sequence: {sequence},
                 role: "{role_escaped}",
                 content: "{content_escaped}",
@@ -860,7 +881,9 @@ pub async fn create_compaction_entry(
     let session_id_escaped = escape_graphql_string(session_id);
     let summary_escaped = escape_graphql_string(summary);
     let created_at_escaped = escape_graphql_string(created_at);
-    let compaction_key = format!("{session_id_escaped}:{sequence}");
+    let compaction_key = escape_graphql_string(&gents::session::compaction_key(
+        AGENT_DID, session_id, None, sequence,
+    ));
     let mutation = format!(
         r#"mutation {{
             create_CompactionEntry(input: {{

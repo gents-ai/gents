@@ -1,33 +1,9 @@
-//! Agent self-configuration tools (#654).
-//!
-//! A typed, self-documenting tool family through which an agent manages **its
-//! own** configuration documents: `get_my_config` plus one `configure_*` tool
-//! per category (behavior, tools, profile, backend, mcp_service, automation,
-//! persona). Gated by `ToolSelection.enable_self_config` +
-//! `self_config_categories`; writes execute under the agent DID inside one
-//! transaction, so DefraDB ACP — not app-level checks — is the authorization
-//! boundary. The Lean `SelfConfig` model proves the patch semantics (identity
-//! immutability, field containment, transactional totality, no-lockout
-//! recoverability); `config_client::patch` is the fenced implementation.
-//!
-//! The tools change *how* the agent behaves, never *who it is*: every patch
-//! surface excludes identity/unique keys, the owner DID, runtime-owned status
-//! fields, and secrets (`InferenceBackend.api_key` in particular is neither
-//! readable nor writable here).
-//!
-//! `configure_persona` (category `persona`) is the one exception to "self
-//! only": every other `configure_*` tool patches a document owned by THIS
-//! behavior/agent and rejects anything pointing elsewhere. Persona management
-//! is document-in-nature too, but its unit isn't a patch on the calling
-//! behavior — it's a `PersonaConfigRequest` row asking to create, clone,
-//! edit, or disable a SIBLING `AgentBehavior` of the same principal
-//! (`agent_did`). `behavior_id`/`clone_from` naming another of this agent's
-//! own personas is the whole point of the tool, not a boundary violation:
-//! the request is still scoped to `agent_did` (never another agent's
-//! principal), it just isn't scoped to `behavior_id` the way every other
-//! tool in this family is. See `crate::agent::persona_ops` for the shared
-//! admission/materialization core this tool, the P2P persona-request
-//! reconciler, and the `gents` CLI all drive.
+//! Principal-scoped self-configuration through canonical context and inference documents.
+//! Patches name explicit writable fields and commit through the common desired-state
+//! transaction after validating the complete retained configuration. Nested tool
+//! permissions and auth references retain their existing typed owners. Raw API keys
+//! cannot be changed or returned. Optional no-lockout checks the candidate config
+//! chain. Persona requests reuse the existing signed admission and reconciliation path.
 
 mod ops;
 mod read;
@@ -46,7 +22,6 @@ use serde_json::{json, Map, Value};
 use crate::agent::p2p_reconcile::{GraphqlPersonaRequestStore, PersonaRequestStore};
 use crate::agent::persona_ops::local_persona_request_mutation;
 use crate::config_client::patch::{SelfConfigPatch, SelfConfigTarget};
-use crate::document_config::{Schedule, Task};
 use crate::graphql::escape_graphql_string;
 use crate::llm::tool::{Tool, ToolDefinition, ToolDyn};
 use crate::tool_surface::SelfConfigToolConfig;
@@ -154,394 +129,158 @@ fn outcome_text(outcome: &PatchOutcome) -> Result<String> {
 // Category request builders: each returns the ApplyRequest the core drives.
 // ---------------------------------------------------------------------------
 
-fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let behavior_id = core.behavior_id().to_string();
-    let agent_did = core.agent_did().to_string();
-    let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
-    request.resolve_unique = Box::new(move |_| Ok(behavior_id.clone()));
-    request.validate = Box::new(move |txn, _anchor, _stored, merged| {
-        let merged = merged.clone();
-        let agent_did = agent_did.clone();
-        Box::pin(async move {
-            let behavior: crate::AgentBehaviorDocument = decode_merged("AgentBehavior", &merged)?;
-
-            // Self only: a patched tool_selection_id must belong to this
-            // agent even if it exists. Not a generic document reference
-            // rule — ToolSelection ownership is self-config policy, not
-            // document shape — so it stays here; existence is checked below
-            // by the owner along with every other reference.
-            if let Some(selection_id) = merged
-                .get("tool_selection_id")
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                if let Some((_, referenced)) = crate::config_client::patch::read_doc_in_txn(
-                    txn,
-                    SelfConfigTarget::ToolSelection,
-                    selection_id,
-                )
-                .await?
-                {
-                    let owner = referenced
-                        .get("agent_did")
-                        .and_then(Value::as_str)
-                        .unwrap_or("");
-                    if owner != agent_did {
-                        bail!(
-                            "behavior.tool_selection_id references {selection_id:?}, which is \
-                             owned by {owner:?}, not this agent — self-config is self only"
-                        );
-                    }
-                }
-            }
-
-            // Document rule: backend/model/tool_selection/profile/skill
-            // reference existence is owned by
-            // `AgentBehavior::validate_references`. A patch may leave a
-            // reference field untouched (e.g. skill_refs when only
-            // system_prompt changes), so this needs the full current
-            // reference snapshot, not just the fields the patch touches.
-            let refs =
-                crate::document_config::ConfigReferences::load_in_txn(txn, &agent_did).await?;
-            behavior.validate_references(&refs)?;
-            Ok(())
-        })
+fn anchored_request(
+    target: SelfConfigTarget,
+    field: &'static str,
+    patch: SelfConfigPatch,
+) -> ApplyRequest<'static> {
+    let mut request = ApplyRequest::new(target, patch);
+    request.resolve_unique = Box::new(move |anchor| {
+        anchor
+            .ref_id(field)
+            .ok_or_else(|| anyhow!("bound {field} is missing"))
     });
-    request.guard = Box::new(|_anchor, merged| {
-        if merged.get("enabled").and_then(Value::as_bool) == Some(false) {
-            bail!(
-                "no-lockout guard: disabling this behavior would strip the agent's own \
-                 reconfigure ability"
-            );
-        }
+    request
+}
+fn behavior_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    let id = core.behavior_id().to_owned();
+    let mut request = ApplyRequest::new(SelfConfigTarget::AgentBehavior, patch);
+    request.resolve_unique = Box::new(move |_| Ok(id.clone()));
+    request.guard = Box::new(|_, merged| {
+        anyhow::ensure!(
+            merged.get("enabled").and_then(Value::as_bool) != Some(false),
+            "no-lockout guard: behavior must remain enabled"
+        );
         Ok(())
     });
     request
 }
-
-fn tools_request(core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let anchor_hint = core.behavior_id().to_string();
-    let agent_did = core.agent_did().to_string();
-    let mut request = ApplyRequest::new(SelfConfigTarget::ToolSelection, patch);
-    request.resolve_unique = Box::new(move |anchor| {
-        anchor.ref_id("tool_selection_id").ok_or_else(|| {
-            anyhow!(
-                "behavior {anchor_hint} has no tool_selection_id; bind one first \
-                 (e.g. configure_behavior {{\"tool_selection_id\": \"<selection>\"}})"
-            )
-        })
-    });
-    request.validate = Box::new(move |_txn, _anchor, stored, merged| {
-        let stored = stored.clone();
+fn tools_request(_core: &SelfConfigCore, patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    let mut request = anchored_request(SelfConfigTarget::Tools, "tools_id", patch);
+    request.validate = Box::new(|_, _, _, merged| {
         let merged = merged.clone();
-        let agent_did = agent_did.clone();
+        Box::pin(async move { validate_merged_selection(&merged) })
+    });
+    request.guard = Box::new(|_, merged| guard_selection_keeps_gate(merged));
+    request
+}
+fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    anchored_request(
+        SelfConfigTarget::InferenceProfile,
+        "inference_profile_id",
+        patch,
+    )
+}
+fn profile_target_request(
+    target: Option<&str>,
+    patch: SelfConfigPatch,
+) -> Result<ApplyRequest<'static>> {
+    Ok(match target.unwrap_or("profile") {
+        "profile" => profile_request(patch),
+        "sampling" => anchored_request(SelfConfigTarget::InferenceSampling, "sampling_id", patch),
+        "execution" => {
+            anchored_request(SelfConfigTarget::InferenceExecution, "execution_id", patch)
+        }
+        "retry_policy" => anchored_request(
+            SelfConfigTarget::InferenceRetryPolicy,
+            "retry_policy_id",
+            patch,
+        ),
+        "compaction" => anchored_request(SelfConfigTarget::Compaction, "compaction_id", patch),
+        other => bail!("unknown profile target {other:?}"),
+    })
+}
+fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
+    let mut request = anchored_request(SelfConfigTarget::InferenceBackend, "backend_id", patch);
+    request.validate = Box::new(move |_, _, stored, merged| {
+        let merged = merged.clone();
+        let stored = stored.clone();
         Box::pin(async move {
-            // Self only: the selection being patched must belong to this
-            // agent, even if a stale behavior binding points elsewhere.
-            let owner = stored
-                .get("agent_did")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if owner != agent_did {
-                bail!(
-                    "the bound ToolSelection is owned by {owner:?}, not this agent — \
-                     self-config is self only"
+            let backend: crate::InferenceBackend = decode_merged("InferenceBackend", &merged)?;
+            if matches!(
+                backend.auth,
+                crate::document_config::BackendAuth::ApiKey { .. }
+            ) {
+                let previous: crate::InferenceBackend = decode_merged("InferenceBackend", &stored)?;
+                anyhow::ensure!(
+                    backend.auth == previous.auth,
+                    "raw API keys are operator-managed; select an environment or OAuth reference"
                 );
             }
-            validate_merged_selection(&merged)
+            backend.validate()
         })
     });
-    request.guard = Box::new(|_anchor, merged| guard_selection_keeps_gate(merged));
-    request
-}
-
-fn profile_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let mut request = ApplyRequest::new(SelfConfigTarget::InferenceProfile, patch);
-    request.resolve_unique = Box::new(|anchor| {
-        anchor.ref_id("inference_profile_id").ok_or_else(|| {
-            anyhow!("behavior has no inference_profile_id; bind one via configure_behavior first")
-        })
-    });
-    request.validate = Box::new(|_txn, _anchor, _stored, merged| {
-        let merged = merged.clone();
-        Box::pin(async move {
-            let profile: crate::document_config::InferenceProfile =
-                decode_merged("InferenceProfile", &merged)?;
-            profile.validate()
-        })
+    request.guard = Box::new(|_, merged| {
+        anyhow::ensure!(
+            merged.get("enabled").and_then(Value::as_bool) != Some(false),
+            "no-lockout guard: backend must remain enabled"
+        );
+        Ok(())
     });
     request
 }
-
-fn backend_request(patch: SelfConfigPatch) -> ApplyRequest<'static> {
-    let mut request = ApplyRequest::new(SelfConfigTarget::InferenceBackend, patch);
-    request.resolve_unique = Box::new(|anchor| {
-        anchor
-            .ref_id("backend_id")
-            .ok_or_else(|| anyhow!("behavior has no backend_id; bind one via configure_behavior"))
-    });
-    request.validate = Box::new(|txn, _anchor, _stored, merged| {
-        let merged = merged.clone();
-        Box::pin(async move {
-            let backend = crate::InferenceBackend::from_value(&Value::Object(merged))?;
-            let stored_api_key_is_present =
-                backend_has_stored_api_key(txn, &backend.backend_id).await?;
-            // `current_model=None`: the no-lockout conjunct is opt-in policy
-            // (`self_config_no_lockout`), enforced below in `guard` only when
-            // the operator has turned it on.
-            backend.validate_with_api_key_presence(None, stored_api_key_is_present)
-        })
-    });
-    request.guard = Box::new(|anchor, merged| {
-        if merged.get("enabled").and_then(Value::as_bool) == Some(false) {
-            bail!(
-                "no-lockout guard: disabling the behavior's own backend would make its \
-                 model unresolvable"
-            );
-        }
-        // Document rule: dropping the current model from `models` is owned
-        // by `InferenceBackend::validate`'s no-lockout conjunct.
-        let backend = crate::InferenceBackend::from_value(&Value::Object(merged.clone()))?;
-        let current_model = anchor
-            .doc
-            .get("model_name")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|name| !name.is_empty());
-        backend.validate(current_model)
-    });
-    request
-}
-
-async fn backend_has_stored_api_key(
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    backend_id: &str,
-) -> Result<bool> {
-    let backend_id = crate::graphql::escape_graphql_string(backend_id);
-    let query = format!(
-        r#"{{
-            InferenceBackend(
-                filter: {{
-                    _and: [
-                        {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                        {{ api_key: {{ _ne: "" }} }}
-                    ]
-                }},
-                limit: 1
-            ) {{ backend_id }}
-        }}"#
-    );
-    let response = txn.execute(&query).await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get("InferenceBackend"))
-        .and_then(Value::as_array)
-        .is_some_and(|rows| !rows.is_empty()))
-}
-
 fn mcp_service_request(service_id: String, patch: SelfConfigPatch) -> ApplyRequest<'static> {
     let mut request = ApplyRequest::new(SelfConfigTarget::ToolServiceRegistry, patch);
     request.resolve_unique = Box::new(move |_| Ok(service_id.clone()));
-    request.validate = Box::new(|_txn, _anchor, _stored, merged| {
-        let merged = merged.clone();
-        Box::pin(async move {
-            if let Some(port) = merged.get("mcp_port") {
-                let valid = port
-                    .as_i64()
-                    .is_some_and(|port| (1..=65535).contains(&port));
-                if !valid {
-                    bail!("mcp_service.mcp_port must be within 1..=65535");
-                }
-            }
-            Ok(())
-        })
-    });
     request
 }
-
 fn automation_request(
     core: &SelfConfigCore,
     target: SelfConfigTarget,
     id: String,
     patch: SelfConfigPatch,
 ) -> ApplyRequest<'static> {
-    let behavior_id = core.behavior_id().to_string();
-    let core = core.clone();
+    let owner = core.agent_did().to_owned();
+    let behavior = core.behavior_id().to_owned();
     let mut request = ApplyRequest::new(target, patch);
     request.allow_create = true;
-    {
-        let id = id.clone();
-        request.resolve_unique = Box::new(move |_| Ok(id.clone()));
-    }
-    request.on_create = Box::new(move |unique_value, merged| {
-        merged.insert(
-            target.unique_field().to_string(),
-            Value::String(unique_value.to_string()),
-        );
+    request.resolve_unique = Box::new(move |_| Ok(id.clone()));
+    request.on_create = Box::new(move |id, merged| {
+        merged.insert(target.unique_field().into(), json!(id));
+        merged.insert("agent_did".into(), json!(owner));
         if target == SelfConfigTarget::Task {
-            // The ownership link is pinned at create and immutable after.
-            merged.insert(
-                "behavior_id".to_string(),
-                Value::String(behavior_id.clone()),
-            );
+            merged.insert("behavior_id".into(), json!(behavior));
         }
-        merged
-            .entry("enabled".to_string())
-            .or_insert(Value::Bool(true));
-        let now = chrono::Utc::now().to_rfc3339();
-        merged.insert("created_at".to_string(), Value::String(now.clone()));
-        merged.insert("updated_at".to_string(), Value::String(now));
         Ok(())
     });
+    let core = core.clone();
     request.validate = Box::new(move |txn, anchor, stored, merged| {
         let core = core.clone();
         let stored = stored.clone();
         let merged = merged.clone();
         Box::pin(async move {
-            match target {
-                SelfConfigTarget::Task => {
-                    let task: Task = decode_merged("Task", &merged)?;
-                    let owner = if stored.is_empty() {
-                        merged.get("behavior_id").and_then(Value::as_str)
-                    } else {
-                        stored.get("behavior_id").and_then(Value::as_str)
-                    };
-                    if owner != Some(core.behavior_id()) {
-                        bail!(
-                            "task {} is not owned by this behavior (behavior_id {owner:?}); \
-                             self-config automation is scoped to this behavior",
-                            task.task_id
-                        );
-                    }
-                }
-                SelfConfigTarget::Schedule => {
-                    let schedule: Schedule = decode_merged("Schedule", &merged)?;
-                    // An EXISTING schedule may only be patched if it already
-                    // belongs to this behavior — otherwise a patch could seize
-                    // another behavior's schedule by re-pointing its task_id
-                    // at an owned task.
-                    ensure_stored_automation_owned(&core, txn, anchor, "schedule", &stored).await?;
-                    let Some(task_id) = schedule
-                        .task_id
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                    else {
-                        bail!("schedule.task_id is required and must reference an owned task");
-                    };
-                    if !core.task_owned(txn, anchor, task_id).await? {
-                        bail!(
-                            "schedule.task_id {task_id:?} does not reference a task owned by \
-                             this behavior"
-                        );
-                    }
-                    if schedule.interval_secs.is_none() && schedule.cron.is_none() {
-                        bail!("schedule needs a cadence: set interval_secs or cron");
-                    }
-                }
-                SelfConfigTarget::EventTrigger => {
-                    ensure_stored_automation_owned(&core, txn, anchor, "event_trigger", &stored)
-                        .await?;
-                    let task_id = merged
+            if target == SelfConfigTarget::Task {
+                anyhow::ensure!(
+                    merged.get("behavior_id").and_then(Value::as_str) == Some(core.behavior_id()),
+                    "task belongs to another behavior"
+                );
+            }
+            if target == SelfConfigTarget::Trigger {
+                for doc in [&stored, &merged].into_iter().filter(|doc| !doc.is_empty()) {
+                    let task = doc
                         .get("task_id")
                         .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "event_trigger.task_id is required and must reference an \
-                                 owned task"
-                            )
-                        })?;
-                    if !core.task_owned(txn, anchor, task_id).await? {
-                        bail!(
-                            "event_trigger.task_id {task_id:?} does not reference a task \
-                             owned by this behavior"
-                        );
-                    }
-                    for field in ["source_collection", "event_kind"] {
-                        let present = merged
-                            .get(field)
-                            .and_then(Value::as_str)
-                            .is_some_and(|value| !value.trim().is_empty());
-                        if !present {
-                            bail!("event_trigger.{field} is required");
-                        }
-                    }
-                    // `source_collection` is interpolated into GraphQL
-                    // identifier positions by the trigger engine, where
-                    // escaping cannot apply — the value must BE a valid
-                    // collection identifier or the write is rejected here,
-                    // at the privilege boundary.
-                    let source_collection = merged
-                        .get("source_collection")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if let Err(error) =
-                        crate::graphql::validate_collection_identifier(source_collection)
-                    {
-                        bail!("event_trigger.source_collection: {error}");
-                    }
-                    // `filter` is spliced into the trigger engine's probe as
-                    // a whole object fragment, which escaping cannot protect
-                    // and identifier validation does not cover (#1038).
-                    if let Some(filter) = merged
-                        .get("filter")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|filter| !filter.is_empty())
-                    {
-                        if let Err(error) = crate::graphql::validate_graphql_filter_fragment(filter)
-                        {
-                            bail!("event_trigger.filter: {error}");
-                        }
-                    }
+                        .ok_or_else(|| anyhow!("trigger task is required"))?;
+                    anyhow::ensure!(
+                        core.task_owned(txn, anchor, task).await?,
+                        "trigger task belongs to another behavior"
+                    );
                 }
-                _ => unreachable!("automation targets only"),
             }
             Ok(())
         })
     });
     request
 }
-
-/// A stored schedule/trigger may only be patched when its CURRENT task link
-/// already belongs to this behavior; creation (empty stored doc) is exempt.
-async fn ensure_stored_automation_owned(
-    core: &SelfConfigCore,
-    txn: &crate::config_client::ConfigApplyTxn<'_>,
-    anchor: &ops::BehaviorAnchor,
-    kind: &str,
-    stored: &Map<String, Value>,
-) -> Result<()> {
-    if stored.is_empty() {
-        return Ok(());
-    }
-    let stored_task = stored
-        .get("task_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty());
-    let owned = match stored_task {
-        Some(task_id) => core.task_owned(txn, anchor, task_id).await?,
-        None => false,
-    };
-    if !owned {
-        bail!(
-            "{kind} exists but is not owned by this behavior (its task_id {stored_task:?} \
-             does not resolve to an owned task) — self-config automation is self only"
-        );
-    }
-    Ok(())
-}
-
 fn automation_target(kind: &str) -> Result<SelfConfigTarget> {
     match kind {
         "task" => Ok(SelfConfigTarget::Task),
         "schedule" => Ok(SelfConfigTarget::Schedule),
-        "event_trigger" => Ok(SelfConfigTarget::EventTrigger),
-        other => bail!("unknown automation kind {other:?}; use task, schedule, or event_trigger"),
+        "trigger" => Ok(SelfConfigTarget::Trigger),
+        "event_source" => Ok(SelfConfigTarget::EventSource),
+        _ => {
+            bail!("unknown automation kind {kind:?}; use task, schedule, trigger, or event_source")
+        }
     }
 }
 
@@ -557,6 +296,7 @@ pub struct GetMyConfigTool {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetMyConfigParams {
     /// Dry-run preview (requires `self_config_dry_run`): the diff a patch
     /// would produce, without committing.
@@ -565,13 +305,14 @@ pub struct GetMyConfigParams {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PreviewParams {
     pub category: String,
     /// Target id for categories that need one (`mcp_service` service_id,
     /// `automation` task/schedule/trigger id).
     #[serde(default)]
     pub id: Option<String>,
-    /// Automation kind (`task` | `schedule` | `event_trigger`).
+    /// Automation kind (`task` | `schedule` | `trigger`).
     #[serde(default)]
     pub kind: Option<String>,
     pub patch: PatchArg,
@@ -598,8 +339,8 @@ impl Tool for GetMyConfigTool {
                         },
                         "kind": {
                             "type": "string",
-                            "enum": ["task", "schedule", "event_trigger"],
-                            "description": "Automation kind (category=automation only).",
+                            "enum": ["behavior", "context", "profile", "sampling", "execution", "retry_policy", "compaction", "task", "schedule", "trigger", "event_source"],
+                            "description": "Target within the selected behavior, profile, or automation category.",
                         },
                         "id": {
                             "type": "string",
@@ -651,7 +392,7 @@ impl Tool for GetMyConfigTool {
                 if !self.dry_run {
                     return Err(SelfConfigError(anyhow!(
                         "dry-run preview is not enabled for this behavior \
-                         (ToolSelection.self_config_dry_run)"
+                         (Tools.self_config_dry_run)"
                     )));
                 }
                 if !self.categories.contains(&preview.category) {
@@ -667,9 +408,15 @@ impl Tool for GetMyConfigTool {
                 }
                 let patch = preview.patch.into_patch();
                 let request = match preview.category.as_str() {
-                    "behavior" => behavior_request(&self.core, patch),
+                    "behavior" => match preview.kind.as_deref().unwrap_or("behavior") {
+                        "behavior" => behavior_request(&self.core, patch),
+                        "context" => {
+                            anchored_request(SelfConfigTarget::AgentContext, "context_id", patch)
+                        }
+                        other => return Err(anyhow!("unknown behavior target {other:?}").into()),
+                    },
                     "tools" => tools_request(&self.core, patch),
-                    "profile" => profile_request(patch),
+                    "profile" => profile_target_request(preview.kind.as_deref(), patch)?,
                     "backend" => backend_request(patch),
                     "mcp_service" => {
                         let id = preview.id.ok_or_else(|| {
@@ -705,7 +452,10 @@ impl Tool for GetMyConfigTool {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PatchOnlyParams {
+    #[serde(default)]
+    pub target: Option<String>,
     pub patch: PatchArg,
 }
 
@@ -723,20 +473,26 @@ impl Tool for ConfigureBehaviorTool {
         ToolDefinition {
             name: CONFIGURE_BEHAVIOR_TOOL_NAME.to_string(),
             description: format!(
-                "Patch this agent's own AgentBehavior document (prompt, model, backend and \
-                 profile references, compaction, skills wiring). Identity fields are \
-                 immutable. {EFFECT_TIMING_NOTE}"
+                "Patch the bound behavior or context document. Context owns prompt, tools, skills and compaction references. Identity fields are immutable. {EFFECT_TIMING_NOTE}"
             ),
             parameters: json!({
                 "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::AgentBehavior) },
+                "properties": { "target": {"type":"string","enum":["behavior","context"],"default":"behavior"}, "patch": {"type":"object","description":"Writable fields of the selected canonical behavior or context document."} },
                 "required": ["patch"],
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let request = behavior_request(&self.core, args.patch.into_patch());
+        let request = match args.target.as_deref().unwrap_or("behavior") {
+            "behavior" => behavior_request(&self.core, args.patch.into_patch()),
+            "context" => anchored_request(
+                SelfConfigTarget::AgentContext,
+                "context_id",
+                args.patch.into_patch(),
+            ),
+            other => return Err(anyhow!("unknown behavior target {other:?}").into()),
+        };
         let outcome = self.core.apply(request).await?;
         Ok(outcome_text(&outcome)?)
     }
@@ -756,19 +512,20 @@ impl Tool for ConfigureToolsTool {
         ToolDefinition {
             name: CONFIGURE_TOOLS_TOOL_NAME.to_string(),
             description: format!(
-                "Patch this agent's own ToolSelection document (tool gates and scopes, \
-                 including the self-config gate itself). tool_policy_version and \
-                 write_tools, datastore_tool_surface_ids, and eth_tool_ids are operator/apply-managed and protected. {EFFECT_TIMING_NOTE}"
+                "Patch the bound Tools document using its canonical nested groups and explicit permissions. {EFFECT_TIMING_NOTE}"
             ),
             parameters: json!({
                 "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::ToolSelection) },
+                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::Tools) },
                 "required": ["patch"],
             }),
         }
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args.target.is_some() {
+            return Err(anyhow!("configure_tools has no target selector").into());
+        }
         let request = tools_request(&self.core, args.patch.into_patch());
         let outcome = self.core.apply(request).await?;
         Ok(outcome_text(&outcome)?)
@@ -789,14 +546,12 @@ impl Tool for ConfigureProfileTool {
         ToolDefinition {
             name: CONFIGURE_PROFILE_TOOL_NAME.to_string(),
             description: format!(
-                "Patch the InferenceProfile this behavior references (sampling, turn and \
-                 token limits, deadlines, retry tuning). Note: profiles are global \
-                 documents — other behaviors referencing the same profile see the change. \
+                "Patch the selected bound inference or compaction document. Shared references within this principal observe the committed change. \
                  {EFFECT_TIMING_NOTE}"
             ),
             parameters: json!({
                 "type": "object",
-                "properties": { "patch": patch_parameter_schema(SelfConfigTarget::InferenceProfile) },
+                "properties": { "target": {"type":"string","enum":["profile","sampling","execution","retry_policy","compaction"],"default":"profile"}, "patch": {"type":"object","description":"Writable fields of the selected canonical inference or compaction document."} },
                 "required": ["patch"],
             }),
         }
@@ -805,7 +560,10 @@ impl Tool for ConfigureProfileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let outcome = self
             .core
-            .apply(profile_request(args.patch.into_patch()))
+            .apply(profile_target_request(
+                args.target.as_deref(),
+                args.patch.into_patch(),
+            )?)
             .await?;
         Ok(outcome_text(&outcome)?)
     }
@@ -824,12 +582,7 @@ impl Tool for ConfigureBackendTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_BACKEND_TOOL_NAME.to_string(),
-            description: format!(
-                "Patch the InferenceBackend this behavior references (endpoint, models, \
-                 api_key_env_var reference, concurrency). The raw api_key secret and \
-                 prober-owned health fields are protected. Backends are global documents. \
-                 {EFFECT_TIMING_NOTE}"
-            ),
+            description: format!("Patch the backend selected by the bound inference profile. Endpoint, auth references, discovery limits and concurrency are configurable; raw keys and observations remain protected. {EFFECT_TIMING_NOTE}"),
             parameters: json!({
                 "type": "object",
                 "properties": { "patch": patch_parameter_schema(SelfConfigTarget::InferenceBackend) },
@@ -839,6 +592,9 @@ impl Tool for ConfigureBackendTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if args.target.is_some() {
+            return Err(anyhow!("configure_backend has no target selector").into());
+        }
         let outcome = self
             .core
             .apply(backend_request(args.patch.into_patch()))
@@ -852,6 +608,7 @@ pub struct ConfigureMcpServiceTool {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigureMcpServiceParams {
     pub service_id: String,
     pub patch: PatchArg,
@@ -894,8 +651,9 @@ pub struct ConfigureAutomationTool {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigureAutomationParams {
-    /// `task` | `schedule` | `event_trigger`.
+    /// `task` | `schedule` | `trigger`.
     pub kind: String,
     /// The document's unique id (created if absent).
     pub id: String,
@@ -911,25 +669,19 @@ impl Tool for ConfigureAutomationTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_AUTOMATION_TOOL_NAME.to_string(),
-            description: format!(
-                "Create or patch automation owned by this behavior: Tasks (kind=task, \
-                 pinned to this behavior), Schedules (kind=schedule, task_id must \
-                 reference an owned task; cadence via interval_secs or cron), and \
-                 EventTriggers (kind=event_trigger). Scheduler/trigger runtime \
-                 bookkeeping fields are protected. {EFFECT_TIMING_NOTE}"
-            ),
+            description: format!("Create or patch Task, Trigger, Schedule, or EventSource documents owned by this principal. Tasks and trigger task links are scoped to this behavior. Schedule owns cadence; Trigger owns task, source and concurrency. Runtime observations are protected. {EFFECT_TIMING_NOTE}"),
             parameters: json!({
                 "type": "object",
                 "properties": {
-                    "kind": { "type": "string", "enum": ["task", "schedule", "event_trigger"] },
+                    "kind": { "type": "string", "enum": ["task", "schedule", "trigger", "event_source"] },
                     "id": { "type": "string" },
                     "patch": {
                         "type": "object",
                         "description": format!(
-                            "Writable fields — task: {}; schedule: {}; event_trigger: {}.",
+                            "Writable fields — task: {}; schedule: {}; trigger: {}.",
                             SelfConfigTarget::Task.writable_fields().join(", "),
                             SelfConfigTarget::Schedule.writable_fields().join(", "),
-                            SelfConfigTarget::EventTrigger.writable_fields().join(", "),
+                            SelfConfigTarget::Trigger.writable_fields().join(", "),
                         ),
                         "additionalProperties": true,
                     },
@@ -961,35 +713,23 @@ pub struct ConfigurePersonaTool {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigurePersonaParams {
     /// `list` | `create` | `edit` | `clone` | `disable`.
     pub action: String,
     #[serde(default)]
     pub persona_name: Option<String>,
-    /// The target persona's `behavior_id` (required for `edit`/`disable`). A
-    /// short name (without the `{agent_did}:` prefix) resolves automatically
-    /// — see [`resolve_persona_ref`].
+    /// Exact behavior_id of the sibling persona (required for edit/disable).
     #[serde(default)]
     pub behavior_id: Option<String>,
-    /// The sibling `behavior_id` to clone from (required for `clone`, unless
-    /// `preset` is also given — see the tool description). A short name
-    /// resolves automatically, same as `behavior_id`.
+    /// Exact sibling behavior_id to clone; a supplied preset requests a new persona.
     #[serde(default)]
     pub clone_from: Option<String>,
-    /// `"backend_id|model_name"`; real backend ids are DID-qualified, e.g.
-    /// `"did:key:zAgentExample...:openai|gpt-5.5"`. A bare model name (e.g.
-    /// `"gpt-5.5"`) is also accepted when it uniquely identifies one enabled
-    /// backend's model — see [`resolve_model`].
-    #[serde(default)]
-    pub model: Option<String>,
     #[serde(default)]
     pub root: Option<String>,
     #[serde(default)]
     pub preset: Option<String>,
-    /// Inference profile id. A short name (without the `{agent_did}:`
-    /// prefix) resolves automatically; an `"id|display"` pair is also
-    /// accepted (the display half is stripped) — see
-    /// [`resolve_profile_id`].
+    /// Exact owner-scoped inference profile ID.
     #[serde(default)]
     pub profile_id: Option<String>,
 }
@@ -1003,7 +743,6 @@ const PERSONA_REQUEST_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 struct PersonaCatalogSnapshot {
-    available_models: Vec<String>,
     allowed_roots: Vec<String>,
     available_profile_ids: Vec<String>,
     behaviors: BTreeMap<String, PersonaBehaviorSnapshot>,
@@ -1012,7 +751,6 @@ struct PersonaCatalogSnapshot {
 #[derive(Debug, Clone, serde::Serialize)]
 struct PersonaBehaviorSnapshot {
     enabled: bool,
-    tool_selection_id: String,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -1032,8 +770,6 @@ struct PersonaRequestRowOut {
     #[serde(default)]
     persona_name: Option<String>,
     #[serde(default)]
-    backend_model: Option<String>,
-    #[serde(default)]
     root: Option<String>,
     #[serde(default)]
     preset: Option<String>,
@@ -1052,91 +788,25 @@ struct PersonaRequestRowOut {
 }
 
 // ---------------------------------------------------------------------------
-// Short-id normalization (#1052): the model routinely types short, human
-// names ("default", "default-profile", a bare model name) rather than the
-// DID-qualified ids the underlying documents actually key on. Resolution
-// happens HERE, in the tool, before the request row is authored — admission
-// (`decide_persona_request` in `crate::agent::persona_ops`) stays strict and
-// untouched, so a short id that still doesn't resolve to anything real gets
-// the same enumerated rejection a fully-qualified typo would. Pure and
-// independently unit-tested (see `self_config::tests`).
-// ---------------------------------------------------------------------------
-
-/// True when `value` already carries `agent_did`'s qualifying prefix
-/// (`"{agent_did}:"`) — i.e. is already a fully-qualified id rather than a
-/// short name the model typed by hand.
-fn is_agent_qualified(agent_did: &str, value: &str) -> bool {
-    value.starts_with(&format!("{agent_did}:"))
+/// Preserve exact owner-scoped document IDs; no hidden rewriting.
+fn resolve_persona_ref(_agent_did: &str, value: &str) -> String {
+    value.to_owned()
 }
 
-/// Resolve a short `behavior_id`/`clone_from` name to `{agent_did}:{value}`
-/// unless it is empty or already agent-DID-qualified.
-fn resolve_persona_ref(agent_did: &str, value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || is_agent_qualified(agent_did, trimmed) {
-        trimmed.to_string()
-    } else {
-        format!("{agent_did}:{trimmed}")
-    }
-}
-
-/// Resolve a `profile_id`: first strip a `"|display"` suffix that leaks in
-/// when a model copies the `id|display` shape it sees elsewhere (e.g. the
-/// `"backend|model"` pairs in `available_models`), then apply the same
-/// short-id qualification as [`resolve_persona_ref`].
-fn resolve_profile_id(agent_did: &str, value: &str) -> String {
-    let trimmed = value.trim();
-    let base = trimmed.split_once('|').map_or(trimmed, |(id, _display)| id);
-    resolve_persona_ref(agent_did, base)
-}
-
-/// Resolve a `model` value. `"backend_id|model_name"` passes through
-/// unchanged — the DID-qualified backend id can't be guessed. A bare name
-/// with no `'|'` resolves against the catalog's `available_models` when
-/// exactly one entry's model-name suffix (the part after the first `'|'`)
-/// matches; zero or multiple matches pass the value through unchanged so
-/// admission's enumerated rejection can explain why.
-fn resolve_model(value: &str, available_models: &BTreeSet<String>) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() || trimmed.contains('|') {
-        return trimmed.to_string();
-    }
-    let mut matches = available_models
-        .iter()
-        .filter(|pair| pair.split_once('|').map(|(_, model_name)| model_name) == Some(trimmed));
-    match (matches.next(), matches.next()) {
-        (Some(unique), None) => unique.clone(),
-        _ => trimmed.to_string(),
-    }
-}
-
-/// Resolve `configure_persona`'s `model` argument, loading the persona
-/// catalog view only when the value needs bare-name resolution (no `'|'`) —
-/// the same loader `action: "list"` (`persona_list`) already uses.
-async fn resolve_model_arg(
-    node: &Arc<EmbeddedNode>,
-    agent_did: &str,
-    model: Option<&str>,
-) -> Result<Option<String>> {
-    let Some(value) = model.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if value.contains('|') {
-        return Ok(Some(value.to_string()));
-    }
-    let store = GraphqlPersonaRequestStore::new(node.clone());
-    let catalog = store.load_catalog_view(agent_did).await?;
-    Ok(Some(resolve_model(value, &catalog.available_models)))
+fn resolve_profile_id(_agent_did: &str, value: &str) -> String {
+    value.to_owned()
 }
 
 async fn load_persona_request_row(
     node: &Arc<EmbeddedNode>,
     request_key: &str,
+    agent_did: &str,
 ) -> Result<Option<PersonaRequestRowOut>> {
     let escaped = escape_graphql_string(request_key);
+    let owner = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
-            PersonaConfigRequest(filter: {{ request_key: {{ _eq: "{escaped}" }} }}) {{
+            PersonaConfigRequest(filter: {{ agent_did: {{ _eq: "{owner}" }}, request_key: {{ _eq: "{escaped}" }} }}, limit: 2) {{
                 request_key
                 requester_did
                 agent_did
@@ -1144,7 +814,6 @@ async fn load_persona_request_row(
                 behavior_id
                 clone_from
                 persona_name
-                backend_model
                 root
                 preset
                 profile_id
@@ -1169,6 +838,7 @@ async fn load_persona_request_row(
     };
     let rows: Vec<PersonaRequestRowOut> =
         serde_json::from_value(value.clone()).map_err(|error| anyhow!("decode row: {error}"))?;
+    anyhow::ensure!(rows.len() <= 1, "ambiguous persona request identity");
     Ok(rows.into_iter().next())
 }
 
@@ -1176,10 +846,14 @@ async fn load_persona_request_row(
 /// `Update` event) drives it to a terminal status, or [`PERSONA_REQUEST_POLL_TIMEOUT`]
 /// elapses. A still-pending row is returned as-is rather than an error: the
 /// request is valid and will converge, the caller just needs to check again.
-async fn poll_persona_request(node: &Arc<EmbeddedNode>, request_key: &str) -> Result<String> {
+async fn poll_persona_request(
+    node: &Arc<EmbeddedNode>,
+    request_key: &str,
+    agent_did: &str,
+) -> Result<String> {
     let deadline = tokio::time::Instant::now() + PERSONA_REQUEST_POLL_TIMEOUT;
     loop {
-        if let Some(row) = load_persona_request_row(node, request_key).await? {
+        if let Some(row) = load_persona_request_row(node, request_key, agent_did).await? {
             if row.status.as_deref() != Some("pending") {
                 return serde_json::to_string_pretty(&row)
                     .map_err(|error| anyhow!("serialize persona request outcome: {error}"));
@@ -1203,7 +877,6 @@ async fn persona_list(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<Strin
     let store = GraphqlPersonaRequestStore::new(node.clone());
     let catalog = store.load_catalog_view(agent_did).await?;
     let snapshot = PersonaCatalogSnapshot {
-        available_models: catalog.available_models.into_iter().collect(),
         allowed_roots: catalog.allowed_roots.into_iter().collect(),
         available_profile_ids: catalog.available_profile_ids.into_iter().collect(),
         behaviors: catalog
@@ -1214,7 +887,6 @@ async fn persona_list(node: &Arc<EmbeddedNode>, agent_did: &str) -> Result<Strin
                     behavior_id,
                     PersonaBehaviorSnapshot {
                         enabled: reference.enabled,
-                        tool_selection_id: reference.tool_selection_id,
                     },
                 )
             })
@@ -1229,10 +901,6 @@ async fn persona_mutate(
     identity: &dyn AgentIdentity,
     args: &ConfigurePersonaParams,
 ) -> Result<String> {
-    // Short-id normalization (#1052): resolved once, up front, so every
-    // action below (and the mutation builder) sees fully-qualified values.
-    // Admission stays strict — a short id that still doesn't resolve to
-    // anything real reaches the same enumerated rejection a typo would.
     let resolved_behavior_id = args
         .behavior_id
         .as_deref()
@@ -1241,7 +909,6 @@ async fn persona_mutate(
         .profile_id
         .as_deref()
         .map(|value| resolve_profile_id(agent_did, value));
-    let resolved_model = resolve_model_arg(node, agent_did, args.model.as_deref()).await?;
 
     let required_behavior_id = |action: &str| -> Result<()> {
         if resolved_behavior_id
@@ -1307,7 +974,6 @@ async fn persona_mutate(
         behavior_id: resolved_behavior_id,
         clone_from,
         persona_name: args.persona_name.clone(),
-        backend_model: resolved_model,
         root: args.root.clone(),
         preset: args.preset.clone(),
         profile_id: resolved_profile_id,
@@ -1324,7 +990,7 @@ async fn persona_mutate(
     )
     .await?;
 
-    poll_persona_request(node, &request_key).await
+    poll_persona_request(node, &request_key, agent_did).await
 }
 
 impl Tool for ConfigurePersonaTool {
@@ -1336,25 +1002,7 @@ impl Tool for ConfigurePersonaTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: CONFIGURE_PERSONA_TOOL_NAME.to_string(),
-            description: "Manage SIBLING personas of this agent (other AgentBehavior/ \
-                 ToolSelection pairs under the same agent_did) through the PersonaConfigRequest \
-                 channel. list reads this agent's current behaviors plus the published \
-                 models/roots/profiles they can be built from. create/clone/edit/disable author \
-                 a request row and poll it for up to 5s as the runtime reconciler admits and \
-                 materializes it; a still-pending result names the request_key so you can check \
-                 again. Unlike every other configure_* tool, behavior_id/clone_from here may \
-                 name ANY behavior of this same agent — that cross-behavior reach is this \
-                 tool's purpose, not an exception to self-config's self-only rule. \
-                 behavior_id/clone_from/profile_id accept a short name (without the agent DID \
-                 prefix) when unambiguous, and model accepts a bare model name when it \
-                 uniquely identifies one enabled backend's model — this tool resolves all of \
-                 these before submitting the request; a value that still doesn't resolve is \
-                 rejected with the published options. Clone copies the source persona's \
-                 permissions verbatim: naming a preset alongside clone_from means you want \
-                 DIFFERENT permissions, so it is treated as a plain create instead of a clone \
-                 (want different permissions? that's a create; clone copies the source's \
-                 permissions)."
-                .to_string(),
+            description: "List, create, clone, edit, or disable sibling personas through signed PersonaConfigRequest admission. Choose an existing inference profile. Document IDs are exact and scoped to this principal. Clone copies source permissions; choosing a preset requests a new persona instead. Pending requests return their key for later inspection.".to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -1368,15 +1016,11 @@ impl Tool for ConfigurePersonaTool {
                     },
                     "behavior_id": {
                         "type": "string",
-                        "description": "Target persona's behavior_id (required for edit/disable). A short name (without the agent DID prefix) resolves automatically to \"{agent_did}:{name}\".",
+                        "description": "Exact behavior_id of the sibling persona (required for edit/disable).",
                     },
                     "clone_from": {
                         "type": "string",
-                        "description": "Sibling behavior_id to clone from (required for clone, unless preset is also given — see the tool description). A short name resolves automatically, same as behavior_id.",
-                    },
-                    "model": {
-                        "type": "string",
-                        "description": "\"backend_id|model_name\" — real backend ids are DID-qualified, e.g. \"did:key:zAgentExample...:openai|gpt-5.5\". A bare model name (e.g. \"gpt-5.5\") is also accepted when it uniquely identifies one enabled backend's model.",
+                        "description": "Exact sibling behavior_id to clone from.",
                     },
                     "root": {
                         "type": "string",
@@ -1388,7 +1032,7 @@ impl Tool for ConfigurePersonaTool {
                     },
                     "profile_id": {
                         "type": "string",
-                        "description": "Inference profile id. A short name (without the agent DID prefix) resolves automatically; an \"id|display\" pair is also accepted (the display half is stripped).",
+                        "description": "Exact inference profile_id owned by this principal.",
                     },
                 },
                 "required": ["action"],

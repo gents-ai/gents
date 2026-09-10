@@ -314,9 +314,10 @@ async fn create_subagent_request_inner(
         &parent_tool_call_id,
     )
     .await?;
-    let metadata = (!prompt_selection.selected_skill_ids.is_empty()).then(|| {
-        serde_json::json!({ "selected_skill_ids": prompt_selection.selected_skill_ids }).to_string()
-    });
+    let input = gents_protocol::request_input::RequestInput {
+        selected_skill_ids: prompt_selection.selected_skill_ids,
+        ..Default::default()
+    };
     let runtime_context = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
     let inherited_context_json = runtime_context
         .as_ref()
@@ -339,7 +340,7 @@ async fn create_subagent_request_inner(
             )
         }
         SubagentAdmissionSource::CrossDeploymentChild { bridge_author_did } => {
-            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_cross_deployment_child(
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_cross_principal_child(
                 &agent_did,
                 &parent_request_id,
                 bridge_author_did,
@@ -374,7 +375,7 @@ async fn create_subagent_request_inner(
             parent_tool_call_id: Some(parent_tool_call_id.clone()),
             parent_tool_call_doc_id: Some(parent_doc_ids.1.clone()),
         }),
-        metadata,
+        input,
         valid_until: deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
         ..RequestSpec::new(identity, admission)
     };
@@ -516,20 +517,9 @@ mod tests {
     }
 }
 
-/// Pins today's `AgentRequestCreate::graphql_input_fields()` output for
-/// `create_subagent_request_inner` (#1336 Task 1), before it is switched
-/// onto `build_signed_request` (#1336 Task 2).
-///
-/// `create_subagent_request_inner` validates the parent request/tool-call
-/// against a live node before it builds `create` at all, persists via
-/// `execute_mutation_with_retry`, and returns only the child `request_id` —
-/// never the `AgentRequestCreate` it built. It also generates both
-/// `new_session_id` (`Uuid::new_v4()`) and `now` (`Utc::now()`) internally.
-/// This reproduces its DTO-construction statements verbatim (see
-/// `create_subagent_request_inner` above, from "Generate fresh session
-/// identifier" through the `workspace` field assignments), substituting
-/// fixed values for both and skipping the node-dependent parent/tool-call
-/// validation, which the DTO-construction logic itself does not consult.
+/// Fixed wire/signature vector for subagent issuance. Physical parent/tool
+/// validation remains covered by the request source owner; this vector fixes
+/// the otherwise fresh session/time values to make wire drift reviewable.
 #[cfg(test)]
 mod pin_tests {
     use super::*;
@@ -556,7 +546,7 @@ mod pin_tests {
         let workspace = Some(WorkspaceLineage {
             workspace_id: Some("ws-subagent-1".to_string()),
             workspace_authority: Some("readWrite".to_string()),
-            workspace_owner_deployment_id: Some("dep-subagent-1".to_string()),
+            workspace_owner_agent_did: Some("did:workspace-owner".to_string()),
             workspace_seal_hash: Some("seal-subagent-1".to_string()),
         });
 
@@ -568,10 +558,10 @@ mod pin_tests {
 
         let prompt_selection = crate::skills::prompt_slash_skill_selection(&prompt);
         let prompt = prompt_selection.prompt;
-        let metadata = (!prompt_selection.selected_skill_ids.is_empty()).then(|| {
-            serde_json::json!({ "selected_skill_ids": prompt_selection.selected_skill_ids })
-                .to_string()
-        });
+        let input = gents_protocol::request_input::RequestInput {
+            selected_skill_ids: prompt_selection.selected_skill_ids,
+            ..Default::default()
+        };
         let runtime_context = crate::tool_call_lifecycle::runtime::current_tool_runtime_context();
         let inherited_context_json = runtime_context
             .as_ref()
@@ -631,8 +621,7 @@ mod pin_tests {
                 parent_tool_call_doc_id: Some(parent_doc_ids.1.clone()),
             }),
             retry: None,
-            sampling: None,
-            metadata,
+            input,
             retry_key: None,
             valid_until: deadline
                 .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
@@ -647,7 +636,7 @@ mod pin_tests {
         let fields = create.graphql_input_fields().expect("graphql_input_fields");
         assert_eq!(
             fields,
-            "request_id: \"subagent-request-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-subagent-1\", retry_root_request: \"subagent-request-1\", content: \"spawn a subagent to help\", execution_origin: \"interactive\", caused_by_trigger_id: \"subagent-parent-tool-call-1\", caused_by_trigger_kind: \"subagent\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, valid_until: \"2030-06-01T00:00:00Z\", subagent_depth: 2, caused_by_parent_request_id: \"subagent-parent-request-1\", caused_by_parent_request_doc_id: \"subagent-parent-request-doc-1\", caused_by_parent_tool_call_id: \"subagent-parent-tool-call-1\", caused_by_parent_tool_call_doc_id: \"subagent-parent-tool-call-doc-1\", workspace_id: \"ws-subagent-1\", workspace_authority: \"readWrite\", workspace_owner_deployment_id: \"dep-subagent-1\", workspace_seal_hash: \"seal-subagent-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"BwhogeGeGk4MH2ovZKskcrSPjik79JvmHt4wXZoejNzYbr7d4954c6vdRSaHEBWXgsHReF4Wqth5UHncWNQ2ene\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"subagent-parent-request-1\", runtime_source_kind: \"local-child\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"subagent-request-1\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-subagent-1\", retry_root_request: \"subagent-request-1\", content: \"spawn a subagent to help\", execution_origin: \"interactive\", caused_by_trigger_id: \"subagent-parent-tool-call-1\", caused_by_trigger_kind: \"subagent\", created_at: \"2030-01-01T00:00:00Z\", retry_count: 0, max_retries: 3, valid_until: \"2030-06-01T00:00:00Z\", subagent_depth: 2, caused_by_parent_request_id: \"subagent-parent-request-1\", caused_by_parent_request_doc_id: \"subagent-parent-request-doc-1\", caused_by_parent_tool_call_id: \"subagent-parent-tool-call-1\", caused_by_parent_tool_call_doc_id: \"subagent-parent-tool-call-doc-1\", workspace_id: \"ws-subagent-1\", workspace_owner_agent_did: \"did:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-subagent-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"5dhmnXUEutnJJsHwRanzGE4RUrtQJY9Vg1cDgghFtB8W6zHJcTKJLbWEuPngrTcvYPVzhp3XcTwi9Mpx1mmdZzUY\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"subagent-parent-request-1\", runtime_source_kind: \"local-child\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 }

@@ -32,18 +32,12 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         &fx.repo,
         &["rev-parse", &format!("{}^{{tree}}", fx.base_sha)],
     );
-    let outcome = provision_read_only_workspace(
-        &access,
-        &fx.repo,
-        &fx.base_sha,
-        "freeze-local",
-        identity.did(),
-    )
-    .await
-    .unwrap();
+    let outcome = provision_read_only_workspace(&access, &fx.repo, &fx.base_sha, identity.did())
+        .await
+        .unwrap();
     assert_eq!(outcome.workspace.lifecycle_state, "sealed");
     assert_eq!(outcome.workspace.base_sha, fx.base_sha);
-    assert_eq!(outcome.workspace.owner_deployment_id, "freeze-local");
+    assert_eq!(outcome.workspace.owner_agent_did, "freeze-local");
     assert_eq!(
         outcome.workspace.path_capability,
         WorkspacePathCapability::exact_paths(Vec::new()).unwrap()

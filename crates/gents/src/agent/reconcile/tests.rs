@@ -15,9 +15,7 @@ use crate::graphql::escape_graphql_string;
 use crate::identity::{AgentIdentity as _, AgentPrincipal, KeyIdentity};
 use crate::lean_vocab_test::lean_runtime_reconcile_case;
 use crate::runtime_status::RuntimeStatusHandle;
-use crate::tool_surface::{
-    BehaviorToolConfig, FileToolMode, ToolCeiling, ToolSelection, ToolSurface,
-};
+use crate::tool_surface::{BehaviorToolConfig, ToolCeiling, ToolSurface};
 use crate::watcher::AgentRequest;
 
 async fn test_node() -> Arc<defra_node::EmbeddedNode> {
@@ -53,7 +51,11 @@ async fn snapshot_for_behaviors(
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
-        let tool_surface = behavior.tools.resolve(node).await.unwrap();
+        let tool_surface = behavior
+            .tools
+            .resolve(node, behavior.agent_did())
+            .await
+            .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts(
@@ -73,7 +75,11 @@ async fn snapshot_for_behaviors_with_admission(
 ) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
-        let tool_surface = behavior.tools.resolve(node).await.unwrap();
+        let tool_surface = behavior
+            .tools
+            .resolve(node, behavior.agent_did())
+            .await
+            .unwrap();
         tool_surfaces.insert(behavior.behavior_id.clone(), Arc::new(tool_surface));
     }
     ResolvedRuntimeSnapshot::from_parts_with_admission_configs(
@@ -108,16 +114,11 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         request_id: format!("child-request-{index}"),
         agent_did: "did:test:background-fanout-test".to_string(),
         requester_did: None,
-        behavior_id: Some(behavior_id.to_string()),
+        behavior_id: behavior_id.to_string(),
         session_id: format!("child-session-{index}"),
         content: format!("background child {index}"),
-        temperature: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        max_tokens: None,
         max_total_tokens: None,
-        metadata: None,
+        input: Default::default(),
         execution_origin: Some("interactive".to_string()),
         created_at: chrono::Utc::now().to_rfc3339(),
         deadline: None,
@@ -136,7 +137,7 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         caused_by_trigger_context: None,
         workspace_id: None,
         workspace_authority: None,
-        workspace_owner_deployment_id: None,
+        workspace_owner_agent_did: None,
         workspace_seal_hash: None,
     }
 }
@@ -307,7 +308,13 @@ async fn slot_panic_restarts_behavior(node: &defra_node::EmbeddedNode) -> bool {
         PendingAgentBehavior::new("general")
             .build_with_identity_for_test(test_identity("pairing-contract-slot-crash")),
     );
-    let tool_surface = Arc::new(behavior.tools.resolve(node).await.unwrap());
+    let tool_surface = Arc::new(
+        behavior
+            .tools
+            .resolve(node, behavior.agent_did())
+            .await
+            .unwrap(),
+    );
     let starts = Arc::new(AtomicUsize::new(0));
     let (starts_tx, mut starts_rx) = watch::channel(0usize);
     let runner = {
@@ -1395,17 +1402,16 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         backend_provider_kind: BackendProviderKind::OpenAiCompatible,
         openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
         backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
+        backend_auth: crate::document_config::BackendAuth::Unauthenticated,
         model_name: "default".to_string(),
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
         max_turns: crate::config::DEFAULT_MAX_TURNS,
         system_prompt: "initial".to_string(),
-        request_context_template: None,
         tools: BehaviorToolConfig::meta_only(),
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
+        compaction: None,
+        compaction_inference: None,
+        max_total_tokens: None,
         stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
         stream_liveness_timeout: Duration::from_secs(
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
@@ -1414,66 +1420,22 @@ async fn generation_supervisor_rotates_dispatcher_on_tool_surface_change() {
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
     });
+    let updated_tools: crate::document_config::Tools = serde_json::from_value(serde_json::json!({
+        "tools_id": "general-tools",
+        "agent_did": principal.agent_did,
+        "host": {"files": {"mode": "ReadOnly"}},
+        "built_ins": {"enable_context_budget": true}
+    }))
+    .unwrap();
     let updated_behavior = Arc::new(AgentBehavior {
-        skills: Vec::new(),
-        behavior_id: "general".to_string(),
-        principal: principal.clone(),
-        backend_id: Some("backend-general".to_string()),
-        backend_provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: crate::OpenAiWireApi::ChatCompletions,
-        backend_endpoint: "http://127.0.0.1:8999/v1".to_string(),
-        backend_api_key: None,
-        backend_api_key_env_var: None,
-        model_name: "default".to_string(),
-        context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
-        max_output_tokens: crate::config::DEFAULT_MAX_OUTPUT_TOKENS,
-        max_turns: crate::config::DEFAULT_MAX_TURNS,
-        system_prompt: "initial".to_string(),
-        request_context_template: None,
-        tools: BehaviorToolConfig::from_selection(
+        tools: BehaviorToolConfig::from_tools_document(
             "general",
-            ToolSelection {
-                file_tools: FileToolMode::ReadOnly,
-                file_tool_root: None,
-                bash: crate::tool_surface::BashMode::Off,
-                command_policy: None,
-                cli_tool_names: Vec::new(),
-                enable_meta_tools: false,
-                enable_goal_tools: false,
-                enable_goal_creation: false,
-                allowed_mcp_service_ids: Vec::new(),
-                required_mcp_service_ids: Vec::new(),
-                backgroundable_tool_names: Vec::new(),
-                approval_required_tools: Vec::new(),
-                enable_memory: false,
-                enable_session_history_tool: false,
-                enable_context_budget: true,
-                enable_defra_query: false,
-                defra_query_collections: Vec::new(),
-                write_tools: Vec::new(),
-                query_tools: Vec::new(),
-                enable_self_config: false,
-                self_config_categories: None,
-                self_config_no_lockout: false,
-                self_config_dry_run: false,
-                enable_lsp: false,
-                lsp_config: None,
-                eth_queries: Vec::new(),
-                eth_calls: Vec::new(),
-            },
+            &updated_tools,
             &ToolCeiling::readonly(),
             Vec::new(),
         )
         .unwrap(),
-        compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
-        compaction_strategy: crate::compaction::CompactionStrategy::StripThenSummarize,
-        stream_batch_ms: crate::config::DEFAULT_STREAM_BATCH_MS,
-        stream_liveness_timeout: Duration::from_secs(
-            crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
-        ),
-        deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
-        completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
-        sampling: crate::config::SamplingConfig::default(),
+        ..initial_behavior.as_ref().clone()
     });
 
     let initial_snapshot =

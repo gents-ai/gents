@@ -1,5 +1,6 @@
 use gents::graphql::escape_graphql_string;
 use gents::interrupt_request;
+use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, RequestQueue};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use crate::support::snapshots::fetch_request_snapshot;
@@ -7,16 +8,18 @@ use crate::support::{
     create_request, first_row, set_interrupt_requested_at, test_db, DocIdRow, AGENT_DID, AGENT_NAME,
 };
 
-async fn create_pending_request_with_metadata(
+async fn create_pending_request_with_input(
     node: &gents::defra_node::EmbeddedNode,
     request_id: &str,
     session_id: &str,
-    metadata: &str,
+    input: &RequestInput,
     execution_origin: &str,
 ) -> String {
     let escaped_request_id = escape_graphql_string(request_id);
     let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_metadata = escape_graphql_string(metadata);
+    let request_input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
+            .unwrap();
     let escaped_execution_origin = escape_graphql_string(execution_origin);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -30,7 +33,7 @@ async fn create_pending_request_with_metadata(
                 retry_root_request: "{escaped_request_id}",
                 superseded_by_request: "",
                 content: "queued",
-                metadata: "{escaped_metadata}",
+                input: {request_input},
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "{escaped_execution_origin}",
@@ -45,7 +48,7 @@ async fn create_pending_request_with_metadata(
     let response = node.execute(&mutation).await;
     assert!(
         !response.has_errors(),
-        "create pending request with metadata failed: {:?}",
+        "create pending request with typed input failed: {:?}",
         response.errors
     );
 
@@ -60,28 +63,32 @@ async fn create_pending_request_with_metadata(
     first_row::<DocIdRow>(&response, "AgentRequest").doc_id
 }
 
-fn automated_wakeup_metadata(session_id: &str, queued_after_request_id: &str) -> String {
-    serde_json::json!({
-        "queue": {
-            "source": "background_completion",
-            "policy": "coalesce",
-            "key": format!("background_completion:{session_id}"),
-            "queued_after_request_id": queued_after_request_id,
-        }
-    })
-    .to_string()
+fn automated_wakeup_input(session_id: &str, queued_after_request_id: &str) -> RequestInput {
+    RequestInput {
+        queue: Some(RequestQueue {
+            source: QueueSource::BackgroundCompletion,
+            policy: QueuePolicy::Coalesce,
+            key: Some(format!("background_completion:{session_id}")),
+            queued_after_request_id: Some(queued_after_request_id.into()),
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
+        ..Default::default()
+    }
 }
 
-fn user_queue_metadata() -> String {
-    serde_json::json!({
-        "queue": {
-            "source": "user",
-            "policy": "append",
-            "key": null,
-            "queued_after_request_id": null,
-        }
-    })
-    .to_string()
+fn user_queue_input() -> RequestInput {
+    RequestInput {
+        queue: Some(RequestQueue {
+            source: QueueSource::User,
+            policy: QueuePolicy::Append,
+            key: None,
+            queued_after_request_id: None,
+            interrupted_request_id: None,
+            background_completion_wake_version: None,
+        }),
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
@@ -97,27 +104,27 @@ async fn interrupt_request_drains_automated_wakeups_but_preserves_user_queue() {
         &created_at,
     )
     .await;
-    let auto_doc_id = create_pending_request_with_metadata(
+    let auto_doc_id = create_pending_request_with_input(
         &db.node,
         "req-queue-drain-auto",
         session_id,
-        &automated_wakeup_metadata(session_id, "req-queue-drain-parent"),
+        &automated_wakeup_input(session_id, "req-queue-drain-parent"),
         "scheduled",
     )
     .await;
-    let user_doc_id = create_pending_request_with_metadata(
+    let user_doc_id = create_pending_request_with_input(
         &db.node,
         "req-queue-drain-user",
         session_id,
-        &user_queue_metadata(),
+        &user_queue_input(),
         "scheduled",
     )
     .await;
-    let interactive_auto_doc_id = create_pending_request_with_metadata(
+    let interactive_auto_doc_id = create_pending_request_with_input(
         &db.node,
         "req-queue-drain-interactive-auto",
         session_id,
-        &automated_wakeup_metadata(session_id, "req-queue-drain-parent"),
+        &automated_wakeup_input(session_id, "req-queue-drain-parent"),
         "interactive",
     )
     .await;
@@ -171,11 +178,11 @@ async fn already_interrupted_request_still_drains_automated_wakeups() {
     )
     .await;
     set_interrupt_requested_at(&db.node, &parent_doc_id, "2026-05-12T00:00:00Z").await;
-    let auto_doc_id = create_pending_request_with_metadata(
+    let auto_doc_id = create_pending_request_with_input(
         &db.node,
         "req-queue-drain-latched-auto",
         session_id,
-        &automated_wakeup_metadata(session_id, "req-queue-drain-latched-parent"),
+        &automated_wakeup_input(session_id, "req-queue-drain-latched-parent"),
         "scheduled",
     )
     .await;

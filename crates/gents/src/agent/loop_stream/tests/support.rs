@@ -620,6 +620,7 @@ pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionH
         &session_id,
         "general",
         "did:test:test",
+        None,
         FailurePolicy::default(),
     )
     .await

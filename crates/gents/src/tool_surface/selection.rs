@@ -7,18 +7,16 @@ use super::modes::{BashMode, FileToolMode};
 
 use std::path::PathBuf;
 
-use crate::document_config::SubagentTarget;
+use crate::document_config::SubagentTargetDocument;
 use crate::tool_call_lifecycle::AwaitMode;
 use crate::toolset::{
-    default_read_only_command_policy, parse_argv_prefixes, CommandExecutionMode,
-    CommandExecutionPolicy, CommandNetworkMode,
+    default_read_only_command_policy, CommandExecutionMode, CommandExecutionPolicy,
+    CommandNetworkMode,
 };
-
-use super::policy::ToolPolicyVersion;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SubagentToolConfig {
-    pub targets: Vec<SubagentTarget>,
+    pub targets: Vec<SubagentTargetDocument>,
     pub spawn_enabled: bool,
     pub steering_enabled: bool,
     pub background_enabled: bool,
@@ -31,43 +29,78 @@ pub(crate) struct SubagentToolConfig {
 }
 
 impl SubagentToolConfig {
-    pub(crate) fn from_document(selection: &crate::document_config::ToolSelectionDocument) -> Self {
-        let background_enabled = selection.subagent_background_enabled.unwrap_or(false);
-        let default_await_mode = selection
-            .subagent_default_await_mode
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .and_then(AwaitMode::from_persisted)
-            .filter(|mode| background_enabled || *mode != AwaitMode::Background)
-            .unwrap_or_default();
-        let targets = selection
-            .subagent_targets
-            .iter()
-            .flatten()
-            .filter_map(
-                |entry| match crate::document_config::SubagentTarget::parse(entry) {
-                    Ok(target) => Some(target),
-                    Err(error) => {
-                        tracing::warn!(
-                            selection_id = %selection.selection_id,
-                            entry = %entry,
-                            %error,
-                            "skipping malformed subagent_targets entry"
-                        );
-                        None
-                    }
-                },
-            )
-            .collect();
-        Self {
-            targets,
-            spawn_enabled: selection.subagent_spawn_enabled.unwrap_or(false),
-            steering_enabled: selection.subagent_steering_enabled.unwrap_or(false),
+    /// Project the canonical `Tools.subagents` group. Targets are NOT populated
+    /// here: `SubagentTools.target_ids` are references to SubagentTarget
+    /// documents, resolved and pushed by the runtime snapshot owner. Every
+    /// control defaults to disabled when the group or flag is absent; selecting
+    /// targets never implicitly enables spawn.
+    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> Result<Self> {
+        tools.validate()?;
+        let group = tools.subagents.as_ref();
+        let background_enabled = group
+            .and_then(|group| group.background_enabled)
+            .unwrap_or(false);
+        let default_await_mode = match group.and_then(|group| group.default_await_mode.as_deref()) {
+            None => AwaitMode::default(),
+            Some(value) => AwaitMode::from_persisted(value)
+                .ok_or_else(|| anyhow::anyhow!("invalid subagent default await mode {value:?}"))?,
+        };
+        Ok(Self {
+            targets: Vec::new(),
+            spawn_enabled: group.and_then(|group| group.spawn_enabled).unwrap_or(false),
+            steering_enabled: group
+                .and_then(|group| group.steering_enabled)
+                .unwrap_or(false),
             background_enabled,
             default_await_mode,
-            allow_cross_deployment: selection.subagent_allow_cross_deployment.unwrap_or(false),
+            allow_cross_deployment: group
+                .and_then(|group| group.allow_cross_principal)
+                .unwrap_or(false),
+        })
+    }
+
+    pub(crate) fn from_document_with_targets<'a>(
+        tools: &crate::document_config::Tools,
+        targets: impl IntoIterator<Item = &'a crate::document_config::SubagentTargetDocument>,
+    ) -> Result<Self> {
+        let mut resolved = Self::from_document(tools)?;
+        let mut by_id = std::collections::HashMap::new();
+        for target in targets {
+            anyhow::ensure!(
+                by_id
+                    .insert(
+                        (target.agent_did.as_str(), target.target_id.as_str()),
+                        target
+                    )
+                    .is_none(),
+                "duplicate scoped SubagentTarget {}",
+                target.target_id
+            );
         }
+        let mut names = std::collections::HashSet::new();
+        for id in tools
+            .subagents
+            .as_ref()
+            .into_iter()
+            .flat_map(|group| &group.target_ids)
+        {
+            let target = by_id
+                .get(&(tools.agent_did.as_str(), id.as_str()))
+                .ok_or_else(|| anyhow::anyhow!("missing same-owner SubagentTarget {id}"))?;
+            anyhow::ensure!(
+                !target.name.trim().is_empty()
+                    && !target.target_agent_did.trim().is_empty()
+                    && !target.behavior_id.trim().is_empty(),
+                "invalid SubagentTarget {id}"
+            );
+            anyhow::ensure!(
+                names.insert(target.name.as_str()),
+                "duplicate subagent target name {}",
+                target.name
+            );
+            resolved.targets.push((*target).clone());
+        }
+        Ok(resolved)
     }
 
     pub(crate) fn tools_enabled(&self) -> bool {
@@ -113,9 +146,9 @@ pub struct ToolSelection {
     /// is also enabled.
     pub enable_goal_creation: bool,
     pub allowed_mcp_service_ids: Vec<String>,
+    pub remote_tools: Option<crate::document_config::RemoteTools>,
     pub required_mcp_service_ids: Vec<String>,
     pub backgroundable_tool_names: Vec<String>,
-    pub approval_required_tools: Vec<String>,
     pub enable_memory: bool,
     pub enable_session_history_tool: bool,
     pub enable_context_budget: bool,
@@ -131,6 +164,10 @@ pub struct ToolSelection {
     pub lsp_config: Option<String>,
     pub eth_queries: Vec<crate::eth::ResolvedEthQuery>,
     pub eth_calls: Vec<crate::eth::ResolvedEthCall>,
+    /// Derived from canonical `Tools.remote.services[].background_tool_names`:
+    /// the generic MCP dispatch wrapper is backgroundable when any selected
+    /// service permits background execution. Not document-writable input.
+    pub remote_background_names: Vec<String>,
 }
 
 impl Default for ToolSelection {
@@ -145,9 +182,9 @@ impl Default for ToolSelection {
             enable_goal_tools: true,
             enable_goal_creation: false,
             allowed_mcp_service_ids: Vec::new(),
+            remote_tools: None,
             required_mcp_service_ids: Vec::new(),
             backgroundable_tool_names: Vec::new(),
-            approval_required_tools: Vec::new(),
             enable_memory: false,
             enable_session_history_tool: false,
             enable_context_budget: true,
@@ -163,83 +200,157 @@ impl Default for ToolSelection {
             lsp_config: None,
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            remote_background_names: Vec::new(),
         }
     }
 }
 
 impl ToolSelection {
-    pub(crate) fn from_document(
-        selection: &crate::document_config::ToolSelectionDocument,
-    ) -> anyhow::Result<Self> {
-        let policy_version = ToolPolicyVersion::parse(selection.tool_policy_version.as_deref())?;
-        let bash = if selection.enable_bash.unwrap_or(false) {
-            BashMode::parse(selection.bash_mode.as_deref().unwrap_or("ReadOnly"))?
-        } else {
-            BashMode::Off
-        };
-        let enable_meta_tools = selection
-            .enable_meta_tools
-            .unwrap_or(policy_version.default_enabled());
-        let (enable_goal_tools, enable_goal_creation) =
-            resolve_goal_capabilities(selection.enable_goal_tools, selection.enable_goal_creation);
+    /// Project the canonical `document_config::Tools` nested groups.
+    ///
+    /// Disabled-by-absence: an omitted group or unset flag grants nothing. There
+    /// is no policy version: the canonical document has no historical
+    /// re-interpretation contract. Timeout
+    /// and background defaults belong to the individual capability owners, not
+    /// this projection. Datastore write/query declarations and eth tools are
+    /// expanded from their referenced documents by the caller.
+    pub(crate) fn from_document(tools: &crate::document_config::Tools) -> anyhow::Result<Self> {
+        tools.validate()?;
+        let host = tools.host.as_ref();
+        let files = host.and_then(|host| host.files.as_ref());
+        let bash_group = host.and_then(|host| host.bash.as_ref());
+        let built_ins = tools.built_ins.as_ref();
+        let datastore = tools.datastore.as_ref();
+        let integrations = tools.integrations.as_ref();
+        let self_config_group = tools.self_config.as_ref();
+
+        let file_tools = files.map(|files| files.mode).unwrap_or_default();
+        let bash = bash_group.map(|bash| bash.mode).unwrap_or_default();
+        let command_policy = command_policy_from_document(bash_group, bash)?;
+        let cli_tool_names = host
+            .map(|host| host.cli.iter().map(|tool| tool.name.clone()).collect())
+            .unwrap_or_default();
+
+        // Remote selections use explicit service ids. Any selected service needs
+        // the meta dispatch wrapper to be callable, so selecting services enables
+        // meta tools; empty selections grant none.
+        let remote_services = tools
+            .remote
+            .as_ref()
+            .map(|remote| remote.services.as_slice())
+            .unwrap_or(&[]);
+        let enable_meta_tools = !remote_services.is_empty();
+        let mut allowed_mcp_service_ids = Vec::with_capacity(remote_services.len());
+        let mut required_mcp_service_ids = Vec::new();
+        let mut remote_background_names = Vec::new();
+        for service in remote_services {
+            let service_id = &service.mcp_service_id;
+            if !allowed_mcp_service_ids.contains(&service_id.to_string()) {
+                allowed_mcp_service_ids.push(service_id.to_string());
+            }
+            if service.required {
+                required_mcp_service_ids.push(service_id.to_string());
+            }
+            // Background capability is per-service; the generic dispatch wrapper
+            // is the surface entry for background MCP calls.
+            if !service.background_tool_names.is_empty() {
+                match service.style {
+                    crate::document_config::RemoteToolStyle::Discovery => {
+                        remote_background_names.push("call_tool".to_string())
+                    }
+                    crate::document_config::RemoteToolStyle::Flat => remote_background_names
+                        .extend(
+                            service
+                                .background_tool_names
+                                .iter()
+                                .map(|name| crate::meta_tools::flat_tool_name(service_id, name)),
+                        ),
+                }
+            }
+        }
+        allowed_mcp_service_ids.sort();
+        allowed_mcp_service_ids.dedup();
+        required_mcp_service_ids.sort();
+        required_mcp_service_ids.dedup();
+
+        let (enable_goal_tools, enable_goal_creation) = resolve_goal_capabilities(
+            built_ins.and_then(|built| built.enable_goal_tools),
+            built_ins.and_then(|built| built.enable_goal_creation),
+        );
+
         Ok(Self {
-            file_tools: if selection.enable_file_tools.unwrap_or(false) {
-                FileToolMode::parse(selection.file_tools_mode.as_deref().unwrap_or("ReadOnly"))?
-            } else {
-                FileToolMode::Off
-            },
-            file_tool_root: selection
-                .file_tool_root
-                .as_deref()
-                .and_then(normalize_optional_string)
+            file_tools,
+            // Tools.host.root is the shared default cwd for files, bash, CLI, LSP,
+            // and task commands. Relative paths resolve against runtime cwd in the
+            // existing root owner (tool_surface/build.rs); absent uses runtime cwd.
+            file_tool_root: host
+                .and_then(|host| host.root.as_deref())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
                 .map(PathBuf::from),
             bash,
-            command_policy: command_policy_from_document(selection, bash)?,
-            cli_tool_names: selection.cli_tool_names.clone().unwrap_or_default(),
+            command_policy,
+            cli_tool_names,
             enable_meta_tools,
             enable_goal_tools,
             enable_goal_creation,
-            allowed_mcp_service_ids: selection
-                .allowed_mcp_service_ids
-                .clone()
-                .unwrap_or_default(),
-            required_mcp_service_ids: selection
-                .required_mcp_service_ids
-                .clone()
-                .unwrap_or_default(),
-            backgroundable_tool_names: selection
-                .backgroundable_tool_names
-                .clone()
-                .unwrap_or_default(),
-            approval_required_tools: selection
-                .approval_required_tools
-                .clone()
-                .unwrap_or_default(),
-            enable_memory: selection.enable_memory.unwrap_or(false),
-            enable_session_history_tool: selection.enable_session_history_tool.unwrap_or(false),
-            enable_context_budget: selection
-                .enable_context_budget
-                .unwrap_or(policy_version.default_enabled()),
-            enable_defra_query: selection.enable_defra_query.unwrap_or(false),
-            defra_query_collections: selection
-                .defra_query_collections
-                .clone()
-                .unwrap_or_default(),
-            write_tools: selection.write_tools.clone().unwrap_or_default(),
+            allowed_mcp_service_ids,
+            remote_tools: tools.remote.clone(),
+            required_mcp_service_ids,
+            // Bash backgrounding stays the only native host background capability;
+            // the derived per-mode allowlist is materialized by the adapter.
+            backgroundable_tool_names: Vec::new(),
+            enable_memory: built_ins
+                .and_then(|built| built.enable_memory)
+                .unwrap_or(false),
+            enable_session_history_tool: built_ins
+                .and_then(|built| built.enable_session_history_tool)
+                .unwrap_or(false),
+            // Canonical default is disabled-by-absence, matching
+            // ToolPolicy.resolveGoalTools-style fail-closed decoding.
+            enable_context_budget: built_ins
+                .and_then(|built| built.enable_context_budget)
+                .unwrap_or(false),
+            enable_defra_query: datastore
+                .and_then(|datastore| datastore.enable_defra_query)
+                .unwrap_or(false),
+            defra_query_collections: datastore
+                .and_then(|datastore| datastore.defra_query_collections.as_deref())
+                .unwrap_or(&[])
+                .iter()
+                .cloned()
+                .collect(),
+            // Canonical surfaces own datastore write declarations; canonical
+            // DatastoreToolSurface/EthTool documents are expanded by the caller.
+            write_tools: Vec::new(),
             query_tools: Vec::new(),
-            enable_self_config: selection.enable_self_config.unwrap_or(false),
-            self_config_categories: selection.self_config_categories.clone(),
-            self_config_no_lockout: selection.self_config_no_lockout.unwrap_or(false),
-            self_config_dry_run: selection.self_config_dry_run.unwrap_or(false),
-            enable_lsp: selection.enable_lsp.unwrap_or(false),
-            lsp_config: selection
-                .lsp_config
-                .as_deref()
+            enable_self_config: self_config_group
+                .and_then(|group| group.enable_self_config)
+                .unwrap_or(false),
+            self_config_categories: self_config_group.and_then(|group| {
+                group
+                    .self_config_categories
+                    .as_ref()
+                    .map(|categories| categories.clone())
+            }),
+            self_config_no_lockout: self_config_group
+                .and_then(|group| group.self_config_no_lockout)
+                .unwrap_or(false),
+            self_config_dry_run: self_config_group
+                .and_then(|group| group.self_config_dry_run)
+                .unwrap_or(false),
+            enable_lsp: integrations
+                .map(|group| group.lsp.is_some())
+                .unwrap_or(false),
+            lsp_config: integrations
+                .and_then(|group| group.lsp.as_ref())
+                .and_then(|lsp| lsp.config.as_deref())
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
             eth_queries: Vec::new(),
             eth_calls: Vec::new(),
+            remote_background_names,
         })
     }
 }
@@ -255,31 +366,29 @@ pub fn resolve_goal_capabilities(
 }
 
 fn command_policy_from_document(
-    selection: &crate::document_config::ToolSelectionDocument,
+    bash_group: Option<&crate::document_config::BashTools>,
     bash: BashMode,
 ) -> anyhow::Result<Option<CommandExecutionPolicy>> {
-    let has_policy = selection
-        .command_execution_policy
-        .as_deref()
-        .and_then(normalize_optional_string)
-        .is_some()
-        || selection
-            .command_network_mode
-            .as_deref()
-            .and_then(normalize_optional_string)
-            .is_some()
-        || selection
-            .command_allowed_argv_prefixes
-            .as_ref()
-            .is_some_and(|prefixes| !prefixes.is_empty())
-        || selection
-            .command_forbidden_argv_prefixes
-            .as_ref()
-            .is_some_and(|prefixes| !prefixes.is_empty())
-        || selection
-            .read_only_command_allowlist
-            .as_ref()
-            .is_some_and(|list| !list.is_empty());
+    let execution_mode = bash_group.and_then(|bash| bash.execution_mode);
+    let network_mode = bash_group.and_then(|bash| bash.network_mode);
+    let allowed = bash_group
+        .and_then(|bash| bash.allowed_argv_prefixes.as_ref())
+        .filter(|prefixes| !prefixes.is_empty())
+        .map(|prefixes| prefixes.as_slice());
+    let forbidden = bash_group
+        .and_then(|bash| bash.forbidden_argv_prefixes.as_ref())
+        .filter(|prefixes| !prefixes.is_empty())
+        .map(|prefixes| prefixes.as_slice());
+    let read_only_allowlist = bash_group
+        .and_then(|bash| bash.read_only_commands.as_ref())
+        .filter(|list| !list.is_empty())
+        .map(|list| list.as_slice());
+    let has_policy = execution_mode.is_some()
+        || network_mode.is_some()
+        || allowed.is_some()
+        || forbidden.is_some()
+        || read_only_allowlist.is_some();
+
     if !has_policy {
         return if matches!(bash, BashMode::Unrestricted) {
             Ok(Some(
@@ -291,59 +400,32 @@ fn command_policy_from_document(
         };
     }
 
-    let requested_mode = selection
-        .command_execution_policy
-        .as_deref()
-        .and_then(normalize_optional_string)
-        .map(CommandExecutionMode::parse)
-        .transpose()?;
+    // Canonical bash.mode owns the exposed bash tool; execution_mode can only
+    // narrow within it. Off/ReadOnly force read-only execution.
     let mode = match bash {
         BashMode::Off | BashMode::ReadOnly => CommandExecutionMode::ReadOnly,
-        BashMode::Unrestricted => requested_mode.unwrap_or(CommandExecutionMode::Unrestricted),
+        BashMode::Unrestricted => execution_mode.unwrap_or(CommandExecutionMode::Unrestricted),
     };
-
-    let allowed = parse_argv_prefixes(
-        selection
-            .command_allowed_argv_prefixes
-            .as_deref()
-            .unwrap_or(&[]),
-    )?;
-    let forbidden = parse_argv_prefixes(
-        selection
-            .command_forbidden_argv_prefixes
-            .as_deref()
-            .unwrap_or(&[]),
-    )?;
-    let network_mode = selection
-        .command_network_mode
-        .as_deref()
-        .and_then(normalize_optional_string)
-        .map(CommandNetworkMode::parse)
-        .transpose()?
-        .unwrap_or(CommandNetworkMode::Inherit);
 
     let base = if matches!(mode, CommandExecutionMode::ReadOnly) {
         default_read_only_command_policy()
     } else {
         CommandExecutionPolicy::write_capable()
     };
-    let base = match (mode, selection.read_only_command_allowlist.as_deref()) {
+    let base = match (mode, read_only_allowlist) {
         (CommandExecutionMode::ReadOnly, Some(list)) if !list.is_empty() => {
             base.with_read_only_allowlist(list.to_vec())
         }
         _ => base,
     };
+    let allowed = allowed.map(<[Vec<String>]>::to_vec).unwrap_or_default();
+    let forbidden = forbidden.map(<[Vec<String>]>::to_vec).unwrap_or_default();
     Ok(Some(
         base.with_mode(mode)
             .with_allowed_argv_prefixes(allowed)
             .with_forbidden_argv_prefixes(forbidden)
-            .with_network_mode(network_mode),
+            .with_network_mode(network_mode.unwrap_or(CommandNetworkMode::Inherit)),
     ))
-}
-
-fn normalize_optional_string(value: &str) -> Option<&str> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 type CustomToolFactoryFn = Arc<dyn Fn() -> Result<Box<dyn ToolDyn>> + Send + Sync>;

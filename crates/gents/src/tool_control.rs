@@ -4,7 +4,6 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 
 use crate::hook::BackgroundExecutionRegistry;
-use crate::interrupt::interrupt_request;
 use crate::tool_call_lifecycle::{AwaitMode, CancelCause, CascadeDispatch, ToolCallLifecycle};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,8 +90,20 @@ pub async fn cancel_background_tool_call(
         }
     };
 
-    if let Some(CascadeDispatch::Local(intent)) = dispatch {
-        interrupt_request(node.as_ref(), &intent.child_request_id).await?;
+    if let Some(CascadeDispatch::Local { child, .. }) = dispatch {
+        crate::interrupt::interrupt_request_by_doc_id(
+            node.as_ref(),
+            child
+                .doc_id
+                .as_deref()
+                .expect("verified physical cascade child"),
+            child
+                .agent_did
+                .as_deref()
+                .expect("verified local child principal"),
+            child.requester_did.as_deref(),
+        )
+        .await?;
     }
 
     if lifecycle.is_cancelled() {

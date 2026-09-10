@@ -331,13 +331,16 @@ async fn spawn_subagent_definition_uses_configured_default_await_mode() {
 }
 
 /// Build a single-target list for subagent tool tests. `name` doubles as the
-/// behavior id; the agent_did is a fixed local placeholder.
-fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTarget> {
-    vec![crate::document_config::SubagentTarget {
-        name: name.to_string(),
+/// behavior id and the destination principal is the same fixed local owner.
+fn subagent_targets(name: &str) -> Vec<crate::document_config::SubagentTargetDocument> {
+    vec![crate::document_config::SubagentTargetDocument {
+        target_id: format!("{name}-target"),
         agent_did: "did:key:zTest".to_string(),
+        target_agent_did: "did:key:zTest".to_string(),
         behavior_id: name.to_string(),
+        name: name.to_string(),
         description: None,
+        tags: Vec::new(),
     }]
 }
 

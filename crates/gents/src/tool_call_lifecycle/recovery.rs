@@ -168,7 +168,7 @@ struct SpawnArgs {
     #[serde(default)]
     workspace_authority: Option<String>,
     #[serde(default)]
-    workspace_owner_deployment_id: Option<String>,
+    workspace_owner_agent_did: Option<String>,
     #[serde(default)]
     workspace_seal_hash: Option<String>,
 }
@@ -590,6 +590,95 @@ impl super::ToolCallLifecycle {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn completed_child_recovery_hydrates_materialized_answer_with_exact_scope() {
+        let node = EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node");
+        crate::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
+        async fn create(node: &EmbeddedNode, collection: &str, input: &str) -> String {
+            let result = node
+                .execute(&format!(
+                    "mutation {{ create_{collection}(input: {{ {input} }}) {{ _docID }} }}"
+                ))
+                .await;
+            assert!(!result.has_errors(), "{collection}: {:?}", result.errors);
+            result.data.as_ref().unwrap()[format!("create_{collection}")][0]["_docID"]
+                .as_str()
+                .expect("created document")
+                .to_string()
+        }
+        let parent_doc = create(&node, "AgentRequest", r#"request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", lifecycle_state: "running""#).await;
+        let bridge_doc = create(
+            &node,
+            "AgentToolCall",
+            &format!(
+                r#"
+            tool_call_key: "bridge", tool_call_id: "bridge", request_id: "parent",
+            request_doc_id: "{}", agent_did: "did:test:parent", session_id: "parent-session",
+            tool_name: "run_subagent", args: "{{}}", status: "running", lifecycle_state: "running",
+            await_mode: "foreground", child_request_id: "child", spawn_target_did: "did:test:child"
+        "#,
+                escape_graphql_string(&parent_doc)
+            ),
+        )
+        .await;
+        let child_doc = create(&node, "AgentRequest", &format!(r#"
+            request_id: "child", agent_did: "did:test:child", behavior_id: "child", session_id: "child-session",
+            lifecycle_state: "completed", caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{}",
+            caused_by_parent_tool_call_id: "bridge", caused_by_parent_tool_call_doc_id: "{}"
+        "#, escape_graphql_string(&parent_doc), escape_graphql_string(&bridge_doc))).await;
+        create(&node, "AgentMessage", &format!(r#"
+            message_key: "answer", request_id: "child", request_doc_id: "{}", agent_did: "did:test:child",
+            session_id: "child-session", sequence: 7, role: "assistant", content: "Durable child answer"
+        "#, escape_graphql_string(&child_doc))).await;
+        create(&node, "AgentResponse", &format!(r#"
+            response_key: "answer", request_id: "child", request_doc_id: "{}", agent_did: "did:test:child",
+            session_id: "child-session", content: "", status: "complete", materialized_message_sequence: 7,
+            created_at: "2026-09-01T00:00:00Z"
+        "#, escape_graphql_string(&child_doc))).await;
+        // Newer rows sharing logical labels must not displace the exact child's answer.
+        create(&node, "AgentResponse", r#"
+            response_key: "foreign", request_id: "child", request_doc_id: "foreign-child-doc", agent_did: "did:test:foreign",
+            session_id: "child-session", content: "Foreign preview", status: "complete", materialized_message_sequence: 8,
+            created_at: "2026-09-02T00:00:00Z"
+        "#).await;
+        create(&node, "AgentMessage", r#"
+            message_key: "foreign", request_id: "child", request_doc_id: "foreign-child-doc", agent_did: "did:test:foreign",
+            session_id: "child-session", sequence: 8, role: "assistant", content: "Foreign answer"
+        "#).await;
+        let mut row: RunningToolCallRow = serde_json::from_value(serde_json::json!({
+            "_docID": bridge_doc, "request_id": "parent", "request_doc_id": "foreign-parent-doc",
+            "agent_did": "did:test:parent", "session_id": "parent-session", "tool_call_id": "bridge",
+            "tool_name": "run_subagent", "args": "{}", "await_mode": "foreground",
+            "child_request_id": "child", "spawn_target_did": "did:test:child"
+        })).unwrap();
+        assert!(
+            recover_bridge_terminal_child(&node, "did:test:parent", &row)
+                .await
+                .is_err()
+        );
+        row.request_doc_id = Some(parent_doc);
+        assert!(
+            recover_bridge_terminal_child(&node, "did:test:foreign", &row)
+                .await
+                .is_err()
+        );
+        assert!(
+            recover_bridge_terminal_child(&node, "did:test:parent", &row)
+                .await
+                .unwrap()
+        );
+        let stored = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state result }} }}"#, escape_graphql_string(&row.doc_id))).await;
+        assert!(!stored.has_errors(), "{:?}", stored.errors);
+        let tool = &stored.data.as_ref().unwrap()["AgentToolCall"][0];
+        assert_eq!(tool["lifecycle_state"], "completed");
+        assert_eq!(tool["result"], "Durable child answer");
+    }
+
     #[test]
     fn timeout_recovery_persists_external_failure_class() {
         assert_eq!(
@@ -900,9 +989,13 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         };
         let parent_workspace = ParentWorkspaceStamp::from_fields(
+            parent
+                .agent_did
+                .as_deref()
+                .context("workspace parent request lacks agent_did")?,
             parent.workspace_id.as_deref(),
+            parent.workspace_owner_agent_did.as_deref(),
             parent.workspace_authority.as_deref(),
-            parent.workspace_owner_deployment_id.as_deref(),
             parent.workspace_seal_hash.as_deref(),
         );
         let operator_tool_root = crate::workspace::process_operator_tool_root();
@@ -912,8 +1005,8 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             spawn_args.workspace.as_ref(),
             complete_lineage_from_bridge(
                 spawn_args.workspace_id.as_deref(),
+                spawn_args.workspace_owner_agent_did.as_deref(),
                 spawn_args.workspace_authority.as_deref(),
-                spawn_args.workspace_owner_deployment_id.as_deref(),
                 spawn_args.workspace_seal_hash.as_deref(),
             ),
             &child_agent_did,
@@ -1339,7 +1432,7 @@ async fn lookup_parent_request(
                 subagent_depth
                 workspace_id
                 workspace_authority
-                workspace_owner_deployment_id
+                workspace_owner_agent_did
                 workspace_seal_hash
             }}
         }}"#
@@ -1613,8 +1706,49 @@ async fn recover_bridge_terminal_child(
         return Ok(false);
     };
 
+    let parent_request_id = row
+        .request_id
+        .as_deref()
+        .context("bridge missing parent request")?;
+    anyhow::ensure!(
+        row.agent_did.as_deref() == Some(agent_did),
+        "bridge recovery owner mismatch"
+    );
+    let parent_doc_id = crate::request_binding::resolve_request_doc_id(node, parent_request_id)
+        .await?
+        .context("bridge parent request missing")?;
+    anyhow::ensure!(
+        row.request_doc_id.as_deref() == Some(parent_doc_id.as_str()),
+        "bridge recovery physical parent mismatch"
+    );
+    let Some(edge) = crate::descendant_graph::resolve_descendant_edge(
+        crate::descendant_graph::DescendantGraphAccess::Local(node),
+        parent_request_id,
+        child_request_id,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    anyhow::ensure!(
+        edge.is_direct()
+            && edge.readable()
+            && edge.immediate_parent_request_id == parent_request_id
+            && edge.immediate_parent_session_id == row.session_id
+            && edge.immediate_parent_tool_call_id == row.tool_call_id,
+        "bridge recovery requires its physically corroborated direct child"
+    );
+    let edge = crate::background_tools::ChildEdge::from_descendant(&edge)
+        .context("bridge child identity is not materialized")?;
+    anyhow::ensure!(
+        row.spawn_target_did
+            .as_deref()
+            .is_none_or(|target| target == edge.child_agent_did),
+        "bridge recovery child owner mismatch"
+    );
+
     if child_request_completed(&child) {
-        let result = load_child_completion_result(node, child_request_id)
+        let result = load_child_completion_result(node, &edge)
             .await?
             .unwrap_or_else(|| format!("child request {child_request_id} completed"));
         recover_bridge_completed_row(node, row, &result).await?;
@@ -1876,37 +2010,50 @@ async fn mark_child_request_dead(
 
 async fn load_child_completion_result(
     node: &EmbeddedNode,
-    child_request_id: &str,
+    child_edge: &crate::background_tools::ChildEdge,
 ) -> Result<Option<String>> {
+    // The response preview is cleared once the final assistant message is
+    // materialized. Keep the transcript hydration owner shared with waiters.
+    if let Some(answer) =
+        crate::background_tools::load_child_final_response(node, child_edge).await?
+    {
+        if !answer.trim().is_empty() {
+            return Ok(Some(answer));
+        }
+    }
     #[derive(Deserialize)]
     struct ResponseRow {
         content: Option<String>,
     }
-
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
+    let child_request_id = &child_edge.child_request_id;
+    let Some(child_doc_id) =
+        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
+    else {
+        return Ok(None);
+    };
     let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 1
-            ) {{
-                content
-            }}
-        }}"#
+        r#"{{ AgentResponse(filter: {{
+        request_doc_id: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }},
+        agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}
+    }}, order: {{ created_at: DESC }}, limit: 1) {{ content }} }}"#,
+        escape_graphql_string(&child_doc_id),
+        escape_graphql_string(child_request_id),
+        escape_graphql_string(&child_edge.child_agent_did),
+        escape_graphql_string(&child_edge.child_session_id)
     );
     let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query child AgentResponse {child_request_id} for bridge recovery failed: {:?}",
-            response.errors
-        );
-    }
+    anyhow::ensure!(
+        !response.has_errors(),
+        "query child response for bridge recovery failed: {:?}",
+        response.errors
+    );
     let rows: Vec<ResponseRow> = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentResponse"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?
         .unwrap_or_default();
     Ok(rows
         .into_iter()

@@ -206,7 +206,12 @@ impl GentsBuilder {
         > = Vec::with_capacity(self.behaviors.len());
         for behavior in self.behaviors {
             let factory = behavior
-                .into_factory(node.as_ref(), &self.tool_ceiling, &self.backend_health)
+                .into_factory(
+                    node.as_ref(),
+                    identity.did(),
+                    &self.tool_ceiling,
+                    &self.backend_health,
+                )
                 .await?;
             behavior_factories.push(factory);
         }
@@ -517,6 +522,7 @@ impl PendingAgentBehavior {
     async fn into_factory(
         self,
         node: &EmbeddedNode,
+        agent_did: &str,
         tool_ceiling: &ToolCeiling,
         backend_health: &crate::backend_health::BackendHealthMap,
     ) -> Result<
@@ -532,18 +538,24 @@ impl PendingAgentBehavior {
             .as_deref()
             .ok_or_else(|| anyhow!("behavior '{}' is missing backend_id", self.name))?
             .to_string();
-        let backend = lookup_backend(node, &backend_id).await?.ok_or_else(|| {
-            anyhow!(
-                "behavior '{}' references missing backend {}",
-                self.name,
-                backend_id
-            )
-        })?;
+        let backend = lookup_backend(node, agent_did, &backend_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow!(
+                    "behavior '{}' references missing backend {}",
+                    self.name,
+                    backend_id
+                )
+            })?;
         // `BackendAdmissionConfig::is_available` is the single owner of the
         // enabled/probe_status/measured_unhealthy comparison (#1332); apply
         // this builder's measured health the same way the reconciler does
         // before gating on it.
-        let admission_config = BackendAdmissionConfig::from_backend(&backend)?
+        let observation =
+            crate::backend_registry::lookup_backend_observation(node, agent_did, &backend_id)
+                .await?
+                .ok_or_else(|| anyhow!("backend {} disappeared during assembly", backend_id))?;
+        let admission_config = BackendAdmissionConfig::from_backend(&backend, &observation)?
             .with_measured_unhealthy(backend_health.measured_blocks_routing(&backend_id).await);
         if !admission_config.is_available() {
             anyhow::bail!(
@@ -551,7 +563,7 @@ impl PendingAgentBehavior {
                 self.name,
                 backend_id,
                 backend.enabled,
-                backend.probe_status,
+                admission_config.probe_status,
                 admission_config.measured_unhealthy,
             );
         }
@@ -576,19 +588,25 @@ impl PendingAgentBehavior {
         tool_ceiling: &ToolCeiling,
     ) -> Result<AgentBehavior> {
         let behavior_name = self.name.clone();
-        let rendered_system_prompt = crate::template::render_system_prompt(
-            &self.system_prompt,
-            serde_json::json!({
-                "node_did": principal.agent_did.as_str(),
-                "behavior_id": behavior_name.as_str(),
-            }),
-            &crate::template::catalog::default_catalog(),
-        )?;
         self.sampling.validate_for_provider(
             backend_fields.backend_provider_kind,
             backend_fields.openai_wire_api,
         )?;
 
+        let compaction = crate::document_config::CompactionConfig {
+            compaction_id: self.name.clone(),
+            agent_did: principal.agent_did.clone(),
+            display_name: None,
+            strategy: self.compaction_strategy,
+            threshold: Some(self.compaction_threshold),
+            keep_recent_tokens: None,
+            tool_result_max_chars: None,
+            summary_max_output_tokens: None,
+            summary_file_list_max: None,
+            inference_profile_id: None,
+            tags: Vec::new(),
+        };
+        compaction.validate()?;
         Ok(AgentBehavior {
             behavior_id: self.name,
             principal,
@@ -596,22 +614,21 @@ impl PendingAgentBehavior {
             backend_provider_kind: backend_fields.backend_provider_kind,
             openai_wire_api: backend_fields.openai_wire_api,
             backend_endpoint: backend_fields.backend_endpoint,
-            backend_api_key: backend_fields.backend_api_key,
-            backend_api_key_env_var: backend_fields.backend_api_key_env_var,
+            backend_auth: backend_fields.backend_auth,
             model_name: self.model_name,
             context_window: self.context_window,
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
-            system_prompt: rendered_system_prompt,
-            request_context_template: None,
+            system_prompt: self.system_prompt,
             tools: BehaviorToolConfig::from_selection(
                 &behavior_name,
                 self.tool_selection,
                 tool_ceiling,
                 self.custom_tools,
             )?,
-            compaction_threshold: self.compaction_threshold,
-            compaction_strategy: self.compaction_strategy,
+            compaction: Some(compaction),
+            compaction_inference: None,
+            max_total_tokens: None,
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
             deadline_duration: self.deadline_duration,
@@ -650,8 +667,7 @@ impl PendingAgentBehavior {
                     "<test>",
                 ),
                 backend_endpoint,
-                backend_api_key: None,
-                backend_api_key_env_var: None,
+                backend_auth: crate::document_config::BackendAuth::Unauthenticated,
             },
             &ToolCeiling::meta_only(),
         )

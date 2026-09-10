@@ -51,10 +51,7 @@ fn snapshot(generation: u64, default_behavior_id: &str) -> Arc<ActiveRuntimeSnap
     })
 }
 
-fn fingerprint_tool_surface(
-    approval_required_tools: Vec<String>,
-    lsp_config: Option<String>,
-) -> Arc<ToolSurface> {
+fn fingerprint_tool_surface(lsp_config: Option<String>) -> Arc<ToolSurface> {
     let enable_lsp = lsp_config.is_some();
     let file_tools = if enable_lsp {
         FileToolMode::ReadWrite
@@ -66,7 +63,6 @@ fn fingerprint_tool_surface(
             "fingerprint",
             ToolSelection {
                 file_tools,
-                approval_required_tools,
                 enable_lsp,
                 lsp_config,
                 ..ToolSelection::default()
@@ -150,29 +146,47 @@ fn readiness_source_validation_rejects_noncanonical_or_unassigned_defaults() {
 }
 
 #[test]
-fn concurrency_mode_parse_accepts_exact_known_values() {
+fn concurrency_mode_deserialization_accepts_exact_known_values() {
     assert_eq!(
-        ConcurrencyMode::parse("parallel"),
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("parallel")).ok(),
         Some(ConcurrencyMode::Parallel)
     );
     assert_eq!(
-        ConcurrencyMode::parse("serial"),
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("serial")).ok(),
         Some(ConcurrencyMode::Serial)
     );
     assert_eq!(
-        ConcurrencyMode::parse("latest_only"),
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latest_only")).ok(),
         Some(ConcurrencyMode::LatestOnly)
     );
 }
 
 #[test]
-fn concurrency_mode_parse_is_strict() {
-    assert_eq!(ConcurrencyMode::parse("Parallel"), None);
-    assert_eq!(ConcurrencyMode::parse("SERIAL"), None);
-    assert_eq!(ConcurrencyMode::parse("latest-only"), None);
-    assert_eq!(ConcurrencyMode::parse("latestOnly"), None);
-    assert_eq!(ConcurrencyMode::parse(" parallel "), None);
-    assert_eq!(ConcurrencyMode::parse(""), None);
+fn concurrency_mode_deserialization_is_strict() {
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("Parallel")).ok(),
+        None
+    );
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("SERIAL")).ok(),
+        None
+    );
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latest-only")).ok(),
+        None
+    );
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("latestOnly")).ok(),
+        None
+    );
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!(" parallel ")).ok(),
+        None
+    );
+    assert_eq!(
+        serde_json::from_value::<ConcurrencyMode>(serde_json::json!("")).ok(),
+        None
+    );
 }
 
 #[test]
@@ -201,9 +215,10 @@ fn configuration_fingerprint_reflects_schedule_set() {
         goal_objective_template: None,
         goal_token_budget: None,
         output_schema_ref: None,
+        hooks: Vec::new(),
     };
-    let with_schedule = base.clone().with_schedules(
-        HashMap::from([(
+    let with_schedule = base.clone().with_automation(ResolvedAutomation {
+        schedules: HashMap::from([(
             "s1".to_string(),
             ResolvedSchedule {
                 trigger_doc_id: "s1-doc".to_string(),
@@ -215,18 +230,19 @@ fn configuration_fingerprint_reflects_schedule_set() {
                 concurrency: ConcurrencyMode::Serial,
             },
         )]),
-        HashSet::new(),
-    );
+        ..Default::default()
+    });
     assert_ne!(baseline, with_schedule.configuration_fingerprint());
 
-    let with_unavailable = base
-        .clone()
-        .with_schedules(HashMap::new(), HashSet::from(["s2".to_string()]));
+    let with_unavailable = base.clone().with_automation(ResolvedAutomation {
+        unavailable_schedules: HashSet::from(["s2".to_string()]),
+        ..Default::default()
+    });
     assert_ne!(baseline, with_unavailable.configuration_fingerprint());
 }
 
 #[test]
-fn configuration_fingerprint_reflects_approval_and_lsp_configuration() {
+fn configuration_fingerprint_reflects_lsp_configuration() {
     let base = ResolvedRuntimeSnapshot {
         principal: None,
         local_did: String::new(),
@@ -234,7 +250,7 @@ fn configuration_fingerprint_reflects_approval_and_lsp_configuration() {
         behaviors: HashMap::new(),
         tool_surfaces: HashMap::from([(
             "general".to_string(),
-            fingerprint_tool_surface(Vec::new(), Some("{}".to_string())),
+            fingerprint_tool_surface(Some("{}".to_string())),
         )]),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),
@@ -246,17 +262,10 @@ fn configuration_fingerprint_reflects_approval_and_lsp_configuration() {
     };
     let baseline = base.configuration_fingerprint();
 
-    let mut held = base.clone();
-    held.tool_surfaces.insert(
-        "general".to_string(),
-        fingerprint_tool_surface(vec!["bash".to_string()], Some("{}".to_string())),
-    );
-    assert_ne!(baseline, held.configuration_fingerprint());
-
     let mut lsp_changed = base;
     lsp_changed.tool_surfaces.insert(
         "general".to_string(),
-        fingerprint_tool_surface(Vec::new(), Some(r#"{"format_on_write":true}"#.to_string())),
+        fingerprint_tool_surface(Some(r#"{"format_on_write":true}"#.to_string())),
     );
     assert_ne!(baseline, lsp_changed.configuration_fingerprint());
 }

@@ -148,7 +148,7 @@ pub async fn load_request_context_observation(
         .unwrap_or_else(|| "null".into());
     let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{
         request_id: {{_eq: "{}"}}, session_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}}
-    }}, limit: 2) {{_docID request_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did))).await;
+    }}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#, escape_graphql_string(request_id), escape_graphql_string(session_id), escape_graphql_string(agent_did))).await;
     crate::graphql::ensure_no_errors(&response, "context request ownership")?;
     let requests: Vec<AgentRequestRow> = serde_json::from_value(
         response
@@ -163,7 +163,48 @@ pub async fn load_request_context_observation(
         [owner] => owner,
         _ => bail!("ambiguous context request identity"),
     };
-    let doc = clean(owner.doc_id.as_ref()).context("context request lacks physical identity")?;
+    load_pinned_request_context_observation(node, owner).await
+}
+
+/// Read inference observations for the already-authorized physical request.
+/// The caller retains its canonical request row; no logical label is resolved again.
+pub async fn load_pinned_request_context_observation(
+    node: &EmbeddedNode,
+    owner: &AgentRequestRow,
+) -> Result<Option<RequestContextObservation>> {
+    let agent_did = owner
+        .agent_did
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("context request lacks principal")?;
+    anyhow::ensure!(
+        owner.session_id.as_deref().is_some_and(|id| !id.is_empty())
+            && !owner.request_id.is_empty(),
+        "context request lacks session or request identity"
+    );
+    let doc = owner
+        .doc_id
+        .as_deref()
+        .filter(|id| !id.is_empty())
+        .context("context request lacks physical identity")?;
+    let scope = crate::session::session_scope_filter(
+        agent_did,
+        owner.session_id.as_deref().unwrap(),
+        owner.requester_did.as_deref(),
+    );
+    let selected = node.execute(&format!(r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{_docID}} }}"#, escape_graphql_string(doc), escape_graphql_string(&owner.request_id))).await;
+    crate::graphql::ensure_no_errors(&selected, "physical context request ownership")?;
+    let rows = selected
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .context("missing physical context owner rows")?;
+    match rows.as_slice() {
+        [] => return Ok(None),
+        [row] if row["_docID"].as_str() == Some(doc) => {}
+        _ => bail!("invalid physical context request identity"),
+    }
     let response = node
         .execute(&format!(
             r#"{{ InferenceCall(filter: {{

@@ -1,12 +1,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use gents::{
-    ensure_agent_principal, graphql::escape_graphql_string, load_agent_behavior,
-    upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling,
-};
+use gents::{AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity, ToolCeiling};
 
-use crate::support::snapshots::{fetch_runtime_snapshot, RuntimeSnapshot};
+use crate::support::fixtures::bind_default_behavior_backend;
+use crate::support::snapshots::{RuntimeSnapshot, fetch_runtime_snapshot};
 use crate::support::test_db;
 
 const UNUSED_BACKEND_ENDPOINT: &str = "http://127.0.0.1:9/v1";
@@ -16,136 +14,64 @@ fn test_identity(name: &str) -> KeyIdentity {
     KeyIdentity::load_or_create(path, None).unwrap()
 }
 
-async fn bind_default_behavior_backend(
+async fn apply_documents(
     node: &gents::defra_node::EmbeddedNode,
-    agent_did: &str,
-    backend_id: &str,
-    endpoint: &str,
+    documents: Vec<(gents::Collection, serde_json::Value)>,
 ) {
-    let bootstrap = ensure_agent_principal(node, agent_did).await.unwrap();
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(endpoint);
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "OpenAiCompatible",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    models: ["default"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    endpoint: "{escaped_endpoint}",
-                    max_concurrent: 1,
-                    enabled: true,
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert InferenceBackend failed: {:?}",
-        response.errors
-    );
-
-    let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-        .await
-        .unwrap()
-        .expect("default behavior document");
-    default_behavior.backend_id = Some(backend_id.to_string());
-    upsert_agent_behavior(node, &default_behavior)
-        .await
-        .unwrap();
+    use gents::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let plan = DesiredStateApplyPlan::new(
+        documents
+            .into_iter()
+            .map(|(collection, value)| DesiredStateApplyDocument {
+                collection,
+                add: value.clone(),
+                update: value,
+            })
+            .collect(),
+    )
+    .unwrap();
+    ConfigAccess::transact_local(node, None, "test.automation_configuration", |txn| {
+        let plan = &plan;
+        Box::pin(async move { gents::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await
+    .unwrap();
 }
 
 async fn create_task(
     node: &gents::defra_node::EmbeddedNode,
+    owner: &str,
     task_id: &str,
     behavior_id: &str,
     prompt_template: &str,
 ) {
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_behavior_id = escape_graphql_string(behavior_id);
-    let escaped_prompt_template = escape_graphql_string(prompt_template);
-    let mutation = format!(
-        r#"mutation {{
-            create_Task(input: {{
-                task_id: "{escaped_task_id}",
-                name: "{escaped_task_id}",
-                behavior_id: "{escaped_behavior_id}",
-                prompt_template: "{escaped_prompt_template}",
-                enabled: true
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Task failed: {:?}",
-        response.errors
-    );
+    apply_documents(node, vec![(gents::Collection::Task, serde_json::json!({"agent_did":owner,"task_id":task_id,"display_name":task_id,"behavior_id":behavior_id,"prompt_template":prompt_template}))]).await;
 }
 
-async fn create_schedule(node: &gents::defra_node::EmbeddedNode, schedule_id: &str, task_id: &str) {
-    let escaped_schedule_id = escape_graphql_string(schedule_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let mutation = format!(
-        r#"mutation {{
-            create_Schedule(input: {{
-                schedule_id: "{escaped_schedule_id}",
-                task_id: "{escaped_task_id}",
-                interval_secs: 60,
-                enabled: true,
-                concurrency: "serial"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create Schedule failed: {:?}",
-        response.errors
-    );
+async fn create_schedule(
+    node: &gents::defra_node::EmbeddedNode,
+    owner: &str,
+    schedule_id: &str,
+    task_id: &str,
+) {
+    apply_documents(node, vec![
+        (gents::Collection::Schedule, serde_json::json!({"agent_did":owner,"schedule_id":schedule_id,"cadence":{"kind":"interval","interval_secs":60}})),
+        (gents::Collection::Trigger, serde_json::json!({"agent_did":owner,"trigger_id":schedule_id,"task_id":task_id,"source":{"kind":"schedule","schedule_id":schedule_id},"concurrency":"serial"})),
+    ]).await;
 }
 
 async fn create_event_trigger(
     node: &gents::defra_node::EmbeddedNode,
+    owner: &str,
     trigger_id: &str,
     task_id: &str,
     source_collection: &str,
     event_kind: &str,
 ) {
-    let escaped_trigger_id = escape_graphql_string(trigger_id);
-    let escaped_task_id = escape_graphql_string(task_id);
-    let escaped_source_collection = escape_graphql_string(source_collection);
-    let escaped_event_kind = escape_graphql_string(event_kind);
-    let mutation = format!(
-        r#"mutation {{
-            create_EventTrigger(input: {{
-                trigger_id: "{escaped_trigger_id}",
-                task_id: "{escaped_task_id}",
-                source_collection: "{escaped_source_collection}",
-                event_kind: "{escaped_event_kind}",
-                enabled: true,
-                concurrency: "serial",
-                fire_count: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create EventTrigger failed: {:?}",
-        response.errors
-    );
+    apply_documents(node, vec![
+        (gents::Collection::EventSource, serde_json::json!({"agent_did":owner,"event_source_id":trigger_id,"source_collection":source_collection,"event_kind":event_kind})),
+        (gents::Collection::Trigger, serde_json::json!({"agent_did":owner,"trigger_id":trigger_id,"task_id":task_id,"source":{"kind":"event","event_source_id":trigger_id},"concurrency":"serial"})),
+    ]).await;
 }
 
 async fn wait_for_runtime_snapshot<F>(
@@ -214,6 +140,7 @@ async fn schedule_insert_bumps_active_generation() {
 
     create_task(
         db.node.as_ref(),
+        &agent_did,
         "task-reconcile-alpha",
         &default_behavior_id,
         "alpha prompt",
@@ -221,6 +148,7 @@ async fn schedule_insert_bumps_active_generation() {
     .await;
     create_schedule(
         db.node.as_ref(),
+        &agent_did,
         "schedule-reconcile-alpha",
         "task-reconcile-alpha",
     )
@@ -292,6 +220,7 @@ async fn event_trigger_insert_bumps_active_generation() {
 
     create_task(
         db.node.as_ref(),
+        &agent_did,
         "task-event-trigger-alpha",
         &default_behavior_id,
         "alpha prompt",
@@ -299,10 +228,11 @@ async fn event_trigger_insert_bumps_active_generation() {
     .await;
     create_event_trigger(
         db.node.as_ref(),
+        &agent_did,
         "event-trigger-alpha",
         "task-event-trigger-alpha",
         "AgentMessage",
-        "create",
+        "created",
     )
     .await;
 

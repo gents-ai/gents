@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::defra_query::CollectionScope;
-use crate::document_config::{QueryToolDecl, SubagentTarget, WriteToolDecl, WriteToolField};
+use crate::document_config::{
+    QueryToolDecl, SubagentTargetDocument, WriteToolDecl, WriteToolField,
+};
 use crate::eth::ResolvedEthQuery;
 use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
@@ -752,9 +754,9 @@ fn query_scope_from_decls(
     EndpointScope::Only(grants)
 }
 
-fn subagent_target_key(target: &SubagentTarget) -> (String, String) {
+fn subagent_target_key(target: &SubagentTargetDocument) -> (String, String) {
     (
-        target.agent_did.trim().to_string(),
+        target.target_agent_did.trim().to_string(),
         target.behavior_id.trim().to_string(),
     )
 }

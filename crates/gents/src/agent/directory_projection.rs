@@ -20,7 +20,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::persona_presets::{builtin_preset_names, preset_name, PresetFields};
+use crate::agent::persona_presets::{builtin_preset_names, classify_tools};
 #[cfg(test)]
 use crate::graphql::ensure_no_errors;
 use crate::graphql::{escape_graphql_string, rows};
@@ -42,20 +42,16 @@ pub struct DirectoryEntry {
     pub default_behavior_id: String,
     /// Per-behavior persona dimensions, index-aligned with `behavior_ids`.
     /// `"backend_id|model_name"`, split on the FIRST `|` (ids must not
-    /// contain `|`); `""` only when both are blank, so a half-configured
-    /// behavior yields `"|model"` or `"backend|"`.
+    /// contain `|`). Both dimensions come from the selected same-owner profile.
     pub behavior_models: Vec<String>,
-    /// Per-behavior file tool root (`""` when the behavior's `ToolSelection`
-    /// is missing or unset), index-aligned with `behavior_ids`.
+    /// Per-behavior HostTools root, empty when absent, index-aligned with `behavior_ids`.
     pub behavior_roots: Vec<String>,
     /// Per-behavior built-in preset name, or `""` for a custom selection (or
     /// a missing one), index-aligned with `behavior_ids`.
     pub behavior_presets: Vec<String>,
-    /// Per-behavior inference profile id (`""` = unset), index-aligned with
-    /// `behavior_ids`.
+    /// Explicit per-behavior inference profile ID, index-aligned with `behavior_ids`.
     pub behavior_profiles: Vec<String>,
-    /// Home-level pickable options for the persona composer; identical on
-    /// every entry derived from the same source. Flattened into the four
+    /// Principal-scoped pickable options for the persona composer, flattened into the four
     /// `available_models`/`allowed_roots`/`permission_presets`/
     /// `available_profiles` columns at upsert/list time.
     pub options: CatalogOptions,
@@ -63,30 +59,25 @@ pub struct DirectoryEntry {
     pub last_seen: String,
 }
 
-/// Per-behavior persona dimensions, as loaded from `AgentBehavior`.
+/// Derived persona dimensions resolved through same-owner context and inference links.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BehaviorInfo {
     pub behavior_id: String,
     pub display_name: String,
     pub backend_id: String,
     pub model_name: String,
-    pub tool_selection_id: String,
+    pub host_root: String,
+    pub preset: String,
     pub inference_profile_id: String,
 }
 
-/// A `ToolSelection`'s directory-relevant fields, keyed by `selection_id`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SelectionInfo {
-    pub file_tool_root: String,
-    pub preset: PresetFields,
-}
-
-/// Home-level, source-wide pickable options for the persona composer.
+/// Principal-scoped pickable options for the persona composer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CatalogOptions {
     /// `"backend_id|model_name"`, sorted, deduped.
     pub available_models: Vec<String>,
-    /// Enabled `WorkspaceRoot` paths, sorted.
+    /// Enabled local-operator `WorkspaceRoot` paths, sorted and ceiling-filtered.
+    /// These currently have no principal scope; this is not a per-principal ACP grant.
     pub allowed_roots: Vec<String>,
     /// `builtin_preset_names()`.
     pub permission_presets: Vec<String>,
@@ -117,10 +108,9 @@ pub struct SourceSnapshot {
     /// Per principal, `(process_state, updated_at)` from the authoritative
     /// `AgentBehaviorReadiness` projection.
     pub runtimes: BTreeMap<String, (String, String)>,
-    /// `ToolSelection` rows keyed by `selection_id`.
-    pub selections: BTreeMap<String, SelectionInfo>,
-    /// Home-level composer options (backends, roots, presets, profiles).
-    pub options: CatalogOptions,
+    /// Composer options keyed by principal; configuration and OAuth catalogs
+    /// must never be inherited from another principal on this source.
+    pub options: BTreeMap<String, CatalogOptions>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -199,8 +189,7 @@ pub fn derive_directory_entries(
     principals: &[(String, String, String)],
     behaviors: &BTreeMap<String, Vec<BehaviorInfo>>,
     runtimes: &BTreeMap<String, (String, String)>,
-    selections: &BTreeMap<String, SelectionInfo>,
-    options: &CatalogOptions,
+    options: &BTreeMap<String, CatalogOptions>,
 ) -> BTreeMap<String, DirectoryEntry> {
     principals
         .iter()
@@ -229,25 +218,8 @@ pub fn derive_directory_entries(
                     }
                 })
                 .collect();
-            let behavior_roots = infos
-                .iter()
-                .map(|info| {
-                    selections
-                        .get(&info.tool_selection_id)
-                        .map(|selection| selection.file_tool_root.clone())
-                        .unwrap_or_default()
-                })
-                .collect();
-            let behavior_presets = infos
-                .iter()
-                .map(|info| {
-                    selections
-                        .get(&info.tool_selection_id)
-                        .and_then(|selection| preset_name(&selection.preset))
-                        .map(str::to_string)
-                        .unwrap_or_default()
-                })
-                .collect();
+            let behavior_roots = infos.iter().map(|info| info.host_root.clone()).collect();
+            let behavior_presets = infos.iter().map(|info| info.preset.clone()).collect();
             let behavior_profiles = infos
                 .iter()
                 .map(|info| info.inference_profile_id.clone())
@@ -268,7 +240,7 @@ pub fn derive_directory_entries(
                     behavior_roots,
                     behavior_presets,
                     behavior_profiles,
-                    options: options.clone(),
+                    options: options.get(did).cloned().unwrap_or_default(),
                     runtime_state,
                     last_seen: canonicalize_last_seen(&updated_at),
                 },
@@ -296,7 +268,6 @@ pub async fn reconcile_directory_tick(
         &snapshot.principals,
         &snapshot.behaviors,
         &snapshot.runtimes,
-        &snapshot.selections,
         &snapshot.options,
     );
     let existing = store
@@ -440,72 +411,34 @@ impl DirectoryStore for GraphqlDirectoryStore {
         // source Update event, and homes running concurrent automation
         // multiply that rate — per-collection executes here would each pay
         // their own parse/plan/transaction overhead per sweep.
-        let query = r#"{
-            AgentPrincipal {
-                agent_did
-                display_name
-                default_behavior_id
-                enabled
+        let mut query = String::from("{ AgentPrincipal { agent_did display_name default_behavior_id enabled } AgentBehaviorReadiness { agent_did snapshot_json updated_at } WorkspaceRoot { root_path enabled }");
+        for collection in DIRECTORY_CONFIG_COLLECTIONS {
+            let (fields, _) = crate::config_client::config_projection(*collection, None)?;
+            query.push_str(&format!(
+                " {} {{ {}",
+                collection.graphql_type(),
+                fields.join(" ")
+            ));
+            if *collection == crate::collection::Collection::InferenceBackend {
+                query.push_str(" catalogs probe_status last_probe");
             }
-            AgentBehavior {
-                agent_did
-                display_name
-                behavior_id
-                backend_id
-                model_name
-                tool_selection_id
-                inference_profile_id
-                enabled
-            }
-            AgentBehaviorReadiness {
-                agent_did
-                snapshot_json
-                updated_at
-            }
-            ToolSelection {
-                selection_id
-                file_tool_root
-                enable_file_tools
-                file_tools_mode
-                enable_bash
-                bash_mode
-                command_allowed_argv_prefixes
-                command_forbidden_argv_prefixes
-                read_only_command_allowlist
-                enable_self_config
-                write_tools
-            }
-            InferenceBackend {
-                backend_id
-                models
-                enabled
-            }
-            WorkspaceRoot {
-                root_path
-                enabled
-            }
-            InferenceProfile {
-                profile_id
-                display_name
-                context_window
-                max_output_tokens
-                max_turns
-                temperature
-                top_p
-            }
-        }"#;
+            query.push_str(" }");
+        }
+        query.push('}');
         let response = crate::graphql::graphql_with_transaction_retry(
             &self.node,
-            query,
+            &query,
             "query directory source snapshot",
         )
         .await?;
+        let principals = parse_principals(&response)?;
+        let (behaviors, options) =
+            parse_config_projection(&response, &principals, self.ceiling_root.as_deref())?;
         Ok(SourceSnapshot {
-            principals: parse_principals(&response)?,
-            behaviors: parse_behaviors(&response)?,
+            principals,
+            behaviors,
             runtimes: parse_runtime_states(&response)?,
-            selections: parse_tool_selections(&response)?,
-            options: parse_catalog_options(&response, self.ceiling_root.as_deref())?,
+            options,
         })
     }
 
@@ -758,70 +691,6 @@ fn parse_principals(response: &QueryResponse) -> Result<Vec<(String, String, Str
         .collect())
 }
 
-fn parse_behaviors(response: &QueryResponse) -> Result<BTreeMap<String, Vec<BehaviorInfo>>> {
-    let mut grouped: BTreeMap<String, Vec<BehaviorInfo>> = BTreeMap::new();
-    for row in rows::<BehaviorRow>(response, "AgentBehavior")? {
-        if !row.enabled.unwrap_or(true) {
-            continue;
-        }
-        let Some(did) = row.agent_did.map(|did| did.trim().to_string()) else {
-            continue;
-        };
-        if did.is_empty() {
-            continue;
-        }
-        let Some(behavior_id) = row
-            .behavior_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-        else {
-            continue;
-        };
-        let display_name = row
-            .display_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| behavior_id.clone());
-        let backend_id = row
-            .backend_id
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        let model_name = row
-            .model_name
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        let tool_selection_id = row
-            .tool_selection_id
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        let inference_profile_id = row
-            .inference_profile_id
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        grouped.entry(did).or_default().push(BehaviorInfo {
-            behavior_id,
-            display_name,
-            backend_id,
-            model_name,
-            tool_selection_id,
-            inference_profile_id,
-        });
-    }
-    Ok(grouped)
-}
-
 fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (String, String)>> {
     Ok(
         rows::<gents_protocol::row::AgentBehaviorReadinessRow>(response, "AgentBehaviorReadiness")?
@@ -841,49 +710,7 @@ fn parse_runtime_states(response: &QueryResponse) -> Result<BTreeMap<String, (St
     )
 }
 
-fn parse_tool_selections(response: &QueryResponse) -> Result<BTreeMap<String, SelectionInfo>> {
-    let mut grouped: BTreeMap<String, SelectionInfo> = BTreeMap::new();
-    for row in rows::<ToolSelectionRow>(response, "ToolSelection")? {
-        let Some(selection_id) = row
-            .selection_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned)
-        else {
-            continue;
-        };
-        let file_tool_root = row
-            .file_tool_root
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_string();
-        let preset = PresetFields {
-            enable_file_tools: row.enable_file_tools.unwrap_or_default(),
-            file_tools_mode: row.file_tools_mode.unwrap_or_default(),
-            enable_bash: row.enable_bash.unwrap_or_default(),
-            bash_mode: row.bash_mode.unwrap_or_default(),
-            command_allowed_argv_prefixes: row.command_allowed_argv_prefixes.unwrap_or_default(),
-            command_forbidden_argv_prefixes: row
-                .command_forbidden_argv_prefixes
-                .unwrap_or_default(),
-            read_only_command_allowlist: row.read_only_command_allowlist.unwrap_or_default(),
-            enable_self_config: row.enable_self_config.unwrap_or_default(),
-            write_tools: row.write_tools.unwrap_or_default(),
-        };
-        grouped.insert(
-            selection_id,
-            SelectionInfo {
-                file_tool_root,
-                preset,
-            },
-        );
-    }
-    Ok(grouped)
-}
-
-/// Hand-assembles a compact JSON object describing an `InferenceProfile`'s
+/// Hand-assembles a compact JSON object describing a resolved profile's
 /// display-relevant parameters (#1050's info-card fields), in a FIXED key
 /// order: `context_window`, `max_output_tokens`, `max_turns`, `temperature`,
 /// `top_p`. Deliberately NOT `serde_json::to_string` of a map — a map's key
@@ -951,32 +778,118 @@ pub(crate) fn filter_roots_to_ceiling(
         .collect()
 }
 
-fn parse_catalog_options(
-    response: &QueryResponse,
-    ceiling_root: Option<&std::path::Path>,
-) -> Result<CatalogOptions> {
-    // Backend rows always carry `enabled` (backend_registry treats it as
-    // required on decode), so the conservative null-means-disabled default
-    // here is a dead branch — deliberately stricter than `parse_behaviors`'
-    // null-means-enabled, because advertising models for a half-written
-    // backend row is worse than omitting them for a tick.
-    let mut available_models: Vec<String> =
-        rows::<InferenceBackendRow>(response, "InferenceBackend")?
-            .into_iter()
-            .filter(|row| row.enabled.unwrap_or(false))
-            .flat_map(|row| {
-                let backend_id = row.backend_id.unwrap_or_default();
-                row.models
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(move |model| format!("{backend_id}|{model}"))
-                    .collect::<Vec<_>>()
-            })
-            .collect();
-    available_models.sort();
-    available_models.dedup();
+const DIRECTORY_CONFIG_COLLECTIONS: &[crate::collection::Collection] = &[
+    crate::collection::Collection::AgentBehavior,
+    crate::collection::Collection::AgentContext,
+    crate::collection::Collection::Tools,
+    crate::collection::Collection::DatastoreToolSurface,
+    crate::collection::Collection::InferenceBackend,
+    crate::collection::Collection::InferenceProfile,
+    crate::collection::Collection::InferenceSampling,
+    crate::collection::Collection::InferenceExecution,
+];
 
-    let mut allowed_roots: Vec<String> = filter_roots_to_ceiling(
+fn config_documents<T: serde::de::DeserializeOwned>(
+    response: &QueryResponse,
+    collection: crate::collection::Collection,
+) -> Result<BTreeMap<(String, String), T>> {
+    let name = collection.graphql_type();
+    let (fields, _) = crate::config_client::config_projection(collection, None)?;
+    let source = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get(name))
+        .and_then(serde_json::Value::as_array)
+        .with_context(|| format!("directory snapshot missing {name}"))?;
+    let mut documents = BTreeMap::new();
+    for value in source {
+        // Backend observations share storage with config but never enter its
+        // strict serde shape. Select desired fields using the canonical owner.
+        let mut document = value
+            .as_object()
+            .context("configuration row is not an object")?
+            .clone();
+        document.retain(|field, _| fields.contains(&field.as_str()));
+        let document = serde_json::Value::Object(document);
+        let (_, normalized) = crate::config_client::config_projection(collection, Some(&document))?;
+        let document = normalized.context("canonical configuration projection missing value")?;
+        let owner = document
+            .get("agent_did")
+            .and_then(serde_json::Value::as_str)
+            .context("configuration owner missing")?;
+        let id = document
+            .get(collection.unique_field())
+            .and_then(serde_json::Value::as_str)
+            .context("configuration ID missing")?;
+        anyhow::ensure!(
+            !owner.trim().is_empty() && !id.trim().is_empty(),
+            "blank {name} owner or ID"
+        );
+        let key = (owner.to_string(), id.to_string());
+        let parsed =
+            serde_json::from_value(document).with_context(|| format!("decoding {name}"))?;
+        anyhow::ensure!(
+            documents.insert(key, parsed).is_none(),
+            "duplicate scoped {name} identity"
+        );
+    }
+    Ok(documents)
+}
+
+fn scoped_config<'a, T>(
+    documents: &'a BTreeMap<(String, String), T>,
+    owner: &str,
+    id: &str,
+) -> Result<&'a T> {
+    documents
+        .get(&(owner.to_string(), id.to_string()))
+        .with_context(|| {
+            format!("directory configuration reference {id:?} missing in principal {owner:?}")
+        })
+}
+
+fn parse_config_projection(
+    response: &QueryResponse,
+    principals: &[(String, String, String)],
+    ceiling_root: Option<&std::path::Path>,
+) -> Result<(
+    BTreeMap<String, Vec<BehaviorInfo>>,
+    BTreeMap<String, CatalogOptions>,
+)> {
+    use crate::collection::Collection;
+    use crate::document_config::{
+        AgentBehavior, AgentContext, BackendAuth, DatastoreToolSurfaceDocument, InferenceBackend,
+        InferenceBackendObservation, InferenceExecution, InferenceProfile, InferenceSampling,
+        Tools,
+    };
+    let behaviors = config_documents::<AgentBehavior>(response, Collection::AgentBehavior)?;
+    let contexts = config_documents::<AgentContext>(response, Collection::AgentContext)?;
+    let tools = config_documents::<Tools>(response, Collection::Tools)?;
+    let surfaces = config_documents::<DatastoreToolSurfaceDocument>(
+        response,
+        Collection::DatastoreToolSurface,
+    )?;
+    let backends = config_documents::<InferenceBackend>(response, Collection::InferenceBackend)?;
+    let profiles = config_documents::<InferenceProfile>(response, Collection::InferenceProfile)?;
+    let samplings = config_documents::<InferenceSampling>(response, Collection::InferenceSampling)?;
+    let executions =
+        config_documents::<InferenceExecution>(response, Collection::InferenceExecution)?;
+    let mut observations = BTreeMap::new();
+    for value in rows::<serde_json::Value>(response, "InferenceBackend")? {
+        let owner = value
+            .get("agent_did")
+            .and_then(serde_json::Value::as_str)
+            .context("backend observation owner missing")?
+            .to_string();
+        let observed: InferenceBackendObservation = serde_json::from_value(value)?;
+        anyhow::ensure!(
+            observations
+                .insert((owner, observed.backend_id.clone()), observed)
+                .is_none(),
+            "duplicate scoped backend observation"
+        );
+    }
+    let mut allowed_roots = filter_roots_to_ceiling(
         rows::<WorkspaceRootRow>(response, "WorkspaceRoot")?
             .into_iter()
             .filter(|row| row.enabled.unwrap_or(false))
@@ -985,45 +898,166 @@ fn parse_catalog_options(
         ceiling_root,
     );
     allowed_roots.sort();
-
-    // Sort pairs first, then split (mirrors how `behaviors`/`behavior_ids`
-    // stay aligned in `derive_directory_entries`): each tuple carries both
-    // the `available_profiles` string and its aligned params JSON, so a
-    // single sort keeps `available_profile_params[i]` describing
-    // `available_profiles[i]` after the split.
-    let mut profile_pairs: Vec<(String, String)> =
-        rows::<InferenceProfileRow>(response, "InferenceProfile")?
-            .into_iter()
-            .filter_map(|row| {
-                let profile_id = row.profile_id?;
-                let display_name = row
+    allowed_roots.dedup();
+    let mut by_owner = BTreeMap::new();
+    let mut options_by_owner = BTreeMap::new();
+    for (owner, _, _) in principals {
+        let mut infos = Vec::new();
+        for ((behavior_owner, _), behavior) in &behaviors {
+            if behavior_owner != owner || !behavior.enabled {
+                continue;
+            }
+            let profile = scoped_config(&profiles, owner, &behavior.inference_profile_id)?;
+            scoped_config(&backends, owner, &profile.backend_id)?;
+            let context = behavior
+                .context_id
+                .as_deref()
+                .map(|id| scoped_config(&contexts, owner, id))
+                .transpose()?;
+            let selected_tools = context
+                .and_then(|context| context.tools_id.as_deref())
+                .map(|id| scoped_config(&tools, owner, id))
+                .transpose()?;
+            let (host_root, preset) = if let Some(tools) = selected_tools {
+                tools.validate()?;
+                let host_root = tools
+                    .host
+                    .as_ref()
+                    .and_then(|host| host.root.clone())
+                    .unwrap_or_default();
+                let merged = crate::document_config::merge_datastore_tool_surfaces(
+                    tools,
+                    surfaces.values(),
+                )?;
+                let preset = classify_tools(&tools, &merged)?
+                    .unwrap_or_default()
+                    .to_string();
+                (host_root, preset)
+            } else {
+                (String::new(), String::new())
+            };
+            anyhow::ensure!(
+                !profile.backend_id.contains('|'),
+                "directory model column cannot encode backend ID containing '|'"
+            );
+            infos.push(BehaviorInfo {
+                behavior_id: behavior.behavior_id.clone(),
+                display_name: behavior
                     .display_name
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| profile_id.clone());
-                let params = render_profile_params_json(
-                    row.context_window,
-                    row.max_output_tokens,
-                    row.max_turns,
-                    row.temperature,
-                    row.top_p,
+                    .as_deref()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(&behavior.behavior_id)
+                    .to_string(),
+                backend_id: profile.backend_id.clone(),
+                model_name: profile.model_name.clone(),
+                inference_profile_id: profile.profile_id.clone(),
+                host_root,
+                preset,
+            });
+        }
+        by_owner.insert(owner.clone(), infos);
+        let mut available_models = BTreeSet::new();
+        for ((backend_owner, id), backend) in &backends {
+            if backend_owner != owner || !backend.enabled {
+                continue;
+            }
+            let credential_scope =
+                matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(owner.as_str());
+            if let Some(catalog) = observations
+                .get(&(owner.clone(), id.clone()))
+                .map(|observation| observation.catalog_for(credential_scope))
+                .transpose()?
+                .flatten()
+            {
+                anyhow::ensure!(
+                    !id.contains('|'),
+                    "directory model column cannot encode backend ID containing '|'"
                 );
-                Some((format!("{profile_id}|{display_name}"), params))
-            })
-            .collect();
-    profile_pairs.sort();
-    let (available_profiles, available_profile_params): (Vec<String>, Vec<String>) =
-        profile_pairs.into_iter().unzip();
-
-    Ok(CatalogOptions {
-        available_models,
-        allowed_roots,
-        permission_presets: builtin_preset_names()
-            .iter()
-            .map(|name| name.to_string())
-            .collect(),
-        available_profiles,
-        available_profile_params,
-    })
+                for model in &catalog.models {
+                    available_models.insert(format!("{id}|{}", model.model_name));
+                }
+            }
+        }
+        let mut profile_pairs = Vec::new();
+        for ((profile_owner, id), profile) in &profiles {
+            if profile_owner != owner {
+                continue;
+            }
+            let backend = scoped_config(&backends, owner, &profile.backend_id)?;
+            let sampling = profile
+                .sampling_id
+                .as_deref()
+                .map(|id| scoped_config(&samplings, owner, id))
+                .transpose()?;
+            let execution = profile
+                .execution_id
+                .as_deref()
+                .map(|id| scoped_config(&executions, owner, id))
+                .transpose()?;
+            let credential_scope =
+                matches!(backend.auth, BackendAuth::PrincipalOAuth).then_some(owner.as_str());
+            if let Some(catalog) = observations
+                .get(&(owner.clone(), backend.backend_id.clone()))
+                .map(|observation| observation.catalog_for(credential_scope))
+                .transpose()?
+                .flatten()
+            {
+                let selected = catalog
+                    .models
+                    .iter()
+                    .filter(|model| model.model_name == profile.model_name)
+                    .collect::<Vec<_>>();
+                anyhow::ensure!(
+                    selected.len() == 1,
+                    "profile {id:?} selects an unadvertised or ambiguous model"
+                );
+                if let (Some(effort), Some(supported)) = (
+                    profile.reasoning_effort,
+                    selected[0].reasoning_efforts.as_ref(),
+                ) {
+                    anyhow::ensure!(
+                        supported.contains(&effort),
+                        "profile {id:?} selects an unadvertised effort"
+                    );
+                }
+            }
+            anyhow::ensure!(
+                !id.contains('|'),
+                "directory profile column cannot encode ID containing '|'"
+            );
+            let name = profile
+                .display_name
+                .as_deref()
+                .filter(|name| !name.is_empty())
+                .unwrap_or(id);
+            profile_pairs.push((
+                format!("{id}|{name}"),
+                render_profile_params_json(
+                    profile.context_window,
+                    profile.max_output_tokens,
+                    execution.and_then(|execution| execution.max_turns),
+                    sampling.and_then(|sampling| sampling.temperature),
+                    sampling.and_then(|sampling| sampling.top_p),
+                ),
+            ));
+        }
+        profile_pairs.sort();
+        let (available_profiles, available_profile_params) = profile_pairs.into_iter().unzip();
+        options_by_owner.insert(
+            owner.clone(),
+            CatalogOptions {
+                available_models: available_models.into_iter().collect(),
+                allowed_roots: allowed_roots.clone(),
+                permission_presets: builtin_preset_names()
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+                available_profiles,
+                available_profile_params,
+            },
+        );
+    }
+    Ok((by_owner, options_by_owner))
 }
 
 #[derive(Deserialize)]
@@ -1038,84 +1072,11 @@ struct PrincipalRow {
 }
 
 #[derive(Deserialize)]
-struct BehaviorRow {
-    agent_did: Option<String>,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    model_name: Option<String>,
-    #[serde(default)]
-    tool_selection_id: Option<String>,
-    #[serde(default)]
-    inference_profile_id: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct ToolSelectionRow {
-    #[serde(default)]
-    selection_id: Option<String>,
-    #[serde(default)]
-    file_tool_root: Option<String>,
-    #[serde(default)]
-    enable_file_tools: Option<bool>,
-    #[serde(default)]
-    file_tools_mode: Option<String>,
-    #[serde(default)]
-    enable_bash: Option<bool>,
-    #[serde(default)]
-    bash_mode: Option<String>,
-    #[serde(default)]
-    command_allowed_argv_prefixes: Option<Vec<String>>,
-    #[serde(default)]
-    command_forbidden_argv_prefixes: Option<Vec<String>>,
-    #[serde(default)]
-    read_only_command_allowlist: Option<Vec<String>>,
-    #[serde(default)]
-    enable_self_config: Option<bool>,
-    #[serde(default)]
-    write_tools: Option<Vec<String>>,
-}
-
-#[derive(Deserialize)]
-struct InferenceBackendRow {
-    #[serde(default)]
-    backend_id: Option<String>,
-    #[serde(default)]
-    models: Option<Vec<String>>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
 struct WorkspaceRootRow {
     #[serde(default)]
     root_path: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
-struct InferenceProfileRow {
-    #[serde(default)]
-    profile_id: Option<String>,
-    #[serde(default)]
-    display_name: Option<String>,
-    #[serde(default)]
-    context_window: Option<i64>,
-    #[serde(default)]
-    max_output_tokens: Option<i64>,
-    #[serde(default)]
-    max_turns: Option<i64>,
-    #[serde(default)]
-    temperature: Option<f64>,
-    #[serde(default)]
-    top_p: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -1541,9 +1502,9 @@ mod tests {
     /// principal then retracts exactly its row.
     ///
     /// Also covers persona-catalog round-trip (issue #714 PR 3): one behavior
-    /// wired to a readonly-matching `ToolSelection` (with root), backend,
-    /// model, and profile; the other behavior wired to none of those, so its
-    /// four dimension entries must derive `""`. A disabled `WorkspaceRoot`
+    /// wired to a readonly-matching `Tools` (with root), backend,
+    /// model, and profile; the other selects the same profile with no context.
+    /// Foreign same-ID config and OAuth observations must not cross scope. A disabled `WorkspaceRoot`
     /// must be excluded from `allowed_roots`. The second tick over the same
     /// settled state must still be write-free — the nine new columns must
     /// not break the storm-regression invariant. The `InferenceProfile`
@@ -1588,9 +1549,7 @@ mod tests {
                 behavior_id: "enabled-behavior",
                 agent_did: "did:key:with-runtime",
                 display_name: "Enabled Behavior",
-                backend_id: "openai",
-                model_name: "gpt-5",
-                tool_selection_id: "readonly-selection",
+                context_id: "readonly-context",
                 inference_profile_id: "fast-profile",
                 enabled: true
             }) { _docID }
@@ -1598,12 +1557,14 @@ mod tests {
                 behavior_id: "artist-behavior",
                 agent_did: "did:key:with-runtime",
                 display_name: "Artist Behavior",
+                inference_profile_id: "fast-profile",
                 enabled: true
             }) { _docID }
             create_AgentBehavior(input: {
                 behavior_id: "disabled-behavior",
                 agent_did: "did:key:with-runtime",
                 display_name: "Disabled Behavior",
+                inference_profile_id: "fast-profile",
                 enabled: false
             }) { _docID }
             create_AgentBehaviorReadiness(input: {
@@ -1611,28 +1572,44 @@ mod tests {
                 snapshot_json: "{\"format_version\":1,\"process_state\":\"ready\",\"active_generation\":1,\"router_generation\":1,\"default_behavior_id\":\"enabled-behavior\",\"behaviors\":[{\"behavior_id\":\"artist-behavior\",\"state\":\"ready\",\"reason\":null},{\"behavior_id\":\"enabled-behavior\",\"state\":\"ready\",\"reason\":null}]}",
                 updated_at: "2026-07-23T12:34:56.845794+00:00"
             }) { _docID }
-            create_ToolSelection(input: {
-                selection_id: "readonly-selection",
-                agent_did: "did:key:with-runtime",
-                file_tool_root: "/repo/with-runtime",
-                enable_file_tools: true,
-                file_tools_mode: "ReadOnly",
-                enable_bash: true,
-                bash_mode: "ReadOnly",
-                enable_self_config: false
+            create_AgentContext(input: {
+                context_id: "readonly-context", agent_did: "did:key:with-runtime", tools_id: "readonly-tools"
+            }) { _docID }
+            create_Tools(input: {
+                tools_id: "readonly-tools", agent_did: "did:key:with-runtime",
+                host: { root: "/repo/with-runtime", files: { mode: "ReadOnly" }, bash: { mode: "ReadOnly" } }
+            }) { _docID }
+            create_Tools(input: {
+                tools_id: "readonly-tools", agent_did: "did:key:foreign",
+                host: { root: "/repo/foreign", files: { mode: "ReadWrite" }, bash: { mode: "Unrestricted" } }
             }) { _docID }
             create_InferenceBackend(input: {
-                backend_id: "openai",
-                name: "OpenAI",
-                provider_kind: "OpenAiCompatible",
+                backend_id: "openai", agent_did: "did:key:with-runtime", name: "OpenAI",
+                provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8000", auth: { kind: "unauthenticated" },
                 enabled: true,
-                models: ["gpt-5", "gpt-5-mini"]
+                catalogs: [
+                    {agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "gpt-5"}, {model_name: "gpt-5-mini"}]},
+                    {agent_did: "did:key:foreign", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-private-model"}]}
+                ]
+            }) { _docID }
+            create_InferenceBackend(input: {
+                backend_id: "openai", agent_did: "did:key:foreign", name: "Foreign",
+                provider_kind: "OpenAiCompatible", endpoint: "http://localhost:8001", auth: { kind: "unauthenticated" },
+                enabled: true, catalogs: [{agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-backend-model"}]}]
             }) { _docID }
             create_InferenceProfile(input: {
-                profile_id: "fast-profile",
-                display_name: "Fast Profile",
-                context_window: 128000,
-                temperature: 0.2
+                profile_id: "fast-profile", agent_did: "did:key:with-runtime", display_name: "Fast Profile",
+                backend_id: "openai", model_name: "gpt-5", sampling_id: "sampling", context_window: 128000
+            }) { _docID }
+            create_InferenceProfile(input: {
+                profile_id: "fast-profile", agent_did: "did:key:foreign", display_name: "Foreign Profile",
+                backend_id: "openai", model_name: "foreign-backend-model"
+            }) { _docID }
+            create_InferenceSampling(input: {
+                sampling_id: "sampling", agent_did: "did:key:with-runtime", temperature: 0.2
+            }) { _docID }
+            create_InferenceSampling(input: {
+                sampling_id: "sampling", agent_did: "did:key:foreign", temperature: 0.9
             }) { _docID }
             create_WorkspaceRoot(input: {
                 root_path: "/repo/enabled",
@@ -1685,18 +1662,18 @@ mod tests {
         );
         // Persona dimensions, index-aligned with the sorted behavior_ids
         // above (artist-behavior first, enabled-behavior second): the
-        // artist behavior has no backend/model/selection/profile wired up
-        // and must derive "" on all four; the enabled behavior has all four
-        // wired and must round-trip through a real node.
+        // both behaviors select the explicit inference profile; only the
+        // enabled behavior has a context/tools link. Foreign same-ID config
+        // documents must never influence any dimension.
         assert_eq!(
             with_runtime.behavior_models,
-            vec![String::new(), "openai|gpt-5".to_string()],
+            vec!["openai|gpt-5".to_string(), "openai|gpt-5".to_string()],
             "behavior_models must round-trip backend_id|model_name, aligned"
         );
         assert_eq!(
             with_runtime.behavior_roots,
             vec![String::new(), "/repo/with-runtime".to_string()],
-            "behavior_roots must round-trip the wired selection's file_tool_root, aligned"
+            "behavior_roots must round-trip the wired tools' host root, aligned"
         );
         assert_eq!(
             with_runtime.behavior_presets,
@@ -1705,7 +1682,7 @@ mod tests {
         );
         assert_eq!(
             with_runtime.behavior_profiles,
-            vec![String::new(), "fast-profile".to_string()],
+            vec!["fast-profile".to_string(), "fast-profile".to_string()],
             "behavior_profiles must round-trip inference_profile_id, aligned"
         );
         assert_eq!(
@@ -1755,15 +1732,71 @@ mod tests {
             no_runtime.default_behavior_id, "",
             "a principal with no default_behavior_id must stay empty, not null-coerced garbage"
         );
-        // Options are home-level, so a principal with no behaviors at all
-        // still carries the same catalog on its row.
-        assert_eq!(no_runtime.options, with_runtime.options);
+        // Config and authentication catalogs never cross principal boundaries.
+        assert!(no_runtime.options.available_models.is_empty());
+        assert!(no_runtime.options.available_profiles.is_empty());
+        assert!(no_runtime.options.available_profile_params.is_empty());
+        // WorkspaceRoot is still local operator policy, with the same ceiling.
+        assert_eq!(
+            no_runtime.options.allowed_roots,
+            with_runtime.options.allowed_roots
+        );
 
         // Settled state is a write-free fixpoint: the runtime-less principal
         // must not keep re-triggering writes forever, and the eight new
         // dimension/option columns must not break settled-comparison either.
         let second = reconcile_directory_tick(&store, "did:key:home").await?;
         assert_eq!(second, DirectoryTickOutcome::default());
+
+        let oauth = r#"mutation { update_InferenceBackend(
+            filter: { agent_did: { _eq: "did:key:with-runtime" }, backend_id: { _eq: "openai" } },
+            input: { provider_kind: "ChatGptCodex", auth: { kind: "principal_oauth" } }
+        ) { _docID } }"#;
+        ensure_no_errors(&node.execute(oauth).await, "select principal OAuth catalog")?;
+        let oauth_snapshot = store.load_source_snapshot().await?;
+        assert!(
+            oauth_snapshot.options["did:key:with-runtime"]
+                .available_models
+                .is_empty(),
+            "OAuth must not borrow shared or foreign catalog observations"
+        );
+        let scoped_catalog = r#"mutation { update_InferenceBackend(
+            filter: { agent_did: { _eq: "did:key:with-runtime" }, backend_id: { _eq: "openai" } },
+            input: { catalogs: [
+                {agent_did: "did:key:with-runtime", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "gpt-5"}]},
+                {agent_did: null, observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "shared-only-model"}]},
+                {agent_did: "did:key:foreign", observed_at: "2026-07-23T00:00:00Z", models: [{model_name: "foreign-private-model"}]}
+            ] }
+        ) { _docID } }"#;
+        ensure_no_errors(
+            &node.execute(scoped_catalog).await,
+            "publish exact OAuth catalog",
+        )?;
+        let scoped_snapshot = store.load_source_snapshot().await?;
+        assert_eq!(
+            scoped_snapshot.options["did:key:with-runtime"].available_models,
+            vec!["openai|gpt-5"]
+        );
+
+        let custom_tools = r#"mutation { update_Tools(
+            filter: { agent_did: { _eq: "did:key:with-runtime" }, tools_id: { _eq: "readonly-tools" } },
+            input: { host: { root: "/repo/with-runtime", files: { mode: "ReadOnly" },
+                bash: { mode: "ReadOnly", allowed_argv_prefixes: [["git", "status"]] } } }
+        ) { _docID } }"#;
+        ensure_no_errors(
+            &node.execute(custom_tools).await,
+            "customize canonical bash argv policy",
+        )?;
+        let custom = store.load_source_snapshot().await?;
+        let customized = custom.behaviors["did:key:with-runtime"]
+            .iter()
+            .find(|behavior| behavior.behavior_id == "enabled-behavior")
+            .expect("customized behavior");
+        assert_eq!(customized.host_root, "/repo/with-runtime");
+        assert_eq!(
+            customized.preset, "",
+            "extra argv prefixes must classify as custom, not readonly"
+        );
 
         let delete = r#"mutation {
             delete_AgentPrincipal(filter: { agent_did: { _eq: "did:key:no-runtime" } }) { _docID }

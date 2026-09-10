@@ -131,7 +131,7 @@ impl BehaviorToolConfig {
         let mut subagent_tools = self.subagent_tools().clone();
         let allow_cross_deployment = subagent_tools.allow_cross_deployment;
         subagent_tools.targets.retain(|target| {
-            if target.agent_did == own_agent_did {
+            if target.target_agent_did == own_agent_did {
                 active_behavior_ids.contains(&target.behavior_id)
             } else {
                 allow_cross_deployment
@@ -237,7 +237,10 @@ fn explain_meta(
     if surface.include_meta_tools {
         builder.include_many(
             "meta_mcp",
-            META_TOOL_NAMES.iter().map(|name| (*name).to_string()),
+            crate::meta_tools::presented_tool_names(
+                surface.remote_tools.as_ref().unwrap_or(&Default::default()),
+                &surface.allowed_mcp_service_ids,
+            ),
         );
         if surface.allowed_mcp_service_ids.is_empty() {
             builder.warn(
@@ -248,7 +251,15 @@ fn explain_meta(
         return;
     }
 
-    for name in META_TOOL_NAMES {
+    let configured = config.remote_tools().map(|remote| {
+        crate::meta_tools::presented_tool_names(remote, config.allowed_mcp_service_ids())
+    });
+    for name in configured.unwrap_or_else(|| {
+        META_TOOL_NAMES
+            .iter()
+            .map(|name| name.to_string())
+            .collect()
+    }) {
         if config.meta_tools_requested() {
             builder.unavailable("meta_mcp", name.to_string());
         } else {
@@ -264,7 +275,7 @@ fn explain_meta(
         } else {
             builder.warn(
                 "meta_requested_no_online_mcp",
-                "Meta tools are configured on, but no allowed ToolServiceRegistry row is currently online.",
+                "Meta tools are configured on, but no principal-local enabled ToolServiceRegistry row is currently available.",
             );
         }
     }
@@ -500,4 +511,48 @@ fn policy_summary(policy: &ToolPolicySurface) -> BTreeMap<String, Vec<String>> {
         vec![format!("scope:{}", policy.query_tools.kind())],
     );
     summary
+}
+
+#[cfg(test)]
+mod target_scope_tests {
+    use super::*;
+    use crate::document_config::SubagentTargetDocument;
+    use crate::tool_surface::{SubagentToolConfig, ToolCeiling, ToolSelection};
+
+    #[test]
+    fn remote_target_explanation_uses_destination_principal() {
+        let target = SubagentTargetDocument {
+            target_id: "remote-worker".into(),
+            agent_did: "did:key:caller".into(),
+            target_agent_did: "did:key:remote".into(),
+            behavior_id: "worker".into(),
+            name: "remote worker".into(),
+            description: None,
+            tags: Vec::new(),
+        };
+        for (allow_remote, local_behaviors, expected) in [
+            (false, HashSet::from(["worker".to_owned()]), 0),
+            (true, HashSet::new(), 1),
+        ] {
+            let config = BehaviorToolConfig::from_selection_with_subagent_tools(
+                "coordinator",
+                ToolSelection::default(),
+                &ToolCeiling::meta_only(),
+                SubagentToolConfig {
+                    targets: vec![target.clone()],
+                    spawn_enabled: true,
+                    allow_cross_deployment: allow_remote,
+                    ..Default::default()
+                },
+                Vec::new(),
+            )
+            .unwrap();
+            let surface = config.resolve_with_available_subagent_targets_for_runtime_availability(
+                RuntimeToolAvailability::all(),
+                "did:key:caller",
+                &local_behaviors,
+            );
+            assert_eq!(surface.subagent_targets().len(), expected);
+        }
+    }
 }

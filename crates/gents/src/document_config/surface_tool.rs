@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
 use super::serde_helpers;
-use super::tool_selection::{
-    reject_tool_name_surface_collisions, validate_write_tool_declarations, ToolSelectionDocument,
-    WriteToolDecl, WriteToolField, WriteToolFieldFill,
+use super::tools::Tools;
+use super::write_tool::{
+    reject_tool_name_surface_collisions, validate_write_tool_declarations, WriteToolDecl,
+    WriteToolField, WriteToolFieldFill,
 };
 
 /// Create and query tools after expanding linked [`DatastoreToolSurfaceDocument`]s.
@@ -24,76 +25,66 @@ pub struct MergedSurfaceTools {
     pub query_tools: Vec<QueryToolDecl>,
 }
 
-/// Merge inline write declarations with a selection's linked datastore surfaces.
+/// Expand the context's explicitly selected datastore surface documents.
 ///
 /// The operation fails closed when a selected surface is missing, disabled,
 /// foreign-owned, malformed, duplicated, or introduces a tool-name collision.
 pub fn merge_datastore_tool_surfaces<'a>(
-    selection: &ToolSelectionDocument,
+    selection: &Tools,
     surfaces: impl IntoIterator<Item = &'a DatastoreToolSurfaceDocument>,
 ) -> Result<MergedSurfaceTools> {
     let mut surface_by_id = HashMap::new();
     for surface in surfaces {
-        let surface_id = surface.surface_id.trim();
-        if surface_id.is_empty() {
+        let surface_id = surface.surface_id.as_str();
+        if surface_id.trim().is_empty() {
             continue;
         }
-        if surface_by_id.insert(surface_id, surface).is_some() {
+        if surface_by_id
+            .insert((surface.agent_did.as_str(), surface_id), surface)
+            .is_some()
+        {
             bail!("duplicate DatastoreToolSurface {surface_id}");
         }
     }
 
-    let mut write_tools = selection.write_tools.clone().unwrap_or_default();
+    let mut write_tools = Vec::new();
     let mut query_tools = Vec::new();
     let mut seen = HashSet::new();
-    for decl in &write_tools {
-        if !seen.insert(decl.tool_name.clone()) {
-            bail!(
-                "ToolSelection {} has duplicate write_tools tool_name {:?}",
-                selection.selection_id,
-                decl.tool_name
-            );
-        }
-    }
-
     let surface_ids = selection
-        .datastore_tool_surface_ids
-        .as_deref()
+        .datastore
+        .as_ref()
+        .and_then(|datastore| datastore.datastore_tool_surface_ids.as_deref())
         .unwrap_or(&[]);
     let mut linked_ids = HashSet::new();
     for surface_id in surface_ids {
-        let surface_id = surface_id.trim();
-        if surface_id.is_empty() {
+        let surface_id = surface_id.as_str();
+        if surface_id.trim().is_empty() {
             bail!(
-                "ToolSelection {} has an empty datastore_tool_surface_ids entry",
-                selection.selection_id
+                "Tools {} has an empty datastore_tool_surface_ids entry",
+                selection.tools_id
             );
         }
         if !linked_ids.insert(surface_id) {
             bail!(
-                "ToolSelection {} lists DatastoreToolSurface {} more than once",
-                selection.selection_id,
+                "Tools {} lists DatastoreToolSurface {} more than once",
+                selection.tools_id,
                 surface_id
             );
         }
-        let surface = surface_by_id.get(surface_id).copied().ok_or_else(|| {
-            anyhow!(
-                "ToolSelection {} references missing DatastoreToolSurface {}",
-                selection.selection_id,
-                surface_id
-            )
-        })?;
-        if surface.agent_did.trim() != selection.agent_did.trim() {
-            bail!(
-                "ToolSelection {} references DatastoreToolSurface {} owned by a different agent",
-                selection.selection_id,
-                surface_id
-            );
-        }
+        let surface = surface_by_id
+            .get(&(selection.agent_did.as_str(), surface_id))
+            .copied()
+            .ok_or_else(|| {
+                anyhow!(
+                    "Tools {} references missing same-agent DatastoreToolSurface {}",
+                    selection.tools_id,
+                    surface_id
+                )
+            })?;
         if !surface.enabled {
             bail!(
-                "ToolSelection {} references disabled DatastoreToolSurface {}",
-                selection.selection_id,
+                "Tools {} references disabled DatastoreToolSurface {}",
+                selection.tools_id,
                 surface_id
             );
         }
@@ -103,10 +94,10 @@ pub fn merge_datastore_tool_surfaces<'a>(
             })?;
             if !seen.insert(entry.tool_name().to_string()) {
                 bail!(
-                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for ToolSelection {}",
+                    "duplicate tool_name {:?} after expanding DatastoreToolSurface {} for Tools {}",
                     entry.tool_name(),
                     surface_id,
-                    selection.selection_id
+                    selection.tools_id
                 );
             }
             match entry {
@@ -125,14 +116,18 @@ pub fn merge_datastore_tool_surfaces<'a>(
 /// One bound read tool: one collection, a fixed projection, optional filter
 /// fills. The model never names the collection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub struct QueryToolDecl {
     pub tool_name: String,
     pub collection: String,
+    #[cfg_attr(feature = "typescript", ts(as = "Option<String>", optional))]
     pub description: String,
     /// Projection allowlist. Omit `fields` at call time to return all of these.
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<String>>", optional))]
     pub fields: Vec<String>,
     /// Filter slots. Runtime-filled entries are hidden from the model and
     /// applied as `_eq` clauses; the rest are optional/required string args.
+    #[cfg_attr(feature = "typescript", ts(as = "Option<Vec<WriteToolField>>", optional))]
     pub filter_fields: Vec<WriteToolField>,
 }
 
@@ -164,15 +159,10 @@ impl<'de> Deserialize<'de> for QueryToolDecl {
             }
         }
         Ok(Self {
-            tool_name: raw.tool_name.trim().to_string(),
-            collection: raw.collection.trim().to_string(),
+            tool_name: raw.tool_name,
+            collection: raw.collection,
             description: raw.description,
-            fields: raw
-                .fields
-                .into_iter()
-                .map(|field| field.trim().to_string())
-                .filter(|field| !field.is_empty())
-                .collect(),
+            fields: raw.fields,
             filter_fields: raw.filter_fields,
         })
     }
@@ -188,7 +178,10 @@ impl QueryToolDecl {
 
 /// One `DatastoreToolSurface` entry: create (the original write decl) or query.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(tag = "kind", rename_all = "snake_case"))]
 pub enum SurfaceToolDecl {
+    #[cfg_attr(feature = "typescript", ts(untagged))]
     Create(WriteToolDecl),
     Query(QueryToolDecl),
 }
@@ -426,6 +419,42 @@ pub(crate) fn validate_surface_tool_names(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn query_authoring_does_not_rewrite_invalid_names_or_drop_fields() {
+        let decl: super::QueryToolDecl = serde_json::from_value(serde_json::json!({
+            "tool_name": "inspect", "collection": " Records ", "fields": ["name", ""]
+        }))
+        .unwrap();
+        assert_eq!(decl.collection, " Records ");
+        assert_eq!(decl.fields, vec!["name", ""]);
+        assert!(super::validate_query_tool_declarations(&[decl], &[], &[]).is_err());
+        let blank_field: super::QueryToolDecl = serde_json::from_value(serde_json::json!({
+            "tool_name": "inspect", "collection": "Records", "fields": ["name", ""]
+        }))
+        .unwrap();
+        assert!(super::validate_query_tool_declarations(&[blank_field], &[], &[]).is_err());
+    }
+
+    #[test]
+    fn surface_references_match_exact_owner_and_id() {
+        let tools: super::Tools = serde_json::from_value(serde_json::json!({
+            "agent_did": "owner", "tools_id": "tools",
+            "datastore": {"datastore_tool_surface_ids": ["surface"]}
+        }))
+        .unwrap();
+        let surface = |owner: &str, id: &str| {
+            serde_json::from_value::<super::DatastoreToolSurfaceDocument>(serde_json::json!({
+                "agent_did": owner, "surface_id": id
+            }))
+            .unwrap()
+        };
+        for denied in [surface("owner", " surface "), surface("foreign", "surface")] {
+            assert!(super::merge_datastore_tool_surfaces(&tools, [&denied]).is_err());
+        }
+        let exact = surface("owner", "surface");
+        assert!(super::merge_datastore_tool_surfaces(&tools, [&exact]).is_ok());
+    }
+
     use super::*;
 
     #[test]

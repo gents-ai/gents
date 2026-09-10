@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::{SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use gents_protocol::row::AgentRequestRow;
@@ -16,18 +16,17 @@ use tokio::sync::watch;
 use tokio::time::MissedTickBehavior;
 use tokio_util::sync::CancellationToken;
 
+use crate::UpdateSubscriptionSource;
 use crate::goal::publish_claimed_continuation;
 use crate::goal::{
-    claim_continuation, claim_retry_continuation, decide_goal_continuation,
-    goal_continuation_materialization_step, load_goal_by_id, load_goals_for_session,
-    refresh_goal_usage, update_goal_fields_if_status, GoalAction, GoalContinuationAction,
-    GoalContinuationPhase, GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus,
-    GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
+    GOAL_TRIGGER_KIND, GoalAction, GoalContinuationAction, GoalContinuationPhase, GoalDecision,
+    GoalDocument, GoalRequestTerminal, GoalStatus, MAX_INFRASTRUCTURE_RETRIES, claim_continuation,
+    claim_retry_continuation, decide_goal_continuation, goal_continuation_materialization_step,
+    load_goal_by_id, load_goals_for_session, refresh_goal_usage, update_goal_fields_if_status,
 };
 use crate::graphql::escape_graphql_string;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
-use crate::UpdateSubscriptionSource;
 
 use super::{FireIntent, FireResult, TriggerKind, TriggerSource};
 
@@ -517,14 +516,12 @@ impl GoalSource {
         let task = ResolvedTask {
             task_id: format!("goal:{}", goal.goal_id),
             name: Some("Durable goal continuation".to_string()),
-            behavior_id: parent
-                .behavior_id
-                .clone()
-                .unwrap_or_else(|| "default".to_string()),
+            behavior_id: parent.behavior_id.clone(),
             prompt_template: prompt,
             goal_objective_template: None,
             goal_token_budget: None,
             output_schema_ref: None,
+            hooks: Vec::new(),
         };
         let goal_id = goal.goal_id.clone();
         let parent_request_id = parent.request_id.clone();
@@ -754,18 +751,13 @@ fn provider_reason_is_usage_limited(reason: &str) -> bool {
 }
 
 fn request_is_goal_wrapup(request: &AgentRequestRow, goal_id: &str) -> bool {
-    request
-        .metadata
-        .as_deref()
-        .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
-        .and_then(|value| value.get("goal").cloned())
-        .is_some_and(|goal| {
-            goal.get("goal_id").and_then(serde_json::Value::as_str) == Some(goal_id)
-                && goal
-                    .get("wrapup")
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-        })
+    request.caused_by_trigger_kind.as_deref() == Some(crate::goal::GOAL_TRIGGER_KIND)
+        && request.caused_by_trigger_id.as_deref() == Some(goal_id)
+        && request
+            .input
+            .as_ref()
+            .and_then(|input| input.goal_continuation.as_ref())
+            .is_some_and(|facts| facts.wrapup)
 }
 
 pub(crate) fn continuation_prompt(
@@ -835,6 +827,7 @@ impl TriggerSource for GoalSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents_protocol::request_input::{GoalContinuationInput, RequestInput};
 
     fn goal() -> GoalDocument {
         serde_json::from_value(serde_json::json!({
@@ -912,5 +905,70 @@ mod tests {
         assert!(prompt.starts_with("Retry from durable state.\n\n"));
         assert!(prompt.contains("one final wrap-up turn"));
         assert!(prompt.contains("Do not expect another automatic continuation"));
+    }
+
+    /// Canonical wrapup detection: the wrapup fact is the typed
+    /// `input.goal_continuation` of the goal-kind request, matched against
+    /// its declared goal lineage. Signature admission is a separate owner. Ordinary schedule/event/manual requests
+    /// and goal-kind requests outside the exact goal lineage are never wrapups.
+    #[test]
+    fn request_is_goal_wrapup_reads_typed_input_facts_only() {
+        fn row(
+            caused_by_kind: Option<&str>,
+            caused_by_id: Option<&str>,
+            input: Option<RequestInput>,
+        ) -> AgentRequestRow {
+            AgentRequestRow {
+                request_id: "child-req".to_string(),
+                caused_by_trigger_kind: caused_by_kind.map(str::to_owned),
+                caused_by_trigger_id: caused_by_id.map(str::to_owned),
+                input,
+                ..Default::default()
+            }
+        }
+
+        fn wrapup_input(wrapup: bool) -> RequestInput {
+            RequestInput {
+                goal_continuation: Some(GoalContinuationInput {
+                    sequence: 3,
+                    wrapup,
+                }),
+                ..Default::default()
+            }
+        }
+
+        // Canonical continuation with wrapup fact under the exact goal lineage.
+        assert!(request_is_goal_wrapup(
+            &row(Some("goal"), Some("goal-1"), Some(wrapup_input(true))),
+            "goal-1"
+        ));
+        // Explicit false is preserved: not a wrapup.
+        assert!(!request_is_goal_wrapup(
+            &row(Some("goal"), Some("goal-1"), Some(wrapup_input(false))),
+            "goal-1"
+        ));
+        // No goal_continuation facts: not a wrapup.
+        assert!(!request_is_goal_wrapup(
+            &row(Some("goal"), Some("goal-1"), Some(RequestInput::default())),
+            "goal-1"
+        ));
+        assert!(!request_is_goal_wrapup(
+            &row(Some("goal"), Some("goal-1"), None),
+            "goal-1"
+        ));
+        // Different goal id: presence grants nothing outside the exact lineage.
+        assert!(!request_is_goal_wrapup(
+            &row(Some("goal"), Some("goal-1"), Some(wrapup_input(true))),
+            "goal-2"
+        ));
+        // Other trigger kinds are never goal wrapups.
+        assert!(!request_is_goal_wrapup(
+            &row(Some("schedule"), Some("goal-1"), Some(wrapup_input(true))),
+            "goal-1"
+        ));
+        assert!(!request_is_goal_wrapup(
+            &row(None, None, Some(wrapup_input(true))),
+            "goal-1"
+        ));
     }
 }

@@ -686,14 +686,16 @@ impl Tool for CancelProcessTool {
     }
 }
 
-fn subagent_target_name_description(targets: &[crate::document_config::SubagentTarget]) -> String {
+fn subagent_target_name_description(
+    targets: &[crate::document_config::SubagentTargetDocument],
+) -> String {
     let mut description = String::from(
         "Friendly name of the subagent to spawn, from this behavior's allowed targets.",
     );
     let entries: Vec<String> = targets
         .iter()
         .map(|target| {
-            let desc = target.description_text();
+            let desc = target.description.as_deref().unwrap_or_default().trim();
             if desc.is_empty() {
                 format!("'{}'", target.name)
             } else {

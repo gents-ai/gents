@@ -1,28 +1,13 @@
-use std::collections::BTreeSet;
-
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::document_config::SurfaceToolDecl;
-use crate::graph_pipeline::{
-    EntryBinding, GraphIntent, PortSpec, ResultContract, WorkspaceAuthorityCeiling,
-    COMPILER_VERSION,
-};
-
-use crate::pack::{bundled_pack_asset, BUNDLED_GRAPH_PACKAGE_NAMES};
-
-#[derive(Deserialize)]
-struct BundledToolSurface {
-    entries: Vec<SurfaceToolDecl>,
-}
-
+use crate::graph_pipeline::{EntryBinding, ResultContract};
 pub use crate::pack::PackageExternalDependency;
+use crate::pack::{bundled_pack_asset, PackInstallOptions, BUNDLED_GRAPH_PACKAGE_NAMES};
 
-/// Graph packages use the common manifest and its PackConfig asset.
+/// Graph packages use the common manifest and canonical configuration loader.
 pub type GraphPackageManifest = crate::pack::PackManifest;
-
-/// Packs and graph compilation use the same capability/task reference type.
 pub type PackageCapabilityTemplate = crate::graph_pipeline::StageCapability;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -48,12 +33,11 @@ pub struct BundledGraphPackage {
 
 impl BundledGraphPackage {
     pub fn asset(&self, path: &str) -> Result<&'static [u8]> {
-        if !self.asset_paths.iter().any(|candidate| candidate == path) {
-            anyhow::bail!(
-                "asset {path:?} is not declared by package {}",
-                self.manifest.name
-            );
-        }
+        anyhow::ensure!(
+            self.asset_paths.iter().any(|declared| declared == path),
+            "asset {path:?} is not declared by package {}",
+            self.manifest.name
+        );
         bundled_pack_asset(&self.manifest.name, path)
             .with_context(|| format!("bundled asset {path:?} is missing"))
     }
@@ -69,12 +53,21 @@ impl BundledGraphPackage {
             version: self.manifest.version.clone(),
             description: self.manifest.description.clone(),
             package_digest: self.package_digest.clone(),
-            compiler_version: self.manifest.compiler_version.clone(),
+            compiler_version: crate::graph_pipeline::COMPILER_VERSION.to_owned(),
             external_dependencies: self.manifest.external_dependencies.clone(),
-            roles: self.manifest.roles.clone(),
-            entries: self.intent.entries.clone(),
-            results: self.intent.results.clone(),
-            capabilities: self.capabilities.clone(),
+            entries: self
+                .config
+                .graph_intents
+                .iter()
+                .flat_map(|intent| intent.entries.clone())
+                .collect(),
+            results: self
+                .config
+                .graph_intents
+                .iter()
+                .flat_map(|intent| intent.results.clone())
+                .collect(),
+            capabilities: self.config.graph_capabilities.clone(),
         }
     }
 }
@@ -92,201 +85,201 @@ pub(crate) fn digest_assets(package_name: &str, paths: &[String]) -> Result<Stri
     Ok(format!("sha256:{:x}", hasher.finalize()))
 }
 
-fn validate_tool_surface_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_pack_asset(package_name, path)
-        .with_context(|| format!("bundled package references missing asset {path:?}"))?;
-    let surface: BundledToolSurface = serde_json::from_slice(bytes)
-        .with_context(|| format!("bundled tool surface asset {path:?} is malformed"))?;
-    for entry in &surface.entries {
-        entry
-            .validate()
-            .with_context(|| format!("bundled tool surface asset {path:?} is invalid"))?;
-    }
-    Ok(())
-}
-
-fn validate_tool_selection_asset(package_name: &str, path: &str) -> Result<()> {
-    let bytes = bundled_pack_asset(package_name, path)
-        .with_context(|| format!("bundled package references missing asset {path:?}"))?;
-    let selection: serde_json::Value = serde_json::from_slice(bytes)
-        .with_context(|| format!("bundled tool selection asset {path:?} is malformed"))?;
-    let object = selection
-        .as_object()
-        .with_context(|| format!("bundled tool selection asset {path:?} must be an object"))?;
-
-    if object.get("tool_policy_version")
-        != Some(&serde_json::json!(crate::tool_surface::TOOL_POLICY_V1))
-    {
-        anyhow::bail!(
-            "bundled tool selection asset {path:?} must declare tool_policy_version {:?}",
-            crate::tool_surface::TOOL_POLICY_V1
-        );
-    }
-    if !matches!(
-        object.get("enable_goal_tools"),
-        Some(serde_json::Value::Bool(_))
-    ) {
-        anyhow::bail!(
-            "bundled tool selection asset {path:?} must explicitly declare boolean enable_goal_tools"
-        );
-    }
-    if object.get("enable_goal_creation") != Some(&serde_json::Value::Bool(false)) {
-        anyhow::bail!(
-            "bundled tool selection asset {path:?} must explicitly disable enable_goal_creation"
-        );
-    }
-    Ok(())
-}
-
-/// Strip distribution-only metadata at the boundary; the existing strict
-/// graph manifest remains the sole owner of graph field validation.
-pub(crate) fn graph_manifest_from_pack(
-    pack: &crate::pack::PackManifest,
-) -> Result<GraphPackageManifest> {
-    let mut fields: serde_json::Map<String, serde_json::Value> =
-        pack.graph.clone().into_iter().collect();
-    fields.insert(
-        "manifest_version".to_owned(),
-        serde_json::json!(pack.manifest_version),
-    );
-    fields.insert("name".to_owned(), serde_json::json!(pack.name));
-    fields.insert("version".to_owned(), serde_json::json!(pack.version));
-    fields.insert(
-        "description".to_owned(),
-        serde_json::json!(pack.description),
-    );
-    serde_json::from_value(serde_json::Value::Object(fields)).context("invalid graph manifest")
-}
-
-fn load_package(distribution: &crate::pack::ResolvedPack) -> Result<BundledGraphPackage> {
-    let package_name = distribution.manifest.name.as_str();
+pub(crate) fn load_package(
+    distribution: &crate::pack::ResolvedPack,
+    options: &PackInstallOptions,
+    environment: &dyn Fn(&str) -> Option<String>,
+) -> Result<BundledGraphPackage> {
+    crate::pack::validate_pack_manifest(&distribution.manifest)?;
     anyhow::ensure!(
-        matches!(
-            distribution.manifest.metadata.kind,
-            crate::pack::PackKind::Graph
-        ),
+        distribution.manifest.metadata.kind == crate::pack::PackKind::Graph,
         "pack is not a graph"
     );
-    let manifest = graph_manifest_from_pack(&distribution.manifest)?;
-    if manifest.compiler_version != COMPILER_VERSION {
-        anyhow::bail!(
-            "package compiler {} does not match runtime {}",
-            manifest.compiler_version,
-            COMPILER_VERSION
+    let manifest = distribution.manifest.clone();
+    let config = crate::pack::load_pack_config(
+        &manifest,
+        options,
+        &|path| Ok(distribution.asset(path)?.to_vec()),
+        environment,
+    )?;
+    let mut asset_paths = manifest.metadata.assets.clone();
+    asset_paths.push("manifest.json".to_owned());
+    asset_paths.sort();
+    asset_paths.dedup();
+    let package_digest = digest_assets(&manifest.name, &asset_paths)?;
+    anyhow::ensure!(
+        package_digest == distribution.digest,
+        "graph distribution digest changed after resolution"
+    );
+    // Capabilities reference the same owned Task documents as ordinary packs.
+    // Port/topology/caller/schema checks remain in the compiler and publication
+    // owner; this loader never constructs behavior/model/tool overrides.
+    for surface in &config.datastore_tool_surfaces {
+        for entry in surface.entries.iter().flatten() {
+            entry
+                .validate()
+                .with_context(|| format!("invalid datastore surface {}", surface.surface_id))?;
+        }
+    }
+    for capability in &config.graph_capabilities {
+        anyhow::ensure!(
+            capability.agent_did == options.agent_did,
+            "foreign graph capability owner"
+        );
+        anyhow::ensure!(
+            config
+                .tasks
+                .iter()
+                .filter(|task| task.agent_did == capability.agent_did
+                    && task.task_id == capability.task_id)
+                .count()
+                == 1,
+            "graph capability {} must reference exactly one owned task {}",
+            capability.capability_id,
+            capability.task_id
         );
     }
-    let intent: GraphIntent = serde_json::from_slice(
-        bundled_pack_asset(package_name, &manifest.intent)
-            .with_context(|| format!("bundled package intent {:?} is missing", manifest.intent))?,
-    )?;
-    let capabilities: Vec<PackageCapabilityTemplate> = serde_json::from_slice(
-        bundled_pack_asset(package_name, &manifest.capabilities).with_context(|| {
-            format!(
-                "bundled package capabilities {:?} are missing",
-                manifest.capabilities
-            )
-        })?,
-    )?;
-    let roles = manifest
-        .roles
-        .iter()
-        .map(|role| role.name.as_str())
-        .collect::<BTreeSet<_>>();
-    if roles.len() != manifest.roles.len()
-        || capabilities
-            .iter()
-            .any(|capability| !roles.contains(capability.role.as_str()))
-    {
-        anyhow::bail!("package capabilities reference missing or duplicate logical roles");
-    }
-    let mut assets = vec![
-        "manifest.json".to_owned(),
-        manifest.intent.clone(),
-        manifest.capabilities.clone(),
-    ];
-    assets.extend(manifest.schemas.iter().cloned());
-    for capability in &capabilities {
-        validate_tool_selection_asset(package_name, &capability.tool_selection_asset)?;
-        assets.extend([
-            capability.behavior_asset.clone(),
-            capability.system_prompt_asset.clone(),
-            capability.task_asset.clone(),
-            capability.task_prompt_asset.clone(),
-            capability.tool_selection_asset.clone(),
-        ]);
-        for path in &capability.tool_surface_assets {
-            validate_tool_surface_asset(package_name, path)?;
-        }
-        assets.extend(capability.tool_surface_assets.iter().cloned());
-    }
-    assets.sort();
-    assets.dedup();
-    let package_digest = digest_assets(package_name, &assets)?;
     Ok(BundledGraphPackage {
         manifest,
-        intent,
-        capabilities,
+        config,
         package_digest,
-        asset_paths: assets,
+        asset_paths,
     })
 }
 
-pub fn load_bundled_graph_package(name: &str) -> Result<BundledGraphPackage> {
-    if !BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name) {
-        anyhow::bail!("unknown bundled graph package {name:?}");
-    }
-    let distribution = crate::pack::resolve_pack(name)?;
-    load_package(&distribution)
+pub fn load_bundled_graph_package(
+    name: &str,
+    options: &PackInstallOptions,
+) -> Result<BundledGraphPackage> {
+    anyhow::ensure!(
+        BUNDLED_GRAPH_PACKAGE_NAMES.contains(&name),
+        "unknown bundled graph package {name:?}"
+    );
+    load_package(&crate::pack::resolve_pack(name)?, options, &|name| {
+        std::env::var(name).ok()
+    })
 }
 
 pub fn load_resolved_graph_package(
     distribution: &crate::pack::ResolvedPack,
+    options: &PackInstallOptions,
 ) -> Result<BundledGraphPackage> {
-    anyhow::ensure!(
-        BUNDLED_GRAPH_PACKAGE_NAMES.contains(&distribution.manifest.name.as_str()),
-        "unknown bundled graph package {:?}",
-        distribution.manifest.name
-    );
-    load_package(distribution)
+    load_package(distribution, options, &|name| std::env::var(name).ok())
 }
 
-pub fn graph_package_catalog() -> Result<Vec<GraphPackageCatalogEntry>> {
+pub fn graph_package_catalog(
+    options: &PackInstallOptions,
+) -> Result<Vec<GraphPackageCatalogEntry>> {
     BUNDLED_GRAPH_PACKAGE_NAMES
         .iter()
-        .map(|name| Ok(load_bundled_graph_package(name)?.catalog_entry()))
+        .map(|name| Ok(load_bundled_graph_package(name, options)?.catalog_entry()))
         .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::document_config::{RemoteToolStyle, Task, Tools};
     use crate::document_config::{SurfaceToolDecl, WriteToolFieldFill};
     use crate::graph_pipeline::{compile_graph, CompilerPolicy, StageCapability};
-    use serde_json::{json, Value};
+    use crate::tool_surface::{BashMode, FileToolMode};
+    use crate::toolset::{CommandExecutionMode, CommandNetworkMode};
 
+    fn options() -> PackInstallOptions {
+        PackInstallOptions {
+            agent_did: "did:key:fixture".to_owned(),
+        }
+    }
+    fn fixture_package(name: &str) -> Result<BundledGraphPackage> {
+        load_package(
+            &crate::pack::resolve_pack(name)?,
+            &options(),
+            &|variable| match variable {
+                "GENTS_REVIEW_MODEL" => Some("selected-model".to_owned()),
+                "GENTS_REVIEW_ENDPOINT" => Some("http://inference.example/v1".to_owned()),
+                _ => None,
+            },
+        )
+    }
+    fn task<'a>(package: &'a BundledGraphPackage, capability: &StageCapability) -> &'a Task {
+        let rows = package
+            .config
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.agent_did == capability.agent_did && task.task_id == capability.task_id
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1);
+        rows[0]
+    }
+    fn tools<'a>(package: &'a BundledGraphPackage, capability: &StageCapability) -> &'a Tools {
+        let task = task(package, capability);
+        let behavior = package
+            .config
+            .agent_behaviors
+            .iter()
+            .find(|row| row.agent_did == task.agent_did && row.behavior_id == task.behavior_id)
+            .unwrap();
+        let context = package
+            .config
+            .contexts
+            .iter()
+            .find(|row| {
+                row.agent_did == task.agent_did
+                    && Some(&row.context_id) == behavior.context_id.as_ref()
+            })
+            .unwrap();
+        package
+            .config
+            .tools
+            .iter()
+            .find(|row| {
+                row.agent_did == task.agent_did && Some(&row.tools_id) == context.tools_id.as_ref()
+            })
+            .unwrap()
+    }
+    fn surface_entries<'a>(package: &'a BundledGraphPackage, id: &str) -> &'a [SurfaceToolDecl] {
+        package
+            .config
+            .datastore_tool_surfaces
+            .iter()
+            .find(|row| row.agent_did == options().agent_did && row.surface_id == id)
+            .unwrap()
+            .entries
+            .as_deref()
+            .unwrap()
+    }
+    fn assert_no_host_tools(tools: &Tools) {
+        let host = tools.host.clone().unwrap_or_default();
+        assert_eq!(host.files.unwrap_or_default().mode, FileToolMode::Off);
+        let bash = host.bash.unwrap_or_default();
+        assert_eq!(bash.mode, BashMode::Off);
+        assert_eq!(bash.execution_mode, None);
+        assert_eq!(bash.network_mode, None);
+        assert!(!bash.background_enabled);
+        assert!(host.cli.is_empty());
+        assert!(tools
+            .integrations
+            .as_ref()
+            .and_then(|group| group.lsp.as_ref())
+            .is_none());
+    }
     #[test]
     fn bundled_catalog_is_read_only_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        assert!(graph_package_catalog().unwrap().len() >= 2);
+        let package = fixture_package("code_review").unwrap();
+        let catalog = BUNDLED_GRAPH_PACKAGE_NAMES
+            .iter()
+            .map(|name| fixture_package(name).unwrap().catalog_entry())
+            .collect::<Vec<_>>();
+        assert!(catalog.len() >= 2);
         assert!(package.package_digest.starts_with("sha256:"));
         for path in &package.asset_paths {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
         }
-        let capabilities = package
-            .capabilities
-            .iter()
-            .map(|template| StageCapability {
-                capability_id: template.capability_id.clone(),
-                revision: template.revision.clone(),
-                task_id: format!("fixture-task-{}", template.capability_id),
-                input_ports: template.input_ports.clone(),
-                output_ports: template.output_ports.clone(),
-                allowed_callers: vec!["did:key:fixture".to_owned()],
-            })
-            .collect::<Vec<_>>();
         let plan = compile_graph(
-            &package.intent,
-            &capabilities,
+            &package.config.graph_intents[0],
+            &package.config.graph_capabilities,
             "did:key:fixture",
             &CompilerPolicy::default(),
         )
@@ -297,54 +290,39 @@ mod tests {
     }
 
     #[test]
-    fn bundled_tool_selections_declare_current_policy_and_goal_authority() {
+    fn bundled_tools_use_explicit_goal_authority() {
         for package_name in BUNDLED_GRAPH_PACKAGE_NAMES {
-            let package = load_bundled_graph_package(package_name).unwrap();
-            for capability in &package.capabilities {
-                validate_tool_selection_asset(package_name, &capability.tool_selection_asset)
-                    .unwrap();
+            let package = fixture_package(package_name).unwrap();
+            for capability in &package.config.graph_capabilities {
+                let builtins = tools(&package, capability)
+                    .built_ins
+                    .clone()
+                    .unwrap_or_default();
+                assert!(!builtins.enable_goal_creation.unwrap_or(false));
             }
         }
     }
 
     #[test]
     fn code_review_tasks_have_bounded_goals_without_creation_authority() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        assert_eq!(package.capabilities.len(), 4);
-        for capability in &package.capabilities {
-            let task: serde_json::Value =
-                serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();
-            let objective = task["goal_objective_template"]
-                .as_str()
-                .expect("each review Task must declare its durable Goal objective");
-            assert!(!objective.trim().is_empty(), "{}", capability.task_asset);
-            let budget = task["goal_token_budget"]
-                .as_i64()
-                .expect("each review Task must have a finite integral token budget");
-            assert!(budget > 0, "{}", capability.task_asset);
+        let package = fixture_package("code_review").unwrap();
+        assert_eq!(package.config.graph_capabilities.len(), 4);
+        for capability in &package.config.graph_capabilities {
+            let task = task(&package, capability);
+            let objective = task.goal_objective_template.as_deref().unwrap();
+            let budget = task.goal_token_budget.unwrap();
+            assert!(!objective.trim().is_empty());
+            assert!(budget > 0);
             crate::goal::validate_task_goal_declaration(Some(objective), Some(budget)).unwrap();
-            let selection: serde_json::Value = serde_json::from_str(
-                package
-                    .asset_text(&capability.tool_selection_asset)
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                selection["enable_goal_tools"], true,
-                "{}",
-                capability.tool_selection_asset
-            );
-            assert_eq!(
-                selection["enable_goal_creation"], false,
-                "{}",
-                capability.tool_selection_asset
-            );
+            let builtins = tools(&package, capability).built_ins.as_ref().unwrap();
+            assert!(builtins.enable_goal_tools.unwrap_or(false));
+            assert!(!builtins.enable_goal_creation.unwrap_or(false));
         }
     }
 
     #[test]
     fn web_deep_research_package_is_complete_and_compiler_valid() {
-        let package = load_bundled_graph_package("web_deep_research").unwrap();
+        let package = fixture_package("web_deep_research").unwrap();
         assert!(package.package_digest.starts_with("sha256:"));
         assert_eq!(package.manifest.external_dependencies.len(), 1);
         let dependency = &package.manifest.external_dependencies[0];
@@ -354,19 +332,17 @@ mod tests {
             assert!(!package.asset(path).unwrap().is_empty(), "{path}");
         }
         let capabilities = package
-            .capabilities
+            .config
+            .graph_capabilities
             .iter()
-            .map(|template| StageCapability {
-                capability_id: template.capability_id.clone(),
-                revision: template.revision.clone(),
-                task_id: format!("fixture-task-{}", template.capability_id),
-                input_ports: template.input_ports.clone(),
-                output_ports: template.output_ports.clone(),
-                allowed_callers: vec!["did:key:fixture".to_owned()],
+            .map(|template| {
+                let mut capability = template.clone();
+                capability.allowed_callers = vec!["did:key:fixture".to_owned()];
+                capability
             })
             .collect::<Vec<_>>();
         let plan = compile_graph(
-            &package.intent,
+            &package.config.graph_intents[0],
             &capabilities,
             "did:key:fixture",
             &CompilerPolicy::default(),
@@ -375,104 +351,55 @@ mod tests {
         assert_eq!(plan.nodes.len(), 4);
         assert_eq!(plan.results.len(), 6);
         assert_eq!(plan.entries[0].name, "research");
-        for capability in &package.capabilities {
-            let selection: serde_json::Value = serde_json::from_str(
-                package
-                    .asset_text(&capability.tool_selection_asset)
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                selection.get("enable_bash"),
-                Some(&serde_json::json!(false))
-            );
-            assert_eq!(
-                selection.get("tool_policy_version"),
-                Some(&serde_json::json!(crate::tool_surface::TOOL_POLICY_V1)),
-                "{} must use secure-default tool policy decoding",
-                capability.tool_selection_asset
-            );
-            for disabled in [
-                "enable_file_tools",
-                "enable_memory",
-                "enable_session_history_tool",
-                "enable_context_budget",
-                "enable_defra_query",
-                "subagent_spawn_enabled",
-                "subagent_steering_enabled",
-                "subagent_background_enabled",
-                "enable_self_config",
-                "enable_lsp",
-            ] {
-                assert_eq!(
-                    selection.get(disabled),
-                    Some(&serde_json::json!(false)),
-                    "{} unexpectedly enables {disabled}",
-                    capability.tool_selection_asset
-                );
-            }
-            assert_eq!(
-                selection.get("command_execution_policy"),
-                Some(&serde_json::Value::Null),
-                "{} must not invent a command-policy enum when bash is disabled",
-                capability.tool_selection_asset
-            );
-            let allowed_mcp_services = selection
-                .get("allowed_mcp_service_ids")
-                .and_then(serde_json::Value::as_array)
-                .unwrap();
-            let required_mcp_services = selection
-                .get("required_mcp_service_ids")
-                .and_then(serde_json::Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let (meta_tools, services, surface) = match capability.capability_id.as_str() {
-                "research-plan" => (true, vec!["web-research-mcp"], "research-plan-writes"),
-                "research-investigate" => (
-                    true,
-                    vec!["web-research-mcp"],
-                    "research-investigate-writes",
-                ),
-                "research-adjudicate" => (false, vec![], "research-adjudicate-io"),
-                "research-report" => (false, vec![], "research-report-io"),
+        for capability in &package.config.graph_capabilities {
+            let selection = tools(&package, capability);
+            assert_no_host_tools(selection);
+            let builtins = selection.built_ins.clone().unwrap_or_default();
+            assert!(!builtins.enable_memory.unwrap_or(false));
+            assert!(!builtins.enable_session_history_tool.unwrap_or(false));
+            assert!(!builtins.enable_context_budget.unwrap_or(false));
+            let subagents = selection.subagents.clone().unwrap_or_default();
+            assert!(!subagents.spawn_enabled.unwrap_or(false));
+            assert!(!subagents.steering_enabled.unwrap_or(false));
+            assert!(!subagents.background_enabled.unwrap_or(false));
+            assert!(!selection
+                .self_config
+                .clone()
+                .unwrap_or_default()
+                .enable_self_config
+                .unwrap_or(false));
+            let datastore = selection.datastore.as_ref().unwrap();
+            assert!(!datastore.enable_defra_query.unwrap_or(false));
+            let (uses_remote, surface_id) = match capability.capability_id.as_str() {
+                "research-plan" => (true, "research-plan-writes"),
+                "research-investigate" => (true, "research-investigate-writes"),
+                "research-adjudicate" => (false, "research-adjudicate-io"),
+                "research-report" => (false, "research-report-io"),
                 other => panic!("unexpected capability {other}"),
             };
-            assert_eq!(
-                selection.get("enable_meta_tools"),
-                Some(&serde_json::json!(meta_tools))
-            );
-            assert_eq!(
-                allowed_mcp_services,
-                &services
-                    .into_iter()
-                    .map(serde_json::Value::from)
-                    .collect::<Vec<_>>()
-            );
-            let expected_required = if matches!(
-                capability.capability_id.as_str(),
-                "research-plan" | "research-investigate"
-            ) {
-                vec![serde_json::Value::from("web-research-mcp")]
+            let remote = selection.remote.clone().unwrap_or_default();
+            if uses_remote {
+                assert_eq!(remote.services.len(), 1);
+                let service = &remote.services[0];
+                assert_eq!(service.mcp_service_id, "web-research-mcp");
+                assert!(service.required);
+                assert_eq!(service.style, RemoteToolStyle::Discovery);
+                assert!(!service.tool_names.is_empty());
+                assert!(service.tool_names.iter().all(|name| !name.contains('*')));
             } else {
-                Vec::new()
-            };
-            assert_eq!(required_mcp_services, expected_required);
+                assert!(remote.services.is_empty());
+            }
             assert_eq!(
-                selection
-                    .get("datastore_tool_surface_ids")
-                    .and_then(serde_json::Value::as_array),
-                Some(&vec![serde_json::Value::from(surface)])
+                datastore.datastore_tool_surface_ids.as_deref(),
+                Some(&[surface_id.to_owned()][..])
             );
-            assert_eq!(
-                capability.workspace_authority,
-                WorkspaceAuthorityCeiling::None
-            );
+            assert_eq!(capability.workspace_authority, None);
         }
     }
 
     #[test]
     fn web_deep_research_handoffs_are_typed_and_correlation_scoped() {
-        let package = load_bundled_graph_package("web_deep_research").unwrap();
+        let package = fixture_package("web_deep_research").unwrap();
         for (asset, fields) in [
             (
                 "tasks/research_plan_task/prompt.md",
@@ -525,11 +452,11 @@ mod tests {
 
         let expected_surface_tools = [
             (
-                "datastore_tool_surfaces/research_plan_writes/object.json",
+                "research-plan-writes",
                 vec!["write_research_assignment", "write_research_plan"],
             ),
             (
-                "datastore_tool_surfaces/research_investigate_writes/object.json",
+                "research-investigate-writes",
                 vec![
                     "write_research_source",
                     "write_research_claim",
@@ -538,7 +465,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore_tool_surfaces/research_adjudicate_io/object.json",
+                "research-adjudicate-io",
                 vec![
                     "read_research_investigation",
                     "read_research_source",
@@ -549,7 +476,7 @@ mod tests {
                 ],
             ),
             (
-                "datastore_tool_surfaces/research_report_io/object.json",
+                "research-report-io",
                 vec![
                     "read_report_research_source",
                     "read_report_research_evidence",
@@ -559,18 +486,16 @@ mod tests {
             ),
         ];
         for (asset, expected_tools) in expected_surface_tools {
-            let surface: BundledToolSurface =
-                serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
+            let surface = surface_entries(&package, asset);
             assert_eq!(
                 surface
-                    .entries
                     .iter()
                     .map(SurfaceToolDecl::tool_name)
                     .collect::<Vec<_>>(),
                 expected_tools,
                 "unexpected authority in {asset}"
             );
-            for entry in &surface.entries {
+            for entry in surface {
                 let fields = match entry {
                     SurfaceToolDecl::Create(entry) => &entry.fields,
                     SurfaceToolDecl::Query(entry) => &entry.filter_fields,
@@ -591,19 +516,13 @@ mod tests {
             }
         }
 
-        let investigator: BundledToolSurface = serde_json::from_str(
-            package
-                .asset_text("datastore_tool_surfaces/research_investigate_writes/object.json")
-                .unwrap(),
-        )
-        .unwrap();
+        let investigator = surface_entries(&package, "research-investigate-writes");
         for (tool_name, minimum_writes) in [
             ("write_research_source", 2),
             ("write_research_claim", 6),
             ("write_research_evidence", 6),
         ] {
             let SurfaceToolDecl::Create(decl) = investigator
-                .entries
                 .iter()
                 .find(|entry| entry.tool_name() == tool_name)
                 .unwrap_or_else(|| panic!("missing {tool_name}"))
@@ -619,7 +538,6 @@ mod tests {
             );
         }
         let SurfaceToolDecl::Create(evidence_write) = investigator
-            .entries
             .iter()
             .find(|entry| entry.tool_name() == "write_research_evidence")
             .unwrap()
@@ -668,16 +586,10 @@ mod tests {
 
     #[test]
     fn code_review_scan_writes_use_the_trigger_area_id() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        let surface: BundledToolSurface = serde_json::from_str(
-            package
-                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
-                .unwrap(),
-        )
-        .unwrap();
+        let package = fixture_package("code_review").unwrap();
+        let surface = surface_entries(&package, "review-scan-writes");
         for tool_name in ["write_candidate_finding", "write_scan_result"] {
             let entry = surface
-                .entries
                 .iter()
                 .find(|entry| entry.tool_name() == tool_name)
                 .unwrap();
@@ -700,14 +612,9 @@ mod tests {
 
     #[test]
     fn code_review_evidence_handoff_is_compact_and_correlation_scoped() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        let surface: BundledToolSurface = serde_json::from_str(
-            package
-                .asset_text("datastore_tool_surfaces/review_recon_writes/object.json")
-                .unwrap(),
-        )
-        .unwrap();
-        let SurfaceToolDecl::Create(entry) = &surface.entries[0] else {
+        let package = fixture_package("code_review").unwrap();
+        let surface = surface_entries(&package, "review-recon-writes");
+        let SurfaceToolDecl::Create(entry) = &surface[0] else {
             panic!("review recon writer must be a create tool");
         };
         let repository_path = entry
@@ -750,14 +657,8 @@ mod tests {
             .unwrap();
         assert!(!scan_prompt.contains("{{ doc.evidence }}"));
 
-        let scan_surface: BundledToolSurface = serde_json::from_str(
-            package
-                .asset_text("datastore_tool_surfaces/review_scan_writes/object.json")
-                .unwrap(),
-        )
-        .unwrap();
+        let scan_surface = surface_entries(&package, "review-scan-writes");
         let manifest_tool = scan_surface
-            .entries
             .iter()
             .find(|entry| entry.tool_name() == "read_review_evidence_manifest")
             .unwrap();
@@ -773,7 +674,6 @@ mod tests {
         );
 
         let page_tool = scan_surface
-            .entries
             .iter()
             .find(|entry| entry.tool_name() == "read_review_evidence_page")
             .unwrap();
@@ -814,94 +714,70 @@ mod tests {
     }
 
     #[test]
-    fn code_review_stages_use_role_specific_least_privilege_tools() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        for asset in [
-            "tool_selections/review_recon_tools/object.json",
-            "tool_selections/review_scan_tools/object.json",
-        ] {
-            let selection: Value =
-                serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
-            assert_eq!(selection["enable_file_tools"], false, "{asset}");
-            assert_eq!(selection["file_tools_mode"], "Off", "{asset}");
-            assert_eq!(selection["enable_bash"], false, "{asset}");
-            assert_eq!(selection["bash_mode"], "Off", "{asset}");
-            assert!(selection["command_execution_policy"].is_null(), "{asset}");
-            assert!(selection["command_network_mode"].is_null(), "{asset}");
-            assert_eq!(selection["enable_lsp"], false, "{asset}");
-            assert_eq!(selection["enable_context_budget"], false, "{asset}");
-            assert_eq!(selection["backgroundable_tool_names"], json!([]), "{asset}");
+    fn code_review_stages_use_task_specific_least_privilege_tools() {
+        let package = fixture_package("code_review").unwrap();
+        for capability_id in ["review-recon", "review-scan"] {
+            let capability = package
+                .config
+                .graph_capabilities
+                .iter()
+                .find(|row| row.capability_id == capability_id)
+                .unwrap();
+            let selection = tools(&package, capability);
+            assert_no_host_tools(selection);
+            assert!(!selection
+                .built_ins
+                .clone()
+                .unwrap_or_default()
+                .enable_context_budget
+                .unwrap_or(false));
         }
-
-        let asset = "tool_selections/review_verify_tools/object.json";
-        let selection: Value = serde_json::from_str(package.asset_text(asset).unwrap()).unwrap();
-        assert_eq!(selection["enable_file_tools"], true, "{asset}");
-        assert_eq!(selection["file_tools_mode"], "ReadOnly", "{asset}");
-        assert_eq!(selection["enable_bash"], true, "{asset}");
-        assert_eq!(selection["bash_mode"], "Unrestricted", "{asset}");
+        let capability = package
+            .config
+            .graph_capabilities
+            .iter()
+            .find(|row| row.capability_id == "review-verify")
+            .unwrap();
+        let selection = tools(&package, capability);
+        let host = selection.host.as_ref().unwrap();
+        assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);
+        let bash = host.bash.as_ref().unwrap();
+        assert_eq!(bash.mode, BashMode::Unrestricted);
         assert_eq!(
-            selection["command_execution_policy"], "artifact_write",
-            "{asset}"
+            bash.execution_mode,
+            Some(CommandExecutionMode::ArtifactWrite)
         );
-        assert_eq!(selection["command_network_mode"], "disabled", "{asset}");
-        assert_eq!(selection["enable_lsp"], false, "{asset}");
-        assert_eq!(selection["enable_context_budget"], true, "{asset}");
-        assert_eq!(
-            selection["backgroundable_tool_names"],
-            json!(["bash_unrestricted"]),
-            "{asset}"
-        );
+        assert_eq!(bash.network_mode, Some(CommandNetworkMode::Disabled));
+        assert!(bash.background_enabled);
+        assert!(host.cli.is_empty());
+        assert!(selection
+            .integrations
+            .as_ref()
+            .and_then(|group| group.lsp.as_ref())
+            .is_none());
+        assert!(selection
+            .built_ins
+            .as_ref()
+            .unwrap()
+            .enable_context_budget
+            .unwrap_or(false));
     }
 
     #[test]
     fn code_review_stages_are_durable_goal_controlled() {
-        let package = load_bundled_graph_package("code_review").unwrap();
-        for capability in &package.capabilities {
-            let task: Value =
-                serde_json::from_str(package.asset_text(&capability.task_asset).unwrap()).unwrap();
-            assert!(
-                task["goal_objective_template"]
-                    .as_str()
-                    .is_some_and(|objective| !objective.trim().is_empty()),
-                "{} must provision a controller-owned durable goal",
-                capability.task_asset
-            );
-            assert!(
-                task["goal_token_budget"]
-                    .as_i64()
-                    .is_some_and(|budget| budget > 0),
-                "{}",
-                capability.task_asset
-            );
-
-            let selection: Value = serde_json::from_str(
-                package
-                    .asset_text(&capability.tool_selection_asset)
-                    .unwrap(),
-            )
-            .unwrap();
-            assert_eq!(
-                selection["enable_goal_tools"], true,
-                "{}",
-                capability.tool_selection_asset
-            );
-            assert_eq!(
-                selection["enable_goal_creation"], false,
-                "{}",
-                capability.tool_selection_asset
-            );
-
-            let prompt = package.asset_text(&capability.task_prompt_asset).unwrap();
-            assert!(
-                prompt.contains("`update_goal`"),
-                "{}",
-                capability.task_prompt_asset
-            );
-            assert!(
-                prompt.contains("`status=\"complete\"`"),
-                "{}",
-                capability.task_prompt_asset
-            );
+        let package = fixture_package("code_review").unwrap();
+        for capability in &package.config.graph_capabilities {
+            let task = task(&package, capability);
+            assert!(task
+                .goal_objective_template
+                .as_deref()
+                .is_some_and(|objective| !objective.trim().is_empty()));
+            assert!(task.goal_token_budget.is_some_and(|budget| budget > 0));
+            let builtins = tools(&package, capability).built_ins.as_ref().unwrap();
+            assert!(builtins.enable_goal_tools.unwrap_or(false));
+            assert!(!builtins.enable_goal_creation.unwrap_or(false));
+            assert!(task.prompt_template.contains("`update_goal`"));
+            assert!(task.prompt_template.contains("`status=\"complete\"`"));
         }
     }
 }

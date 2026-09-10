@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
@@ -53,51 +52,47 @@ pub struct BackendAdmissionConfig {
 }
 
 impl BackendAdmissionConfig {
-    pub(crate) fn from_backend(backend: &InferenceBackend) -> Result<Self> {
-        if backend.max_concurrent < 1 {
-            anyhow::bail!(
-                "backend {} has invalid max_concurrent {}; expected >= 1",
-                backend.backend_id,
-                backend.max_concurrent
-            );
-        }
-        if backend.max_queue_depth < 0 {
-            anyhow::bail!(
-                "backend {} has invalid max_queue_depth {}; expected >= 0",
-                backend.backend_id,
-                backend.max_queue_depth
-            );
-        }
-
-        // Reuse the effective provider mapping and hash its resource fields
-        // in a versioned, unambiguous encoding. Display/catalog metadata does
-        // not replace controllers; availability remains separately owned.
-        // Only a process-keyed digest enters persisted call rows. Preserve key
-        // rotation in equality without exposing an offline credential oracle.
+    pub(crate) fn from_backend(
+        backend: &InferenceBackend,
+        observation: &crate::document_config::InferenceBackendObservation,
+    ) -> Result<Self> {
+        backend.validate()?;
+        anyhow::ensure!(
+            backend.backend_id == observation.backend_id,
+            "backend observation does not match configuration reference"
+        );
+        let max_concurrent = usize::try_from(backend.effective_max_concurrent())?;
+        let max_queue_depth = usize::try_from(backend.effective_max_queue_depth())?;
+        // The observation must come from the same owner-scoped document lookup.
+        // Fingerprint connection identity, credentials and effective capacity;
+        // catalogs and health remain separately owned observations.
         let fields = backend.backend_fields();
         let fingerprint_inputs = (
             BACKEND_CONFIG_FINGERPRINT_TAG,
+            &backend.agent_did,
             &backend.backend_id,
             &fields.backend_provider_kind,
             &fields.openai_wire_api,
             &fields.backend_endpoint,
-            &fields.backend_api_key,
-            &fields.backend_api_key_env_var,
-            backend.max_concurrent,
-            backend.max_queue_depth,
+            &fields.backend_auth,
+            backend.connect_timeout_secs.unwrap_or(10),
+            max_concurrent,
+            max_queue_depth,
         );
         let encoded = serde_json::to_vec(&fingerprint_inputs)?;
         let config_fingerprint = keyed_fingerprint(
             &encoded,
             FINGERPRINT_KEY.get_or_init(rand::random::<[u8; 32]>),
         );
-
         Ok(Self {
             backend_id: backend.backend_id.clone(),
-            max_concurrent: backend.max_concurrent as usize,
-            max_queue_depth: backend.max_queue_depth as usize,
+            max_concurrent,
+            max_queue_depth,
             enabled: backend.enabled,
-            probe_status: backend.probe_status.clone(),
+            probe_status: observation
+                .probe_status
+                .clone()
+                .unwrap_or_else(|| crate::backend_registry::UNKNOWN_PROBE_STATUS.into()),
             measured_unhealthy: false,
             config_fingerprint,
         })
@@ -154,21 +149,6 @@ pub fn document_configured_from_fields(enabled: bool, probe_status: &str) -> boo
     enabled && probe_status == HEALTHY_PROBE_STATUS
 }
 
-pub(crate) fn backend_admission_configs_from_backends<'a>(
-    backends: impl IntoIterator<Item = &'a InferenceBackend>,
-    measured_vetoed: &HashSet<String>,
-) -> Result<HashMap<String, BackendAdmissionConfig>> {
-    let mut configs = HashMap::new();
-    for backend in backends {
-        configs.insert(
-            backend.backend_id.clone(),
-            BackendAdmissionConfig::from_backend(backend)?
-                .with_measured_unhealthy(measured_vetoed.contains(&backend.backend_id)),
-        );
-    }
-    Ok(configs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,33 +178,41 @@ mod tests {
     fn resource_identity_normalizes_wire_defaults_and_protects_credentials() {
         let mut backend = InferenceBackend::from_value(&serde_json::json!({
             "backend_id": "resource-identity",
+            "agent_did": "did:test:admission",
             "name": "Resource identity",
             "provider_kind": "OpenAiCompatible",
             "endpoint": "http://127.0.0.1/v1",
-            "api_key": "fixture-only-secret",
+            "auth": {"kind":"api_key", "key":"fixture-only-secret"},
             "max_concurrent": 2,
             "max_queue_depth": 0,
-            "enabled": true,
-            "probe_status": "healthy"
+            "enabled": true
         }))
         .unwrap();
-        let implicit = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        let observation = crate::document_config::InferenceBackendObservation {
+            backend_id: backend.backend_id.clone(),
+            catalogs: Vec::new(),
+            probe_status: Some(HEALTHY_PROBE_STATUS.into()),
+            last_probe: None,
+        };
+        let implicit = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
         backend.openai_wire_api = Some(backend.backend_fields().openai_wire_api);
         assert_eq!(
-            BackendAdmissionConfig::from_backend(&backend).unwrap(),
+            BackendAdmissionConfig::from_backend(&backend, &observation).unwrap(),
             implicit
         );
         assert!(!implicit.config_fingerprint.contains("fixture-only-secret"));
 
-        backend.api_key = Some("rotated-fixture-only-secret".into());
-        let rotated = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        backend.auth = crate::document_config::BackendAuth::ApiKey {
+            key: "rotated-fixture-only-secret".into(),
+        };
+        let rotated = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
         assert_ne!(implicit.config_fingerprint, rotated.config_fingerprint);
         assert!(!rotated.config_fingerprint.contains("fixture-only-secret"));
 
         // Lean Registry.Config.key includes queue capacity. Its separately
         // modeled capacity is the semaphore, not the entire resource identity.
-        backend.max_queue_depth = 3;
-        let resized_queue = BackendAdmissionConfig::from_backend(&backend).unwrap();
+        backend.max_queue_depth = Some(3);
+        let resized_queue = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
         assert_ne!(rotated.config_fingerprint, resized_queue.config_fingerprint);
         assert_eq!(rotated.max_concurrent, resized_queue.max_concurrent);
     }
