@@ -189,32 +189,6 @@ async fn load_oauth_credential_for_discovery(
     Ok((credential, agent_did))
 }
 
-/// Rewrites `models[]` on the stored backend document and nothing else.
-async fn write_discovered_models(
-    graphql: &str,
-    backend_id: &str,
-    models: &[String],
-) -> Result<usize> {
-    let models_field = string_list_field("models", models)
-        .ok_or_else(|| anyhow::anyhow!("backend models field could not be rendered"))?;
-    let mutation = format!(
-        r#"mutation {{
-            update_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{}" }} }},
-                input: {{ {} }}
-            ) {{ _docID }}
-        }}"#,
-        escape_graphql_string(backend_id),
-        models_field,
-    );
-    let response = ConfigAccess::Graphql(graphql.to_string())
-        .write("config.inference_backend.models.update", &mutation)
-        .await?;
-    extract_mutation_doc_id(&response, "InferenceBackend")
-        .with_context(|| format!("updating models on backend {backend_id}"))?;
-    Ok(models.len())
-}
-
 /// Whether a model-discovery error is an authentication failure (HTTP 401/403), so ChatGptCodex
 /// discovery can append re-login guidance the bare error omits. Inspects the typed status carried
 /// by [`ModelDiscoveryHttpError`] rather than scraping the rendered message (which also contains the
