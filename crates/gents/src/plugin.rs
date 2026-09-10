@@ -47,13 +47,15 @@
 //!    under a weaker guarantee than the caller asked for. The effective
 //!    authority claim in rule 2 is only honest for a plugin admitted this
 //!    way.
-//! 5. **Every bound that is enforced is real.** `budget.fuel`,
-//!    `budget.memory_bytes`, and `budget.wall_clock` go straight to
-//!    `AfbRunRequest`; `run_afb_bytes` itself races the wall-clock deadline
-//!    against the run (see `AfbRunRequest::timeout`'s own doc) rather than
-//!    this file hand-rolling a second timeout thread. Stdout and stderr are
-//!    each capped after the run, truncation is named in `diagnostics`,
-//!    never silently applied.
+//! 5. **Every bound is real, and a default is one the artifact can start
+//!    under.** `budget.fuel`, `budget.memory_bytes`, and
+//!    `budget.wall_clock` go straight to `AfbRunRequest`, where the wall
+//!    clock is a genuine preemption rather than a deadline the host stops
+//!    waiting at. [`PluginBudget::for_artifact`] raises a default that
+//!    could not host this artifact at all, because a ceiling below what a
+//!    guest spends before its own code runs bounds nothing. Stdout and
+//!    stderr are each capped after the run, truncation is named in
+//!    `diagnostics`, never silently applied.
 //! 6. **Output is validated, `input_schema` is not.** Stdout that is not
 //!    exactly one JSON value is [`PluginVerdict::BadOutput`] naming why.
 //!    `input_schema` describes the *arguments*, not the result, so this
@@ -96,10 +98,10 @@ pub struct PluginBudget {
     /// `memory.grow`.
     pub memory_bytes: u64,
     /// Wall-clock deadline for the whole call, enforced by
-    /// `run_afb_bytes` itself: a guest that ignores it keeps running on a
-    /// detached thread until its own fuel runs out (see
-    /// `AfbRunRequest::timeout`'s own doc), exactly like this module's
-    /// previous hand-rolled timeout did for the identical reason.
+    /// `run_afb_bytes` itself as a real preemption: a guest that runs past
+    /// it is interrupted and nothing keeps running behind the call (see
+    /// `AfbRunRequest::timeout`'s own doc). Granularity is one epoch tick,
+    /// 10 ms today, so a guest can overshoot by up to a tick.
     pub wall_clock: std::time::Duration,
 }
 
@@ -200,9 +202,9 @@ pub struct PluginOutcome {
     pub diagnostics: String,
     /// Fuel actually consumed, as `run_afb_bytes` reports it: exact on
     /// every outcome for the bounded dispatch family this module ever
-    /// admits (rule 4), including `OutOfMemory` and `OutOfFuel`; `0` on
-    /// `Timeout` (the run that owns the number is still running in the
-    /// background).
+    /// admits (rule 4), including `OutOfMemory` and `OutOfFuel`. `0` on
+    /// `Timeout`, where the store is torn down with the interrupted guest
+    /// and the figure is unknowable rather than estimated.
     pub fuel_used: u64,
     pub wall_ms: u64,
 }
@@ -359,8 +361,7 @@ impl PluginRunner {
                 verdict: PluginVerdict::Timeout,
                 output: serde_json::Value::Null,
                 diagnostics: format!(
-                    "the plugin did not answer within its {}ms wall-clock budget; it may still \
-                     be running in the background until its fuel runs out",
+                    "the plugin did not answer within its {}ms wall-clock budget and was stopped",
                     budget.wall_clock.as_millis()
                 ),
                 fuel_used: output.fuel_used,
