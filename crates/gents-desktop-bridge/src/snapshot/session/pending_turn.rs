@@ -76,7 +76,7 @@ pub(super) fn build_pending_turn(
     let request = store.requests.iter().find(|row| {
         row.request_id == request_id
             && row.session_id.as_deref() == Some(session_id)
-            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did, false))
+            && agent_did.is_none_or(|agent_did| request_matches_agent(row, agent_did))
     })?;
     if !gents::lifecycle::request_content_owns_user_projection(request.metadata.as_deref()) {
         return None;

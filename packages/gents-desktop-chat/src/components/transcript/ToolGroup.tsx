@@ -14,8 +14,6 @@ function statusClass(statusKind: string) {
       return "tool-item-dot tool-item-dot-success";
     case "error":
       return "tool-item-dot tool-item-dot-error";
-    case "awaitingapproval":
-      return "tool-item-dot tool-item-dot-held";
     default:
       return "tool-item-dot tool-item-dot-running";
   }
@@ -27,8 +25,6 @@ function statusLabel(tool: RenderedToolCallView) {
       return "completed";
     case "error":
       return "failed";
-    case "awaitingapproval":
-      return "awaiting approval";
     case "unknown":
       return "unknown";
     default:

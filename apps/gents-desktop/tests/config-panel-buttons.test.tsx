@@ -6,37 +6,31 @@ import { EventTriggerConfigEditor } from "../src/components/config/EventTriggerC
 import { InferenceProfileConfigEditor } from "../src/components/config/InferenceProfileConfigPanel";
 import { ScheduleConfigEditor } from "../src/components/config/ScheduleConfigPanel";
 import { TaskConfigEditor } from "../src/components/config/TaskConfigPanel";
-import { ToolSelectionConfigEditor } from "../src/components/config/ToolSelectionConfigPanel";
+import { ToolsConfigEditor } from "../src/components/config/ToolsConfigPanel";
 import { ToolServiceConfigEditor } from "../src/components/config/ToolServiceConfigPanel";
 import type {
-  BackendSaveRequest,
+  ConfigComponentsPatchRequest,
   EventTriggerSaveRequest,
-  InferenceProfileSaveRequest,
+  ConfigComponentsApplyRequest,
   ScheduleSaveRequest,
   TaskSaveRequest,
-  ToolSelectionSaveRequest,
   ToolServiceSaveRequest,
 } from "@source-inc/gents-desktop-client";
-import {
-  backend,
-  profile,
-  schedule,
-  task,
-  toolSelection,
-  toolService,
-} from "./config-panel-buttons/fixtures";
+import { backend, schedule, task, toolService } from "./config-panel-buttons/fixtures";
 
 describe("config panel action buttons", () => {
   it("keeps persisted document IDs immutable when saving existing rows", async () => {
-    const onSaveBackendConfig = vi.fn<
-      [(request: BackendSaveRequest) => Promise<unknown>]
+    const onPatchConfigComponents = vi.fn<
+      [(request: ConfigComponentsPatchRequest) => Promise<unknown>]
     >(() => Promise.resolve());
     render(
       <BackendConfigEditor
+        agentDid="did:key:z6MkAgent"
         backend={backend}
         savedStatus={null}
         saving={false}
-        onSaveBackendConfig={onSaveBackendConfig}
+        onSaveBackendConfig={vi.fn()}
+        onPatchConfigComponents={onPatchConfigComponents}
         onSaved={vi.fn()}
       />,
     );
@@ -45,21 +39,32 @@ describe("config panel action buttons", () => {
     });
     fireEvent.click(screen.getByTestId("backend-save"));
     await waitFor(() =>
-      expect(onSaveBackendConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ backendId: "default-backend" }),
-      ),
+      expect(onPatchConfigComponents).toHaveBeenCalledWith({
+        agentDid: "did:key:z6MkAgent",
+        patches: [
+          { collection: "InferenceBackend", id: "default-backend", changes: {} },
+        ],
+      }),
     );
     expect(screen.getByTestId("backend-id")).toHaveAttribute("readonly");
 
     const onSaveProfileConfig = vi.fn<
-      [(request: InferenceProfileSaveRequest) => Promise<unknown>]
+      [(request: ConfigComponentsApplyRequest) => Promise<unknown>]
     >(() => Promise.resolve());
     render(
       <InferenceProfileConfigEditor
-        profile={profile}
+        agentDid="did:key:z6MkAgent"
+        profile={{
+          agent_did: "did:key:z6MkAgent",
+          profile_id: "default-profile",
+          backend_id: "default-backend",
+          model_name: "model",
+        }}
+        samplingConfigs={[]}
+        executionConfigs={[]}
         savedStatus={null}
         saving={false}
-        onSaveInferenceProfileConfig={onSaveProfileConfig}
+        onApplyConfigComponents={onSaveProfileConfig}
         onSaved={vi.fn()}
       />,
     );
@@ -69,37 +74,46 @@ describe("config panel action buttons", () => {
     fireEvent.click(screen.getByTestId("profile-save"));
     await waitFor(() =>
       expect(onSaveProfileConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ profileId: "default-profile" }),
+        expect.objectContaining({
+          document: expect.objectContaining({
+            inference_profiles: [
+              expect.objectContaining({ profile_id: "default-profile" }),
+            ],
+          }),
+        }),
       ),
     );
     expect(screen.getByTestId("profile-id")).toHaveAttribute("readonly");
 
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
+    const onApplyTools = vi.fn().mockResolvedValue(undefined);
     render(
-      <ToolSelectionConfigEditor
+      <ToolsConfigEditor
         agentDid="did:key:z6MkAgent"
+        tools={{ agent_did: "did:key:z6MkAgent", tools_id: "default-tools" }}
+        toolServices={[]}
+        subagentTargets={[]}
         savedStatus={null}
         saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={toolSelection}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        onApplyConfigComponents={onApplyTools}
+        onDeleteToolsConfig={vi.fn()}
+        onDeleted={vi.fn()}
         onSaved={vi.fn()}
       />,
     );
-    fireEvent.change(screen.getByTestId("tool-selection-id"), {
+    fireEvent.change(screen.getByTestId("tools-id"), {
       target: { value: "renamed-tools" },
     });
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
+    fireEvent.click(screen.getByTestId("tools-save"));
     await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ selectionId: "default-tools" }),
-      ),
+      expect(onApplyTools).toHaveBeenCalledWith({
+        document: {
+          agent_principal: { agent_did: "did:key:z6MkAgent" },
+          tools: [{ agent_did: "did:key:z6MkAgent", tools_id: "default-tools" }],
+          subagent_targets: [],
+        },
+      }),
     );
-    expect(screen.getByTestId("tool-selection-id")).toHaveAttribute("readonly");
+    expect(screen.getByTestId("tools-id")).toHaveAttribute("readonly");
 
     const onSaveToolServiceConfig = vi.fn<
       [(request: ToolServiceSaveRequest) => Promise<unknown>]
@@ -108,7 +122,13 @@ describe("config panel action buttons", () => {
       <ToolServiceConfigEditor
         savedStatus={null}
         saving={false}
-        toolService={toolService}
+        agentDid="did:key:z6MkAgent"
+        toolService={{
+          agent_did: "did:key:z6MkAgent",
+          service_id: "mcp-local",
+          hostname: "localhost",
+          mcp_port: 7331,
+        }}
         onSaveToolServiceConfig={onSaveToolServiceConfig}
         onSaved={vi.fn()}
         onTestToolService={vi.fn()}
@@ -120,7 +140,9 @@ describe("config panel action buttons", () => {
     fireEvent.click(screen.getByTestId("tool-service-save"));
     await waitFor(() =>
       expect(onSaveToolServiceConfig).toHaveBeenCalledWith(
-        expect.objectContaining({ serviceId: "mcp-local" }),
+        expect.objectContaining({
+          document: expect.objectContaining({ service_id: "mcp-local" }),
+        }),
       ),
     );
     expect(screen.getByTestId("tool-service-id")).toHaveAttribute("readonly");
@@ -220,233 +242,115 @@ describe("config panel action buttons", () => {
     expect(screen.getByTestId("event-trigger-id")).toHaveAttribute("readonly");
   });
 
-  it("does not infer MCP authority from unrelated configuration", async () => {
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
+  it("keeps all canonical command/datastore/timeouts through advanced authoring", async () => {
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    const document = {
+      agent_did: "owner",
+      tools_id: "tools",
+      host: {
+        bash: {
+          mode: "Unrestricted" as const,
+          execution_mode: "unrestricted" as const,
+          network_mode: "enabled" as const,
+          timeout_secs: 45,
+        },
+      },
+      datastore: {
+        enable_defra_query: true,
+        defra_query_collections: ["Note"],
+        datastore_tool_surface_ids: ["surface"],
+      },
+    };
     render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
+      <ToolsConfigEditor
+        agentDid="owner"
+        tools={document}
+        toolServices={[]}
+        subagentTargets={[]}
         saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={{
-          ...toolSelection,
-          allowedMcpServiceIds: [],
-        }}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        savedStatus={null}
+        onApplyConfigComponents={onApply}
+        onDeleteToolsConfig={vi.fn()}
+        onDeleted={vi.fn()}
         onSaved={vi.fn()}
       />,
     );
-
-    expect(screen.getByTestId("tool-allowed-mcp-service-mcp-local")).not.toBeChecked();
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
-
+    fireEvent.click(screen.getByTestId("tools-save"));
     await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          allowedMcpServiceIds: [],
-        }),
-      ),
+      expect(onApply).toHaveBeenCalledWith({
+        document: {
+          agent_principal: { agent_did: "owner" },
+          tools: [document],
+          subagent_targets: [],
+        },
+      }),
     );
   });
-
-  it("hydrates and saves nullable goal capability overrides", async () => {
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
+  it("keeps goal capabilities independent of remote service presentation", async () => {
+    const onApply = vi.fn().mockResolvedValue(undefined);
     render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
-        saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={{
-          ...toolSelection,
-          enableGoalTools: true,
-          enableGoalCreation: false,
+      <ToolsConfigEditor
+        agentDid="owner"
+        tools={{
+          agent_did: "owner",
+          tools_id: "tools",
+          built_ins: { enable_goal_tools: true, enable_goal_creation: false },
         }}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        toolServices={[]}
+        subagentTargets={[]}
+        saving={false}
+        savedStatus={null}
+        onApplyConfigComponents={onApply}
+        onDeleteToolsConfig={vi.fn()}
+        onDeleted={vi.fn()}
         onSaved={vi.fn()}
       />,
     );
-
-    expect(screen.getByTestId("tool-enable-goal-tools")).toHaveValue("enabled");
-    expect(screen.getByTestId("tool-enable-goal-creation")).toHaveValue("disabled");
-    expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-
-    fireEvent.change(screen.getByTestId("tool-enable-goal-tools"), {
-      target: { value: "inherit" },
+    expect(screen.getByTestId("tools-goal-tools")).toBeChecked();
+    expect(screen.getByTestId("tools-goal-creation")).not.toBeChecked();
+    fireEvent.click(screen.getByTestId("tools-goal-tools"));
+    fireEvent.click(screen.getByTestId("tools-goal-creation"));
+    fireEvent.click(screen.getByTestId("tools-save"));
+    await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
+    expect(onApply.mock.calls[0][0].document.tools[0].built_ins).toEqual({
+      enable_goal_tools: false,
+      enable_goal_creation: true,
     });
-    expect(screen.getByTestId("unsaved-chip")).toBeInTheDocument();
-    fireEvent.change(screen.getByTestId("tool-enable-goal-creation"), {
-      target: { value: "enabled" },
-    });
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
-
-    await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          enableGoalTools: null,
-          enableGoalCreation: true,
-        }),
-      ),
-    );
   });
-
-  it("edits defra_query_collections and keeps write_tools / policy version read-only", async () => {
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
+  it("preserves authored host config while displaying the runtime ceiling", async () => {
+    const onApply = vi.fn().mockResolvedValue(undefined);
+    const document = {
+      agent_did: "owner",
+      tools_id: "tools",
+      host: { files: { mode: "ReadOnly" as const } },
+    };
     render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
-        saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={{
-          ...toolSelection,
-          defraQueryCollections: ["AgentRequest"],
-          writeTools: [
-            '{"tool_name":"upsert_note","collection":"Note","description":"","fields":[]}',
-          ],
-          toolPolicyVersion: "tool-policy/v1",
-        }}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
-        onSaved={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByTestId("tool-defra-query-collections")).toHaveValue(
-      "AgentRequest",
-    );
-    expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
-      "tool-policy/v1",
-    );
-    const writeToolsRow = screen.getByTestId("tool-write-tools");
-    expect(writeToolsRow).toHaveTextContent("upsert_note → Note");
-    expect(writeToolsRow).not.toHaveTextContent("tool_name");
-
-    fireEvent.change(screen.getByTestId("tool-defra-query-collections"), {
-      target: { value: "AgentRequest\nAgentResponse" },
-    });
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
-
-    await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          defraQueryCollections: ["AgentRequest", "AgentResponse"],
-        }),
-      ),
-    );
-    const [[request]] = onSaveToolSelectionConfig.mock.calls;
-    expect(request).not.toHaveProperty("writeTools");
-    expect(request).not.toHaveProperty("toolPolicyVersion");
-  });
-
-  it("reports an unversioned tool policy as runtime-rejected", () => {
-    render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
-        saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={{ ...toolSelection, toolPolicyVersion: null }}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={vi.fn(() => Promise.resolve())}
-        onSaved={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId("tool-policy-version")).toHaveTextContent(
-      "missing (runtime rejects)",
-    );
-  });
-
-  it("normalizes command policy choices when saving tool selections", async () => {
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
-    render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
-        saving={false}
-        toolCeiling="Readwrite"
-        toolRoot="/tmp/work"
-        toolSelection={{
-          ...toolSelection,
-          commandExecutionPolicy: "ReadOnly",
-          commandNetworkMode: "Disabled",
-        }}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
-        onSaved={vi.fn()}
-      />,
-    );
-
-    expect(screen.getByTestId("tool-command-execution-policy")).toHaveValue(
-      "read_only",
-    );
-    expect(screen.getByTestId("tool-command-network-mode")).toHaveValue("disabled");
-    fireEvent.change(screen.getByTestId("tool-command-execution-policy"), {
-      target: { value: "unrestricted" },
-    });
-    fireEvent.change(screen.getByTestId("tool-command-network-mode"), {
-      target: { value: "enabled" },
-    });
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
-
-    await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          commandExecutionPolicy: "unrestricted",
-          commandNetworkMode: "enabled",
-        }),
-      ),
-    );
-  });
-
-  it("applies the server tool ceiling when saving tool selections", async () => {
-    const onSaveToolSelectionConfig = vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
-    >(() => Promise.resolve());
-
-    render(
-      <ToolSelectionConfigEditor
-        agentDid="did:key:z6MkAgent"
-        savedStatus={null}
-        saving={false}
+      <ToolsConfigEditor
+        agentDid="owner"
+        tools={document}
+        toolServices={[]}
+        subagentTargets={[]}
         toolCeiling="MetaOnly"
-        toolRoot="/tmp/work"
-        toolSelection={toolSelection}
-        toolServiceRegistries={[toolService]}
-        onSaveToolSelectionConfig={onSaveToolSelectionConfig}
+        saving={false}
+        savedStatus={null}
+        onApplyConfigComponents={onApply}
+        onDeleteToolsConfig={vi.fn()}
+        onDeleted={vi.fn()}
         onSaved={vi.fn()}
       />,
     );
-
-    expect(screen.getByTestId("tool-enable-file-tools")).toBeDisabled();
-    expect(screen.getByTestId("tool-enable-bash")).toBeDisabled();
-    fireEvent.click(screen.getByTestId("tool-selection-save"));
-
+    expect(
+      screen.getByText(/Current runtime tool ceiling: MetaOnly/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("tools-save"));
     await waitFor(() =>
-      expect(onSaveToolSelectionConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          enableFileTools: false,
-          enableBash: false,
-        }),
-      ),
+      expect(onApply).toHaveBeenCalledWith({
+        document: {
+          agent_principal: { agent_did: "owner" },
+          tools: [document],
+          subagent_targets: [],
+        },
+      }),
     );
   });
 });

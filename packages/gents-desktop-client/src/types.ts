@@ -14,12 +14,13 @@ export type {
   BehaviorReadinessView,
   BehaviorUnavailableReasonView,
   BehaviorView,
-  ConversationSummary,
+  SessionSummary,
+  SessionProvenance,
+  SessionFork,
   DeploymentView,
   DesktopClientSnapshot,
   EventTriggerView,
   InferenceBackendView,
-  InferenceProfileView,
   MailboxItemView,
   ToolSurfaceExplanationView,
   NetworkStatusView,
@@ -34,8 +35,6 @@ export type {
   TaskRecentRunsView,
   TaskRunSummaryView,
   TaskView,
-  ToolSelectionView,
-  ToolServiceRegistryView,
 } from "./types/deployment.js";
 export {
   displayAgentIdentity,
@@ -47,6 +46,11 @@ export {
 export type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
+  ConfigComponentsApplyRequest,
+  ConfigComponentsPatchRequest,
+  ConfigComponentPatch,
+  EventSourceSaveRequest,
+  EventSourceDeleteRequest,
   BehaviorSaveRequest,
   ChatSendRequest,
   MailboxItemRequest,
@@ -72,14 +76,14 @@ export type {
   EventTriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
-  ToolSelectionDeleteRequest,
+  ToolsDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
   SkillSaveRequest,
   TaskRunRequest,
   TaskRunResult,
   TaskSaveRequest,
-  ToolSelectionSaveRequest,
+  ToolsSaveRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
@@ -114,7 +118,6 @@ export type {
   CascadeAffectedRequest,
   CascadeCancelPreview,
   DesktopInterruptRequestRequest,
-  DesktopListHoldsRequest,
   DesktopListSubagentTreeRequest,
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
@@ -122,12 +125,9 @@ export type {
   DesktopProbeMcpServiceRequest,
   DerivedCancelCauseView,
   InterruptRequestResult,
-  DesktopResolveHoldRequest,
-  HeldToolCallView,
   MCPServiceHealthView,
   McpServiceProbeResult,
   NativeExecutorStatusView,
-  ResolveHoldResult,
   RuntimeLivenessView,
   StuckWorkDiagnosticView,
   SubagentEdgeView,
@@ -144,3 +144,19 @@ export type {
 export type { ProviderAccountView } from "./generated/ProviderAccountView.js";
 export type { ProviderAccountsRequest } from "./generated/ProviderAccountsRequest.js";
 export type { ProviderAccountDisconnectRequest } from "./generated/ProviderAccountDisconnectRequest.js";
+export type { InferenceBackend } from "./generated/InferenceBackend.js";
+export type { BackendAuth } from "./generated/BackendAuth.js";
+export type { BackendProviderKind } from "./generated/BackendProviderKind.js";
+export type { OpenAiWireApi } from "./generated/OpenAiWireApi.js";
+export type { InferenceProfile } from "./generated/InferenceProfile.js";
+export type { InferenceSampling } from "./generated/InferenceSampling.js";
+export type { InferenceExecution } from "./generated/InferenceExecution.js";
+export type { InferenceRetryPolicy } from "./generated/InferenceRetryPolicy.js";
+export type { PackConfig } from "./generated/PackConfig.js";
+export type { AgentBehavior } from "./generated/AgentBehavior.js";
+export type { AgentContext } from "./generated/AgentContext.js";
+export type { CompactionConfig } from "./generated/CompactionConfig.js";
+export type { Tools } from "./generated/Tools.js";
+export type { ToolServiceRegistry } from "./generated/ToolServiceRegistry.js";
+export type { SubagentTargetDocument } from "./generated/SubagentTargetDocument.js";
+export type { AgentPrincipal } from "./generated/AgentPrincipal.js";

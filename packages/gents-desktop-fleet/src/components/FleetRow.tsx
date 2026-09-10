@@ -75,12 +75,13 @@ export function FleetRow({
   ).length;
   const defaultBehavior = deployment.behaviors.find(
     (behavior) =>
-      behavior.behaviorId ===
-      deployment.agentPrincipal.defaultBehaviorId,
+      behavior.behaviorId === deployment.agentPrincipal.defaultBehaviorId,
   );
   const toolIcons = toolCeilingIcons(
-    deployment.toolSelections,
-    defaultBehavior?.toolSelectionId,
+    deployment.tools,
+    deployment.contexts.find(
+      (context) => context.context_id === defaultBehavior?.contextId,
+    )?.tools_id,
     isLocalRuntimeSource(deployment.source) ? bootstrap?.initToolCeiling : null,
   );
   const runtimeLastUpdate = deployment.runtime?.updatedAt ?? null;

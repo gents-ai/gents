@@ -22,27 +22,25 @@ use gents_desktop_bridge::commands::mcp_health::{
 };
 use gents_desktop_bridge::commands::{
     rename_conversation, repair_p2p, run_schedule_config, run_task_config, save_agent_config,
-    save_backend_config, save_behavior_config, save_event_trigger_config,
+    delete_event_source_config, save_event_source_config, save_backend_config, save_behavior_config, save_event_trigger_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
-    save_tool_selection_config, save_tool_service_config, send_chat_message,
+    save_tools_config, save_tool_service_config, send_chat_message,
     test_tool_service_config,
 };
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
-use gents_desktop_bridge::tauri_commands::operations::{
-    list_tool_call_holds_for_core, resolve_tool_call_hold_for_core, subagent_tree_view_from_gents,
-};
+use gents_desktop_bridge::tauri_commands::operations::subagent_tree_view_from_gents;
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendHealthView, BackendSaveRequest, BehaviorSaveRequest,
-    ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest, DesktopListHoldsRequest,
+    ChatSendRequest, ConversationRenameRequest, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
-    DesktopResolveHoldRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventTriggerSaveRequest, InferenceCallSummaryView, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleRunRequest,
-    ScheduleSaveRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
-    ToolSelectionSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EnrollmentRequestView,
+    EventSourceDeleteRequest, EventSourceSaveRequest, EnrollmentStatusRequest,
+    EventTriggerSaveRequest, InferenceCallSummaryView,
+    InferenceProfileSaveRequest, NativeExecutorStatusView, PeerStatusFetchRequest,
+    RuntimeLivenessView, ScheduleRunRequest, ScheduleSaveRequest, SubagentTreeView, TaskRunRequest,
+    TaskSaveRequest, ToolsSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -352,28 +350,6 @@ pub(super) fn handle_request(
                 runtime.block_on(send_chat_message(fixture.desktop_core().as_ref(), request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
-        ("POST", "/desktop/tool-call-holds/list") => {
-            let request = decode::<DesktopListHoldsRequest>(
-                &request.body,
-                "decoding tool-call holds request",
-            )?;
-            let held = runtime.block_on(list_tool_call_holds_for_core(
-                Arc::clone(fixture.desktop_core()),
-                request,
-            ))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&held)?))
-        }
-        ("POST", "/desktop/tool-call-holds/resolve") => {
-            let request = decode::<DesktopResolveHoldRequest>(
-                &request.body,
-                "decoding tool-call hold resolution",
-            )?;
-            let result = runtime.block_on(resolve_tool_call_hold_for_core(
-                Arc::clone(fixture.desktop_core()),
-                request,
-            ))?;
-            Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
-        }
         ("POST", "/desktop/conversation/rename") => {
             let request =
                 decode::<ConversationRenameRequest>(&request.body, "decoding rename request")?;
@@ -533,12 +509,12 @@ pub(super) fn handle_request(
             ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
-        ("POST", "/desktop/tool-selection/save") => {
-            let request = decode::<ToolSelectionSaveRequest>(
+        ("POST", "/desktop/tools/save") => {
+            let request = decode::<ToolsSaveRequest>(
                 &request.body,
                 "decoding tool selection save request",
             )?;
-            runtime.block_on(save_tool_selection_config(
+            runtime.block_on(save_tools_config(
                 fixture.desktop_core().as_ref(),
                 request,
             ))?;
@@ -563,6 +539,24 @@ pub(super) fn handle_request(
             let result = runtime.block_on(test_tool_service_config(request))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
         }
+        ("POST", "/desktop/config/components/apply") => {
+            let request = decode::<gents_desktop_bridge::types::ConfigComponentsApplyRequest>(
+                &request.body, "decoding component apply request",
+            )?;
+            runtime.block_on(gents_desktop_bridge::commands::apply_config_components(
+                fixture.desktop_core().as_ref(), request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/config/components/patch") => {
+            let request = decode::<gents_desktop_bridge::types::ConfigComponentsPatchRequest>(
+                &request.body, "decoding component patch request",
+            )?;
+            runtime.block_on(gents_desktop_bridge::commands::patch_config_components(
+                fixture.desktop_core().as_ref(), request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
         ("POST", "/desktop/task/save") => {
             let request = decode::<TaskSaveRequest>(&request.body, "decoding task save request")?;
             runtime.block_on(save_task_config(fixture.desktop_core().as_ref(), request))?;
@@ -585,6 +579,24 @@ pub(super) fn handle_request(
                 request,
             ))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(&result)?))
+        }
+        ("POST", "/desktop/event-source/save") => {
+            let request = decode::<EventSourceSaveRequest>(
+                &request.body, "decoding event source save request",
+            )?;
+            runtime.block_on(save_event_source_config(
+                fixture.desktop_core().as_ref(), request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/event-source/delete") => {
+            let request = decode::<EventSourceDeleteRequest>(
+                &request.body, "decoding event source delete request",
+            )?;
+            runtime.block_on(delete_event_source_config(
+                fixture.desktop_core().as_ref(), request,
+            ))?;
+            Ok(snapshot_response(runtime, fixture)?)
         }
         ("POST", "/desktop/event-trigger/save") => {
             let request = decode::<EventTriggerSaveRequest>(

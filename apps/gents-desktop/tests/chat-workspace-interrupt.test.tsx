@@ -14,7 +14,6 @@ const mockedInterrupt = vi.fn();
 const api = {
   previewInterruptCascade: mockedPreview,
   interruptRequest: mockedInterrupt,
-  listToolCallHolds: vi.fn().mockResolvedValue([]),
 } as unknown as DesktopApiAdapter;
 
 const baseDeployment: DeploymentView = {

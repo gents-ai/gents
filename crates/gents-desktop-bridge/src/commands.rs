@@ -18,16 +18,16 @@ mod util;
 pub use chat::{rename_conversation, send_chat_message};
 #[cfg_attr(test, allow(unused_imports))]
 pub use config::{
-    delete_backend_config, delete_behavior_config, delete_event_trigger_config,
-    delete_inference_profile_config, delete_schedule_config, delete_skill_config,
-    delete_task_config, delete_tool_selection_config, delete_tool_service_config,
+    apply_config_components, delete_backend_config, delete_behavior_config,
+    delete_event_trigger_config, delete_inference_profile_config, delete_schedule_config,
+    delete_skill_config, delete_task_config, delete_tool_service_config, delete_tools_config,
     save_agent_config, save_backend_config, save_behavior_config, save_inference_profile_config,
-    save_skill_config, save_tool_selection_config,
+    save_skill_config, save_tools_config,
 };
 pub use mailbox::{dismiss_mailbox, list_mailbox, start_mailbox_request};
 pub use peer::{remove_peer, rename_peer, repair_p2p};
 pub use task::{
-    run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
-    save_task_config,
+    delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
+    save_event_trigger_config, save_schedule_config, save_task_config,
 };
 pub use tool_service::{save_tool_service_config, test_tool_service_config};

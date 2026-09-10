@@ -18,7 +18,6 @@ import {
   ChatTranscriptPanel,
 } from "@source-inc/gents-desktop-chat";
 import { effectiveBehaviorSkills } from "@source-inc/gents-desktop-chat";
-import { HoldsPanel } from "@source-inc/gents-desktop-operations";
 import type { ConversationLoadingStatus as ConversationLoadingStatusView } from "../lib/loadingStatus";
 import { ConversationLoadingStatus } from "./ConversationLoadingStatus";
 
@@ -217,8 +216,6 @@ export function ActiveChatWorkspace({
             retryUnavailableHint={retryUnavailableHint}
             onLoadOlder={onLoadOlderTimeline}
           />
-
-          <HoldsPanel agentDid={selectedDeployment.agentDid} api={api} hideWhenIdle />
 
           <ChatComposer
             activeRequestId={activeRequestId}

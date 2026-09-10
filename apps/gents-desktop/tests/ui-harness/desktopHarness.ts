@@ -22,10 +22,7 @@ import type {
   TaskRunResult,
   ToolServiceTestResult,
 } from "@source-inc/gents-desktop-client";
-import type {
-  HeldToolCallView,
-  ResolveHoldResult,
-} from "@source-inc/gents-desktop-client";
+import type {} from "@source-inc/gents-desktop-client";
 
 const AGENT_DID = "did:key:z6MkBombadilAgent";
 const DEFAULT_BEHAVIOR_ID = "default";
@@ -41,7 +38,6 @@ export type DesktopUiHarnessScenario =
   | "save-error"
   | "backend-health-error"
   | "backend-unavailable"
-  | "tool-hold"
   | "mailbox-overflow"
   | "long-content"
   | "active-turn"
@@ -117,24 +113,6 @@ export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
   const scenario = normalizeScenario(options.scenario);
-  let heldToolCalls: HeldToolCallView[] =
-    scenario === "tool-hold"
-      ? Array.from({ length: 6 }, (_, index) => {
-          const ordinal = index + 1;
-          return {
-            toolCallDocId: `hold-doc-mobile-${ordinal}`,
-            toolCallId: `hold-mobile-${ordinal}`,
-            requestId: `request_01JZ6Q0Y5Q7V0MOBILE_APPROVAL_BOUNDARY_WITHOUT_BREAKS_${ordinal}`,
-            sessionId: "session-intro",
-            agentDid: AGENT_DID,
-            toolName: `mcp__workstation_diagnostics__inspect_namespaced_service_without_breaks_${ordinal}`,
-            args: JSON.stringify({
-              target: `https://workstation.example/internal/service/with/a/very/long/unbroken/path/${ordinal}`,
-            }),
-            deadlineAt: "2099-08-28T23:59:59Z",
-          };
-        })
-      : [];
   const listeners = new Set<DesktopClientUpdatedHandler>();
   const sessions = new Map<string, DesktopSessionSnapshot>();
   const sessionLineage = new Map<
@@ -1209,7 +1187,7 @@ export function createDesktopUiHarness(
       notify("config");
       return snapshot();
     },
-    async deleteToolSelectionConfig(request) {
+    async deleteToolsConfig(request) {
       const referencing = deployment.behaviors
         .filter((behavior) => behavior.toolSelectionId === request.selectionId)
         .map((behavior) => behavior.behaviorId);
@@ -1322,7 +1300,7 @@ export function createDesktopUiHarness(
       };
       return snapshot();
     },
-    async saveToolSelectionConfig(request) {
+    async saveToolsConfig(request) {
       const selectionId = request.selectionId.trim() || `tools-${requestSeq}`;
       const prior = deployment.toolSelections.find(
         (selection) => selection.selectionId === selectionId,
@@ -1565,24 +1543,6 @@ export function createDesktopUiHarness(
         alreadyInterrupted: false,
         stalePreview: false,
         preview: null,
-      };
-      return result;
-    },
-    async listToolCallHolds() {
-      return heldToolCalls;
-    },
-    async resolveToolCallHold(request) {
-      const held = heldToolCalls.find((hold) => hold.toolCallId === request.toolCallId);
-      if (!held) {
-        throw new Error(`tool call ${request.toolCallId} is not awaiting approval`);
-      }
-      heldToolCalls = heldToolCalls.filter(
-        (hold) => hold.toolCallId !== request.toolCallId,
-      );
-      const result: ResolveHoldResult = {
-        approvalId: `approval-${request.toolCallId}-harness`,
-        toolCallId: request.toolCallId,
-        decision: request.approve ? "approved" : "denied",
       };
       return result;
     },
@@ -2187,7 +2147,6 @@ function normalizeScenario(value?: string | null): DesktopUiHarnessScenario {
     case "save-error":
     case "backend-health-error":
     case "backend-unavailable":
-    case "tool-hold":
     case "mailbox-overflow":
     case "long-content":
     case "active-turn":

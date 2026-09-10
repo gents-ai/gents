@@ -11,7 +11,7 @@ import type {
   ScheduleSaveRequest,
   TaskRunResult,
   TaskSaveRequest,
-  ToolSelectionSaveRequest,
+  ToolsSaveRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
@@ -261,8 +261,8 @@ export function workspaceHandlers() {
     onSaveInferenceProfileConfig: vi.fn<
       [(request: InferenceProfileSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve()),
-    onSaveToolSelectionConfig: vi.fn<
-      [(request: ToolSelectionSaveRequest) => Promise<unknown>]
+    onSaveToolsConfig: vi.fn<
+      [(request: ToolsSaveRequest) => Promise<unknown>]
     >(() => Promise.resolve()),
     onSaveToolServiceConfig: vi.fn<
       [(request: ToolServiceSaveRequest) => Promise<unknown>]

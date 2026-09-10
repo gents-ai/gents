@@ -3,6 +3,8 @@ import type { Dispatch, SetStateAction } from "react";
 import type {
   AgentConfigSaveRequest,
   BackendSaveRequest,
+  ConfigComponentsPatchRequest,
+  ConfigComponentsApplyRequest,
   BehaviorSaveRequest,
   CodexLoginResult,
   DesktopApiAdapter,
@@ -11,7 +13,7 @@ import type {
   InferenceProfileSaveRequest,
   SkillDeleteRequest,
   SkillSaveRequest,
-  ToolSelectionSaveRequest,
+  ToolsSaveRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
   ToolServiceTestResult,
@@ -20,7 +22,7 @@ import type {
   EventTriggerDeleteRequest,
   BackendDeleteRequest,
   InferenceProfileDeleteRequest,
-  ToolSelectionDeleteRequest,
+  ToolsDeleteRequest,
   ToolServiceDeleteRequest,
   BehaviorDeleteRequest,
 } from "@source-inc/gents-desktop-client";
@@ -50,8 +52,8 @@ export function createDesktopShellConfigActions({
     try {
       const next = await api.saveAgentConfig(request);
       setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      setSelectedBehaviorId(request.defaultBehaviorId);
+      setSelectedAgentDid(request.document.agent_did);
+      setSelectedBehaviorId(request.document.default_behavior_id ?? null);
       return next;
     } catch (err) {
       setError(String(err));
@@ -68,8 +70,8 @@ export function createDesktopShellConfigActions({
     try {
       const next = await api.saveBehaviorConfig(request);
       setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
-      setSelectedBehaviorId(request.behaviorId);
+      setSelectedAgentDid(request.document.agent_did);
+      setSelectedBehaviorId(request.document.behavior_id);
       return next;
     } catch (err) {
       setError(String(err));
@@ -86,7 +88,7 @@ export function createDesktopShellConfigActions({
     try {
       const next = await api.saveSkillConfig(request);
       setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      setSelectedAgentDid(request.document.agent_did);
       return next;
     } catch (err) {
       setError(String(err));
@@ -194,11 +196,11 @@ export function createDesktopShellConfigActions({
     }
   }
 
-  async function onDeleteToolSelectionConfig(request: ToolSelectionDeleteRequest) {
+  async function onDeleteToolsConfig(request: ToolsDeleteRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.deleteToolSelectionConfig(request);
+      const next = await api.deleteToolsConfig(request);
       setSnapshot(next);
       setSelectedAgentDid(request.agentDid);
       return next;
@@ -247,6 +249,36 @@ export function createDesktopShellConfigActions({
     setError(null);
     try {
       const next = await api.saveBackendConfig(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onPatchConfigComponents(request: ConfigComponentsPatchRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await api.patchConfigComponents(request);
+      setSnapshot(next);
+      return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onApplyConfigComponents(request: ConfigComponentsApplyRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      const next = await api.applyConfigComponents(request);
       setSnapshot(next);
       return next;
     } catch (err) {
@@ -312,13 +344,13 @@ export function createDesktopShellConfigActions({
     }
   }
 
-  async function onSaveToolSelectionConfig(request: ToolSelectionSaveRequest) {
+  async function onSaveToolsConfig(request: ToolsSaveRequest) {
     setSavingConfig(true);
     setError(null);
     try {
-      const next = await api.saveToolSelectionConfig(request);
+      const next = await api.saveToolsConfig(request);
       setSnapshot(next);
-      setSelectedAgentDid(request.agentDid);
+      setSelectedAgentDid(request.document.agent_did);
       return next;
     } catch (err) {
       setError(String(err));
@@ -358,6 +390,8 @@ export function createDesktopShellConfigActions({
   return {
     onSaveAgentConfig,
     onSaveBackendConfig,
+    onPatchConfigComponents,
+    onApplyConfigComponents,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
     onDeleteTaskConfig,
@@ -365,7 +399,7 @@ export function createDesktopShellConfigActions({
     onDeleteEventTriggerConfig,
     onDeleteBackendConfig,
     onDeleteInferenceProfileConfig,
-    onDeleteToolSelectionConfig,
+    onDeleteToolsConfig,
     onDeleteToolServiceConfig,
     onDeleteBehaviorConfig,
     onProbeInferenceEndpoint,
@@ -375,7 +409,7 @@ export function createDesktopShellConfigActions({
     onCancelGrokLogin,
     onSaveInferenceProfileConfig,
     onSaveSkillConfig,
-    onSaveToolSelectionConfig,
+    onSaveToolsConfig,
     onSaveToolServiceConfig,
     onTestToolService,
   };

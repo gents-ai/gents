@@ -14,8 +14,6 @@ export function conversationLifecycleGroup(
       "dead",
       "inputrequired",
       "input_required",
-      "awaitingapproval",
-      "awaiting_approval",
     ].includes(state)
   ) {
     return "attention";

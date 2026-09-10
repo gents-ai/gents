@@ -6,14 +6,11 @@ import type {
   ChatSendResult,
   DesktopClientSnapshot,
   DesktopOperationsSnapshot,
-  DesktopResolveHoldRequest,
   DesktopSessionSnapshot,
-  HeldToolCallView,
   InitSummary,
   InterruptRequestResult,
   MCPServiceHealthView,
   McpServiceProbeResult,
-  ResolveHoldResult,
   SubagentTreeView,
   TaskRunResult,
 } from "@source-inc/gents-desktop-client";
@@ -104,8 +101,8 @@ export function createBridgeHttpAdapter(
         "/desktop/inference-profile/save",
         request,
       ),
-    saveToolSelectionConfig: async (request) =>
-      client.postJson<DesktopClientSnapshot>("/desktop/tool-selection/save", request),
+    saveToolsConfig: async (request) =>
+      client.postJson<DesktopClientSnapshot>("/desktop/tools/save", request),
     saveToolServiceConfig: async (request) =>
       client.postJson<DesktopClientSnapshot>("/desktop/tool-service/save", request),
     testToolService: async (request) =>
@@ -146,12 +143,6 @@ export function createBridgeHttpAdapter(
       client.postJson<CascadeCancelPreview>("/desktop/interrupt/preview", request),
     interruptRequest: async (request) =>
       client.postJson<InterruptRequestResult>("/desktop/interrupt/request", request),
-    listToolCallHolds: async (agentDid) =>
-      client.postJson<HeldToolCallView[]>("/desktop/tool-call-holds/list", {
-        agentDid,
-      }),
-    resolveToolCallHold: async (request: DesktopResolveHoldRequest) =>
-      client.postJson<ResolveHoldResult>("/desktop/tool-call-holds/resolve", request),
   };
 }
 

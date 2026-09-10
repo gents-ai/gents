@@ -3,26 +3,20 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
 use gents::graphql::escape_graphql_string;
 use gents::{
+    AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, ToolCeiling,
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
-    default_tool_selection_id_for_behavior, ensure_agent_principal, load_agent_behavior,
-    subagent_target_entry, upsert_agent_behavior, AgentIdentity, DocumentRuntimeOptions, Gents,
-    InferenceBackend, KeyIdentity, ToolCeiling,
 };
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::{
-    decode_behavior_readiness_snapshot, AgentBehaviorReadinessRow, AgentBehaviorRow,
-    InferenceProfileRow, ToolSelectionRow,
-};
+use gents_protocol::row::{AgentBehaviorReadinessRow, decode_behavior_readiness_snapshot};
 use serde_json::Value;
 use tokio::sync::watch;
 use tracing::Instrument;
 
+use super::DEFAULT_DEPLOYMENT_LABEL;
 use super::backend::AgentBackendConfig;
 use super::workspace::seed_repo_workspace;
-use super::DEFAULT_DEPLOYMENT_LABEL;
 
 #[derive(Debug, Clone)]
 pub(crate) struct LiveAgentDocs {
@@ -107,6 +101,12 @@ async fn seed_live_behavior_documents(
     backend: &AgentBackendConfig,
     subagent_backend: Option<&AgentBackendConfig>,
 ) -> Result<LiveAgentDocs> {
+    use gents::config_client::{
+        ConfigAccess, DesiredStateApplyPlan, apply_desired_state_plan,
+        load_inference_backend_in_txn,
+    };
+    use gents::document_config::PackConfig;
+    use serde_json::json;
     let behavior_id = default_behavior_id_for_agent(agent_did);
     let subagent_behavior_id = format!("{agent_did}:live-repo-audit-subagent");
     let backend_id = format!("{agent_name}-backend");
@@ -115,183 +115,72 @@ async fn seed_live_behavior_documents(
     } else {
         backend_id.clone()
     };
-    let tool_selection_id = default_tool_selection_id_for_behavior(&behavior_id);
-    let subagent_tool_selection_id = default_tool_selection_id_for_behavior(&subagent_behavior_id);
+    let tool_selection_id = format!("{behavior_id}-tools");
+    let subagent_tool_selection_id = format!("{subagent_behavior_id}-tools");
     let inference_profile_id = default_inference_profile_id_for_behavior(&behavior_id);
-
-    bind_default_behavior_backend(core.node(), agent_did, &backend_id, backend).await?;
-    if let Some(sub) = subagent_backend {
-        upsert_inference_backend(core.node(), &subagent_backend_id, sub).await?;
-    }
-
-    core.save_tool_selection(&ToolSelectionRow {
-        selection_id: tool_selection_id.clone(),
-        agent_did: Some(agent_did.to_string()),
-        display_name: Some("Live Repo Audit Tools".to_string()),
-        tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
-        subagent_default_await_mode: None,
-        write_tools: Vec::new(),
-        datastore_tool_surface_ids: Vec::new(),
-        eth_tool_ids: Vec::new(),
-        enable_self_config: None,
-        self_config_categories: Vec::new(),
-        self_config_no_lockout: None,
-        self_config_dry_run: None,
-        enable_lsp: None,
-        lsp_config: None,
-        enable_file_tools: Some(true),
-        file_tools_mode: Some("ReadOnly".to_string()),
-        file_tool_root: None,
-        // Keep a real native-background lane in the live desktop fixture. The
-        // operations snapshot E2E uses it to observe a `spawn_process` call
-        // while its underlying command is still running.
-        enable_bash: Some(true),
-        bash_mode: Some("Unrestricted".to_string()),
-        command_execution_policy: None,
-        read_only_command_allowlist: Vec::new(),
-        command_allowed_argv_prefixes: Vec::new(),
-        command_forbidden_argv_prefixes: Vec::new(),
-        command_network_mode: None,
-        cli_tool_names: Vec::new(),
-        enable_meta_tools: Some(false),
-        enable_goal_tools: Some(false),
-        enable_goal_creation: Some(false),
-        allowed_mcp_service_ids: Vec::new(),
-        required_mcp_service_ids: Vec::new(),
-        backgroundable_tool_names: vec!["bash_unrestricted".to_string()],
-        enable_memory: Some(false),
-        enable_session_history_tool: Some(false),
-        enable_context_budget: Some(true),
-        subagent_targets: vec![subagent_target_entry(
-            "repo-audit-subagent",
-            agent_did,
-            &subagent_behavior_id,
-            Some("Local repository audit subagent for the desktop live fixture".to_string()),
-        )],
-        subagent_spawn_enabled: Some(true),
-        subagent_steering_enabled: Some(true),
-        subagent_background_enabled: Some(true),
-        subagent_allow_cross_deployment: Some(false),
-        cross_deployment_spawn_timeout_seconds: Some(60),
-        enable_defra_query: Some(false),
-        defra_query_collections: Vec::new(),
-    })
-    .await?;
-    core.save_tool_selection(&ToolSelectionRow {
-        selection_id: subagent_tool_selection_id.clone(),
-        agent_did: Some(agent_did.to_string()),
-        display_name: Some("Live Repo Audit Subagent Tools".to_string()),
-        tool_policy_version: Some(gents::tool_surface::TOOL_POLICY_V1.to_string()),
-        subagent_default_await_mode: None,
-        write_tools: Vec::new(),
-        datastore_tool_surface_ids: Vec::new(),
-        eth_tool_ids: Vec::new(),
-        enable_self_config: None,
-        self_config_categories: Vec::new(),
-        self_config_no_lockout: None,
-        self_config_dry_run: None,
-        enable_lsp: None,
-        lsp_config: None,
-        enable_file_tools: Some(true),
-        file_tools_mode: Some("ReadOnly".to_string()),
-        file_tool_root: None,
-        enable_bash: Some(false),
-        bash_mode: Some("ReadOnly".to_string()),
-        command_execution_policy: None,
-        read_only_command_allowlist: Vec::new(),
-        command_allowed_argv_prefixes: Vec::new(),
-        command_forbidden_argv_prefixes: Vec::new(),
-        command_network_mode: None,
-        cli_tool_names: Vec::new(),
-        enable_meta_tools: Some(false),
-        enable_goal_tools: Some(false),
-        enable_goal_creation: Some(false),
-        allowed_mcp_service_ids: Vec::new(),
-        required_mcp_service_ids: Vec::new(),
-        backgroundable_tool_names: Vec::new(),
-        enable_memory: Some(false),
-        enable_session_history_tool: Some(false),
-        enable_context_budget: Some(true),
-        subagent_targets: Vec::new(),
-        subagent_spawn_enabled: Some(false),
-        subagent_steering_enabled: Some(false),
-        subagent_background_enabled: Some(false),
-        subagent_allow_cross_deployment: Some(false),
-        cross_deployment_spawn_timeout_seconds: None,
-        enable_defra_query: Some(false),
-        defra_query_collections: Vec::new(),
-    })
-    .await?;
-    core.save_inference_profile(&InferenceProfileRow {
-        profile_id: inference_profile_id.clone(),
-        display_name: Some("Live Repo Audit Profile".to_string()),
-        context_window: Some(131_072),
-        max_output_tokens: Some(1_024),
-        max_turns: Some(20),
-        temperature: Some(0.0),
-        stream_batch_ms: Some(250),
-        stream_liveness_timeout_secs: Some(300),
-        deadline_duration_secs: Some(300),
-        retry_max_transport: None,
-        retry_backoff_ms: None,
-        retry_max_resample: None,
-        retry_allow_repair: None,
-        retry_interactive_max: None,
-        top_p: None,
-        top_k: None,
-        seed: None,
-        min_p: None,
-        frequency_penalty: None,
-        presence_penalty: None,
-        repetition_penalty: None,
-        reasoning_effort: None,
-    })
-    .await?;
-    core.save_behavior(&AgentBehaviorRow {
-        behavior_id: behavior_id.clone(),
-        agent_did: Some(agent_did.to_string()),
-        display_name: Some("Live Repo Audit Default".to_string()),
-        system_prompt: Some(
-            "You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks."
-                .to_string(),
-        ),
-        backend_id: Some(backend_id.clone()),
-        model_name: Some(backend.model_name.clone()),
-        tool_selection_id: Some(tool_selection_id.clone()),
-        inference_profile_id: Some(inference_profile_id.clone()),
-        compaction_strategy: Some("StripThenSummarize".to_string()),
-        compaction_threshold: Some(0.95),
-        enabled: Some(true),
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        created_at: Some(Utc::now().to_rfc3339()),
-    })
-    .await?;
-    let subagent_model_name = subagent_backend
-        .map(|s| s.model_name.clone())
-        .unwrap_or_else(|| backend.model_name.clone());
-    core.save_behavior(&AgentBehaviorRow {
-        behavior_id: subagent_behavior_id.clone(),
-        agent_did: Some(agent_did.to_string()),
-        display_name: Some("Live Repo Audit Subagent".to_string()),
-        system_prompt: Some(
-            "You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings."
-                .to_string(),
-        ),
-        backend_id: Some(subagent_backend_id.clone()),
-        model_name: Some(subagent_model_name),
-        tool_selection_id: Some(subagent_tool_selection_id.clone()),
-        inference_profile_id: Some(inference_profile_id.clone()),
-        compaction_strategy: Some("StripThenSummarize".to_string()),
-        compaction_threshold: Some(0.95),
-        enabled: Some(true),
-        skill_refs: Vec::new(),
-        skill_excludes: Vec::new(),
-        created_at: Some(Utc::now().to_rfc3339()),
+    let subagent_profile_id = default_inference_profile_id_for_behavior(&subagent_behavior_id);
+    let context_id = format!("{behavior_id}-context");
+    let subagent_context_id = format!("{subagent_behavior_id}-context");
+    let execution_id = format!("{behavior_id}-execution");
+    let sampling_id = format!("{behavior_id}-sampling");
+    let compaction_id = format!("{behavior_id}-compaction");
+    let target_id = format!("{behavior_id}-subagent-target");
+    let subagent = subagent_backend.unwrap_or(backend);
+    let config = json!({
+        "agent_principal":{"agent_did":agent_did,"display_name":agent_name,"default_behavior_id":behavior_id},
+        "agent_behaviors":[
+            {"agent_did":agent_did,"behavior_id":behavior_id,"display_name":"Live Repo Audit Default","context_id":context_id,"inference_profile_id":inference_profile_id},
+            {"agent_did":agent_did,"behavior_id":subagent_behavior_id,"display_name":"Live Repo Audit Subagent","context_id":subagent_context_id,"inference_profile_id":subagent_profile_id}
+        ],
+        "contexts":[
+            {"agent_did":agent_did,"context_id":context_id,"system_prompt":"You are Amy, a repository analysis agent operating inside a live desktop integration test. Keep answers concise. Use only the exact files requested by the user, and do not explore the wider repository unless explicitly asked. When the user explicitly asks you to use the local subagent, call spawn_subagent with name \"repo-audit-subagent\" and await_mode \"background\", then call wait_subagent with the returned child_request_id to retrieve the child's result before you reply to the user. When the user explicitly asks you to launch a native background process, call spawn_process with tool_name \"bash_unrestricted\" and the exact requested arguments. Do not call wait_process, read_process, list_processes, or cancel_process unless the user explicitly asks.","tools_id":tool_selection_id,"compaction_id":compaction_id},
+            {"agent_did":agent_did,"context_id":subagent_context_id,"system_prompt":"You are Amy's local repo audit subagent inside a live desktop integration test. Read only the exact files requested by the parent and return concise findings.","tools_id":subagent_tool_selection_id,"compaction_id":compaction_id}
+        ],
+        "tools":[
+            {"agent_did":agent_did,"tools_id":tool_selection_id,"display_name":"Live Repo Audit Tools",
+             "host":{"files":{"mode":"ReadOnly"},"bash":{"mode":"Unrestricted","background_enabled":true}},
+             "built_ins":{"enable_context_budget":true},
+             "subagents":{"target_ids":[target_id],"spawn_enabled":true,"steering_enabled":true,"background_enabled":true,"allow_cross_principal":false,"cross_principal_spawn_timeout_secs":60}},
+            {"agent_did":agent_did,"tools_id":subagent_tool_selection_id,"display_name":"Live Repo Audit Subagent Tools",
+             "host":{"files":{"mode":"ReadOnly"}},"built_ins":{"enable_context_budget":true}}
+        ],
+        "subagent_targets":[{"agent_did":agent_did,"target_id":target_id,"target_agent_did":agent_did,"behavior_id":subagent_behavior_id,"name":"repo-audit-subagent","description":"Local repository audit subagent for the desktop live fixture"}],
+        "inference_profiles":[
+            {"agent_did":agent_did,"profile_id":inference_profile_id,"display_name":"Live Repo Audit Profile","backend_id":backend_id,"model_name":backend.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id},
+            {"agent_did":agent_did,"profile_id":subagent_profile_id,"display_name":"Live Repo Audit Subagent Profile","backend_id":subagent_backend_id,"model_name":subagent.model_name,"context_window":131072,"max_output_tokens":1024,"sampling_id":sampling_id,"execution_id":execution_id}
+        ],
+        "inference_sampling":[{"agent_did":agent_did,"sampling_id":sampling_id,"temperature":0.0}],
+        "inference_execution":[{"agent_did":agent_did,"execution_id":execution_id,"max_turns":20,"stream_batch_ms":250,"stream_liveness_timeout_secs":60,"deadline_duration_secs":300}],
+        "compactions":[{"agent_did":agent_did,"compaction_id":compaction_id,"strategy":"StripThenSummarize","threshold":0.95}]
+    });
+    ConfigAccess::transact_local(core.node(), None, "desktop.fixture.config", |txn| {
+        let mut config = config.clone();
+        let backend_id = &backend_id;
+        let subagent_backend_id = &subagent_backend_id;
+        Box::pin(async move {
+            let existing = load_inference_backend_in_txn(txn, agent_did, backend_id).await?;
+            let mut backends = vec![live_backend_candidate(
+                existing, agent_did, backend_id, backend,
+            )?];
+            if subagent_backend.is_some() {
+                let existing =
+                    load_inference_backend_in_txn(txn, agent_did, subagent_backend_id).await?;
+                backends.push(live_backend_candidate(
+                    existing,
+                    agent_did,
+                    subagent_backend_id,
+                    subagent,
+                )?);
+            }
+            config["inference_backends"] = serde_json::to_value(backends)?;
+            let config: PackConfig = serde_json::from_value(config)?;
+            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+            apply_desired_state_plan(txn, &plan).await?;
+            Ok(())
+        })
     })
     .await?;
     core.refresh_store().await?;
-
     Ok(LiveAgentDocs {
         behavior_id,
         subagent_behavior_id,
@@ -303,124 +192,47 @@ async fn seed_live_behavior_documents(
     })
 }
 
-async fn upsert_inference_backend(
-    node: &gents::defra_node::EmbeddedNode,
-    backend_id: &str,
-    backend: &AgentBackendConfig,
-) -> Result<()> {
-    let escaped_backend_id = escape_graphql_string(backend_id);
-    let escaped_endpoint = escape_graphql_string(&backend.endpoint);
-    let escaped_provider_kind = escape_graphql_string(backend.provider_kind.as_str());
-    let escaped_model_name = escape_graphql_string(&backend.model_name);
-    let api_key_field = graphql_optional_string_field("api_key", backend.api_key.as_deref());
-    let api_key_env_var_field =
-        graphql_optional_string_field("api_key_env_var", backend.api_key_env_var.as_deref());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{escaped_backend_id}" }} }},
-                add: {{
-                    backend_id: "{escaped_backend_id}",
-                    name: "{escaped_backend_id}",
-                    provider_kind: "{escaped_provider_kind}",
-                    endpoint: "{escaped_endpoint}",
-                    {api_key_field}
-                    {api_key_env_var_field}
-                    max_concurrent: 2,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }},
-                update: {{
-                    name: "{escaped_backend_id}",
-                    provider_kind: "{escaped_provider_kind}",
-                    endpoint: "{escaped_endpoint}",
-                    {api_key_field}
-                    {api_key_env_var_field}
-                    max_concurrent: 2,
-                    max_queue_depth: 100,
-                    enabled: true,
-                    models: ["{escaped_model_name}"],
-                    probe_status: "healthy"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let mutation_ref = &mutation;
-    gents::config_client::ConfigAccess::transact_local(
-        node,
-        None,
-        "desktop.fixture.inference_backend.upsert",
-        move |txn| {
-            Box::pin(async move {
-                let existing =
-                    gents::config_client::load_inference_backend_in_txn(txn, backend_id).await?;
-                live_backend_candidate(existing, backend_id, backend).validate(None)?;
-                txn.execute(mutation_ref).await?;
-                Ok(())
-            })
-        },
-    )
-    .await
-}
-
 fn live_backend_candidate(
     existing: Option<InferenceBackend>,
-    backend_id: &str,
-    backend: &AgentBackendConfig,
-) -> InferenceBackend {
-    let existing_openai_wire_api = existing
-        .as_ref()
-        .and_then(|backend| backend.openai_wire_api);
-    let existing_api_key = existing
-        .as_ref()
-        .and_then(|backend| backend.api_key.clone());
-    let existing_api_key_env_var = existing
-        .as_ref()
-        .and_then(|backend| backend.api_key_env_var.clone());
-
-    InferenceBackend {
-        backend_id: backend_id.to_string(),
-        name: backend_id.to_string(),
-        provider_kind: backend.provider_kind,
-        openai_wire_api: existing_openai_wire_api,
-        endpoint: backend.endpoint.clone(),
-        // The fixture mutation intentionally preserves an existing credential
-        // when the corresponding override is absent. Validate that effective
-        // document so switching credential modes cannot leave both populated.
-        api_key: backend.api_key.clone().or(existing_api_key),
-        api_key_env_var: backend.api_key_env_var.clone().or(existing_api_key_env_var),
-        max_concurrent: 2,
-        max_queue_depth: 100,
-        enabled: true,
-        models: vec![backend.model_name.clone()],
-        probe_status: "healthy".to_string(),
-    }
-}
-
-async fn bind_default_behavior_backend(
-    node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
     backend_id: &str,
     backend: &AgentBackendConfig,
-) -> Result<()> {
-    let bootstrap = ensure_agent_principal(node, agent_did).await?;
-    upsert_inference_backend(node, backend_id, backend).await?;
-    let mut default_behavior = load_agent_behavior(node, &bootstrap.default_behavior.behavior_id)
-        .await?
-        .expect("default behavior document");
-    default_behavior.backend_id = Some(backend_id.to_string());
-    default_behavior.model_name = Some(backend.model_name.clone());
-    upsert_agent_behavior(node, &default_behavior).await?;
-    Ok(())
-}
-
-fn graphql_optional_string_field(name: &str, value: Option<&str>) -> String {
-    value
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!(r#"{name}: "{}","#, escape_graphql_string(value)))
-        .unwrap_or_default()
+) -> Result<InferenceBackend> {
+    use gents::document_config::BackendAuth;
+    let auth = match (&backend.api_key, &backend.api_key_env_var) {
+        (Some(_), Some(_)) => anyhow::bail!("live backend must select one credential source"),
+        (Some(key), None) => BackendAuth::ApiKey { key: key.clone() },
+        (None, Some(variable)) => BackendAuth::Environment {
+            variable: variable.clone(),
+        },
+        (None, None) => existing
+            .as_ref()
+            .map(|value| value.auth.clone())
+            .unwrap_or_else(|| {
+                if backend.provider_kind.is_agent_scoped_oauth() {
+                    BackendAuth::PrincipalOAuth
+                } else {
+                    BackendAuth::Unauthenticated
+                }
+            }),
+    };
+    let candidate = InferenceBackend {
+        agent_did: agent_did.into(),
+        backend_id: backend_id.into(),
+        name: backend_id.into(),
+        provider_kind: backend.provider_kind,
+        openai_wire_api: existing.and_then(|value| value.openai_wire_api),
+        endpoint: backend.endpoint.clone(),
+        auth,
+        connect_timeout_secs: None,
+        discovery_timeout_secs: None,
+        max_concurrent: Some(2),
+        max_queue_depth: Some(100),
+        enabled: true,
+        tags: Vec::new(),
+    };
+    candidate.validate()?;
+    Ok(candidate)
 }
 
 async fn wait_for_runtime_process_state(
@@ -475,35 +287,36 @@ mod tests {
     use gents::BackendProviderKind;
 
     #[test]
-    fn live_backend_candidate_validates_preserved_credentials() {
-        let existing = InferenceBackend {
-            backend_id: "backend".to_string(),
-            name: "backend".to_string(),
-            provider_kind: BackendProviderKind::OpenAiCompatible,
-            openai_wire_api: None,
-            endpoint: "http://old.example/v1".to_string(),
-            api_key: Some("stored-secret".to_string()),
-            api_key_env_var: None,
-            max_concurrent: 1,
-            max_queue_depth: 10,
-            enabled: true,
-            models: vec!["old-model".to_string()],
-            probe_status: "healthy".to_string(),
-        };
-        let requested = AgentBackendConfig {
+    fn live_backend_candidate_preserves_or_explicitly_replaces_one_credential_source() {
+        use gents::document_config::BackendAuth;
+        let existing: InferenceBackend = serde_json::from_value(serde_json::json!({
+            "agent_did":"owner", "backend_id":"backend", "name":"backend",
+            "provider_kind":"OpenAiCompatible", "endpoint":"http://old.example/v1",
+            "auth":{"kind":"api_key","key":"stored-secret"}
+        }))
+        .unwrap();
+        let mut requested = AgentBackendConfig {
             endpoint: "http://new.example/v1".to_string(),
             model_name: "new-model".to_string(),
             provider_kind: BackendProviderKind::OpenAiCompatible,
             api_key: None,
-            api_key_env_var: Some("BACKEND_API_KEY".to_string()),
+            api_key_env_var: None,
         };
-
-        let error = live_backend_candidate(Some(existing), "backend", &requested)
-            .validate(None)
-            .expect_err("the preserved raw key must conflict with the new env reference");
-
-        assert!(error
-            .to_string()
-            .contains("must not set both api_key and api_key_env_var"));
+        let preserved =
+            live_backend_candidate(Some(existing.clone()), "owner", "backend", &requested).unwrap();
+        assert!(matches!(preserved.auth, BackendAuth::ApiKey { key } if key == "stored-secret"));
+        requested.api_key_env_var = Some("BACKEND_API_KEY".into());
+        let replaced =
+            live_backend_candidate(Some(existing), "owner", "backend", &requested).unwrap();
+        assert!(
+            matches!(replaced.auth, BackendAuth::Environment { variable } if variable == "BACKEND_API_KEY")
+        );
+        requested.api_key = Some("second-secret".into());
+        assert!(
+            live_backend_candidate(None, "owner", "backend", &requested)
+                .unwrap_err()
+                .to_string()
+                .contains("one credential source")
+        );
     }
 }

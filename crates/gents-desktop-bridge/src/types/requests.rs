@@ -1,13 +1,5 @@
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use ts_rs::TS;
-
-fn deserialize_present_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
 
 /// Local-runtime init request. Filesystem paths are **not** accepted from the
 /// webview — they come from `BridgeConfig` resolved at plugin init.
@@ -68,30 +60,16 @@ pub struct ConversationRenameRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfigSaveRequest {
-    pub agent_did: String,
-    pub display_name: String,
-    pub default_behavior_id: String,
-    pub enabled: Option<bool>,
+    pub document: gents::document_config::AgentPrincipal,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct BehaviorSaveRequest {
-    pub agent_did: String,
-    pub behavior_id: String,
-    pub display_name: String,
-    pub system_prompt: String,
-    pub backend_id: Option<String>,
-    pub tool_selection_id: Option<String>,
-    pub inference_profile_id: Option<String>,
-    pub compaction_strategy: Option<String>,
-    pub compaction_threshold: Option<f64>,
-    pub enabled: Option<bool>,
-    #[serde(default)]
-    pub skill_refs: Vec<String>,
-    #[serde(default)]
-    pub skill_excludes: Vec<String>,
+    pub document: gents::AgentBehaviorDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -138,8 +116,8 @@ pub struct InferenceProfileDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolSelectionDeleteRequest {
-    pub selection_id: String,
+pub struct ToolsDeleteRequest {
+    pub tools_id: String,
     pub agent_did: String,
 }
 
@@ -159,106 +137,30 @@ pub struct BehaviorDeleteRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct BackendSaveRequest {
-    pub backend_id: String,
-    pub name: String,
-    pub provider_kind: String,
-    #[serde(default)]
-    pub openai_wire_api: Option<String>,
-    pub endpoint: String,
-    pub api_key: Option<String>,
-    pub api_key_env_var: Option<String>,
-    pub clear_api_key: Option<bool>,
-    pub models: Vec<String>,
-    pub max_concurrent: Option<i64>,
-    pub max_queue_depth: Option<i64>,
-    pub enabled: Option<bool>,
+    pub document: gents::InferenceBackend,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct InferenceProfileSaveRequest {
-    pub profile_id: String,
-    pub display_name: String,
-    pub context_window: Option<i64>,
-    pub max_output_tokens: Option<i64>,
-    pub max_turns: Option<i64>,
-    pub temperature: Option<f64>,
-    pub reasoning_effort: Option<String>,
-    pub stream_batch_ms: Option<i64>,
-    pub stream_liveness_timeout_secs: Option<i64>,
-    pub deadline_duration_secs: Option<i64>,
+    pub document: gents::InferenceProfile,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolSelectionSaveRequest {
-    pub agent_did: String,
-    pub selection_id: String,
-    pub display_name: String,
-    pub enable_file_tools: Option<bool>,
-    pub file_tools_mode: Option<String>,
-    pub file_tool_root: Option<String>,
-    pub enable_bash: Option<bool>,
-    pub bash_mode: Option<String>,
-    #[serde(default)]
-    pub command_execution_policy: Option<String>,
-    #[serde(default)]
-    pub command_allowed_argv_prefixes: Vec<String>,
-    #[serde(default)]
-    pub command_forbidden_argv_prefixes: Vec<String>,
-    #[serde(default)]
-    pub command_network_mode: Option<String>,
-    pub cli_tool_names: Vec<String>,
-    pub enable_meta_tools: Option<bool>,
-    #[serde(default, deserialize_with = "deserialize_present_option")]
-    #[ts(type = "boolean | null", optional)]
-    pub enable_goal_tools: Option<Option<bool>>,
-    #[serde(default, deserialize_with = "deserialize_present_option")]
-    #[ts(type = "boolean | null", optional)]
-    pub enable_goal_creation: Option<Option<bool>>,
-    #[serde(default)]
-    pub allowed_mcp_service_ids: Vec<String>,
-    #[serde(default)]
-    pub required_mcp_service_ids: Vec<String>,
-    #[serde(default)]
-    pub backgroundable_tool_names: Vec<String>,
-    #[serde(default)]
-    pub subagent_targets: Vec<String>,
-    pub subagent_spawn_enabled: Option<bool>,
-    pub subagent_steering_enabled: Option<bool>,
-    pub subagent_background_enabled: Option<bool>,
-    pub subagent_allow_cross_deployment: Option<bool>,
-    pub cross_deployment_spawn_timeout_seconds: Option<i64>,
-    pub enable_memory: Option<bool>,
-    #[serde(default)]
-    pub enable_session_history_tool: Option<bool>,
-    #[serde(default)]
-    pub enable_context_budget: Option<bool>,
-    #[serde(default)]
-    pub enable_defra_query: Option<bool>,
-    /// Editable query allowlist. `None` = field absent → preserve the stored
-    /// value (so a save that doesn't touch it can't wipe it); `Some(list)` sets
-    /// it (empty list clears). This is the field whose silent revert was the SP2
-    /// data-loss bug.
-    #[serde(default)]
-    pub defra_query_collections: Option<Vec<String>>,
-    #[serde(default)]
-    pub subagent_default_await_mode: Option<String>,
+#[serde(deny_unknown_fields)]
+pub struct ToolsSaveRequest {
+    pub document: gents::Tools,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct ToolServiceSaveRequest {
-    pub service_id: String,
-    pub display_name: String,
-    pub description: Option<String>,
-    pub hostname: Option<String>,
-    pub tailscale_ip: Option<String>,
-    pub lan_ip: Option<String>,
-    pub mcp_port: Option<i64>,
-    pub mcp_path: Option<String>,
-    pub status: Option<String>,
+    pub document: gents::document_config::ToolServiceRegistry,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -274,35 +176,16 @@ pub struct ToolServiceTestRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct TaskSaveRequest {
-    pub task_id: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub behavior_id: String,
-    pub prompt_template: String,
-    #[serde(default, deserialize_with = "deserialize_present_option")]
-    #[ts(type = "string | null", optional)]
-    pub goal_objective_template: Option<Option<String>>,
-    #[serde(default, deserialize_with = "deserialize_present_option")]
-    #[ts(type = "number | null", optional)]
-    pub goal_token_budget: Option<Option<i64>>,
-    pub enabled: Option<bool>,
-    pub output_schema_ref: Option<String>,
+    pub document: gents::document_config::Task,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct SkillSaveRequest {
-    pub skill_id: String,
-    pub agent_did: String,
-    pub scope: String,
-    pub name: String,
-    pub description: Option<String>,
-    pub instructions: String,
-    #[serde(default)]
-    pub tool_refs: Vec<String>,
-    pub display_name: Option<String>,
-    pub enabled: Option<bool>,
+    pub document: gents::document_config::SkillDocument,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -315,15 +198,9 @@ pub struct TaskRunRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct ScheduleSaveRequest {
-    pub schedule_id: String,
-    pub task_id: String,
-    pub interval_secs: Option<i64>,
-    pub cron: Option<String>,
-    pub timezone: Option<String>,
-    pub missed_run_policy: Option<String>,
-    pub enabled: Option<bool>,
-    pub concurrency: Option<String>,
+    pub document: gents::document_config::Schedule,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -334,14 +211,9 @@ pub struct ScheduleRunRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
 pub struct EventTriggerSaveRequest {
-    pub trigger_id: String,
-    pub task_id: String,
-    pub source_collection: String,
-    pub event_kind: String,
-    pub filter: Option<String>,
-    pub enabled: Option<bool>,
-    pub concurrency: Option<String>,
+    pub document: gents::document_config::Trigger,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -383,22 +255,6 @@ pub struct DesktopPreviewInterruptCascadeRequest {
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct DesktopListHoldsRequest {
-    pub agent_did: String,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct DesktopResolveHoldRequest {
-    pub agent_did: String,
-    pub tool_call_id: String,
-    pub approve: bool,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct DesktopInterruptRequest {
     pub request_id: String,
     #[serde(default)]
@@ -419,7 +275,7 @@ pub struct DesktopProbeMcpServiceRequest {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::*;
 
@@ -438,88 +294,41 @@ mod tests {
         }};
     }
 
-    fn tool_selection_request() -> Value {
-        json!({
-            "agentDid": "did:test:agent",
-            "selectionId": "tools",
-            "displayName": "Tools",
-            "enableFileTools": false,
-            "fileToolsMode": "ReadOnly",
-            "fileToolRoot": null,
-            "enableBash": false,
-            "bashMode": "ReadOnly",
-            "cliToolNames": [],
-            "enableMetaTools": false,
-            "delegateTo": [],
-            "subagentSpawnEnabled": false,
-            "subagentSteeringEnabled": false,
-            "subagentBackgroundEnabled": false,
-            "subagentAllowCrossDeployment": false,
-            "crossDeploymentSpawnTimeoutSeconds": null,
-            "enableMemory": false
-        })
-    }
-
-    fn task_request() -> Value {
-        json!({
-            "taskId": "task-a",
-            "name": "Task A",
-            "description": null,
-            "behaviorId": "default",
-            "promptTemplate": "Do work",
-            "enabled": true,
-            "outputSchemaRef": null
-        })
+    #[test]
+    fn tool_goal_capabilities_use_canonical_optional_group() {
+        let omitted: ToolsSaveRequest =
+            serde_json::from_value(json!({"document":{"agent_did":"owner","tools_id":"tools"}}))
+                .unwrap();
+        assert!(omitted.document.built_ins.is_none());
+        let explicit: ToolsSaveRequest = serde_json::from_value(json!({"document":{"agent_did":"owner","tools_id":"tools","built_ins":{"enable_goal_tools":true,"enable_goal_creation":false}}})).unwrap();
+        let built_ins = explicit.document.built_ins.unwrap();
+        assert_eq!(built_ins.enable_goal_tools, Some(true));
+        assert_eq!(built_ins.enable_goal_creation, Some(false));
+        let explicit_null: ToolsSaveRequest = serde_json::from_value(
+            json!({"document":{"agent_did":"owner","tools_id":"tools","built_ins":null}}),
+        )
+        .unwrap();
+        assert!(explicit_null.document.built_ins.is_none());
     }
 
     #[test]
-    fn tool_goal_capabilities_distinguish_omitted_null_and_value() {
-        let omitted: ToolSelectionSaveRequest =
-            serde_json::from_value(tool_selection_request()).expect("omitted request");
-        assert_eq!(omitted.enable_goal_tools, None);
-        assert_eq!(omitted.enable_goal_creation, None);
-
-        let mut explicit_null = tool_selection_request();
-        explicit_null["enableGoalTools"] = Value::Null;
-        explicit_null["enableGoalCreation"] = Value::Null;
-        let explicit_null: ToolSelectionSaveRequest =
-            serde_json::from_value(explicit_null).expect("explicit-null request");
-        assert_eq!(explicit_null.enable_goal_tools, Some(None));
-        assert_eq!(explicit_null.enable_goal_creation, Some(None));
-
-        let mut explicit = tool_selection_request();
-        explicit["enableGoalTools"] = Value::Bool(true);
-        explicit["enableGoalCreation"] = Value::Bool(false);
-        let explicit: ToolSelectionSaveRequest =
-            serde_json::from_value(explicit).expect("explicit request");
-        assert_eq!(explicit.enable_goal_tools, Some(Some(true)));
-        assert_eq!(explicit.enable_goal_creation, Some(Some(false)));
-    }
-
-    #[test]
-    fn task_goal_fields_distinguish_omitted_null_and_value() {
-        let omitted: TaskSaveRequest =
-            serde_json::from_value(task_request()).expect("omitted request");
-        assert_eq!(omitted.goal_objective_template, None);
-        assert_eq!(omitted.goal_token_budget, None);
-
-        let mut explicit_null = task_request();
-        explicit_null["goalObjectiveTemplate"] = Value::Null;
-        explicit_null["goalTokenBudget"] = Value::Null;
-        let explicit_null: TaskSaveRequest =
-            serde_json::from_value(explicit_null).expect("explicit-null request");
-        assert_eq!(explicit_null.goal_objective_template, Some(None));
-        assert_eq!(explicit_null.goal_token_budget, Some(None));
-
-        let mut explicit = task_request();
-        explicit["goalObjectiveTemplate"] = Value::String("Finish work".to_string());
-        explicit["goalTokenBudget"] = Value::Number(10_000.into());
-        let explicit: TaskSaveRequest = serde_json::from_value(explicit).expect("explicit request");
+    fn task_goal_fields_use_canonical_replacement_optionality() {
+        let mut value = json!({"document":{"agent_did":"owner","task_id":"task","behavior_id":"behavior","prompt_template":"Do work"}});
+        let omitted: TaskSaveRequest = serde_json::from_value(value.clone()).unwrap();
+        assert!(omitted.document.goal_objective_template.is_none());
+        value["document"]["goal_objective_template"] = Value::Null;
+        value["document"]["goal_token_budget"] = Value::Null;
+        let cleared: TaskSaveRequest = serde_json::from_value(value.clone()).unwrap();
+        assert!(cleared.document.goal_objective_template.is_none());
+        assert!(cleared.document.goal_token_budget.is_none());
+        value["document"]["goal_objective_template"] = json!("Finish work");
+        value["document"]["goal_token_budget"] = json!(10000);
+        let explicit: TaskSaveRequest = serde_json::from_value(value).unwrap();
         assert_eq!(
-            explicit.goal_objective_template,
-            Some(Some("Finish work".to_string()))
+            explicit.document.goal_objective_template.as_deref(),
+            Some("Finish work")
         );
-        assert_eq!(explicit.goal_token_budget, Some(Some(10_000)));
+        assert_eq!(explicit.document.goal_token_budget, Some(10000));
     }
 
     #[test]
@@ -551,9 +360,9 @@ mod tests {
             "profile-a"
         );
         assert_source_routed_delete_request!(
-            ToolSelectionDeleteRequest,
-            "selectionId",
-            selection_id,
+            ToolsDeleteRequest,
+            "toolsId",
+            tools_id,
             "selection-a"
         );
         assert_source_routed_delete_request!(
@@ -568,5 +377,190 @@ mod tests {
             behavior_id,
             "behavior-a"
         );
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct EventSourceSaveRequest {
+    pub document: gents::document_config::EventSource,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct EventSourceDeleteRequest {
+    pub event_source_id: String,
+    pub agent_did: String,
+}
+
+/// Atomic component edits for an existing principal, not pack installation.
+/// Supply agent_principal with only agent_did/default-valued fields. Principal
+/// settings use AgentConfigSaveRequest. Omitted documents remain untouched;
+/// graph_intents/graph_capabilities are rejected, not compiled or ignored.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct ConfigComponentsApplyRequest {
+    pub document: gents::document_config::PackConfig,
+}
+
+/// Existing-document edits only. Canonical patch admission protects identities;
+/// omitted values remain unchanged, including redacted credentials. All edits
+/// are validated and committed together. No implicit creation or removal.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct ConfigComponentsPatchRequest {
+    pub agent_did: String,
+    pub patches: Vec<ConfigComponentPatch>,
+}
+
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(tag = "collection")]
+#[serde(deny_unknown_fields)]
+pub enum ConfigComponentPatch {
+    AgentBehavior {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./AgentBehavior.js\").AgentBehavior, \"agent_did\" | \"behavior_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    AgentContext {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./AgentContext.js\").AgentContext, \"agent_did\" | \"context_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    Compaction {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./CompactionConfig.js\").CompactionConfig, \"agent_did\" | \"compaction_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    Tools {
+        id: String,
+        #[ts(type = "Partial<Omit<import(\"./Tools.js\").Tools, \"agent_did\" | \"tools_id\">>")]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    InferenceProfile {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./InferenceProfile.js\").InferenceProfile, \"agent_did\" | \"profile_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    InferenceSampling {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./InferenceSampling.js\").InferenceSampling, \"agent_did\" | \"sampling_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    InferenceExecution {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./InferenceExecution.js\").InferenceExecution, \"agent_did\" | \"execution_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    InferenceRetryPolicy {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./InferenceRetryPolicy.js\").InferenceRetryPolicy, \"agent_did\" | \"retry_policy_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    InferenceBackend {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./InferenceBackend.js\").InferenceBackend, \"agent_did\" | \"backend_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    ToolServiceRegistry {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./ToolServiceRegistry.js\").ToolServiceRegistry, \"agent_did\" | \"service_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    Task {
+        id: String,
+        #[ts(type = "Partial<Omit<import(\"./Task.js\").Task, \"agent_did\" | \"task_id\">>")]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    Schedule {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./Schedule.js\").Schedule, \"agent_did\" | \"schedule_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    Trigger {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./Trigger.js\").Trigger, \"agent_did\" | \"trigger_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+    EventSource {
+        id: String,
+        #[ts(
+            type = "Partial<Omit<import(\"./EventSource.js\").EventSource, \"agent_did\" | \"event_source_id\">>"
+        )]
+        changes: serde_json::Map<String, serde_json::Value>,
+    },
+}
+
+impl ConfigComponentPatch {
+    pub(crate) fn into_patch(
+        self,
+    ) -> (
+        gents::config_client::patch::SelfConfigTarget,
+        String,
+        gents::config_client::patch::SelfConfigPatch,
+    ) {
+        use gents::config_client::patch::SelfConfigTarget;
+        let (target, id, changes) = match self {
+            Self::AgentBehavior { id, changes } => (SelfConfigTarget::AgentBehavior, id, changes),
+            Self::AgentContext { id, changes } => (SelfConfigTarget::AgentContext, id, changes),
+            Self::Compaction { id, changes } => (SelfConfigTarget::Compaction, id, changes),
+            Self::Tools { id, changes } => (SelfConfigTarget::Tools, id, changes),
+            Self::InferenceProfile { id, changes } => {
+                (SelfConfigTarget::InferenceProfile, id, changes)
+            }
+            Self::InferenceSampling { id, changes } => {
+                (SelfConfigTarget::InferenceSampling, id, changes)
+            }
+            Self::InferenceExecution { id, changes } => {
+                (SelfConfigTarget::InferenceExecution, id, changes)
+            }
+            Self::InferenceRetryPolicy { id, changes } => {
+                (SelfConfigTarget::InferenceRetryPolicy, id, changes)
+            }
+            Self::InferenceBackend { id, changes } => {
+                (SelfConfigTarget::InferenceBackend, id, changes)
+            }
+            Self::ToolServiceRegistry { id, changes } => {
+                (SelfConfigTarget::ToolServiceRegistry, id, changes)
+            }
+            Self::Task { id, changes } => (SelfConfigTarget::Task, id, changes),
+            Self::Schedule { id, changes } => (SelfConfigTarget::Schedule, id, changes),
+            Self::Trigger { id, changes } => (SelfConfigTarget::Trigger, id, changes),
+            Self::EventSource { id, changes } => (SelfConfigTarget::EventSource, id, changes),
+        };
+        (
+            target,
+            id,
+            changes
+                .into_iter()
+                .map(|(field, value)| (field, Some(value)))
+                .collect(),
+        )
     }
 }

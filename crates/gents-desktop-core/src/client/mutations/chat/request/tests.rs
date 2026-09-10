@@ -888,7 +888,7 @@ async fn latest_request_id_for_session_for_test(
                         limit: 1
                     ) {{
                         _docID request_id agent_did behavior_id session_id content
-                        temperature top_p top_k seed max_tokens max_total_tokens metadata
+                        input max_total_tokens
                         lifecycle_state backend_id execution_origin retry_root_request
                         retry_parent_request retry_parent_request_doc_id retry_count max_retries
                     }}
@@ -1238,22 +1238,6 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
         core.node(),
         &create.graphql_mutation().map_err(anyhow::Error::msg)?,
         "test.seed_typed_retry_parent",
-    )
-    .await?;
-    // Explicitly seed the canonical nested input through the shared renderer.
-    // It is already included in the parent's signed semantics above. This test
-    // exercises retry preservation, not the submit-options transport adapter.
-    let input =
-        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(&original_input)?)?;
-    let escaped_request_id = escape_graphql_string(&request_id);
-    execute_mutation(
-        core.node(),
-        &format!(
-            r#"mutation {{ update_AgentRequest(
-        filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, input: {{ input: {input} }}
-    ) {{ _docID }} }}"#
-        ),
-        "test.seed_typed_retry_input",
     )
     .await?;
     let original = SubmittedRequest {

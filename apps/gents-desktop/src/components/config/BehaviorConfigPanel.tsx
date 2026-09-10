@@ -1,36 +1,24 @@
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
-
 import type {
+  AgentBehavior,
+  AgentContext,
+  AgentPrincipal,
+  CompactionConfig,
   AgentConfigSaveRequest,
   BehaviorDeleteRequest,
-  BehaviorSaveRequest,
   BehaviorView,
+  ConfigComponentsApplyRequest,
   DeploymentView,
   DesktopApiAdapter,
-  InferenceBackendView,
-  InferenceProfileView,
+  InferenceProfile,
   SkillView,
-  ToolSelectionView,
+  Tools,
 } from "@source-inc/gents-desktop-client";
-import { BehaviorToolSurface } from "./BehaviorToolSurface";
 import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
-import { isDirty } from "./configDirty";
-import {
-  ConfigDocumentList,
-  EditorStatusChip,
-  FieldHint,
-  PlusIcon,
-} from "./ConfigChrome";
-import {
-  boolText,
-  isOptionalFloat,
-  optionalString,
-  parseOptionalFloat,
-} from "./formUtils";
-
-const DEFAULT_COMPACTION_STRATEGY = "StripThenSummarize";
-const DEFAULT_COMPACTION_THRESHOLD = "0.75";
+import { BehaviorToolSurface } from "./BehaviorToolSurface";
+import { ConfigDocumentList, ConfigEditorHeader, FieldHint } from "./ConfigChrome";
+import { isOptionalFloat, parseOptionalFloat } from "./formUtils";
 
 export type BehaviorConfigPanelProps = {
   api: DesktopApiAdapter;
@@ -40,16 +28,14 @@ export type BehaviorConfigPanelProps = {
   savedStatus: string | null;
   onSavedStatusChange: (value: string) => void;
   onCreateBehavior: () => void;
-  onCreateBackend: () => void;
   onCreateProfile: () => void;
-  onCreateToolSelection: () => void;
-  onSelectBehavior: (behaviorId: string) => void;
+  onCreateTools: () => void;
+  onSelectBehavior: (id: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
-  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onApplyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<unknown>;
   onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
   onDeletedBehavior: () => void;
 };
-
 export function BehaviorConfigPanel({
   api,
   deployment,
@@ -58,547 +44,488 @@ export function BehaviorConfigPanel({
   savedStatus,
   onSavedStatusChange,
   onCreateBehavior,
-  onCreateBackend,
   onCreateProfile,
-  onCreateToolSelection,
+  onCreateTools,
   onSelectBehavior,
   onSaveAgentConfig,
-  onSaveBehaviorConfig,
+  onApplyConfigComponents,
   onDeleteBehaviorConfig,
   onDeletedBehavior,
 }: BehaviorConfigPanelProps) {
+  const config =
+    deployment.behaviorConfigs.find(
+      (entry) => entry.behavior_id === selectedBehavior?.behaviorId,
+    ) ?? null;
+  if (selectedBehavior && !config)
+    return <FieldHint show>Behavior configuration is not available.</FieldHint>;
   return (
     <section className="config-layout">
       <ConfigDocumentList
-        eyebrow="Documents"
-        items={deployment.behaviors.map((behavior) => ({
-          id: behavior.behaviorId,
-          title: behavior.behaviorId,
-          meta: behavior.isDefault ? "default" : boolText(behavior.enabled),
+        eyebrow="Behaviors"
+        title="Agent behaviors"
+        items={deployment.behaviorConfigs.map((entry) => ({
+          id: entry.behavior_id,
+          title: entry.display_name ?? entry.behavior_id,
+          meta:
+            deployment.agentPrincipal.defaultBehaviorId === entry.behavior_id
+              ? "default"
+              : entry.enabled === false
+                ? "disabled"
+                : "enabled",
         }))}
         selectedId={selectedBehavior?.behaviorId ?? null}
         testPrefix="behavior"
-        title="Agent Behaviors"
         onCreate={onCreateBehavior}
         onSelect={onSelectBehavior}
       />
-
       <BehaviorConfigEditor
         api={api}
-        agentDisplayName={
-          deployment.agentPrincipal.displayName ?? deployment.label ?? "Agent"
-        }
         agentDid={deployment.agentDid}
-        agentEnabled={deployment.agentPrincipal.enabled ?? true}
-        behavior={selectedBehavior}
-        currentDefaultBehaviorId={deployment.agentPrincipal.defaultBehaviorId ?? null}
-        inferenceBackends={deployment.inferenceBackends}
+        principal={deployment.principalConfig}
+        behavior={config}
+        contexts={deployment.contexts}
+        compactions={deployment.compactions}
         inferenceProfiles={deployment.inferenceProfiles}
-        savedStatus={savedStatus}
-        saving={saving}
+        tools={deployment.tools}
         skills={deployment.skills}
-        toolSelections={deployment.toolSelections}
-        onCreateBackend={onCreateBackend}
+        saving={saving}
+        savedStatus={savedStatus}
         onCreateProfile={onCreateProfile}
-        onCreateToolSelection={onCreateToolSelection}
-        onSaved={(behaviorId) => {
-          onSelectBehavior(behaviorId);
-          onSavedStatusChange(`behavior:${behaviorId}`);
-        }}
+        onCreateTools={onCreateTools}
         onSaveAgentConfig={onSaveAgentConfig}
-        onSaveBehaviorConfig={onSaveBehaviorConfig}
+        onApplyConfigComponents={onApplyConfigComponents}
         onDeleteBehaviorConfig={onDeleteBehaviorConfig}
-        onDeleted={() => {
-          onDeletedBehavior();
+        onDeleted={onDeletedBehavior}
+        onSaved={(id) => {
+          onSelectBehavior(id);
+          onSavedStatusChange(`behavior:${id}`);
         }}
       />
     </section>
   );
 }
-
 export type BehaviorConfigEditorProps = {
   api: DesktopApiAdapter;
-  agentDisplayName: string;
   agentDid: string;
-  agentEnabled: boolean;
-  behavior: BehaviorView | null;
-  currentDefaultBehaviorId: string | null;
-  inferenceBackends: InferenceBackendView[];
-  inferenceProfiles: InferenceProfileView[];
+  principal: AgentPrincipal | null;
+  behavior: AgentBehavior | null;
+  contexts: AgentContext[];
+  compactions: CompactionConfig[];
+  inferenceProfiles: InferenceProfile[];
+  tools: Tools[];
   skills: SkillView[];
-  toolSelections: ToolSelectionView[];
   saving: boolean;
   savedStatus: string | null;
-  onCreateBackend: () => void;
   onCreateProfile: () => void;
-  onCreateToolSelection: () => void;
-  onSaved: (behaviorId: string) => void;
+  onCreateTools: () => void;
+  onSaved: (id: string) => void;
   onSaveAgentConfig: (request: AgentConfigSaveRequest) => Promise<unknown>;
-  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onApplyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<unknown>;
   onDeleteBehaviorConfig: (request: BehaviorDeleteRequest) => Promise<unknown>;
   onDeleted: () => void;
 };
-
 export function BehaviorConfigEditor({
   api,
-  agentDisplayName,
   agentDid,
-  agentEnabled,
+  principal,
   behavior,
-  currentDefaultBehaviorId,
-  inferenceBackends,
+  contexts,
+  compactions,
   inferenceProfiles,
-  skills = [],
-  toolSelections,
+  tools,
+  skills,
   saving,
   savedStatus,
-  onCreateBackend,
   onCreateProfile,
-  onCreateToolSelection,
+  onCreateTools,
   onSaved,
   onSaveAgentConfig,
-  onSaveBehaviorConfig,
+  onApplyConfigComponents,
   onDeleteBehaviorConfig,
   onDeleted,
 }: BehaviorConfigEditorProps) {
   const [behaviorId, setBehaviorId] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState("");
-  const [backendId, setBackendId] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [profileId, setProfileId] = useState("");
-  const [toolSelectionId, setToolSelectionId] = useState("");
-  const [compactionStrategy, setCompactionStrategy] = useState(
-    DEFAULT_COMPACTION_STRATEGY,
-  );
-  const [compactionThreshold, setCompactionThreshold] = useState(
-    DEFAULT_COMPACTION_THRESHOLD,
-  );
+  const [contextId, setContextId] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [toolsId, setToolsId] = useState("");
+  const [compactionId, setCompactionId] = useState("");
+  const [strategy, setStrategy] =
+    useState<CompactionConfig["strategy"]>("StripThenSummarize");
+  const [threshold, setThreshold] = useState("");
+  const [skillIds, setSkillIds] = useState<string[]>([]);
   const [enabled, setEnabled] = useState(true);
   const [defaultForAgent, setDefaultForAgent] = useState(false);
-  const [skillRefs, setSkillRefs] = useState<string[]>([]);
-  const [skillExcludes, setSkillExcludes] = useState<string[]>([]);
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-
-  async function deleteBehavior() {
-    setConfirmingDelete(false);
-    if (!behavior) {
-      return;
-    }
-    try {
-      await onDeleteBehaviorConfig({ behaviorId: behavior.behaviorId, agentDid });
-      onDeleted();
-    } catch {}
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  function loadCompaction(id: string) {
+    const selected = compactions.find((entry) => entry.compaction_id === id);
+    setCompactionId(id);
+    setStrategy(selected?.strategy ?? "StripThenSummarize");
+    setThreshold(selected?.threshold == null ? "" : String(selected.threshold));
   }
-
+  function loadContext(id: string) {
+    const selected = contexts.find((entry) => entry.context_id === id);
+    setContextId(id);
+    setSystemPrompt(selected?.system_prompt ?? "");
+    setToolsId(selected?.tools_id ?? "");
+    setSkillIds(selected?.skill_ids ?? []);
+    loadCompaction(selected?.compaction_id ?? "");
+  }
   useEffect(() => {
-    const base = behaviorFormValues(behavior);
-    setBehaviorId(base.behaviorId);
-    setSystemPrompt(base.systemPrompt);
-    setBackendId(base.backendId);
-    setProfileId(base.profileId);
-    setToolSelectionId(base.toolSelectionId);
-    setCompactionStrategy(base.compactionStrategy);
-    setCompactionThreshold(base.compactionThreshold);
-    setEnabled(base.enabled);
-    setDefaultForAgent(base.defaultForAgent);
-    setSkillRefs(base.skillRefs);
-    setSkillExcludes(base.skillExcludes);
-    setSaveError(null);
-  }, [behavior?.behaviorId]);
-
-  const profileBindingExists = inferenceProfiles.some(
-    (profile) => profile.profileId === profileId,
-  );
-
-  const behaviorScopedSkills = skills.filter((skill) => skill.scope === "behavior");
-  const principalScopedSkills = skills.filter((skill) => skill.scope === "principal");
-
-  function toggleSkillRef(skillId: string, checked: boolean) {
-    setSkillRefs((current) =>
-      checked
-        ? Array.from(new Set([...current, skillId]))
-        : current.filter((id) => id !== skillId),
+    setBehaviorId(behavior?.behavior_id ?? "");
+    setDisplayName(behavior?.display_name ?? "");
+    setProfileId(behavior?.inference_profile_id ?? "");
+    setEnabled(behavior?.enabled ?? true);
+    setDefaultForAgent(
+      Boolean(behavior && principal?.default_behavior_id === behavior.behavior_id),
     );
-  }
-
-  function toggleSkillExclude(skillId: string, excluded: boolean) {
-    setSkillExcludes((current) =>
-      excluded
-        ? Array.from(new Set([...current, skillId]))
-        : current.filter((id) => id !== skillId),
-    );
-  }
-
-  const selectedBackend = inferenceBackends.find(
-    (backend) => backend.backendId === backendId,
+    loadContext(behavior?.context_id ?? "");
+    setError(null);
+  }, [behavior?.behavior_id, agentDid]);
+  const context = contexts.find((entry) => entry.context_id === contextId);
+  const compaction = compactions.find((entry) => entry.compaction_id === compactionId);
+  const profile = inferenceProfiles.find((entry) => entry.profile_id === profileId);
+  const originalContext = contexts.find(
+    (entry) => entry.context_id === behavior?.context_id,
   );
-  const backendModels = selectedBackend?.models.filter(Boolean) ?? [];
-  const resolvedModel = backendModels.length
-    ? backendModels.join(", ")
-    : selectedBackend
-      ? "No models configured"
-      : "Select a backend";
-  const promptRows = Math.min(
-    28,
-    Math.max(14, systemPrompt.split("\n").length + Math.ceil(systemPrompt.length / 90)),
+  const originalCompaction = compactions.find(
+    (entry) => entry.compaction_id === originalContext?.compaction_id,
   );
-  const compactionThresholdValid = isOptionalFloat(compactionThreshold, {
-    min: 0,
-    max: 1,
-  });
-
-  const base = behaviorFormValues(behavior);
-  const dirty = isDirty(
-    {
-      behaviorId,
-      systemPrompt,
-      backendId,
-      profileId,
-      toolSelectionId,
-      compactionStrategy,
-      compactionThreshold,
-      enabled,
-      defaultForAgent,
-      skillRefs: [...skillRefs].sort(),
-      skillExcludes: [...skillExcludes].sort(),
-    },
-    {
-      ...base,
-      profileId: base.profileId,
-      skillRefs: [...base.skillRefs].sort(),
-      skillExcludes: [...base.skillExcludes].sort(),
-    },
-  );
-
-  async function submitBehavior(event: FormEvent) {
+  const dirty =
+    behaviorId !== (behavior?.behavior_id ?? "") ||
+    displayName !== (behavior?.display_name ?? "") ||
+    profileId !== (behavior?.inference_profile_id ?? "") ||
+    contextId !== (behavior?.context_id ?? "") ||
+    systemPrompt !== (originalContext?.system_prompt ?? "") ||
+    toolsId !== (originalContext?.tools_id ?? "") ||
+    compactionId !== (originalContext?.compaction_id ?? "") ||
+    strategy !== (originalCompaction?.strategy ?? "StripThenSummarize") ||
+    threshold !==
+      (originalCompaction?.threshold == null
+        ? ""
+        : String(originalCompaction.threshold)) ||
+    enabled !== (behavior?.enabled ?? true) ||
+    defaultForAgent !==
+      Boolean(behavior && principal?.default_behavior_id === behavior.behavior_id) ||
+    JSON.stringify([...skillIds].sort()) !==
+      JSON.stringify([...(originalContext?.skill_ids ?? [])].sort());
+  const thresholdValid = isOptionalFloat(threshold, { min: 0, max: 1 });
+  async function save(event: FormEvent) {
     event.preventDefault();
-    const nextId = behaviorId.trim();
+    setError(null);
+    const id = behavior?.behavior_id ?? behaviorId;
     try {
-      await onSaveBehaviorConfig({
-        agentDid,
-        behaviorId: nextId,
-        displayName: nextId,
-        systemPrompt,
-        backendId: optionalString(backendId),
-        inferenceProfileId: profileId,
-        toolSelectionId: optionalString(toolSelectionId),
-        compactionStrategy: optionalString(compactionStrategy),
-        compactionThreshold: parseOptionalFloat(compactionThreshold),
-        enabled,
-        skillRefs,
-        skillExcludes,
+      if (!contextId && (systemPrompt || toolsId || compactionId || skillIds.length))
+        throw new Error(
+          "Choose a context ID to configure prompt, tools, skills, or compaction.",
+        );
+      if (!compactionId && (threshold || strategy !== "StripThenSummarize"))
+        throw new Error("Choose a compaction ID to configure compaction settings.");
+      if (!principal) throw new Error("Principal configuration is not available.");
+      await onApplyConfigComponents({
+        document: {
+          agent_principal: { agent_did: agentDid },
+          agent_behaviors: [
+            {
+              ...behavior,
+              agent_did: agentDid,
+              behavior_id: id,
+              display_name: displayName || null,
+              context_id: contextId || null,
+              inference_profile_id: profileId,
+              enabled,
+            },
+          ],
+          contexts: contextId
+            ? [
+                {
+                  ...context,
+                  agent_did: agentDid,
+                  context_id: contextId,
+                  system_prompt: systemPrompt || null,
+                  tools_id: toolsId || null,
+                  compaction_id: compactionId || null,
+                  skill_ids: skillIds,
+                },
+              ]
+            : [],
+          compactions: compactionId
+            ? [
+                {
+                  ...compaction,
+                  agent_did: agentDid,
+                  compaction_id: compactionId,
+                  strategy,
+                  threshold: parseOptionalFloat(threshold),
+                },
+              ]
+            : [],
+        },
       });
-      if (defaultForAgent && nextId !== currentDefaultBehaviorId) {
+      const defaultId = defaultForAgent
+        ? id
+        : principal.default_behavior_id === id
+          ? null
+          : principal.default_behavior_id;
+      if (defaultId !== principal.default_behavior_id)
         await onSaveAgentConfig({
-          agentDid,
-          displayName: agentDisplayName,
-          defaultBehaviorId: nextId,
-          enabled: agentEnabled,
+          document: { ...principal, default_behavior_id: defaultId },
         });
-      }
-      onSaved(nextId);
-      setSaveError(null);
-    } catch (error) {
-      setSaveError(error instanceof Error ? error.message : String(error));
+      onSaved(id);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
     }
   }
-
+  const selectedKnown = new Set(
+    skills.filter((skill) => skill.agentDid === agentDid).map((skill) => skill.skillId),
+  );
   return (
-    <form
-      className="panel config-editor behavior-config-editor"
-      onSubmit={submitBehavior}
-    >
-      <div className="panel-header behavior-config-header">
-        <div>
-          <p className="eyebrow">Behavior</p>
-          <div className="behavior-key-row">
-            {!behavior ? (
-              <input
-                className="behavior-key-input"
-                data-testid="behavior-id"
-                onChange={(event) => setBehaviorId(event.currentTarget.value)}
-                value={behaviorId}
-              />
-            ) : (
-              <h3>{behaviorId || "New Behavior"}</h3>
-            )}
-          </div>
-        </div>
-        <EditorStatusChip
-          dirty={dirty}
-          saved={savedStatus === `behavior:${behaviorId.trim()}`}
+    <form className="panel config-editor behavior-config-editor" onSubmit={save}>
+      <ConfigEditorHeader
+        eyebrow="Behavior"
+        title={displayName || behaviorId || "New behavior"}
+        saved={savedStatus === `behavior:${behaviorId}`}
+        dirty={dirty}
+      />
+      {error ? <FieldHint show>{error}</FieldHint> : null}
+      <div className="grid-2">
+        <label className="field">
+          <span>Behavior ID</span>
+          <input
+            data-testid="behavior-id"
+            readOnly={Boolean(behavior)}
+            value={behaviorId}
+            onChange={(event) => {
+              if (!behavior) setBehaviorId(event.currentTarget.value);
+            }}
+          />
+        </label>
+        <label className="field">
+          <span>Display name</span>
+          <input
+            data-testid="behavior-display-name"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.currentTarget.value)}
+          />
+        </label>
+      </div>
+      <label className="field">
+        <span>Inference profile</span>
+        <select
+          data-testid="behavior-profile-id"
+          value={profileId}
+          onChange={(event) => setProfileId(event.currentTarget.value)}
+        >
+          <option value="">Select a profile</option>
+          {profileId && !profile ? (
+            <option value={profileId}>{profileId} (unavailable)</option>
+          ) : null}
+          {inferenceProfiles.map((entry) => (
+            <option key={entry.profile_id} value={entry.profile_id}>
+              {entry.display_name ?? entry.profile_id}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          data-testid="behavior-create-profile"
+          onClick={onCreateProfile}
+        >
+          Create inference profile
+        </button>
+        <span>
+          {profile
+            ? `${profile.backend_id} · ${profile.model_name}`
+            : "Select a configured inference profile."}
+        </span>
+      </label>
+      <label className="field">
+        <span>Context ID</span>
+        <input
+          data-testid="behavior-context-id"
+          value={contextId}
+          onChange={(event) => loadContext(event.currentTarget.value)}
         />
-      </div>
-      {saveError ? <FieldHint show>Save failed: {saveError}</FieldHint> : null}
-
-      <div className="behavior-link-grid">
-        <label className="field behavior-link-field">
-          <span>Backend</span>
-          <div className="behavior-link-control">
-            <select
-              data-testid="behavior-backend-id"
-              onChange={(event) => setBackendId(event.currentTarget.value)}
-              value={backendId}
-            >
-              <option value="">Unset</option>
-              {inferenceBackends.map((backend) => (
-                <option key={backend.backendId} value={backend.backendId}>
-                  {backend.name ?? backend.backendId}
-                </option>
-              ))}
-            </select>
-            <button
-              aria-label="Create backend"
-              className="ghost-button config-icon-button"
-              data-testid="behavior-create-backend"
-              onClick={onCreateBackend}
-              title="Create backend"
-              type="button"
-            >
-              <PlusIcon />
-            </button>
-          </div>
-        </label>
-        <label className="field behavior-link-field">
-          <span>Profile</span>
-          <div className="behavior-link-control">
-            <select
-              data-testid="behavior-profile-id"
-              onChange={(event) => setProfileId(event.currentTarget.value)}
-              value={profileId}
-            >
-              {!profileId ? <option value="">Select a profile</option> : null}
-              {profileId && !profileBindingExists ? (
-                <option disabled value={profileId}>
-                  {profileId} (unavailable)
-                </option>
-              ) : null}
-              {inferenceProfiles.map((profile) => (
-                <option key={profile.profileId} value={profile.profileId}>
-                  {profile.displayName ?? profile.profileId}
-                </option>
-              ))}
-            </select>
-            <button
-              aria-label="Create inference profile"
-              className="ghost-button config-icon-button"
-              data-testid="behavior-create-profile"
-              onClick={onCreateProfile}
-              title="Create inference profile"
-              type="button"
-            >
-              <PlusIcon />
-            </button>
-          </div>
-        </label>
-        <label className="field behavior-link-field">
-          <span>Tool selection</span>
-          <div className="behavior-link-control">
-            <select
-              data-testid="behavior-tool-selection-id"
-              onChange={(event) => setToolSelectionId(event.currentTarget.value)}
-              value={toolSelectionId}
-            >
-              <option value="">Unset</option>
-              {toolSelections.map((selection) => (
-                <option key={selection.selectionId} value={selection.selectionId}>
-                  {selection.displayName ?? selection.selectionId}
-                </option>
-              ))}
-            </select>
-            <button
-              aria-label="Create tool selection"
-              className="ghost-button config-icon-button"
-              data-testid="behavior-create-tool-selection"
-              onClick={onCreateToolSelection}
-              title="Create tool selection"
-              type="button"
-            >
-              <PlusIcon />
-            </button>
-          </div>
-        </label>
-      </div>
-
-      <div className="grid-2 behavior-state-grid">
+        <span>
+          Reuse a context or explicitly name a new one. Shared contexts affect all
+          referencing behaviors.
+        </span>
+      </label>
+      <label className="field">
+        <span>Tools</span>
+        <select
+          data-testid="behavior-tools-id"
+          value={toolsId}
+          onChange={(event) => setToolsId(event.currentTarget.value)}
+        >
+          <option value="">No tools</option>
+          {toolsId && !tools.some((entry) => entry.tools_id === toolsId) ? (
+            <option value={toolsId}>{toolsId} (unavailable)</option>
+          ) : null}
+          {tools.map((entry) => (
+            <option key={entry.tools_id} value={entry.tools_id}>
+              {entry.display_name ?? entry.tools_id}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          data-testid="behavior-create-tools"
+          onClick={onCreateTools}
+        >
+          Create tools
+        </button>
+      </label>
+      <div className="grid-2">
         <label className="checkbox">
           <input
-            checked={enabled}
             data-testid="behavior-enabled"
-            onChange={(event) => setEnabled(event.currentTarget.checked)}
             type="checkbox"
+            checked={enabled}
+            onChange={(event) => setEnabled(event.currentTarget.checked)}
           />
           <span>Enabled</span>
         </label>
         <label className="checkbox">
           <input
-            checked={defaultForAgent}
             data-testid="behavior-default-for-agent"
-            disabled={behavior?.isDefault ?? false}
-            onChange={(event) => setDefaultForAgent(event.currentTarget.checked)}
             type="checkbox"
+            checked={defaultForAgent}
+            onChange={(event) => setDefaultForAgent(event.currentTarget.checked)}
           />
-          <span>Default behavior</span>
+          <span>Default for this principal</span>
         </label>
       </div>
-
-      <section className="behavior-compaction-box">
-        <div className="grid-2">
-          <label className="field">
-            <span>Strategy</span>
-            <select
-              data-testid="behavior-compaction-strategy"
-              onChange={(event) => setCompactionStrategy(event.currentTarget.value)}
-              value={compactionStrategy}
-            >
-              <option value="StripThenSummarize">Strip then summarize</option>
-              <option value="StripToolResults">Strip tool results</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Threshold</span>
-            <input
-              data-testid="behavior-compaction-threshold"
-              max="1"
-              min="0"
-              onChange={(event) => setCompactionThreshold(event.currentTarget.value)}
-              step="0.01"
-              type="number"
-              value={compactionThreshold}
-            />
-            <FieldHint show={!compactionThresholdValid}>
-              Number between 0 and 1
-            </FieldHint>
-          </label>
-        </div>
-      </section>
-
-      <div className="facts facts-single">
-        <div>
-          <dt>Backend model</dt>
-          <dd>{resolvedModel}</dd>
-        </div>
+      <label className="field">
+        <span>Compaction ID</span>
+        <input
+          data-testid="behavior-compaction-id"
+          value={compactionId}
+          onChange={(event) => loadCompaction(event.currentTarget.value)}
+        />
+      </label>
+      <div className="grid-2">
+        <label className="field">
+          <span>Compaction strategy</span>
+          <select
+            data-testid="behavior-compaction-strategy"
+            value={strategy ?? "StripThenSummarize"}
+            onChange={(event) =>
+              setStrategy(event.currentTarget.value as CompactionConfig["strategy"])
+            }
+          >
+            <option value="StripThenSummarize">Strip, then summarize</option>
+            <option value="StripToolResults">Strip tool results</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>Compaction threshold</span>
+          <input
+            data-testid="behavior-compaction-threshold"
+            value={threshold}
+            placeholder="Default"
+            onChange={(event) => setThreshold(event.currentTarget.value)}
+          />
+          <FieldHint show={!thresholdValid}>Number between 0 and 1</FieldHint>
+        </label>
       </div>
-
       <BehaviorToolSurface
-        agentDid={agentDid}
         api={api}
-        behaviorId={behavior?.behaviorId ?? null}
+        agentDid={agentDid}
+        behaviorId={behavior?.behavior_id ?? null}
       />
-
       <section className="behavior-skills-box" data-testid="behavior-skills">
-        <p className="eyebrow">Skills</p>
-        {!skills.length ? (
-          <p className="muted">
-            No skills defined for this agent. Create skills in the Skills tab.
-          </p>
-        ) : null}
-        {behaviorScopedSkills.length ? (
-          <fieldset className="behavior-skill-group">
-            <legend>Behavior-scoped (opt in)</legend>
-            {behaviorScopedSkills.map((skill) => (
-              <label className="checkbox" key={skill.skillId}>
-                <input
-                  checked={skillRefs.includes(skill.skillId)}
-                  data-testid={`behavior-skill-ref-${skill.skillId}`}
-                  onChange={(event) =>
-                    toggleSkillRef(skill.skillId, event.currentTarget.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>{skill.displayName ?? skill.name ?? skill.skillId}</span>
-              </label>
-            ))}
-          </fieldset>
-        ) : null}
-        {principalScopedSkills.length ? (
-          <fieldset className="behavior-skill-group">
-            <legend>Principal-scoped (inherited; uncheck to exclude)</legend>
-            {principalScopedSkills.map((skill) => (
-              <label className="checkbox" key={skill.skillId}>
-                <input
-                  checked={!skillExcludes.includes(skill.skillId)}
-                  data-testid={`behavior-skill-inherit-${skill.skillId}`}
-                  onChange={(event) =>
-                    toggleSkillExclude(skill.skillId, !event.currentTarget.checked)
-                  }
-                  type="checkbox"
-                />
-                <span>{skill.displayName ?? skill.name ?? skill.skillId}</span>
-              </label>
-            ))}
-          </fieldset>
-        ) : null}
+        <h3>Selected skills</h3>
+        <p>Only explicitly selected skills are available to this context.</p>
+        {skills
+          .filter((skill) => skill.agentDid === agentDid)
+          .map((skill) => (
+            <label className="checkbox" key={skill.skillId}>
+              <input
+                data-testid={`behavior-skill-ref-${skill.skillId}`}
+                type="checkbox"
+                checked={skillIds.includes(skill.skillId)}
+                onChange={(event) => {
+                  const checked = event.currentTarget.checked;
+                  setSkillIds((current) =>
+                    checked
+                      ? [...current.filter((id) => id !== skill.skillId), skill.skillId]
+                      : current.filter((id) => id !== skill.skillId),
+                  );
+                }}
+              />
+              <span>
+                {skill.name ?? skill.displayName ?? skill.skillId}
+                {skill.enabled === false ? " (disabled)" : ""}
+              </span>
+            </label>
+          ))}
+        {skillIds
+          .filter((id) => !selectedKnown.has(id))
+          .map((id) => (
+            <label className="checkbox" key={id}>
+              <input
+                type="checkbox"
+                checked
+                onChange={() =>
+                  setSkillIds((current) => current.filter((value) => value !== id))
+                }
+              />
+              <span>{id} (unavailable)</span>
+            </label>
+          ))}
       </section>
-
       <label className="field">
         <span>System prompt</span>
         <textarea
-          className="config-textarea behavior-system-prompt"
           data-testid="behavior-system-prompt"
-          onChange={(event) => setSystemPrompt(event.currentTarget.value)}
-          rows={promptRows}
+          rows={18}
           value={systemPrompt}
+          onChange={(event) => setSystemPrompt(event.currentTarget.value)}
         />
+        <span>Literal context instructions; prompt templates belong to tasks.</span>
       </label>
-
       <div className="config-actions">
-        {behavior && !behavior.isDefault ? (
+        {behavior ? (
           <button
             className="ghost-button danger-button"
             data-testid="behavior-delete"
-            disabled={saving}
-            onClick={() => setConfirmingDelete(true)}
             type="button"
+            disabled={saving}
+            onClick={() => setConfirmDelete(true)}
           >
-            Delete Behavior
+            Delete behavior
           </button>
         ) : null}
         <ConfirmDialog
-          open={confirmingDelete}
+          open={confirmDelete}
           title="Delete behavior"
-          message={`Delete behavior "${behavior?.behaviorId ?? ""}"? Tasks still pointing at it will block the delete.`}
+          message="Existing references must be removed before deletion."
           confirmLabel="Delete"
           danger
+          onCancel={() => setConfirmDelete(false)}
           onConfirm={() => {
-            void deleteBehavior();
+            setConfirmDelete(false);
+            if (behavior)
+              void onDeleteBehaviorConfig({
+                agentDid,
+                behaviorId: behavior.behavior_id,
+              })
+                .then(onDeleted)
+                .catch((caught) => setError(String(caught)));
           }}
-          onCancel={() => setConfirmingDelete(false)}
         />
         <button
           className="primary-button"
           data-testid="behavior-save"
-          disabled={
-            saving ||
-            !behaviorId.trim() ||
-            !systemPrompt.trim() ||
-            !profileBindingExists ||
-            !compactionThresholdValid
-          }
           type="submit"
+          disabled={saving || !behaviorId.trim() || !profile || !thresholdValid}
         >
-          {saving ? "Saving..." : "Save Behavior"}
+          {saving ? "Saving..." : "Save behavior"}
         </button>
       </div>
     </form>
   );
-}
-
-function behaviorFormValues(behavior: BehaviorView | null) {
-  return {
-    behaviorId: behavior?.behaviorId ?? "",
-    systemPrompt: behavior?.systemPrompt ?? "",
-    backendId: behavior?.backendId ?? "",
-    profileId: behavior?.inferenceProfileId ?? "",
-    toolSelectionId: behavior?.toolSelectionId ?? "",
-    compactionStrategy: behavior?.compactionStrategy ?? DEFAULT_COMPACTION_STRATEGY,
-    compactionThreshold:
-      behavior?.compactionThreshold != null
-        ? String(behavior.compactionThreshold)
-        : DEFAULT_COMPACTION_THRESHOLD,
-    enabled: behavior?.enabled ?? true,
-    defaultForAgent: behavior?.isDefault ?? false,
-    skillRefs: behavior?.skillRefs ?? [],
-    skillExcludes: behavior?.skillExcludes ?? [],
-  };
 }

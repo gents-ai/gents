@@ -674,32 +674,6 @@ Denies the desktop_list_subagent_tree command without any pre-configured scope.
 <tr>
 <td>
 
-`gents-desktop-bridge:allow-desktop-list-tool-call-holds`
-
-</td>
-<td>
-
-Enables the desktop_list_tool_call_holds command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-list-tool-call-holds`
-
-</td>
-<td>
-
-Denies the desktop_list_tool_call_holds command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
 `gents-desktop-bridge:allow-desktop-mailbox-dismiss`
 
 </td>
@@ -1317,32 +1291,6 @@ Enables the desktop_request_timeline command without any pre-configured scope.
 <td>
 
 Denies the desktop_request_timeline command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-resolve-tool-call-hold`
-
-</td>
-<td>
-
-Enables the desktop_resolve_tool_call_hold command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-resolve-tool-call-hold`
-
-</td>
-<td>
-
-Denies the desktop_resolve_tool_call_hold command without any pre-configured scope.
 
 </td>
 </tr>
@@ -2045,32 +1993,6 @@ Interrupt cascade preview
 <td>
 
 Interrupt request execution
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:holds-read`
-
-</td>
-<td>
-
-List tool-call holds
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:holds-control`
-
-</td>
-<td>
-
-Resolve tool-call holds
 
 </td>
 </tr>

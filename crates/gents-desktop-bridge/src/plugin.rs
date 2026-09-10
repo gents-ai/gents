@@ -2,7 +2,7 @@ use tauri::plugin::{Builder, TauriPlugin};
 use tauri::{Manager, Runtime};
 
 use crate::config::BridgeConfig;
-use crate::state::{resolve_policy, DesktopAppState};
+use crate::state::{DesktopAppState, resolve_policy};
 use crate::tauri_commands;
 
 pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
@@ -54,6 +54,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
             tauri_commands::config::desktop_agent_config_save,
+            tauri_commands::config::desktop_config_components_apply,
+            tauri_commands::config::desktop_config_components_patch,
             tauri_commands::config::desktop_behavior_save,
             tauri_commands::config::desktop_skill_save,
             tauri_commands::config::desktop_skill_delete,
@@ -62,12 +64,12 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::config::desktop_event_trigger_delete,
             tauri_commands::config::desktop_backend_delete,
             tauri_commands::config::desktop_inference_profile_delete,
-            tauri_commands::config::desktop_tool_selection_delete,
+            tauri_commands::config::desktop_tools_delete,
             tauri_commands::config::desktop_tool_service_delete,
             tauri_commands::config::desktop_behavior_delete,
             tauri_commands::config::desktop_backend_save,
             tauri_commands::config::desktop_inference_profile_save,
-            tauri_commands::config::desktop_tool_selection_save,
+            tauri_commands::config::desktop_tools_save,
             tauri_commands::config::desktop_tool_service_save,
             tauri_commands::config::desktop_tool_service_test,
             tauri_commands::inference_setup::desktop_probe_inference_endpoint,
@@ -81,6 +83,8 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,
             tauri_commands::tasks::desktop_event_trigger_save,
+            tauri_commands::tasks::desktop_event_source_save,
+            tauri_commands::tasks::desktop_event_source_delete,
             tauri_commands::tasks::desktop_task_run,
             tauri_commands::operations::desktop_operations_snapshot,
             tauri_commands::operations::desktop_list_subagent_tree,
@@ -89,8 +93,6 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::operations::desktop_list_backends_with_health,
             tauri_commands::operations::desktop_list_mcp_services_with_health,
             tauri_commands::operations::desktop_probe_mcp_service,
-            tauri_commands::operations::desktop_list_tool_call_holds,
-            tauri_commands::operations::desktop_resolve_tool_call_hold
         ])
         .build()
 }

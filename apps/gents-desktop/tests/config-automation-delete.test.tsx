@@ -7,7 +7,7 @@ import { BackendConfigEditor } from "../src/components/config/BackendConfigPanel
 import { BehaviorConfigEditor } from "../src/components/config/BehaviorConfigPanel";
 import { EventTriggerConfigEditor } from "../src/components/config/EventTriggerConfigPanel";
 import { InferenceProfileConfigEditor } from "../src/components/config/InferenceProfileConfigPanel";
-import { ToolSelectionConfigEditor } from "../src/components/config/ToolSelectionConfigPanel";
+import { ToolsConfigEditor } from "../src/components/config/ToolsConfigPanel";
 import { ToolServiceConfigEditor } from "../src/components/config/ToolServiceConfigPanel";
 import type { TaskView } from "@source-inc/gents-desktop-client";
 import { toolSelection, toolService } from "./config-panel-buttons/fixtures";
@@ -292,17 +292,17 @@ describe("automation document deletion", () => {
   });
 
   it("prefers the tool selection row's source deployment when deleting", async () => {
-    const onDeleteToolSelectionConfig = vi.fn().mockResolvedValue(undefined);
+    const onDeleteToolsConfig = vi.fn().mockResolvedValue(undefined);
     render(
-      <ToolSelectionConfigEditor
+      <ToolsConfigEditor
         agentDid={sourceAgentDid}
         toolSelection={{ ...toolSelection, agentDid: "did:test:replica-source" }}
         toolServiceRegistries={[toolService]}
         savedStatus={null}
         saving={false}
         onSaved={vi.fn()}
-        onSaveToolSelectionConfig={vi.fn()}
-        onDeleteToolSelectionConfig={onDeleteToolSelectionConfig}
+        onSaveToolsConfig={vi.fn()}
+        onDeleteToolsConfig={onDeleteToolsConfig}
         onDeleted={vi.fn()}
       />,
     );
@@ -310,7 +310,7 @@ describe("automation document deletion", () => {
     fireEvent.click(screen.getByTestId("tool-selection-delete"));
     fireEvent.click(screen.getByTestId("confirm-dialog-confirm"));
     await waitFor(() =>
-      expect(onDeleteToolSelectionConfig).toHaveBeenCalledWith({
+      expect(onDeleteToolsConfig).toHaveBeenCalledWith({
         selectionId: "default-tools",
         agentDid: "did:test:replica-source",
       }),

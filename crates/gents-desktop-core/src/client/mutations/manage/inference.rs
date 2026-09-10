@@ -1,180 +1,135 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::InferenceBackend;
-use gents_protocol::row::InferenceBackendRow;
-use serde_json::Value;
-
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
-    graphql_optional_int_field, graphql_string_field, graphql_string_list_field, join_fields,
-    normalize_required,
+use gents::collection::Collection;
+use gents::config_client::{
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    read_desired_state_record_in_txn,
 };
 
 pub async fn upsert_inference_backend(
     node: &EmbeddedNode,
-    row: &InferenceBackendRow,
+    document: &InferenceBackend,
 ) -> Result<()> {
-    validate_inference_backend(row)?;
-    // Keep the desktop encoder: it owns last_probe and preserves its existing
-    // full-row null/list behavior, neither of which the config-client backend
-    // writer represents exactly.
-    let backend_id = normalize_required("backend_id", &row.backend_id)?;
-
-    let add_fields = [
-        Some(format!(
-            r#"backend_id: "{}""#,
-            escape_graphql_string(backend_id)
-        )),
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "provider_kind",
-            row.provider_kind.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "openai_wire_api",
-            row.openai_wire_api.as_deref(),
-        )),
-        Some(graphql_string_field("endpoint", row.endpoint.as_deref())),
-        Some(graphql_string_field("api_key", row.api_key.as_deref())),
-        Some(graphql_string_field(
-            "api_key_env_var",
-            row.api_key_env_var.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "max_concurrent",
-            row.max_concurrent,
-        )),
-        Some(graphql_optional_int_field(
-            "max_queue_depth",
-            row.max_queue_depth,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_list_field("models", &row.models)),
-        Some(graphql_string_field(
-            "last_probe",
-            row.last_probe.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "probe_status",
-            row.probe_status.as_deref(),
-        )),
-    ];
-    let update_fields = [
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "provider_kind",
-            row.provider_kind.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "openai_wire_api",
-            row.openai_wire_api.as_deref(),
-        )),
-        Some(graphql_string_field("endpoint", row.endpoint.as_deref())),
-        Some(graphql_string_field("api_key", row.api_key.as_deref())),
-        Some(graphql_string_field(
-            "api_key_env_var",
-            row.api_key_env_var.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "max_concurrent",
-            row.max_concurrent,
-        )),
-        Some(graphql_optional_int_field(
-            "max_queue_depth",
-            row.max_queue_depth,
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(graphql_string_list_field("models", &row.models)),
-        Some(graphql_string_field(
-            "last_probe",
-            row.last_probe.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "probe_status",
-            row.probe_status.as_deref(),
-        )),
-    ];
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        backend_id = escape_graphql_string(backend_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_inference_backend").await
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceBackend,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.inference_backend.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
-fn validate_inference_backend(row: &InferenceBackendRow) -> Result<()> {
-    let value = serde_json::to_value(row)?;
-    let mut backend = InferenceBackend::from_value(&value)?;
-    // `from_value` normalizes blank credentials for runtime consumption. Keep
-    // the submitted values for write-boundary validation, where an explicitly
-    // blank credential is an invalid document rather than an absent one.
-    backend.api_key = row.api_key.clone();
-    backend.api_key_env_var = row.api_key_env_var.clone();
-    backend.validate(None)
+pub async fn delete_inference_backend(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    id: &str,
+) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::InferenceBackend,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.inference_backend.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed =
+                read_desired_state_record_in_txn(txn, Collection::InferenceBackend, agent_did, id)
+                    .await?
+                    .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
-mod validation_tests {
-    use super::validate_inference_backend;
-    use gents_protocol::row::InferenceBackendRow;
+mod tests {
+    use super::*;
+    use gents::document_config::{BackendAuth, BackendModelCatalog, InferenceProfile};
+    use serde_json::json;
+    use std::sync::Arc;
 
-    #[test]
-    fn rejects_a_row_that_sets_both_credential_sources() {
-        let row: InferenceBackendRow = serde_json::from_value(serde_json::json!({
-            "backend_id": "backend",
-            "name": "Backend",
-            "provider_kind": "OpenAiCompatible",
-            "endpoint": "https://example.test/v1",
-            "api_key": "secret",
-            "api_key_env_var": "BACKEND_API_KEY",
-            "max_concurrent": 1,
-            "enabled": true
-        }))
-        .expect("backend row");
-
-        let error = validate_inference_backend(&row).expect_err("invalid backend");
-        assert!(error
-            .to_string()
-            .contains("must not set both api_key and api_key_env_var"));
+    #[tokio::test]
+    async fn backend_save_preserves_catalog_and_scoped_delete_rejects_retained_profile()
+    -> Result<()> {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        for owner in ["did:test:owner", "did:test:other"] {
+            gents::ensure_agent_principal(&node, owner).await?;
+        }
+        let mut backend: InferenceBackend = serde_json::from_value(json!({
+            "agent_did":"did:test:owner", "backend_id":"shared", "name":"Backend",
+            "provider_kind":"OpenAiCompatible", "endpoint":"http://localhost:8000/v1",
+            "auth":{"kind":"unauthenticated"}
+        }))?;
+        upsert_inference_backend(&node, &backend).await?;
+        let mut other = backend.clone();
+        other.agent_did = "did:test:other".into();
+        upsert_inference_backend(&node, &other).await?;
+        let catalog = BackendModelCatalog {
+            agent_did: None,
+            observed_at: "2026-09-10T00:00:00Z".into(),
+            models: Vec::new(),
+        };
+        ConfigAccess::transact_local(&node, None, "test.catalog", |txn| {
+            let backend = &backend;
+            let catalog = catalog.clone();
+            Box::pin(async move {
+                gents::backend_registry::record_model_catalog_in_txn(txn, backend, catalog).await
+            })
+        })
+        .await?;
+        backend.name = "Renamed".into();
+        upsert_inference_backend(&node, &backend).await?;
+        let observation = gents::backend_registry::lookup_backend_observation(
+            &node,
+            &backend.agent_did,
+            &backend.backend_id,
+        )
+        .await?;
+        assert_eq!(observation.unwrap().catalogs, vec![catalog]);
+        let mut invalid = backend.clone();
+        invalid.auth = BackendAuth::ApiKey { key: " ".into() };
+        assert!(upsert_inference_backend(&node, &invalid).await.is_err());
+        let profile: InferenceProfile = serde_json::from_value(json!({
+            "agent_did":backend.agent_did, "profile_id":"profile", "backend_id":"shared", "model_name":"model"
+        }))?;
+        gents::config_client::write_inference_profile_document(
+            &ConfigAccess::Local(node.clone()),
+            &profile,
+        )
+        .await?;
+        assert!(
+            delete_inference_backend(&node, &backend.agent_did, "shared")
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            delete_inference_backend(&node, &other.agent_did, "shared").await?,
+            1
+        );
+        assert_eq!(
+            delete_inference_backend(&node, &other.agent_did, "shared").await?,
+            0
+        );
+        assert!(
+            gents::backend_registry::lookup_backend_observation(
+                &node,
+                &backend.agent_did,
+                "shared"
+            )
+            .await?
+            .is_some()
+        );
+        Ok(())
     }
-}
-
-pub async fn delete_inference_backend(node: &EmbeddedNode, backend_id: &str) -> Result<usize> {
-    let mutation = build_delete_inference_backend_mutation(backend_id)?;
-    let response = super::super::graphql::execute_mutation_response(
-        node,
-        &mutation,
-        "desktop.inference_backend.delete",
-    )
-    .await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get("delete_InferenceBackend"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_inference_backend_mutation(backend_id: &str) -> Result<String> {
-    let backend_id = normalize_required("backend_id", backend_id)?;
-    let backend_id = escape_graphql_string(backend_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_InferenceBackend(
-                filter: {{ backend_id: {{ _eq: "{backend_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    ))
 }

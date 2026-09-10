@@ -1,7 +1,7 @@
 import type {
   DeploymentView,
   SyncHealthView,
-  ToolSelectionView,
+  Tools,
 } from "@source-inc/gents-desktop-client";
 import {
   behaviorReadinessIsInferenceFailure,
@@ -87,13 +87,13 @@ export function needsInferenceSetup(deployment: DeploymentView): boolean {
 }
 
 export function toolCeilingIcons(
-  selections: ToolSelectionView[],
+  selections: Tools[],
   selectedToolSelectionId?: string | null,
   serverCeiling?: string | null,
 ): ToolIcon[] {
   const source = selectedToolSelectionId
     ? selections.filter(
-        (selection) => selection.selectionId === selectedToolSelectionId,
+        (selection) => selection.tools_id === selectedToolSelectionId,
       )
     : [];
   const icons: ToolIcon[] = [];
@@ -101,27 +101,21 @@ export function toolCeilingIcons(
     ? ` Server ceiling: ${displayToolCeiling(serverCeiling)}.`
     : "";
   const bestFileMode = strongestMode(
-    source
-      .filter((selection) => selection.enableFileTools)
-      .map((selection) => selection.fileToolsMode),
+    source.map((selection) => selection.host?.files?.mode),
   );
   const bestBashMode = strongestMode(
-    source
-      .filter((selection) => selection.enableBash)
-      .map((selection) => selection.bashMode),
+    source.map((selection) => selection.host?.bash?.mode),
   );
   const allowedMetaServices = uniqueValues(
     source
-      .filter((selection) => selection.enableMetaTools)
-      .flatMap((selection) => selection.allowedMcpServiceIds ?? []),
-  );
-  const unrestrictedMetaServices = source.some(
-    (selection) =>
-      selection.enableMetaTools &&
-      (selection.allowedMcpServiceIds ?? []).length === 0,
+      .flatMap((selection) => selection.remote?.services ?? [])
+      .filter((service) => (service.tool_names ?? []).length > 0)
+      .map((service) => service.mcp_service_id),
   );
   const cliTools = uniqueValues(
-    source.flatMap((selection) => selection.cliToolNames),
+    source.flatMap((selection) =>
+      (selection.host?.cli ?? []).map((tool) => tool.name),
+    ),
   );
 
   if (bestFileMode) {
@@ -142,13 +136,11 @@ export function toolCeilingIcons(
       }.${ceilingSuffix}`,
     });
   }
-  if (allowedMetaServices.length || unrestrictedMetaServices) {
+  if (allowedMetaServices.length) {
     icons.push({
       kind: "meta",
       tone: "meta",
-      title: unrestrictedMetaServices
-        ? "MCP services: discover and call all online MCP services."
-        : `MCP services: discover and call ${allowedMetaServices.join(", ")}.`,
+      title: `MCP services: use explicitly selected tools from ${allowedMetaServices.join(", ")}.`,
     });
   }
   if (cliTools.length) {

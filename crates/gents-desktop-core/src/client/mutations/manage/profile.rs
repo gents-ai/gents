@@ -1,235 +1,107 @@
 use anyhow::Result;
 use defra_node::EmbeddedNode;
 use gents::InferenceProfile;
-use gents_protocol::row::InferenceProfileRow;
-use serde_json::Value;
-
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field,
-    graphql_optional_float_field, graphql_optional_int_field, graphql_optional_int_list_field,
-    graphql_string_field, join_fields, normalize_required,
+use gents::collection::Collection;
+use gents::config_client::{
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
+    read_desired_state_record_in_txn,
 };
 
 pub async fn upsert_inference_profile(
     node: &EmbeddedNode,
-    row: &InferenceProfileRow,
+    document: &InferenceProfile,
 ) -> Result<()> {
-    let profile_id = normalize_required("profile_id", &row.profile_id)?;
-    validate_inference_profile(row)?;
-
-    // Keep the desktop encoder: absent row values are authoritative clears
-    // here, while the canonical document upsert omits absent numeric fields.
-    let add_fields = [
-        Some(format!(
-            r#"profile_id: "{}""#,
-            escape_graphql_string(profile_id)
-        )),
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "context_window",
-            row.context_window,
-        )),
-        Some(graphql_optional_int_field(
-            "max_output_tokens",
-            row.max_output_tokens,
-        )),
-        Some(graphql_optional_int_field("max_turns", row.max_turns)),
-        Some(graphql_optional_float_field("temperature", row.temperature)),
-        Some(graphql_optional_float_field("top_p", row.top_p)),
-        Some(graphql_optional_int_field("top_k", row.top_k)),
-        Some(graphql_optional_int_field("seed", row.seed)),
-        Some(graphql_optional_float_field("min_p", row.min_p)),
-        Some(graphql_optional_float_field(
-            "frequency_penalty",
-            row.frequency_penalty,
-        )),
-        Some(graphql_optional_float_field(
-            "presence_penalty",
-            row.presence_penalty,
-        )),
-        Some(graphql_optional_float_field(
-            "repetition_penalty",
-            row.repetition_penalty,
-        )),
-        Some(graphql_string_field(
-            "reasoning_effort",
-            row.reasoning_effort.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "stream_batch_ms",
-            row.stream_batch_ms,
-        )),
-        Some(graphql_optional_int_field(
-            "stream_liveness_timeout_secs",
-            row.stream_liveness_timeout_secs,
-        )),
-        Some(graphql_optional_int_field(
-            "deadline_duration_secs",
-            row.deadline_duration_secs,
-        )),
-        Some(graphql_optional_int_field(
-            "retry_max_transport",
-            row.retry_max_transport,
-        )),
-        Some(graphql_optional_int_list_field(
-            "retry_backoff_ms",
-            row.retry_backoff_ms.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "retry_max_resample",
-            row.retry_max_resample,
-        )),
-        Some(graphql_optional_bool_field(
-            "retry_allow_repair",
-            row.retry_allow_repair,
-        )),
-        Some(graphql_optional_int_field(
-            "retry_interactive_max",
-            row.retry_interactive_max,
-        )),
-    ];
-    let update_fields = [
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "context_window",
-            row.context_window,
-        )),
-        Some(graphql_optional_int_field(
-            "max_output_tokens",
-            row.max_output_tokens,
-        )),
-        Some(graphql_optional_int_field("max_turns", row.max_turns)),
-        Some(graphql_optional_float_field("temperature", row.temperature)),
-        Some(graphql_optional_float_field("top_p", row.top_p)),
-        Some(graphql_optional_int_field("top_k", row.top_k)),
-        Some(graphql_optional_int_field("seed", row.seed)),
-        Some(graphql_optional_float_field("min_p", row.min_p)),
-        Some(graphql_optional_float_field(
-            "frequency_penalty",
-            row.frequency_penalty,
-        )),
-        Some(graphql_optional_float_field(
-            "presence_penalty",
-            row.presence_penalty,
-        )),
-        Some(graphql_optional_float_field(
-            "repetition_penalty",
-            row.repetition_penalty,
-        )),
-        Some(graphql_string_field(
-            "reasoning_effort",
-            row.reasoning_effort.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "stream_batch_ms",
-            row.stream_batch_ms,
-        )),
-        Some(graphql_optional_int_field(
-            "stream_liveness_timeout_secs",
-            row.stream_liveness_timeout_secs,
-        )),
-        Some(graphql_optional_int_field(
-            "deadline_duration_secs",
-            row.deadline_duration_secs,
-        )),
-        Some(graphql_optional_int_field(
-            "retry_max_transport",
-            row.retry_max_transport,
-        )),
-        Some(graphql_optional_int_list_field(
-            "retry_backoff_ms",
-            row.retry_backoff_ms.as_deref(),
-        )),
-        Some(graphql_optional_int_field(
-            "retry_max_resample",
-            row.retry_max_resample,
-        )),
-        Some(graphql_optional_bool_field(
-            "retry_allow_repair",
-            row.retry_allow_repair,
-        )),
-        Some(graphql_optional_int_field(
-            "retry_interactive_max",
-            row.retry_interactive_max,
-        )),
-    ];
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        profile_id = escape_graphql_string(profile_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_inference_profile").await
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::InferenceProfile,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.profile.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
-fn validate_inference_profile(row: &InferenceProfileRow) -> Result<()> {
-    let profile: InferenceProfile = serde_json::from_value(serde_json::to_value(row)?)?;
-    profile.validate()
+pub async fn delete_inference_profile(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    id: &str,
+) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::InferenceProfile,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.profile.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed =
+                read_desired_state_record_in_txn(txn, Collection::InferenceProfile, agent_did, id)
+                    .await?
+                    .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
 }
 
 #[cfg(test)]
-mod validation_tests {
-    use super::validate_inference_profile;
-    use gents_protocol::row::InferenceProfileRow;
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::sync::Arc;
 
-    #[test]
-    fn rejects_every_invalid_profile_field_in_one_error() {
-        let row: InferenceProfileRow = serde_json::from_value(serde_json::json!({
-            "profile_id": "invalid-profile",
-            "top_p": 2.0,
-            "seed": -1
-        }))
-        .expect("profile row");
-
-        let error = validate_inference_profile(&row)
-            .expect_err("invalid profile")
-            .to_string();
-        assert!(error.contains("top_p must be within [0, 1]"));
-        assert!(error.contains("seed must be non-negative"));
+    #[tokio::test]
+    async fn profile_save_validates_bounds_and_resolves_backend_in_exact_owner_scope() -> Result<()>
+    {
+        let node = Arc::new(EmbeddedNode::builder().build().await?);
+        gents::ensure_runtime_schemas(&node).await?;
+        for owner in ["did:test:owner", "did:test:other"] {
+            gents::ensure_agent_principal(&node, owner).await?;
+        }
+        let backend = serde_json::from_value(
+            json!({"agent_did":"did:test:owner","backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+        )?;
+        gents::config_client::write_inference_backend_document(
+            &ConfigAccess::Local(node.clone()),
+            &backend,
+        )
+        .await?;
+        let mut profile: InferenceProfile = serde_json::from_value(
+            json!({"agent_did":"did:test:owner","profile_id":"profile","backend_id":"backend","model_name":"model","reasoning_effort":"high","max_output_tokens":100}),
+        )?;
+        upsert_inference_profile(&node, &profile).await?;
+        profile.max_output_tokens = Some(0);
+        assert!(upsert_inference_profile(&node, &profile).await.is_err());
+        profile.max_output_tokens = None;
+        profile.agent_did = "did:test:other".into();
+        assert!(upsert_inference_profile(&node, &profile).await.is_err());
+        ConfigAccess::transact_local(&node, None, "test.profile.read", |txn| {
+            Box::pin(async move {
+                let (_, value) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::InferenceProfile,
+                    "did:test:owner",
+                    "profile",
+                )
+                .await?
+                .unwrap();
+                let retained: InferenceProfile = serde_json::from_value(value)?;
+                assert_eq!(retained.max_output_tokens, Some(100));
+                assert_eq!(
+                    retained.reasoning_effort,
+                    Some(gents::config::ReasoningEffort::High)
+                );
+                Ok(())
+            })
+        })
+        .await?;
+        Ok(())
     }
-}
-
-pub async fn delete_inference_profile(node: &EmbeddedNode, profile_id: &str) -> Result<usize> {
-    let mutation = build_delete_inference_profile_mutation(profile_id)?;
-    let response = super::super::graphql::execute_mutation_response(
-        node,
-        &mutation,
-        "desktop.inference_profile.delete",
-    )
-    .await?;
-    Ok(response
-        .get("data")
-        .and_then(|data| data.get("delete_InferenceProfile"))
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
-}
-
-fn build_delete_inference_profile_mutation(profile_id: &str) -> Result<String> {
-    let profile_id = normalize_required("profile_id", profile_id)?;
-    let profile_id = escape_graphql_string(profile_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_InferenceProfile(
-                filter: {{ profile_id: {{ _eq: "{profile_id}" }} }}
-            ) {{ _docID }}
-        }}"#
-    ))
 }

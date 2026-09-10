@@ -634,308 +634,67 @@ mod tests {
         skill_id: &str,
         include_exclude: bool,
     ) -> Result<()> {
-        fixture.desktop_core().refresh_store().await?;
-        let snapshot = fixture.desktop_core().store().snapshot();
-        let mut behavior = snapshot
-            .behavior_row(agent_did, behavior_id)
-            .cloned()
-            .with_context(|| format!("behavior {behavior_id} not present in desktop store"))?;
-        behavior.skill_refs = vec![skill_id.to_string()];
-        behavior.skill_excludes = if include_exclude {
-            vec![skill_id.to_string()]
-        } else {
-            Vec::new()
+        use gents::collection::Collection;
+        use gents::config_client::{
+            ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan,
+            apply_desired_state_plan, read_desired_state_record_in_txn,
         };
-        fixture.desktop_core().save_behavior(&behavior).await
+        ConfigAccess::transact_local(
+            fixture.desktop_core().node(),
+            None,
+            "desktop.fixture.skill",
+            |txn| {
+                Box::pin(async move {
+                    let (_, behavior) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::AgentBehavior,
+                        agent_did,
+                        behavior_id,
+                    )
+                    .await?
+                    .with_context(|| format!("behavior {behavior_id} is missing"))?;
+                    let behavior: gents::AgentBehaviorDocument = serde_json::from_value(behavior)?;
+                    let context_id = behavior
+                        .context_id
+                        .context("fixture behavior has no context")?;
+                    let (_, context) = read_desired_state_record_in_txn(
+                        txn,
+                        Collection::AgentContext,
+                        agent_did,
+                        &context_id,
+                    )
+                    .await?
+                    .context("fixture context is missing")?;
+                    let mut context: gents::document_config::AgentContext =
+                        serde_json::from_value(context)?;
+                    context.skill_ids = if include_exclude {
+                        Vec::new()
+                    } else {
+                        vec![skill_id.to_owned()]
+                    };
+                    let value = serde_json::to_value(context)?;
+                    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+                        collection: Collection::AgentContext,
+                        add: value.clone(),
+                        update: value,
+                    }])?;
+                    apply_desired_state_plan(txn, &plan).await?;
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+        fixture.desktop_core().refresh_store().await?;
+        Ok(())
     }
 
     fn skill_save_request(agent_did: &str, skill_id: &str, instructions: &str) -> SkillSaveRequest {
         SkillSaveRequest {
-            skill_id: skill_id.to_string(),
-            agent_did: agent_did.to_string(),
-            scope: "behavior".to_string(),
-            name: skill_id.to_string(),
-            description: Some(format!("Test skill {skill_id}")),
-            instructions: instructions.to_string(),
-            tool_refs: Vec::new(),
-            display_name: Some(skill_id.to_string()),
-            enabled: Some(true),
-        }
-    }
-
-    async fn wait_for_remote_skill(core: &ClientCore, skill_id: &str) -> Result<Value> {
-        wait_for_row(
-            "remote Skill create",
-            Duration::from_secs(60),
-            || async move {
-                let rows = query_skill_rows(core, skill_id).await?;
-                Ok(rows.into_iter().next())
-            },
-        )
-        .await
-    }
-
-    async fn wait_for_remote_skill_absent(core: &ClientCore, skill_id: &str) -> Result<()> {
-        wait_for_condition(
-            "remote Skill delete",
-            Duration::from_secs(60),
-            || async move { Ok(query_skill_rows(core, skill_id).await?.is_empty()) },
-        )
-        .await
-    }
-
-    async fn wait_for_remote_behavior_skill_refs(
-        core: &ClientCore,
-        behavior_id: &str,
-        expected_refs: &[&str],
-        expected_excludes: &[&str],
-    ) -> Result<()> {
-        wait_for_condition(
-            "remote AgentBehavior skill refs",
-            Duration::from_secs(60),
-            || async move {
-                let rows = query_agent_behavior_rows(core, behavior_id).await?;
-                let Some(row) = rows.first() else {
-                    return Ok(false);
-                };
-                Ok(string_list(row.get("skill_refs")) == expected_refs
-                    && string_list(row.get("skill_excludes")) == expected_excludes)
-            },
-        )
-        .await
-    }
-
-    async fn wait_for_remote_request(core: &ClientCore, request_id: &str) -> Result<Value> {
-        wait_for_row(
-            "remote AgentRequest",
-            Duration::from_secs(60),
-            || async move {
-                let request_id = escape_graphql_string(request_id);
-                let query = format!(
-                    r#"{{
-                    AgentRequest(
-                        filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-                        limit: 1
-                    ) {{ request_id content metadata lifecycle_state }}
-                }}"#
-                );
-                let rows = query_rows(core, &query, "AgentRequest").await?;
-                Ok(rows.into_iter().next())
-            },
-        )
-        .await
-    }
-
-    async fn wait_for_remote_runtime_generation(core: &ClientCore, agent_did: &str) -> Result<u64> {
-        wait_for_row(
-            "remote authoritative runtime generation",
-            Duration::from_secs(60),
-            || async move { query_runtime_observation(core, agent_did).await },
-        )
-        .await
-        .map(|observation| observation.active_generation)
-    }
-
-    async fn wait_for_remote_runtime_generation_after(
-        core: &ClientCore,
-        agent_did: &str,
-        previous_generation: u64,
-    ) -> Result<()> {
-        wait_for_condition(
-            "remote authoritative runtime generation advance",
-            Duration::from_secs(90),
-            || async move {
-                let Some(observation) = query_runtime_observation(core, agent_did).await? else {
-                    return Ok(false);
-                };
-                if observation.last_reconcile_result == "error" {
-                    bail!(
-                        "runtime reconcile failed while waiting for skill binding: {}",
-                        observation.last_reconcile_error
-                    );
-                }
-                Ok(observation.active_generation > previous_generation
-                    && observation.reconcile_phase == "idle")
-            },
-        )
-        .await
-    }
-
-    async fn wait_for_captured_chat_request(
-        mock: &MockChatEndpoint,
-        needle: &str,
-    ) -> Result<Value> {
-        let deadline = Instant::now() + Duration::from_secs(120);
-        loop {
-            let captured = mock.captured_chat_requests();
-            if let Some(request) = captured
-                .iter()
-                .find(|request| request.to_string().contains(needle))
-            {
-                return Ok(request.clone());
-            }
-            if Instant::now() >= deadline {
-                bail!(
-                    "timed out waiting for mock chat request containing {needle:?}; captured={captured:?}"
-                );
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    async fn query_skill_rows(core: &ClientCore, skill_id: &str) -> Result<Vec<Value>> {
-        let skill_id = escape_graphql_string(skill_id);
-        let query = format!(
-            r#"{{
-                Skill(
-                    filter: {{ skill_id: {{ _eq: "{skill_id}" }} }}
-                ) {{ skill_id agent_did scope name instructions enabled }}
-            }}"#
-        );
-        query_rows(core, &query, "Skill").await
-    }
-
-    async fn query_agent_behavior_rows(core: &ClientCore, behavior_id: &str) -> Result<Vec<Value>> {
-        let behavior_id = escape_graphql_string(behavior_id);
-        let query = format!(
-            r#"{{
-                AgentBehavior(
-                    filter: {{ behavior_id: {{ _eq: "{behavior_id}" }} }},
-                    limit: 1
-                ) {{ behavior_id skill_refs skill_excludes }}
-            }}"#
-        );
-        query_rows(core, &query, "AgentBehavior").await
-    }
-
-    struct RemoteRuntimeObservation {
-        active_generation: u64,
-        reconcile_phase: String,
-        last_reconcile_result: String,
-        last_reconcile_error: String,
-    }
-
-    async fn query_runtime_observation(
-        core: &ClientCore,
-        agent_did: &str,
-    ) -> Result<Option<RemoteRuntimeObservation>> {
-        let expected_agent_did = agent_did.to_string();
-        let agent_did = escape_graphql_string(agent_did);
-        let query = format!(
-            r#"{{
-                AgentBehaviorReadiness(
-                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
-                    limit: 1
-                ) {{ agent_did snapshot_json updated_at }}
-                AgentRuntime(
-                    filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
-                    limit: 1
-                ) {{
-                    reconcile_phase
-                    last_reconcile_result
-                    last_reconcile_error
-                }}
-            }}"#
-        );
-        let response = core.node().execute(&query).await;
-        if response.has_errors() {
-            bail!("query runtime observation failed: {:?}", response.errors);
-        }
-        let data = response
-            .data
-            .as_ref()
-            .context("runtime observation missing data")?;
-        let Some(readiness_value) = data
-            .get("AgentBehaviorReadiness")
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-            .cloned()
-        else {
-            return Ok(None);
-        };
-        let readiness_row: AgentBehaviorReadinessRow = serde_json::from_value(readiness_value)?;
-        let readiness = decode_behavior_readiness_snapshot(&readiness_row, &expected_agent_did)
-            .map_err(|reason| anyhow::anyhow!("invalid behavior readiness: {reason:?}"))?;
-        let Some(runtime) = data
-            .get("AgentRuntime")
-            .and_then(Value::as_array)
-            .and_then(|rows| rows.first())
-        else {
-            return Ok(None);
-        };
-        Ok(Some(RemoteRuntimeObservation {
-            active_generation: readiness.active_generation,
-            reconcile_phase: runtime
-                .get("reconcile_phase")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            last_reconcile_result: runtime
-                .get("last_reconcile_result")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            last_reconcile_error: runtime
-                .get("last_reconcile_error")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-                .to_string(),
-        }))
-    }
-
-    async fn query_rows(core: &ClientCore, query: &str, collection: &str) -> Result<Vec<Value>> {
-        let response = core.node().execute(query).await;
-        if response.has_errors() {
-            bail!("query {collection} failed: {:?}", response.errors);
-        }
-        Ok(response
-            .data
-            .as_ref()
-            .and_then(|data| data.get(collection))
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default())
-    }
-
-    async fn wait_for_row<T, F, Fut>(
-        label: &'static str,
-        timeout: Duration,
-        mut check: F,
-    ) -> Result<T>
-    where
-        F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<Option<T>>>,
-    {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if let Some(row) = check().await? {
-                return Ok(row);
-            }
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for {label}");
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-
-    async fn wait_for_condition<F, Fut>(
-        label: &'static str,
-        timeout: Duration,
-        mut check: F,
-    ) -> Result<()>
-    where
-        F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<bool>>,
-    {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if check().await? {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                bail!("timed out waiting for {label}");
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            document: serde_json::from_value(serde_json::json!({
+                "skill_id": skill_id, "agent_did": agent_did, "name": skill_id,
+                "description": format!("Test skill {skill_id}"),
+                "instructions": instructions, "display_name": skill_id,
+            })).expect("canonical fixture skill"),
         }
     }
 

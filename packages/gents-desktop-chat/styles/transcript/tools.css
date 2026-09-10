@@ -73,7 +73,6 @@
     background: var(--color-error);
   }
 
-  .tool-item-dot-held,
   .tool-item-dot-denied {
     background: var(--color-warning);
   }
@@ -141,11 +140,6 @@
   .tool-exit.is-error {
     color: var(--color-error);
     border-color: rgb(var(--color-error-strong-rgb) / 0.35);
-  }
-
-  .tool-item-status-awaitingapproval {
-    color: var(--color-warning);
-    border-color: rgb(var(--color-warning-rgb) / 0.35);
   }
 
   .tool-command-prompt {

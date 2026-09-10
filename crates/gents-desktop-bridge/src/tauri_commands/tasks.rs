@@ -4,13 +4,14 @@ use crate::error::BridgeError;
 
 use super::emit_config_update_and_snapshot;
 use crate::commands::{
-    run_schedule_config, run_task_config, save_event_trigger_config, save_schedule_config,
-    save_task_config,
+    delete_event_source_config, run_schedule_config, run_task_config, save_event_source_config,
+    save_event_trigger_config, save_schedule_config, save_task_config,
 };
-use crate::state::{current_core, DesktopAppState};
+use crate::state::{DesktopAppState, current_core};
 use crate::types::{
-    ClientUpdateEvent, DesktopClientSnapshot, EventTriggerSaveRequest, ScheduleRunRequest,
-    ScheduleSaveRequest, TaskRunRequest, TaskRunResult, TaskSaveRequest,
+    ClientUpdateEvent, DesktopClientSnapshot, EventSourceDeleteRequest, EventSourceSaveRequest,
+    EventTriggerSaveRequest, ScheduleRunRequest, ScheduleSaveRequest, TaskRunRequest,
+    TaskRunResult, TaskSaveRequest,
 };
 
 #[tauri::command]
@@ -99,4 +100,34 @@ pub async fn desktop_task_run<R: Runtime>(
         ClientUpdateEvent::coarse("config"),
     );
     Ok(result)
+}
+
+#[tauri::command]
+pub async fn desktop_event_source_save<R: Runtime>(
+    app: AppHandle<R>,
+    request: EventSourceSaveRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    save_event_source_config(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
+}
+
+#[tauri::command]
+pub async fn desktop_event_source_delete<R: Runtime>(
+    app: AppHandle<R>,
+    request: EventSourceDeleteRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<DesktopClientSnapshot, BridgeError> {
+    let Some(core) = current_core(&state) else {
+        return Err(BridgeError::untyped("desktop client is not running"));
+    };
+    delete_event_source_config(core.as_ref(), request)
+        .await
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
+    emit_config_update_and_snapshot(&app, &core, &state).await
 }

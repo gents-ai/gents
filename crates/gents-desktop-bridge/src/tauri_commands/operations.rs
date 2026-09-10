@@ -21,11 +21,10 @@ use crate::snapshot::operations_snapshot::{
 };
 use crate::state::{current_core, DesktopAppState};
 use crate::types::{
-    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest, DesktopListHoldsRequest,
+    BackendHealthView, CascadeCancelPreview, DesktopInterruptRequest,
     DesktopListSubagentTreeRequest, DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
-    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest,
-    DesktopResolveHoldRequest, HeldToolCallView, InferenceCallSummaryView, InterruptRequestResult,
-    MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView, ResolveHoldResult,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, InferenceCallSummaryView,
+    InterruptRequestResult, MCPServiceHealthView, McpServiceProbeResult, NativeExecutorStatusView,
     RuntimeLivenessView, SubagentEdgeView, SubagentNodeView, SubagentTreeView,
 };
 
@@ -615,73 +614,4 @@ pub(crate) async fn probe_mcp_service_for_core(
     probe_mcp_service(core.as_ref(), &request.service_id)
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))
-}
-
-#[tauri::command]
-pub async fn desktop_list_tool_call_holds(
-    state: State<'_, DesktopAppState>,
-    request: DesktopListHoldsRequest,
-) -> Result<Vec<HeldToolCallView>, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    list_tool_call_holds_for_core(core, request).await
-}
-
-pub async fn list_tool_call_holds_for_core(
-    core: Arc<ClientCore>,
-    request: DesktopListHoldsRequest,
-) -> Result<Vec<HeldToolCallView>, BridgeError> {
-    let held = core
-        .list_tool_call_holds(&request.agent_did)
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(held
-        .into_iter()
-        .map(|call| HeldToolCallView {
-            tool_call_doc_id: call.tool_call_doc_id,
-            tool_call_id: call.tool_call_id,
-            request_id: call.request_id,
-            session_id: call.session_id,
-            agent_did: call.agent_did,
-            tool_name: call.tool_name,
-            args: call.args,
-            deadline_at: call.deadline_at,
-        })
-        .collect())
-}
-
-#[tauri::command]
-pub async fn desktop_resolve_tool_call_hold(
-    state: State<'_, DesktopAppState>,
-    request: DesktopResolveHoldRequest,
-) -> Result<ResolveHoldResult, BridgeError> {
-    let Some(core) = current_core(&state) else {
-        return Err(BridgeError::untyped("desktop client is not running"));
-    };
-    resolve_tool_call_hold_for_core(core, request).await
-}
-
-pub async fn resolve_tool_call_hold_for_core(
-    core: Arc<ClientCore>,
-    request: DesktopResolveHoldRequest,
-) -> Result<ResolveHoldResult, BridgeError> {
-    let approval_id = core
-        .resolve_tool_call_hold(
-            &request.agent_did,
-            &request.tool_call_id,
-            request.approve,
-            request.reason.clone(),
-        )
-        .await
-        .map_err(|error| BridgeError::untyped(error.to_string()))?;
-    Ok(ResolveHoldResult {
-        approval_id,
-        tool_call_id: request.tool_call_id,
-        decision: if request.approve {
-            "approved".to_string()
-        } else {
-            "denied".to_string()
-        },
-    })
 }

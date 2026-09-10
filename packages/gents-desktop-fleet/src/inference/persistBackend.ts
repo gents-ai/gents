@@ -1,54 +1,57 @@
 import type {
-  BackendSaveRequest,
-  BehaviorSaveRequest,
+  BackendAuth,
+  BackendProviderKind,
+  ConfigComponentsPatchRequest,
   DeploymentView,
+  OpenAiWireApi,
 } from "@source-inc/gents-desktop-client";
 
-import { behaviorSaveFrom, resolveTargets } from "./resolveTargets.js";
+import { resolveTargets } from "./resolveTargets.js";
 
 export type PersistBackendOptions = {
   name: string;
-  providerKind: string;
+  providerKind: BackendProviderKind;
   endpoint: string;
-  models: string[];
-  apiKey?: string;
-  clearApiKey?: boolean;
-  openaiWireApi?: string;
+  modelName: string;
+  auth: BackendAuth;
+  openaiWireApi?: OpenAiWireApi;
 };
 
 export async function persistInferenceBackend({
   deployment,
   options,
-  onSaveBackendConfig,
-  onSaveBehaviorConfig,
+  onPatchConfigComponents,
 }: {
   deployment: DeploymentView;
   options: PersistBackendOptions;
-  onSaveBackendConfig: (request: BackendSaveRequest) => Promise<unknown>;
-  onSaveBehaviorConfig: (request: BehaviorSaveRequest) => Promise<unknown>;
+  onPatchConfigComponents: (
+    request: ConfigComponentsPatchRequest,
+  ) => Promise<unknown>;
 }) {
   const targets = resolveTargets(deployment);
-  if (!targets.behavior || !targets.backendId) {
+  if (!targets.profile || !targets.backend) {
     throw new Error(targets.error ?? "Inference target binding is unavailable");
   }
-  await onSaveBackendConfig({
-    backendId: targets.backendId,
-    name: options.name,
-    providerKind: options.providerKind,
-    openaiWireApi: options.openaiWireApi,
-    endpoint: options.endpoint,
-    apiKey: options.apiKey,
-    maxConcurrent: targets.backend?.maxConcurrent ?? undefined,
-    maxQueueDepth: targets.backend?.maxQueueDepth ?? undefined,
-    clearApiKey: options.clearApiKey ?? false,
-    models: options.models,
-    enabled: true,
+  await onPatchConfigComponents({
+    agentDid: deployment.agentDid,
+    patches: [
+      {
+        collection: "InferenceBackend",
+        id: targets.backend.backendId,
+        changes: {
+          name: options.name,
+          provider_kind: options.providerKind,
+          endpoint: options.endpoint,
+          auth: options.auth,
+          openai_wire_api: options.openaiWireApi ?? null,
+          enabled: true,
+        },
+      },
+      {
+        collection: "InferenceProfile",
+        id: targets.profile.profile_id,
+        changes: { model_name: options.modelName },
+      },
+    ],
   });
-  await onSaveBehaviorConfig(
-    behaviorSaveFrom(
-      targets.behavior,
-      deployment.agentDid,
-      targets.backendId,
-    ),
-  );
 }

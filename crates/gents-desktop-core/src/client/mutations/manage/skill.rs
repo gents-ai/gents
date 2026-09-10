@@ -1,149 +1,130 @@
-//! `Skill` mutations for the desktop client.
-//!
-//! A `Skill` is an apply-owned document (decision D1): a reusable instruction
-//! + tool-dependency fragment owned by a principal (`agent_did`). Every field
-//! is operator-authored — the runtime never writes skills back — so this
-//! writer projects all of them. `tool_refs` is a `[String!]` and MUST render
-//! an empty list as `null`, never `[]` (AGENTS.md sharp edge: a bare `[]`
-//! literal types as `JsonArray` and corrupts the nillable array column); the
-//! shared `graphql_string_list_field` helper enforces that.
-//!
-//! Mirrors the simpler `upsert_*` shape the other manage writers use; the
-//! CLI's `commands/config/skill.rs` carries the import/export + SKILL.md
-//! parsing surface, which the desktop intentionally does not duplicate.
-
-use anyhow::{Context, Result};
-use chrono::Utc;
+//! Canonical authored configuration through the shared retained-candidate owner.
+use anyhow::Result;
 use defra_node::EmbeddedNode;
-use gents_protocol::row::SkillRow;
-use serde_json::Value;
-
-use super::super::graphql::{
-    escape_graphql_string, execute_mutation, graphql_optional_bool_field, graphql_string_field,
-    graphql_string_list_field, join_fields, normalize_required,
+use gents::collection::Collection;
+use gents::config_client::{
+    ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan, apply_desired_state_plan,
 };
+use gents::document_config::SkillDocument;
 
-pub async fn upsert_skill(node: &EmbeddedNode, row: &SkillRow) -> Result<()> {
-    let skill_id = normalize_required("skill_id", &row.skill_id)?;
-    let agent_did = normalize_required(
-        "agent_did",
-        row.agent_did
-            .as_deref()
-            .context("agent_did is required for Skill")?,
-    )?;
-    let created_at = row
-        .created_at
-        .as_deref()
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
-
-    let add_fields = [
-        Some(format!(
-            r#"skill_id: "{}""#,
-            escape_graphql_string(skill_id)
-        )),
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(agent_did)
-        )),
-        Some(graphql_string_field("scope", row.scope.as_deref())),
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "description",
-            row.description.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "instructions",
-            row.instructions.as_deref(),
-        )),
-        Some(graphql_string_list_field("tool_refs", &row.tool_refs)),
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "interface_json",
-            row.interface_json.as_deref(),
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-        Some(format!(
-            r#"created_at: "{}""#,
-            escape_graphql_string(&created_at)
-        )),
-    ];
-    let update_fields = [
-        Some(format!(
-            r#"agent_did: "{}""#,
-            escape_graphql_string(agent_did)
-        )),
-        Some(graphql_string_field("scope", row.scope.as_deref())),
-        Some(graphql_string_field("name", row.name.as_deref())),
-        Some(graphql_string_field(
-            "description",
-            row.description.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "instructions",
-            row.instructions.as_deref(),
-        )),
-        Some(graphql_string_list_field("tool_refs", &row.tool_refs)),
-        Some(graphql_string_field(
-            "display_name",
-            row.display_name.as_deref(),
-        )),
-        Some(graphql_string_field(
-            "interface_json",
-            row.interface_json.as_deref(),
-        )),
-        Some(graphql_optional_bool_field("enabled", row.enabled)),
-    ];
-
-    let mutation = format!(
-        r#"mutation {{
-            upsert_Skill(
-                filter: {{ skill_id: {{ _eq: "{skill_id}" }} }},
-                add: {{
-                    {add_fields}
-                }},
-                update: {{
-                    {update_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        skill_id = escape_graphql_string(skill_id),
-        add_fields = join_fields(&add_fields),
-        update_fields = join_fields(&update_fields),
-    );
-    execute_mutation(node, &mutation, "upsert_skill").await
+pub async fn upsert_skill(node: &EmbeddedNode, document: &SkillDocument) -> Result<()> {
+    let value = serde_json::to_value(document)?;
+    let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+        collection: Collection::Skill,
+        add: value.clone(),
+        update: value,
+    }])?;
+    ConfigAccess::transact_local(node, None, "desktop.skill.save", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(())
+        })
+    })
+    .await
 }
 
-pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, skill_id: &str) -> Result<usize> {
-    let mutation = build_delete_skill_mutation(agent_did, skill_id)?;
-    let response =
-        super::super::graphql::execute_mutation_response(node, &mutation, "desktop.skill.delete")
-            .await?;
-    Ok(response
-        .pointer("/data/delete_Skill")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0))
+pub async fn delete_skill(node: &EmbeddedNode, agent_did: &str, id: &str) -> Result<usize> {
+    let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+        Collection::Skill,
+        agent_did.to_owned(),
+        id.to_owned(),
+    )])?;
+    ConfigAccess::transact_local(node, None, "desktop.skill.delete", |txn| {
+        let plan = &plan;
+        Box::pin(async move {
+            let existed = gents::config_client::read_desired_state_record_in_txn(
+                txn,
+                Collection::Skill,
+                agent_did,
+                id,
+            )
+            .await?
+            .is_some();
+            apply_desired_state_plan(txn, plan).await?;
+            Ok(usize::from(existed))
+        })
+    })
+    .await
 }
 
-fn build_delete_skill_mutation(agent_did: &str, skill_id: &str) -> Result<String> {
-    let agent_did = normalize_required("agent_did", agent_did)?;
-    let skill_id = normalize_required("skill_id", skill_id)?;
-    let agent_did = escape_graphql_string(agent_did);
-    let skill_id = escape_graphql_string(skill_id);
-    Ok(format!(
-        r#"mutation {{
-            delete_Skill(
-                filter: {{
-                    _and: [
-                        {{ skill_id: {{ _eq: "{skill_id}" }} }},
-                        {{ agent_did: {{ _eq: "{agent_did}" }} }}
-                    ]
-                }}
-            ) {{ _docID }}
-        }}"#
-    ))
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gents::config_client::read_desired_state_record_in_txn;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn skill_delete_rejects_context_references_without_detaching_or_cross_owner_effects()
+    -> Result<()> {
+        let node = EmbeddedNode::builder().build().await?;
+        gents::ensure_runtime_schemas(&node).await?;
+        for owner in ["did:test:skill-a", "did:test:skill-b"] {
+            gents::ensure_agent_principal(&node, owner).await?;
+            let document: SkillDocument = serde_json::from_value(
+                json!({"agent_did":owner,"skill_id":"skill","instructions":"Literal {{ instruction }}","created_at":"2026-01-01T00:00:00Z","tags":["review"]}),
+            )?;
+            upsert_skill(&node, &document).await?;
+        }
+        let value =
+            json!({"agent_did":"did:test:skill-a","context_id":"context","skill_ids":["skill"]});
+        let plan = DesiredStateApplyPlan::new(vec![DesiredStateApplyDocument {
+            collection: Collection::AgentContext,
+            add: value.clone(),
+            update: value,
+        }])?;
+        ConfigAccess::transact_local(&node, None, "desktop.skill.context", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(txn, plan).await?;
+                Ok(())
+            })
+        })
+        .await?;
+        assert!(
+            delete_skill(&node, "did:test:skill-a", "skill")
+                .await
+                .is_err()
+        );
+        assert_eq!(delete_skill(&node, "did:test:skill-b", "skill").await?, 1);
+        ConfigAccess::transact_local(&node, None, "desktop.skill.verify", |txn| {
+            Box::pin(async move {
+                let (_, context) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentContext,
+                    "did:test:skill-a",
+                    "context",
+                )
+                .await?
+                .unwrap();
+                assert_eq!(context["skill_ids"], json!(["skill"]));
+                let (_, skill) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::Skill,
+                    "did:test:skill-a",
+                    "skill",
+                )
+                .await?
+                .unwrap();
+                let skill: SkillDocument = serde_json::from_value(skill)?;
+                assert_eq!(
+                    skill.instructions.as_deref(),
+                    Some("Literal {{ instruction }}")
+                );
+                assert_eq!(skill.created_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+                assert_eq!(skill.tags, vec!["review"]);
+                let plan = DesiredStateApplyPlan::new(Vec::new())?.with_removals(vec![(
+                    Collection::AgentContext,
+                    "did:test:skill-a".into(),
+                    "context".into(),
+                )])?;
+                apply_desired_state_plan(txn, &plan).await?;
+                Ok(())
+            })
+        })
+        .await?;
+        assert_eq!(delete_skill(&node, "did:test:skill-a", "skill").await?, 1);
+        assert_eq!(delete_skill(&node, "did:test:skill-a", "skill").await?, 0);
+        Ok(())
+    }
 }

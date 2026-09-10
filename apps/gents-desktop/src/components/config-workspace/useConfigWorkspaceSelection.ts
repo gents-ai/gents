@@ -14,9 +14,7 @@ export function useConfigWorkspaceSelection(
   >(null);
   const [selectedBackendId, setSelectedBackendId] = useState<string | null>(null);
   const [selectedProfileId, setSelectedProfileId] = useState<string | null>(null);
-  const [selectedToolSelectionId, setSelectedToolSelectionId] = useState<string | null>(
-    null,
-  );
+  const [selectedToolsId, setSelectedToolsId] = useState<string | null>(null);
   const [selectedToolServiceId, setSelectedToolServiceId] = useState<string | null>(
     null,
   );
@@ -52,7 +50,7 @@ export function useConfigWorkspaceSelection(
       setSelectedConfigBehaviorId(null);
       setSelectedBackendId(null);
       setSelectedProfileId(null);
-      setSelectedToolSelectionId(null);
+      setSelectedToolsId(null);
       setSelectedToolServiceId(null);
       setSelectedSkillId(null);
       setSelectedTaskId(null);
@@ -70,7 +68,9 @@ export function useConfigWorkspaceSelection(
     );
     ensureSelection(
       selectedBackendId,
-      selectedBehavior?.backendId ?? null,
+      selectedDeployment.inferenceProfiles.find(
+        (profile) => profile.profile_id === selectedBehavior?.inferenceProfileId,
+      )?.backend_id ?? null,
       (id) =>
         selectedDeployment.inferenceBackends.some(
           (backend) => backend.backendId === id,
@@ -82,25 +82,24 @@ export function useConfigWorkspaceSelection(
       selectedBehavior?.inferenceProfileId ?? null,
       (id) =>
         selectedDeployment.inferenceProfiles.some(
-          (profile) => profile.profileId === id,
+          (profile) => profile.profile_id === id,
         ),
       setSelectedProfileId,
     );
     ensureSelection(
-      selectedToolSelectionId,
-      selectedBehavior?.toolSelectionId ?? null,
-      (id) =>
-        selectedDeployment.toolSelections.some(
-          (selection) => selection.selectionId === id,
-        ),
-      setSelectedToolSelectionId,
+      selectedToolsId,
+      selectedDeployment.contexts.find(
+        (context) => context.context_id === selectedBehavior?.contextId,
+      )?.tools_id ?? null,
+      (id) => selectedDeployment.tools.some((selection) => selection.tools_id === id),
+      setSelectedToolsId,
     );
     ensureSelection(
       selectedToolServiceId,
       selectedDeployment.toolServiceRegistries[0]?.serviceId ?? null,
       (id) =>
         selectedDeployment.toolServiceRegistries.some(
-          (service) => service.serviceId === id,
+          (service) => service.service_id === id,
         ),
       setSelectedToolServiceId,
     );
@@ -141,7 +140,7 @@ export function useConfigWorkspaceSelection(
     selectedScheduleId,
     selectedSkillId,
     selectedTaskId,
-    selectedToolSelectionId,
+    selectedToolsId,
     selectedToolServiceId,
   ]);
 
@@ -156,30 +155,29 @@ export function useConfigWorkspaceSelection(
     if (!behavior || !selectedDeployment) {
       return;
     }
+    const backendId = selectedDeployment.inferenceProfiles.find(
+      (profile) => profile.profile_id === behavior.inferenceProfileId,
+    )?.backend_id;
     if (
-      behavior.backendId &&
+      backendId &&
       selectedDeployment.inferenceBackends.some(
-        (backend) => backend.backendId === behavior.backendId,
+        (backend) => backend.backendId === backendId,
       )
-    ) {
-      setSelectedBackendId(behavior.backendId);
-    }
+    )
+      setSelectedBackendId(backendId);
     if (
       behavior.inferenceProfileId &&
       selectedDeployment.inferenceProfiles.some(
-        (profile) => profile.profileId === behavior.inferenceProfileId,
+        (profile) => profile.profile_id === behavior.inferenceProfileId,
       )
     ) {
       setSelectedProfileId(behavior.inferenceProfileId);
     }
-    if (
-      behavior.toolSelectionId &&
-      selectedDeployment.toolSelections.some(
-        (selection) => selection.selectionId === behavior.toolSelectionId,
-      )
-    ) {
-      setSelectedToolSelectionId(behavior.toolSelectionId);
-    }
+    const toolsId = selectedDeployment.contexts.find(
+      (context) => context.context_id === behavior.contextId,
+    )?.tools_id;
+    if (toolsId && selectedDeployment.tools.some((tools) => tools.tools_id === toolsId))
+      setSelectedToolsId(toolsId);
   }
 
   return {
@@ -194,7 +192,7 @@ export function useConfigWorkspaceSelection(
     selectedScheduleId,
     selectedSkillId,
     selectedTaskId,
-    selectedToolSelectionId,
+    selectedToolsId,
     selectedToolServiceId,
     setActiveTab,
     setSavedStatus,
@@ -205,7 +203,7 @@ export function useConfigWorkspaceSelection(
     setSelectedScheduleId,
     setSelectedSkillId,
     setSelectedTaskId,
-    setSelectedToolSelectionId,
+    setSelectedToolsId,
     setSelectedToolServiceId,
   };
 }

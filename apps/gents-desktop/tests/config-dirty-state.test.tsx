@@ -49,6 +49,7 @@ const backendHandlers = {
   onCreateBackend: vi.fn(),
   onSavedStatusChange: vi.fn(),
   onSaveBackendConfig: vi.fn(),
+  onPatchConfigComponents: vi.fn(),
 };
 
 describe("config dirty state", () => {
@@ -79,22 +80,20 @@ describe("config dirty state", () => {
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
   });
 
-  it("treats model separators semantically and clears a saved API key", async () => {
+  it("keeps advertised models read-only and clears a saved API key", async () => {
     const deployment = makeDeployment();
     deployment.inferenceBackends[0].models = ["m-1", "m-2"];
-    const onSaveBackendConfig = vi.fn().mockResolvedValue(undefined);
+    const onPatchConfigComponents = vi.fn().mockResolvedValue(undefined);
     render(
       <BackendConfigPanel
         deployment={deployment}
         selectedBackendId="backend-a"
         {...backendHandlers}
-        onSaveBackendConfig={onSaveBackendConfig}
+        onPatchConfigComponents={onPatchConfigComponents}
       />,
     );
 
-    fireEvent.change(screen.getByTestId("backend-models"), {
-      target: { value: "m-1, m-2" },
-    });
+    expect(screen.getByTestId("backend-models")).toHaveAttribute("readonly");
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByTestId("backend-api-key"), {
@@ -105,9 +104,16 @@ describe("config dirty state", () => {
 
     await waitFor(() => expect(screen.getByTestId("backend-api-key")).toHaveValue(""));
     expect(screen.queryByTestId("unsaved-chip")).not.toBeInTheDocument();
-    expect(onSaveBackendConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ models: ["m-1", "m-2"] }),
-    );
+    expect(onPatchConfigComponents).toHaveBeenCalledWith({
+      agentDid: "did:test:operator",
+      patches: [
+        {
+          collection: "InferenceBackend",
+          id: "backend-a",
+          changes: { auth: { kind: "api_key", key: "temporary-secret" } },
+        },
+      ],
+    });
   });
 
   it("marks the skill editor dirty on edit", () => {

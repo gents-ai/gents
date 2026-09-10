@@ -20,7 +20,6 @@ fn tool_status_kind(status: Option<&str>) -> String {
     match status.unwrap_or_default().to_ascii_lowercase().as_str() {
         "completed" | "complete" | "success" => "success".to_string(),
         "failed" | "error" | "cancelled" | "timedout" => "error".to_string(),
-        "awaitingapproval" => "awaitingApproval".to_string(),
         "pending" | "claimed" | "processing" | "running" => "running".to_string(),
         _ => "unknown".to_string(),
     }
@@ -120,7 +119,7 @@ fn overlay_has_durable_owner(
 fn tool_is_nonterminal(tool: &ToolCallView) -> bool {
     matches!(
         tool_status_kind(tool.lifecycle_state.as_deref()).as_str(),
-        "running" | "awaitingApproval"
+        "running"
     )
 }
 
@@ -411,11 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn status_kind_maps_awaiting_approval_and_terminals() {
-        assert_eq!(
-            tool_status_kind(Some("awaitingApproval")),
-            "awaitingApproval"
-        );
+    fn status_kind_maps_active_and_terminal_states() {
         assert_eq!(tool_status_kind(Some("completed")), "success");
         assert_eq!(tool_status_kind(Some("failed")), "error");
         assert_eq!(tool_status_kind(Some("cancelled")), "error");

@@ -120,16 +120,6 @@ description = "Interrupt request execution"
 permissions = ["allow-desktop-interrupt-request"]
 
 [[set]]
-identifier = "holds-read"
-description = "List tool-call holds"
-permissions = ["allow-desktop-list-tool-call-holds"]
-
-[[set]]
-identifier = "holds-control"
-description = "Resolve tool-call holds"
-permissions = ["allow-desktop-resolve-tool-call-hold"]
-
-[[set]]
 identifier = "runtime-admin"
 description = "Local runtime provisioning and managed server lifecycle"
 permissions = [
@@ -144,20 +134,23 @@ identifier = "config-write"
 description = "Config save/delete/test mutations"
 permissions = [
   "allow-desktop-agent-config-save",
+  "allow-desktop-config-components-apply",
+  "allow-desktop-config-components-patch",
   "allow-desktop-behavior-save",
   "allow-desktop-skill-save",
   "allow-desktop-skill-delete",
   "allow-desktop-task-delete",
   "allow-desktop-schedule-delete",
   "allow-desktop-event-trigger-delete",
+  "allow-desktop-event-source-delete",
   "allow-desktop-backend-delete",
   "allow-desktop-inference-profile-delete",
-  "allow-desktop-tool-selection-delete",
+  "allow-desktop-tools-delete",
   "allow-desktop-tool-service-delete",
   "allow-desktop-behavior-delete",
   "allow-desktop-backend-save",
   "allow-desktop-inference-profile-save",
-  "allow-desktop-tool-selection-save",
+  "allow-desktop-tools-save",
   "allow-desktop-tool-service-save",
   "allow-desktop-tool-service-test",
   "allow-desktop-probe-inference-endpoint",
@@ -181,6 +174,7 @@ permissions = [
   "allow-desktop-schedule-save",
   "allow-desktop-schedule-run",
   "allow-desktop-event-trigger-save",
+  "allow-desktop-event-source-save",
   "allow-desktop-task-run",
 ]
 
@@ -211,8 +205,6 @@ permissions = [
   "operations-read",
   "interrupt-read",
   "interrupt-control",
-  "holds-read",
-  "holds-control",
   "config-write",
   "provider-accounts-read",
   "tasks",

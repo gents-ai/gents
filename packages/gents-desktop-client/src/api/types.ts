@@ -1,3 +1,7 @@
+import type { ConfigComponentsApplyRequest } from "../generated/ConfigComponentsApplyRequest.js";
+import type { ConfigComponentsPatchRequest } from "../generated/ConfigComponentsPatchRequest.js";
+import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest.js";
+import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
@@ -41,8 +45,8 @@ import type {
   TaskRunRequest,
   TaskRunResult,
   TaskSaveRequest,
-  ToolSelectionDeleteRequest,
-  ToolSelectionSaveRequest,
+  ToolsDeleteRequest,
+  ToolsSaveRequest,
   ToolServiceDeleteRequest,
   ToolServiceSaveRequest,
   ToolServiceTestRequest,
@@ -53,9 +57,6 @@ import type {
 import type {
   DesktopOperationsSnapshot,
   DesktopOperationsSnapshotRequest,
-  DesktopResolveHoldRequest,
-  HeldToolCallView,
-  ResolveHoldResult,
 } from "../types/operations.js";
 
 export type DesktopApiAdapter = {
@@ -133,6 +134,8 @@ export type DesktopApiAdapter = {
   }) => Promise<void>;
   resendRequest: (requestId: string) => Promise<RequestResendResult>;
   retryRequest: (requestId: string) => Promise<ChatSendResult>;
+  applyConfigComponents: (request: ConfigComponentsApplyRequest) => Promise<DesktopClientSnapshot>;
+  patchConfigComponents: (request: ConfigComponentsPatchRequest) => Promise<DesktopClientSnapshot>;
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -151,6 +154,8 @@ export type DesktopApiAdapter = {
   deleteScheduleConfig: (
     request: ScheduleDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
+  saveEventSourceConfig: (request: EventSourceSaveRequest) => Promise<DesktopClientSnapshot>;
+  deleteEventSourceConfig: (request: EventSourceDeleteRequest) => Promise<DesktopClientSnapshot>;
   deleteEventTriggerConfig: (
     request: EventTriggerDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
@@ -160,8 +165,8 @@ export type DesktopApiAdapter = {
   deleteInferenceProfileConfig: (
     request: InferenceProfileDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
-  deleteToolSelectionConfig: (
-    request: ToolSelectionDeleteRequest,
+  deleteToolsConfig: (
+    request: ToolsDeleteRequest,
   ) => Promise<DesktopClientSnapshot>;
   deleteToolServiceConfig: (
     request: ToolServiceDeleteRequest,
@@ -191,8 +196,8 @@ export type DesktopApiAdapter = {
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
-  saveToolSelectionConfig: (
-    request: ToolSelectionSaveRequest,
+  saveToolsConfig: (
+    request: ToolsSaveRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveToolServiceConfig: (
     request: ToolServiceSaveRequest,
@@ -224,10 +229,6 @@ export type DesktopApiAdapter = {
   interruptRequest: (
     request: DesktopInterruptRequestRequest,
   ) => Promise<InterruptRequestResult>;
-  listToolCallHolds: (agentDid: string) => Promise<HeldToolCallView[]>;
-  resolveToolCallHold: (
-    request: DesktopResolveHoldRequest,
-  ) => Promise<ResolveHoldResult>;
 };
 
 export type { ManagedServerStatus };

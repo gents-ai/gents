@@ -1,9 +1,8 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, Context, Result};
-use gents::mcp_pool::{resolve_mcp_url, McpPool};
+use anyhow::{Context, Result, anyhow, bail};
+use gents::mcp_pool::{McpPool, resolve_mcp_url};
 use gents_desktop_core::client::ClientCore;
-use gents_protocol::row::ToolServiceRegistryRow;
 
 use super::super::types::{
     ToolServiceSaveRequest, ToolServiceTestRequest, ToolServiceTestResult, ToolServiceToolView,
@@ -39,57 +38,7 @@ pub async fn save_tool_service_config(
     core: &ClientCore,
     request: ToolServiceSaveRequest,
 ) -> Result<()> {
-    let service_id = require_trimmed("service_id", request.service_id)?;
-    let display_name = require_trimmed("display_name", request.display_name)?;
-
-    let store = core.store().snapshot();
-    let mut row = store
-        .tool_service_registries
-        .iter()
-        .find(|row| row.service_id == service_id)
-        .cloned()
-        .unwrap_or_else(|| ToolServiceRegistryRow {
-            service_id: service_id.clone(),
-            display_name: None,
-            description: None,
-            hostname: None,
-            tailscale_ip: None,
-            lan_ip: None,
-            mcp_port: None,
-            mcp_path: None,
-            send_agent_did: false,
-            tools: Vec::new(),
-            status: None,
-            version: None,
-            updated_at: None,
-        });
-    row.display_name = Some(display_name);
-    row.description = trim_optional(request.description);
-    row.hostname = trim_optional(request.hostname);
-    row.tailscale_ip = trim_optional(request.tailscale_ip);
-    row.lan_ip = trim_optional(request.lan_ip);
-    anyhow::ensure!(
-        row.hostname.is_some() || row.tailscale_ip.is_some() || row.lan_ip.is_some(),
-        "hostname, tailscale_ip, or lan_ip is required"
-    );
-    let mcp_port = request.mcp_port.context("mcp_port is required")?;
-    anyhow::ensure!(
-        (1..=u16::MAX as i64).contains(&mcp_port),
-        "mcp_port must be between 1 and 65535"
-    );
-    row.mcp_port = Some(mcp_port);
-    row.mcp_path = Some(require_trimmed(
-        "mcp_path",
-        request.mcp_path.unwrap_or_default(),
-    )?);
-    let status = require_trimmed("status", request.status.unwrap_or_default())?;
-    anyhow::ensure!(
-        matches!(status.as_str(), "online" | "offline" | "disabled"),
-        "status must be online, offline, or disabled"
-    );
-    row.status = Some(status);
-    core.save_tool_service_registry(&row).await?;
-    Ok(())
+    core.save_tool_service_registry(&request.document).await
 }
 
 pub async fn test_tool_service_config(
