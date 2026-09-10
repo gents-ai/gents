@@ -204,23 +204,6 @@ def receiverThreadId (link : SubagentThreadLink) : String :=
 theorem receiver_thread_is_child_session (link : SubagentThreadLink) :
     receiverThreadId link = link.childSessionId := rfl
 
-structure CollabPresentationMetadata where
-  model : Option String
-  reasoningEffort : Option String
-  deriving DecidableEq, Repr
-
-def projectCollabPresentationMetadata
-    (metadata : CollabPresentationMetadata) : CollabPresentationMetadata :=
-  metadata
-
-theorem collab_model_is_runtime_model (metadata : CollabPresentationMetadata) :
-    (projectCollabPresentationMetadata metadata).model = metadata.model := rfl
-
-theorem absent_runtime_reasoning_effort_stays_absent
-    (model : Option String) :
-    (projectCollabPresentationMetadata
-      { model := model, reasoningEffort := none }).reasoningEffort = none := rfl
-
 inductive ThreadSourceFilter where
   | cli
   | subAgent
@@ -456,15 +439,16 @@ inductive ThreadPresentationStatus where
   | systemError
   deriving DecidableEq, Repr
 
-def projectThreadStatus
-    (head : Option ClientHeadProjection)
-    (conversationStatus : String) : ThreadPresentationStatus :=
+/-- Presentation consumes the selected request observation (including the compact
+session observation on index-only peers). It never invents a second conversation
+status vocabulary; choosing the exact latest identity belongs to the caller. -/
+def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentationStatus :=
   match head with
   | some ⟨.waitingForClaim, _⟩ | some ⟨.streaming, _⟩ => .active
   | some ⟨.failed, _⟩ => .systemError
   | some ⟨.completed, _⟩ | some ⟨.superseded, _⟩
   | some ⟨.interrupted, _⟩ => .idle
-  | none => if conversationStatus = "error" then .systemError else .idle
+  | none => .idle
 
 def projectionBehaviorId (rootBehaviorId : String)
     (threadBehaviorId : Option String) : String :=
@@ -511,22 +495,19 @@ def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
   persisted.getD observed
 
 theorem active_request_projects_active_thread :
-    projectThreadStatus (some ⟨.waitingForClaim, .processing⟩) "completed" = .active := rfl
+    projectThreadStatus (some ⟨.waitingForClaim, .processing⟩) = .active := rfl
 
 theorem terminal_response_projects_idle_thread_before_request_terminalizes :
-    projectThreadStatus (some ⟨.completed, .processing⟩) "active" = .idle := rfl
+    projectThreadStatus (some ⟨.completed, .processing⟩) = .idle := rfl
 
 theorem failed_request_projects_system_error_thread :
-    projectThreadStatus (some ⟨.failed, .failed⟩) "active" = .systemError := rfl
+    projectThreadStatus (some ⟨.failed, .failed⟩) = .systemError := rfl
 
 theorem completed_request_projects_idle_thread :
-    projectThreadStatus (some ⟨.completed, .completed⟩) "error" = .idle := rfl
+    projectThreadStatus (some ⟨.completed, .completed⟩) = .idle := rfl
 
-theorem missing_request_error_conversation_projects_system_error :
-    projectThreadStatus none "error" = .systemError := rfl
-
-theorem missing_request_active_conversation_is_quiescent :
-    projectThreadStatus none "active" = .idle := rfl
+theorem missing_request_observation_is_quiescent :
+    projectThreadStatus none = .idle := rfl
 
 theorem child_behavior_overrides_root_for_response_metadata :
     projectionBehaviorId "root" (some "child") = "child" := rfl

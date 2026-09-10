@@ -52,63 +52,25 @@ theorem interrupted_request_cancels_live_linked_tools
     h_wf.allToolsCoherent toolPre h_in h_live_kind
   obtain ⟨h_linked, h_deadline_eq, h_time_eq⟩ := h_coherent
   obtain ⟨idx, h_idx⟩ := List.mem_iff_getElem?.mp h_in
-  cases h_live with
-  | inl h_pending =>
-    have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
-                      { toolPre with state := .cancelled } :=
-      ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch .interrupted h_pending rfl
-    let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
-    let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-    refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
-    · refine Trace.step ?_ Trace.refl
-      refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
-              ⟨h_linked, h_deadline_eq, h_time_eq⟩
-              ⟨h_linked, h_deadline_eq, h_time_eq⟩
-              (fun h_det =>
-                absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
-                  h_live_kind)
-              (fun h_bg h_fg => ?_)
-      simp [toolPost, h_bg] at h_fg
-    · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
-      simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
-  | inr h_rest =>
-    cases h_rest with
-    | inl h_held =>
-      have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
-                        { toolPre with state := .cancelled } :=
-        ToolExecution.ToolCallContext.Transition.cancelWhileHeld .interrupted h_held rfl
-      let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
-      let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-      refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
-      · refine Trace.step ?_ Trace.refl
-        refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
-                ⟨h_linked, h_deadline_eq, h_time_eq⟩
-                ⟨h_linked, h_deadline_eq, h_time_eq⟩
-                (fun h_det =>
-                  absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
-                    h_live_kind)
-                (fun h_bg h_fg => ?_)
-        simp [toolPost, h_bg] at h_fg
-      · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
-        simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
-    | inr h_running =>
-      have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
-                        { toolPre with state := .cancelled } :=
-        ToolExecution.ToolCallContext.Transition.cancelDuringRun .interrupted h_running rfl
-      let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
-      let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
-      refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
-      · refine Trace.step ?_ Trace.refl
-        refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
-                ⟨h_linked, h_deadline_eq, h_time_eq⟩
-                ⟨h_linked, h_deadline_eq, h_time_eq⟩
-                (fun h_det =>
-                  absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
-                    h_live_kind)
-                (fun h_bg h_fg => ?_)
-        simp [toolPost, h_bg] at h_fg
-      · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
-        simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
+  have h_t_step : ToolExecution.ToolCallContext.Transition toolPre
+      { toolPre with state := .cancelled } := by
+    rcases h_live with h_pending | h_running
+    · exact ToolExecution.ToolCallContext.Transition.cancelBeforeDispatch .interrupted h_pending rfl
+    · exact ToolExecution.ToolCallContext.Transition.cancelDuringRun .interrupted h_running rfl
+  let toolPost : ToolExecution.ToolCallContext := { toolPre with state := .cancelled }
+  let post : ComposedState := { pre with tools := pre.tools.set idx toolPost }
+  refine ⟨post, toolPost, ?_, rfl, h_interrupted, ?_, rfl, h_linked⟩
+  · refine Trace.step ?_ Trace.refl
+    refine Transition.tool_step h_idx h_t_step rfl rfl rfl rfl rfl
+      ⟨h_linked, h_deadline_eq, h_time_eq⟩
+      ⟨h_linked, h_deadline_eq, h_time_eq⟩
+      (fun h_det =>
+        absurd (show IsDetached toolPre by simpa [IsDetached, toolPost] using h_det)
+          h_live_kind)
+      (fun h_bg h_fg => ?_)
+    simp [toolPost, h_bg] at h_fg
+  · have h_lt : idx < pre.tools.length := (List.getElem?_eq_some_iff.mp h_idx).1
+    simpa [post, toolPost] using List.mem_set pre.tools idx h_lt toolPost
 
 theorem interrupted_request_cancels_live_linked_tools_from_initial
     {pre : ComposedState} {toolPre : ToolExecution.ToolCallContext}

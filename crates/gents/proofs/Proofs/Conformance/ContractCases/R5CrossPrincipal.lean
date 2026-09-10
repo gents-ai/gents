@@ -2,16 +2,16 @@ import Proofs.Conformance.ContractCases.Types
 
 namespace Conformance.ContractCases
 
-def r5CrossDeploymentCase
-    (name route parentDeployment childDeployment parentRequestId parentToolCallId
+def r5CrossPrincipalCase
+    (name route parentPrincipal childPrincipal parentRequestId parentToolCallId
       childRequestId targetBehaviorId : String)
-    (crossDeploymentRoutingFired singleDeploymentFallback unclaimedDeadlineSet : Bool) :
-    R5CrossDeploymentCase :=
+    (crossPrincipalRoutingFired samePrincipalFallback unclaimedDeadlineSet : Bool) :
+    R5CrossPrincipalCase :=
   { name := name
   , route := route
   , action := "spawn_subagent"
-  , parentDeployment := parentDeployment
-  , childDeployment := childDeployment
+  , parentPrincipal := parentPrincipal
+  , childPrincipal := childPrincipal
   , parentRequestId := parentRequestId
   , parentToolCallId := parentToolCallId
   , childRequestId := childRequestId
@@ -20,21 +20,21 @@ def r5CrossDeploymentCase
   , cancelPolicy := "cascade"
   , parentTriggerPersisted := true
   , childMaterialized := true
-  , childOwnedByTargetDeployment := true
+  , childOwnedByTargetPrincipal := true
   , causedByParentRequestIdMatches := true
   , causedByParentToolCallIdMatches := true
   , causedByTriggerKind := "subagent"
-  , crossDeploymentRoutingFired := crossDeploymentRoutingFired
-  , singleDeploymentFallback := singleDeploymentFallback
+  , crossPrincipalRoutingFired := crossPrincipalRoutingFired
+  , samePrincipalFallback := samePrincipalFallback
   , unclaimedDeadlineSet := unclaimedDeadlineSet
   }
 
-def r5CrossDeploymentCases : List R5CrossDeploymentCase :=
-  [ r5CrossDeploymentCase
-      "r5_cross_deployment_background_claim_materializes_child"
-      "cross_deployment"
-      "deployment_a"
-      "deployment_b"
+def r5CrossPrincipalCases : List R5CrossPrincipalCase :=
+  [ r5CrossPrincipalCase
+      "r5_cross_principal_background_claim_materializes_child"
+      "cross_principal"
+      "did:principal-a"
+      "did:principal-b"
       "r5-lean-cross-parent"
       "r5-lean-cross-tool"
       "runtime_generated"
@@ -42,11 +42,11 @@ def r5CrossDeploymentCases : List R5CrossDeploymentCase :=
       true
       false
       true
-  , r5CrossDeploymentCase
-      "r5_single_deployment_background_fallback_materializes_child"
-      "single_deployment"
-      "deployment_a"
-      "deployment_a"
+  , r5CrossPrincipalCase
+      "r5_same_principal_background_fallback_materializes_child"
+      "same_principal"
+      "did:principal-a"
+      "did:principal-a"
       "r5-lean-local-parent"
       "r5-lean-local-tool"
       "runtime_generated"

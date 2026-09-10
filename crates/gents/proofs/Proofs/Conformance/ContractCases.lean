@@ -7,7 +7,7 @@ import Proofs.Conformance.ContractCases.LiveOverlay
 import Proofs.Conformance.ContractCases.QueueDeadline
 import Proofs.Conformance.ContractCases.R6Background
 import Proofs.Conformance.ContractCases.BridgeStep
-import Proofs.Conformance.ContractCases.R5CrossDeployment
+import Proofs.Conformance.ContractCases.R5CrossPrincipal
 import Proofs.Conformance.ContractCases.ComposedInvariants
 import Proofs.Conformance.ContractCases.CancelPropagation
 import Proofs.Conformance.ContractCases.SubagentDelegation

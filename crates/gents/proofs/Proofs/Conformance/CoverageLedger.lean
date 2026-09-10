@@ -179,7 +179,7 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.agentFacing, Surface.runtimeInternal, Surface.operatorUi]
     , deferred := []
     }
-  , { feature := "subagents-cross-deployment"
+  , { feature := "subagents-cross-principal"
     , required := [Surface.agentFacing, Surface.api, Surface.operatorUi]
     , deferred := []
     }
@@ -328,7 +328,7 @@ def vocabularyCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "SessionRecoveryLatestRequestState"
-      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "vocabulary"
@@ -454,13 +454,8 @@ def stateMachineCoverage : List CoverageEntry :=
       "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
-      "PairingReconcile"
-      "agent::reconcile::tests::pairing_reconcile_state_machine_contract_is_complete")
-      "pairing-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
-      "state_machine"
       "SessionRecovery"
-      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
@@ -484,21 +479,6 @@ def stateMachineCoverage : List CoverageEntry :=
       "eth-submission" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "state_machine"
-      "AwaitMode"
-      "conformance::lean_emits_await_mode_vocabulary")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "state_machine"
-      "CancelPolicy"
-      "conformance::lean_emits_cancel_policy_vocabulary")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "state_machine"
-      "ChildTerminal"
-      "conformance::lean_emits_child_terminal_vocabulary_and_projections")
-      "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "state_machine"
       "Goal"
       "conformance::goals::rust_goal_status_vocabulary_and_machine_match_lean_contract")
       "durable-goals" [Surface.runtimeInternal]
@@ -510,7 +490,17 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (consumerCoverage
+  [ tagged (followUpCoverage
+      "pairing_reconcile_cases"
+      "PairingReconcileCases"
+      "Conformance layer: replace the retired phase-table consumer with actual multi-resource reconciliation samples.")
+      "pairing-reconcile" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "child_failure_projections"
+      "ChildFailureProjections"
+      "Conformance layer: consume bridge-derived child/tool projections; AwaitMode and CancelPolicy remain vocabularies, not machines.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "lifecycle_transition_cases"
       "RequestTransitions"
       "conformance::generated_request_transition_cases_cover_lifecycle_policy")
@@ -655,10 +645,10 @@ def caseCoverage : List CoverageEntry :=
       "StartupReadinessCases"
       "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
       "runtime-reconcile" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
-      "config_import::lean_apply_write_boundary_tests::generated_apply_reconcile_cases_fence_production_apply_write_boundary")
+      "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
@@ -683,7 +673,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "session_recovery_cases"
       "SessionRecoveryCases"
-      "conformance::generated_session_recovery_cases_drive_db_backed_reissue_contract")
+      "gents_desktop_core::client::mutations::chat::request::tests::generated_session_recovery_cases_drive_desktop_retry_request")
       "session-recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "slot_cases"
@@ -950,11 +940,6 @@ def caseCoverage : List CoverageEntry :=
       "conformance::graph_pipeline::generated_run_terminal_cases_fence_completion_cas")
       "graph-pipeline" [Surface.runtimeInternal]
   , tagged (consumerCoverage
-      "recovery_equivalence_cases"
-      "RecoveryEquivalenceCases"
-      "conformance::generated_recovery_equivalence_cases_pin_uninterrupted_convergence_contract")
-      "recovery" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
       "conformance::generated_restart_disposition_cases_drive_recover_all")
@@ -965,20 +950,20 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "r5_cross_deployment_cases"
-      "R5CrossDeploymentCases"
-      "conformance::generated_r5_cross_deployment_cases_drive_production_dispatch")
-      "subagents-cross-deployment" [Surface.agentFacing]
+      "r5_cross_principal_cases"
+      "R5CrossPrincipalCases"
+      "conformance::generated_r5_cross_principal_cases_drive_production_dispatch")
+      "subagents-cross-principal" [Surface.agentFacing]
   , tagged (consumerCoverage
-      "r5_cross_deployment_cases"
-      "R5CrossDeploymentCases"
+      "r5_cross_principal_cases"
+      "R5CrossPrincipalCases"
       "http::r5_dispatch::tests::subagent_dispatch_endpoint_matches_agent_request_parent_walk")
-      "subagents-cross-deployment" [Surface.api]
+      "subagents-cross-principal" [Surface.api]
   , tagged (consumerCoverage
-      "r5_cross_deployment_cases"
-      "R5CrossDeploymentCases"
-      "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_deployment_contract_cases")
-      "subagents-cross-deployment" [Surface.operatorUi]
+      "r5_cross_principal_cases"
+      "R5CrossPrincipalCases"
+      "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases")
+      "subagents-cross-principal" [Surface.operatorUi]
   , tagged (consumerCoverage
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
@@ -1254,10 +1239,11 @@ def caseCoverage : List CoverageEntry :=
       "RenderedCaptureCases"
       "apps/gents-desktop/tests/request-trace.test.tsx::request trace panel renders the reconstructed event stream")
       "rendered-capture" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUpCoverage
       "event_delivery_cases"
       "EventDeliveryTransitionCases"
-      "conformance::event_delivery_transition_cases_match_contract")
+      "conformance::event_delivery_transition_cases_match_contract"
+      "Conformance layer: replay handle_ready_trigger_preserves_pending_sibling through EventSource with two triggers on one source document. The existing consumer runs all transition rows through Watcher and therefore does not validate EventSource delivery-key construction or readiness isolation.")
       "event-delivery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "event_delivery_cases"
@@ -1329,8 +1315,8 @@ def followUpHookCoverage : List CoverageEntry :=
       "background-tools" []
   , tagged (followUpCoverage
       "follow_up_hook"
-      "Subagent.BridgedState.inv_depth"
-      "Subagent.BridgedState.inv_depth proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.inv_link. The arbitrary graph-level closure is emitted through subagent_delegation_graph_cases; this hook remains for the paired bridge trace invariant.")
+      "Subagent.BridgedState.subagent_depth_bounded"
+      "Subagent.BridgedState.subagent_depth_bounded proves bridged traces preserve max subagent depth; related link invariant: Subagent.BridgedState.bridge_link_symmetric. The arbitrary graph-level closure is emitted through subagent_delegation_graph_cases; this hook remains for the paired bridge trace invariant.")
       "background-tools" []
   , tagged (followUpCoverage
       "follow_up_hook"
@@ -1359,13 +1345,8 @@ def followUpHookCoverage : List CoverageEntry :=
       "compaction" [Surface.agentFacing]
   , tagged (followUpCoverage
       "follow_up_hook"
-      "PromptAssembly.Template.system_render_stable"
-      "system_render_stable proves a well-formed system template renders identically across requests that agree on run-constant values — the cacheable prefix is byte-stable. validateSystem_correct ties the apply-time guard to well-formedness. Fenced by tests/conformance/prompt_template.rs.")
-      "compaction" []
-  , tagged (followUpCoverage
-      "follow_up_hook"
-      "PromptAssembly.Template.assembleWithContext_tail"
-      "assembleWithContext_tail proves the per-request assembly ends with exactly [contextPreamble, prompt] — the rendered <context> message rides immediately before the prompt. Fenced by the loop_stream::assemble_new_messages helper and its unit test assembles_context_immediately_before_prompt; a reorder there breaks the test and contradicts the proof.")
+      "PromptAssembly.Template.assembled_preamble_literal"
+      "The existing slot assembler preserves resolved context instructions literally; task_binding_preserves_context confines invocation substitutions to the task slot. Task render_determined proves dependency on declared task variables. The next layers must fence this model through the real provider-input serializer; slot content preservation alone is not a wire-format proof.")
       "compaction" []
   ]
 

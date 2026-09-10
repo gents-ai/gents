@@ -6,9 +6,6 @@ namespace ScopeTemplates
 def resolveTemplate (cat : Catalog) (id : TemplateId) : Option Template :=
   cat.find? (fun t => t.id = id)
 
-theorem resolveTemplate_deterministic (cat : Catalog) (id : TemplateId) :
-    resolveTemplate cat id = resolveTemplate cat id := rfl
-
 theorem resolveTemplate_id_eq {cat : Catalog} {id : TemplateId} {t : Template}
     (h : resolveTemplate cat id = some t) : t.id = id := by
   unfold resolveTemplate at h
@@ -70,27 +67,6 @@ def scopeFilter (scope : Scope) (collections : List String)
               | .peerDid => peerDid
               | .homeDid => localDid })
   | .clientRoute => []
-
-theorem scopeFilter_spec (s : Scope) (collections : List String)
-    (peerDid localDid : Did) :
-    scopeFilter s collections peerDid localDid =
-      match s with
-      | .peerDid f =>
-          collections.map
-            (fun c => { collection := c, field := f, value := peerDid })
-      | .unscoped => []
-      | .perCollection rules =>
-          rules.map
-            (fun r =>
-              { collection := r.collection
-              , field := r.field
-              , value :=
-                  match r.source with
-                  | .localDid => localDid
-                  | .peerDid => peerDid
-                  | .homeDid => localDid })
-      | .clientRoute => [] := by
-  cases s <;> rfl
 
 theorem scopeFilter_peerDid (f : String) (collections : List String)
     (peerDid localDid : Did) :
@@ -157,14 +133,13 @@ def clientTranscriptMatches (requesterDid ownerDid : Did)
 
 theorem conversation_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection conversationRules) [] peerDid localDid
-      = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
-        , { collection := "AgentResponse",     field := "requester_did", value := peerDid }
-        , { collection := "AgentMessage",      field := "requester_did", value := peerDid }
-        , { collection := "AgentToolCall",     field := "requester_did", value := peerDid }
-        , { collection := "AgentToolResult",   field := "requester_did", value := peerDid }
-        , { collection := "AgentSession",      field := "requester_did", value := peerDid }
-        , { collection := "AgentConversation", field := "requester_did", value := peerDid }
-        , { collection := "CompactionEntry",   field := "requester_did", value := peerDid } ] := by
+      = [ { collection := "AgentRequest",    field := "requester_did", value := peerDid }
+        , { collection := "AgentResponse",   field := "requester_did", value := peerDid }
+        , { collection := "AgentMessage",    field := "requester_did", value := peerDid }
+        , { collection := "AgentToolCall",   field := "requester_did", value := peerDid }
+        , { collection := "AgentToolResult", field := "requester_did", value := peerDid }
+        , { collection := "AgentSession",    field := "requester_did", value := peerDid }
+        , { collection := "CompactionEntry", field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, conversationRules]
 
 theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
@@ -176,16 +151,16 @@ theorem conversation_filters_requester_lineage (peerDid localDid : Did) :
 theorem conversation_filters_exactly_transcript_collections (peerDid localDid : Did) :
     ((scopeFilter conversationTemplate.scope [] peerDid localDid).map
         (fun k => k.collection)).toFinset
-      = conversationTranscriptCollections.toFinset := by
+      = transcriptCollections.toFinset := by
   simp [scopeFilter, conversationTemplate, conversationRules,
-    conversationTranscriptCollections]
+    transcriptCollections]
 
 theorem conversation_config_is_unfiltered (peerDid localDid : Did) :
     agentConfigCollections.all (fun collection =>
       (scopeFilter conversationTemplate.scope [] peerDid localDid).all
         (fun filter => filter.collection ≠ collection)) = true := by
   simp [scopeFilter, conversationTemplate, conversationRules,
-    agentConfigCollections]
+    agentConfigCollections, reachableConfigKinds, ConfigDocuments.Collection.collectionName, ConfigDocuments.documentSpec]
 
 theorem conversation_grants_agent_config :
     agentConfigCollections.toFinset ⊆ conversationTemplate.collections := by
@@ -195,7 +170,7 @@ theorem conversation_grants_agent_config :
 theorem conversation_request_crossing_is_peer_scoped (peerDid localDid : Did) :
     (scopeFilter conversationTemplate.scope [] peerDid localDid).find?
         (fun k => k.collection = "AgentRequest") =
-          some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
+      some { collection := "AgentRequest", field := "requester_did", value := peerDid } := by
   simp [scopeFilter, conversationTemplate, conversationRules]
 
 theorem machine_filter_eq (peerDid homeDid : Did) :
@@ -215,10 +190,10 @@ theorem machine_filter_eq (peerDid homeDid : Did) :
 theorem machine_filters_transcript_persona_and_directory (peerDid homeDid : Did) :
     ((scopeFilter machineTemplate.scope [] peerDid homeDid).map
         (fun k => k.collection)).toFinset
-      = (conversationTranscriptCollections ++
+      = (transcriptCollections ++
           ["MailboxItem", "SessionHydrationRequest", "AgentDirectoryEntry"]).toFinset := by
   simp [scopeFilter, machineTemplate, machineRules, machineCollections,
-    conversationRules, conversationCollections, conversationTranscriptCollections]
+    conversationRules, conversationCollections, transcriptCollections]
 
 theorem machine_directory_crossing_is_home_scoped (peerDid homeDid : Did) :
     (scopeFilter machineTemplate.scope [] peerDid homeDid).find?
@@ -249,7 +224,7 @@ theorem client_request_filter_conjoins_requester_and_destination
             , { field := "agent_did", value := ownerDid } ] } := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections]
+      clientTranscriptCollections, transcriptCollections]
 
 theorem client_persona_request_filter_conjoins_requester_and_destination
     (direction : RouteDirection) (requesterDid ownerDid : Did) :
@@ -262,7 +237,7 @@ theorem client_persona_request_filter_conjoins_requester_and_destination
             , { field := "agent_did", value := ownerDid } ] } := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections]
+      clientTranscriptCollections, transcriptCollections]
 
 theorem client_hydration_request_conjoins_requester_and_destination
     (direction : RouteDirection) (requesterDid ownerDid : Did) :
@@ -275,7 +250,7 @@ theorem client_hydration_request_conjoins_requester_and_destination
             , { field := "agent_did", value := ownerDid } ] } := by
   cases direction <;>
     simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections]
+      clientTranscriptCollections, transcriptCollections]
 
 theorem client_transcript_match_iff_requester_and_destination
     (requesterDid ownerDid : Did) (row : TranscriptIdentity) :
@@ -296,6 +271,12 @@ theorem client_transcript_rejects_another_destination
       { requesterDid := requesterDid, agentDid := otherDid } = false := by
   simp [clientTranscriptMatches, different]
 
+theorem clientTranscriptPredicates_collections (requesterDid ownerDid : Did) :
+    (clientTranscriptPredicates requesterDid ownerDid).map
+        (fun predicate => predicate.collection) = clientTranscriptCollections := by
+  simp only [clientTranscriptPredicates, List.map_map, Function.comp_apply]
+  rfl
+
 theorem client_filters_cover_exact_directional_projection
     (direction : RouteDirection) (requesterDid ownerDid : Did) :
     (clientRouteFilters direction requesterDid ownerDid).map
@@ -304,9 +285,8 @@ theorem client_filters_cover_exact_directional_projection
       | .clientToRuntime => clientToRuntimeCollections
       | .runtimeToClient => clientToRuntimeCollections ++ clientOwnerProjectionCollections := by
   cases direction <;>
-    simp [clientRouteFilters, clientTranscriptPredicates,
-      clientTranscriptCollections, clientToRuntimeCollections,
-      clientOwnerProjectionCollections]
+    simp [clientRouteFilters, clientTranscriptPredicates_collections,
+      clientToRuntimeCollections, clientOwnerProjectionCollections]
 
 theorem client_return_adds_exact_bounded_control_plane :
     clientRouteCollections .runtimeToClient =
@@ -320,7 +300,8 @@ theorem client_readiness_return_is_owner_scoped
       some
         { collection := "AgentBehaviorReadiness"
         , clauses := [ { field := "agent_did", value := ownerDid } ] } := by
-  simp [clientRouteFilters, clientTranscriptPredicates, clientTranscriptCollections]
+  simp [clientRouteFilters, clientTranscriptPredicates, transcriptCollections,
+    clientTranscriptCollections]
 
 theorem client_return_control_plane_is_unfiltered
     (requesterDid ownerDid : Did) :
@@ -329,13 +310,31 @@ theorem client_return_control_plane_is_unfiltered
         (clientRouteFilters .runtimeToClient requesterDid ownerDid).all
           (fun predicate => predicate.collection ≠ collection)) = true := by
   simp [clientControlPlaneCollections, clientRouteFilters,
-    clientTranscriptPredicates, clientTranscriptCollections]
+    clientTranscriptPredicates, transcriptCollections, agentConfigCollections,
+    reachableConfigKinds, ConfigDocuments.Collection.collectionName,
+    ConfigDocuments.documentSpec, clientTranscriptCollections]
 
 theorem client_excludes_unbounded_and_secret_control_plane :
     "PeerPairingDesired" ∉ clientTemplate.collections ∧
     "DataPlanePairingDesired" ∉ clientTemplate.collections ∧
-    "InferenceBackend" ∉ clientTemplate.collections := by
+    "InferenceBackend" ∉ clientTemplate.collections ∧
+    "OAuthCredential" ∉ clientTemplate.collections := by
   decide
+
+/-- Operator configuration includes backend configuration. Permission to create
+or use that route belongs to existing DID/ACP admission, outside this selection model. -/
+theorem operator_config_selects_backend :
+    "InferenceBackend" ∈ agentConfigTemplate.collections := by decide
+
+/-- Ordinary client, transcript and subagent templates never select credential
+documents. Template names do not confer operator authorization. -/
+theorem ordinary_routes_exclude_credentials
+    (t : Template) (ht : t ∈ [clientTemplate, conversationTemplate, machineTemplate,
+      clientIndexTemplate, subagentHostTemplate, subagentCoordinatorTemplate])
+    (c : String) (hc : c ∈ credentialCollections) : c ∉ t.collections := by
+  simp only [credentialCollections, List.mem_cons, List.not_mem_nil, or_false] at ht hc
+  rcases ht with rfl | rfl | rfl | rfl | rfl | rfl <;>
+    rcases hc with rfl | rfl <;> decide
 
 theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentCoordinatorRules) [] peerDid localDid
@@ -344,10 +343,10 @@ theorem subagentCoordinator_filter_eq (peerDid localDid : Did) :
 
 theorem subagentHost_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection subagentHostRules) [] peerDid localDid
-      = [ { collection := "AgentRequest",      field := "requester_did", value := peerDid }
-        , { collection := "AgentResponse",     field := "requester_did", value := peerDid }
-        , { collection := "AgentMessage",      field := "requester_did", value := peerDid }
-        , { collection := "AgentToolCall",     field := "requester_did", value := peerDid } ] := by
+      = [ { collection := "AgentRequest",    field := "requester_did", value := peerDid }
+        , { collection := "AgentResponse",   field := "requester_did", value := peerDid }
+        , { collection := "AgentMessage",    field := "requester_did", value := peerDid }
+        , { collection := "AgentToolCall",   field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, subagentHostRules, subagentHostCollections]
 
 theorem subagentHost_filters_requester_lineage (peerDid localDid : Did) :
@@ -377,11 +376,14 @@ theorem subagentHost_filters_declared_collections (peerDid localDid : Did) :
   simp [scopeFilter, subagentHostTemplate, subagentHostRules,
     subagentHostCollections]
 
+/-- Subagent legs stay minimal requester-scoped carriers: no host-local
+artifacts and no configuration documents ride them. -/
 theorem subagentHost_excludes_host_local_artifacts :
     "AgentToolResult" ∉ subagentHostTemplate.collections ∧
     "AgentSession" ∉ subagentHostTemplate.collections ∧
-    "AgentConversation" ∉ subagentHostTemplate.collections ∧
-    "CompactionEntry" ∉ subagentHostTemplate.collections := by
+    "CompactionEntry" ∉ subagentHostTemplate.collections ∧
+    "AgentBehavior" ∉ subagentHostTemplate.collections ∧
+    "InferenceBackend" ∉ subagentHostTemplate.collections := by
   decide
 
 theorem subagentCoordinator_in_catalog :
@@ -434,9 +436,8 @@ theorem clientIndex_in_catalog :
 
 theorem clientIndex_filter_eq (peerDid localDid : Did) :
     scopeFilter (.perCollection clientIndexRules) [] peerDid localDid
-      = [ { collection := "AgentConversation", field := "requester_did", value := peerDid }
-        , { collection := "AgentSession",      field := "requester_did", value := peerDid }
-        , { collection := "MailboxItem",       field := "requester_did", value := peerDid } ] := by
+      = [ { collection := "AgentSession", field := "requester_did", value := peerDid }
+        , { collection := "MailboxItem",  field := "requester_did", value := peerDid } ] := by
   simp [scopeFilter, clientIndexRules]
 
 theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
@@ -444,9 +445,10 @@ theorem clientIndex_filters_requester_lineage (peerDid localDid : Did) :
       (fun k => k.value = peerDid ∧ k.field = "requester_did") = true := by
   simp [scopeFilter, clientIndexTemplate, clientIndexRules]
 
+/-- The eager index contains exactly the session and mailbox documents. -/
 theorem clientIndex_covers_exactly_literal_index_collections :
     clientIndexTemplate.collections =
-      ["AgentConversation", "AgentSession", "MailboxItem"].toFinset := by
+      ["AgentSession", "MailboxItem"].toFinset := by
   decide
 
 theorem subagent_filter_values_local_or_peer

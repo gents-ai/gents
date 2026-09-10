@@ -2,6 +2,49 @@
 
 This directory contains the Lean 4 model for `gents`.
 
+## Configuration and session refactor contract layer
+
+This branch is layer 2 above spec PR [#1430](https://github.com/gents-ai/gents/pull/1430),
+baseline `ce3aaf12`. Its changed contracts describe the **target configuration
+and session model**, not the intentionally unmigrated Rust runtime. Lean conformance-source
+adapters are updated to compile; regenerating JSON fixtures, repairing Rust
+bridges, schemas, packs, and consumers belongs to subsequent stacked PRs.
+Historical bridge references below are not evidence that this target already runs.
+
+| Surface | Contract and retained owner |
+| --- | --- |
+| Document vocabulary | `ConfigDocuments` supplies apply, self-config, and sync projections with canonical names and field lists. Nested groups are values, not new documents. |
+| Authoring and inference | `Configuration` resolves a behavior into one `ResolvedSessionConfig`: actual context content plus inference. Typed document lookups use `(agent_did, logical ID)` and share one owner check; Task and graph stages reuse this result. Compact defaults, explicit auth, and backend/credential-scoped discovery retain their own boundaries. |
+| Graph selection | `GraphPipeline/Configuration` resolves authorized installed capabilities through that same Task resolver. Foreign capability ownership is preserved. Event groups reuse `Triggers/Groups` validation and candidate resolution, with graph bounds checked at delivery. |
+| Context and permissions | `Skills` uses an explicit context whitelist and preserves tool authority exactly. `PromptAssembly/Template` retains task rendering only; its existing assembler carries literal context text, with task substitutions confined to the task slot. `ToolPolicy/Configuration` enforces exact service/tool selection, independent presentation, background subsets, and tool-local limits alongside the existing ceiling lattice. |
+| Event groups | Trigger and callback consumers share `EventGroupKey`, candidate eligibility and the durable clock in `EventDelivery/Group`. Callback input and group origin live on the existing invocation and survive its transitions; retries do not reproject live sources. |
+| Self-configuration | Existing patch/validate/guard owner remains. Canonical nested fields replace flattened legacy fields; the opt-in no-lockout guard consumes decoded enablement; `SelfConfig/Auth` permits environment/OAuth reference edits while preventing new raw-key writes. |
+| Installation | `ApplyReconcile/Publication` validates same-owner reference closure and publishes atomically without altering observations. There is one publication model; reference cycles are supported. Document references carry their principal once, so same-label documents from different principals coexist. The runtime bridge requires successful complete configuration resolution and a separate availability observation; document presence does not imply readiness. Authored IDs use an injective mapping to lifecycle IDs. Candidate construction, ACP checks, and transaction implementation are refinement boundaries. |
+| Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
+| Identity | `Identity` resolves behavior labels with an explicit principal; shared labels never determine permissions or imply a global ID-to-principal mapping. Structural fixture results evaluate the actual well-formedness predicate. |
+| Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
+| Forks | `SessionFork` copies a transcript prefix, remaps collection-qualified physical references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings. |
+| Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
+| Locality | Workspace/callback ownership uses the principal DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
+
+Prompt proofs now preserve literal content through the existing slot assembler and
+exclude task substitutions from other slots. Wire serialization still needs a runtime
+bridge. Discovery preserves both the containing backend’s owner and its credential scope, including shared credentials; same backend labels across principals cannot alias. Observations remain independent of configuration. Numeric limits
+share one validator with capability-local defaults; provider/runtime wiring still
+requires conformance.
+The canonical decoder and host/provider adapters remain conformance boundaries.
+Persona profile/root catalogs must be built for the authorized principal; the old
+loader’s unfiltered catalog queries do not satisfy the model’s scoped premise.
+
+The conformance layer must fence the new executable resolvers and guards, including
+negative references/owners, omitted/null/default round trips, explicit remote names,
+canonical session selection and projection, atomic retry/wake publication, fork reference
+remapping and cursor coverage, signed request-input distinctions, physical-request usage scoping,
+foreign-capability authorization, dynamic group bounds, atomic publication, and hook
+failure/cancellation/recovery. A string-valued field model is not a JSON parser proof.
+Preserve existing event callback journals/workspace behavior until the spec's separate
+workspace-hook integration TODO is resolved. Single-instance enforcement remains #1435.
+
 The goal is not to prove math in isolation. The goal is to make the runtime
 state machines explicit enough that:
 
@@ -21,15 +64,15 @@ The proofs are strongest where the runtime is a state machine:
 - session retry/reissue
 - tenant-safe, on-demand session hydration admission and document selection
 - runtime reconcile generation publication
-- desired-state apply ordering and field ownership
+- atomic configuration publication and field ownership
 - task, schedule, and event-trigger dispatch
 - isolated workspace lifecycle, append-only bindings, seal/owner routing, authority meet, and callback invocation journals (`Proofs/Workspace`, `Proofs/Callback`)
 - client turn projection and desktop shell workflow state
 - command/tool execution policy for bash argv, network, sandbox, and shell env
 - MCP/tool execution preflight and retry eligibility boundaries
 - managed native executor deadline/cancel liveness and tool composition
-- mailbox owner stamping, open-row idempotence, terminal transitions, and
-  separation of attention status from graph progress (`Proofs/Mailbox`)
+- mailbox owner stamping, open-row idempotence, and terminal transitions
+  (`Proofs/Mailbox`)
 - canonical descendant visibility, materialization authorization, and
   direct-parent control authority (`DescendantGraph`, #836)
 - provider-input narrowing and prompt-layer assembly (`PromptAssembly`,
@@ -45,17 +88,17 @@ The proofs are strongest where the runtime is a state machine:
   ledger: every reported completion (including a later-retracted attempt)
   charges monotonically, each dispatch fits its remaining allowance, and an
   exhausted ledger cannot dispatch again. Generated witnesses fence the Rust
-  clamp and fail-closed charge classifications.
-  `Provider.sanitizeForProvider` models the full three-stage composition
-  production runs (`normalize_assistant_content_order ∘
-  drop_unpaired_tool_calls ∘ drop_orphaned_tool_results`); the coarser
-  row-only `sanitize` is related to it by a *conditional* refinement,
-  `project_sanitizeForProvider_eq_sanitize`, which holds on assistant rows
-  whose content is nothing but tool calls. The two genuinely differ outside
-  that fragment: on an assistant message carrying text alongside a tool call
-  that never resolved, production keeps the message and its text while
-  `sanitize` drops the row. The model follows production there — see the
-  `Proofs/PromptAssembly/Provider.lean` module docstring.
+  clamp and fail-closed live charge classifications. Restart rehydration sums
+  persisted usage; it does not itself establish rejection of missing usage.
+  `sanitizeTurn` is the per-turn row sanitizer. Its direct soundness and
+  idempotence proofs currently use `UniqueCallIds`; its fixpoint theorem uses
+  provider validity and nonempty announcements. `sanitizeGlobal` and
+  `Provider.sanitizeForProviderGlobal` are explicitly conditional proof models,
+  not alternative production implementations. The content-aware global model
+  preserves assistant prose, prunes empty messages, and normalizes content order;
+  its row refinement additionally requires calls-only assistant content and
+  nondegenerate messages. Full content-bearing per-turn and repeated-occurrence
+  proofs remain a migration boundary, including transfer of prefix/cursor laws.
 
 They model daemon storage observations, but do not prove DefraDB storage-engine
 correctness, network delivery, provider behavior, UI rendering, external tool
@@ -101,7 +144,7 @@ The current proof suite covers twenty practical areas:
 4. Scheduler slot accounting and admission/release
 5. Session recovery and retry/reissue semantics
 6. Runtime reconcile generation publication and visibility
-7. Desired-state apply ordering, reference closure, and apply/runtime field separation
+7. Atomic configuration publication, reference closure, and config/runtime field separation
 8. Trigger dispatch for manual, schedule, and event-driven tasks
 9. Client turn-state derivation from replicated request/response documents
 10. Client-shell workflow rules for selection, submission, and transport decoupling
@@ -206,12 +249,15 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
 | `Proofs/Scheduling.lean` | Scheduler/backend slot state |
 | `Proofs/Fleet.lean` | Barrel for fleet state, transitions, executable semantics, and slot accounting |
-| `Proofs/SessionRecovery.lean` | Retry/reissue model for session-linked requests |
+| `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
+| `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
+| `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
+| `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; terminality; idempotent crash re-drive; pairing non-interference; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/RuntimeReconcile/StartupReadiness.lean` | Startup/readiness projection and semantic publication predicate. Generated `readiness_publication_cases` drive publisher process-state transitions and require no writes during idle time; document age is not a connectivity lease. |
-| `Proofs/ApplyReconcile.lean` | Barrel for desired-state apply, prefix safety, runtime bridge, and convergence |
+| `Proofs/ApplyReconcile.lean` | Barrel for atomic publication, model-driven witnesses, runtime bridge, and convergence |
 | `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654) |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Workspace.lean` | Isolated workspace lifecycle, append-only bindings, seal/owner routing, and authority meet |
@@ -223,13 +269,13 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/ManagedExec.lean` | Barrel for managed native executor state, executable transitions, liveness properties, and tool composition |
 | `Proofs/GraphPipeline.lean` | Model-callable graph publication and run lifecycle: validation/materialization gates, active-pointer alignment, immutable revision identity, atomic seed/run start, cancellation suppression, result-commit-gated success, and terminal CAS safety |
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
-| `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Fifteen projection cases and five publication traces are consumed by real signed-row and transaction tests. |
+| `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
-| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (parent/child composed pair, `SecondLeg` subagent-vs-tool vocabulary), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
-| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693, equivalence-to-uninterrupted), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them) |
+| `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them) |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
@@ -517,8 +563,7 @@ numbers: `R-Int` for `interrupt_monotonicity` and `R-TTL` for
 Deadline and TTL conformance is now explicit on both sides: the request model
 requires `ttlOpen` before claim (`claim_requires_ttl_open`,
 `claim_with_ttl_bounds_time`), and session retry/reissue requires the source
-request deadline to remain open (`reissue_source_deadline_open`,
-`reissue_latest_deadline_open`). Rust mirrors this by converting stale
+request deadline to remain open (`reissue_requires_eligible_parent`). Rust mirrors this by converting stale
 pre-claim requests to `dead/Stale` and by bounding inference retry sleeps and
 stream waits by the claimed deadline. Once work is claimed, retry exhaustion
 and deadline expiry remain ordinary terminal `failed` outcomes rather than
@@ -551,7 +596,7 @@ fair-scheduler or wall-clock progress is a misread (#557).
 
 | Tier | Meaning | Where it lives |
 |------|---------|----------------|
-| **1. Existential reachability** | There exists a finite legal path from pre to a good post (`∃ post, Trace …` / `∃ actions, …`) | Lean (default): `claimed_eventually_terminal`, `recovery_convergence`, `accepted_work_eventually_releases`, `D1_delivery_convergence`, `streamIdle_eventually_terminal`, … |
+| **1. Existential reachability** | There exists a finite legal path from pre to a good post (`∃ post, Trace …` / `∃ actions, …`) | Lean (default): `claimed_eventually_terminal`, `accepted_work_eventually_releases`, `D1_delivery_convergence`, `expired_idle_timeout_transition_constructible`, … |
 | **2. Fair-scheduler liveness** | Under weak/strong fairness, enabled progress steps fire | Primarily `tla/` (WF/SF annotations); Lean does not assume a fair scheduler |
 | **3. Bounded phase / measure progress** | Each relevant step decreases a `Nat` measure (or is otherwise step-bounded) — not wall-clock latency | Rare in Lean; example: L1 `phase_change_decreases_measure` (termination measure on phase change). Not distributed N-tick latency. |
 | **4. Operational watchdog** | Runtime-enforced deadline/timeout/recovery | Rust (request deadlines, stream idle timeouts, recovery sweeps) — not Lean |
@@ -567,7 +612,6 @@ per-node Lean machines.
 |----|----------|------|----------------|---------|
 | L1 | Real current-product phase changes decrease a termination measure | 3 (bounded phase progress) | The model rules out endless phase churn that never gets closer to terminal state | `phase_change_decreases_measure` |
 | L2 | Claimed work has a constructive path to terminal state | 1 (`∃ post, Trace`) | A claimed request is not modeled as stuck forever before inference begins | `claimed_eventually_terminal` |
-| L3 | Recovery has a same-length terminal-result list | 1′ (list witness, **not** a Trace) | For any stuck list there exists a same-length list of terminal contexts; does *not* prove a transition path from each stuck input to its result | `recovery_convergence` |
 
 ### Scheduler Safety and Liveness
 
@@ -611,8 +655,14 @@ session boundary:
 - latest-request semantics are updated coherently
 - retry counts advance monotonically and stay bounded
 
-This is the formal version of "retry creates a new request without corrupting
-session history."
+This models the fields inspected by desktop `retry_request_in_txn`, using the
+canonical request lifecycle and a narrow retry projection. The successor has no
+execution deadline before claim. `retryFromRows?` checks the exact physical parent
+and authoritative head in the session’s requester scope; compact observations are
+not admission evidence. Signing, typed input carryover, and the physical retry-key
+transaction remain adapter responsibilities. Inference resolves through the behavior
+at claim rather than a copied backend field. The next layer
+must delete the old test-local reissue implementation and use the real desktop owner.
 
 ### Completion Retry
 
@@ -666,6 +716,7 @@ router observed-generation readiness/liveness, and in-flight retirement safety.
 The key guarantees are:
 
 - generations only move forward
+- acceptance uses the request’s explicit behavior selection; an existing session must match
 - sessions stay pinned by behavior identity, not by mutable default selection
 - request acceptance and its owned session projection are one atomic transition
 - accepted request identities are monotone and cannot be admitted twice
@@ -678,36 +729,29 @@ snapshots.
 
 ### Apply/Reconcile
 
-`Proofs/ApplyReconcile.lean` models the operator/CLI apply path:
+`Proofs/ApplyReconcile.lean` models one atomic publication path:
 
-- collection apply order is explicit
-- desired-state references must be closed and point to earlier apply ranks
-- apply steps write only `DesiredFields`
-- runtime-owned `LiveFields` are structurally untouched by apply
-- partial apply is modeled as any prefix of the sorted diff
-- every well-formed prefix preserves live-owned fields and keeps the full
-  desired projection reference-closed; an explicit corollary scopes that to
-  already-written referrers
-- retrying from any prefix by recomputing diff converges to the same manifest
-  desired projection
-- after convergence, another diff/apply pass is idempotent
-- `t_conv_runnable` is the apply-sensitive result: after a well-formed apply,
-  every manifest behavior id is runnable
-- `t_conv` and `t_conv_published` are coverage corollaries over the resolved and
-  published snapshot carrier sets
+- ordinary references resolve to documents with the same owner; cycles are allowed
+- accepted publication replaces the complete desired snapshot and preserves observations
+- rejected publication changes nothing; repeating publication is idempotent
+- the common context/inference resolver determines configuration readiness
+- runtime availability remains a separate observation; invalid configuration stays unavailable
+- executable fixture rows invoke `publish` directly
 
-This is the formal contract behind manifest diff/apply and per-agent manifest
-roots.
+The conformance layer must regenerate these fixtures and wire the transaction/decoder
+bridge to this model. No collection ranking, partial-write installer, or separate
+fixture implementation remains in the formal layer.
 
 ### Triggers
 
 `Proofs/Triggers.lean` models the trigger engine and proves:
 
 - disabled triggers cannot accept work
+- scheduled/event triggers select their configured task; `resolveDispatch` uses
+  the same owned context/inference resolver as direct tasks and graph stages
 - serial triggers accept at most one active request
 - `T3_latest_only_convergence` proves latest-only supersession directly from
-  `dispatchStep`; `latestOnlyFireTransition_convergence` is only the abstract
-  relation unwrapping lemma
+  `dispatchStep`
 - `T4_lineage_completeness` is the definitional lineage shape theorem for
   `consistentLineage`; the materialization substance is
   `dispatch_materializedTriggerRequest_consistentLineage`, which connects
@@ -814,10 +858,8 @@ Model → conformance → Rust bindings:
   `new_background_tool` row refines `ToolExecution.Transition.complete`,
   `bridge_failure(Interrupted)` refines `cancelDuringRun`, and
   `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
-  (`is_bridge()` admits both kinds). `SecondLeg.tool` in
-  `Proofs/Background/Bridge.lean` carries only the terminal-projection
-  vocabulary for that leg; the paired `BridgedState` transitions are
-  subagent-only by design.
+  (`is_bridge()` admits both kinds). `BridgedState` is subagent-only; native
+  tools use these existing executor transitions without a second child payload.
 - **Terminal completion → next agent turn (#937)** —
   `Proofs/Background/CompletionContinuation.lean` composes the terminal
   parent-visible tool state, ordinary user-role transcript append, canonical
@@ -857,24 +899,20 @@ place where "everything persisted can be projected back out" is most at risk.
 Before #993 the model was vacuous: `stubMessageKind` was literally
 `| .toolResult callId key => .toolResult callId key`, so every preservation
 property quantified over `id` and proved that doing nothing preserves meaning.
-The current model quantifies over the production policy:
+The current model separates executable reduction from conditional global-resolution
+proofs. Transfer to content-bearing per-turn input remains explicit:
 
 - **`strip`** rewrites a tool result's payload into a pointer stub and touches
   nothing else — never a constructor, never a call id. `strip_idempotent` is
   earned by production recognizing an existing stub rather than re-stubbing it.
-- **`providerView = sanitize ∘ strip`** is the single narrowing both the
-  compaction writer and the request reader index.
-  `strip_sanitize_commute` settles the question #993 raised as unproven —
-  stripping first does *not* change which pairs `sanitize` considers orphaned —
-  and settling it affirmatively is what licenses reordering the compacted-prefix
-  drop past sanitization.
-- **`providerView_append`** proves the provider view of a longer history begins
-  with the provider view of the shorter one, given the suffix contributes no
-  result for a call announced in the prefix. Two checkable sufficient conditions
-  are provided; production satisfies the second, since a new request appends its
-  user prompt before anything else. `compacted_prefix_correspondence` is the
-  theorem the runtime fix rests on: the count the writer records names exactly
-  the rows the reader drops.
+- **`providerViewTurn = sanitizeTurn ∘ strip`** is the per-turn row operation.
+  `providerViewGlobal = sanitizeGlobal ∘ strip` remains a proof projection;
+  they agree under the explicit `UniqueCallIds` premise.
+- **`providerViewGlobal_append`** proves prefix correspondence for the global
+  row model when the suffix contributes no result for a prefix call. The
+  compacted-prefix laws are conditional mathematical guarantees, not a proof
+  that arbitrary content-bearing production histories satisfy those premises.
+  The content/per-turn migration must transfer them before retiring the global model.
 - **`summarize`** is parameterised over the token-budget split index rather than
   pinning a token function — what must hold is that *whatever* index the budget
   picks, the reducer stays sound. `pairSafeBoundary` retreats that index to the
@@ -891,6 +929,16 @@ The runtime counterpart of `safeToReduce` is `compaction::safe_to_reduce`,
 resolved at session scope — see
 `boundary.compaction.safe-to-reduce-session-scope` for the refinement and its
 accepted failure mode.
+
+### Durable transcript operations
+
+`Transcript` models permissive durable writes, sequence allocation, tool/result
+reservation and duplicate-result observation. Ordering is proved from the append
+operation and its pre-state sequence bound. Duplicate result observation executes
+the same completion function and preserves all state. Fixture counts, pair closure,
+ordering, and drain observations are computed from actual operations with legal
+transition traces. Durable orphan result rows are representable and are not falsely
+labeled pair-closed. Provider-input sanitation owns the stricter boundary.
 
 ### Client Turn Projection
 
@@ -917,10 +965,10 @@ parallel Codex-specific state machine.
 `Proofs/ClientShell.lean` sits above the per-turn projection and models the
 desktop-style multi-session shell:
 
-- snapshots never mutate the user's selected deployment/session
+- snapshots never mutate the user's selected principal route/session
 - transport health is a non-mutating input
 - local session switching is transport-independent
-- a new conversation is ephemeral until its first request is submitted
+- opening the new-session composer clears the local selection; explicit empty durable sessions remain supported
 - the submitted request selects the session returned by the runtime
 - follow-up submission safety is independent from transport health
 - an awaiting submission only retires after the matching tip is observed
@@ -990,7 +1038,7 @@ reconstructed count never exceeds backend `max_concurrent`.
 
 The finite-state checks currently establish:
 
-- generated Request transition cases enumerate the full 9x9 state square as
+- generated Request transition cases enumerate the full 10x10 state square as
   legal, illegal, or product-unreachable, with `inputRequired` pairs classified
   as reserved current-product vocabulary
 - generated Process transition cases enumerate the full 5x5 state square as
@@ -1046,18 +1094,11 @@ gaps.
 
 ## Known Limitations
 
-### Apply Storage Atomicity
+### Configuration transaction refinement
 
-`gents-cli config apply` today is best-effort: if a write fails partway
-through the ordered apply sequence, the database is left in a durable prefix and
-there is no rollback. `Proofs/ApplyReconcile/Prefix.lean` covers this non-atomic
-case: every prefix preserves runtime/live-owned fields, already-written
-referrers remain reference-closed, and rerunning `apply` from the prefix
-converges to the same manifest desired projection. Production realizes the
-model's "recompute diff after a prefix" retry step by rebuilding the live diff
-at the start of each `config apply` attempt and applying selected documents via
-unique-field upserts or equivalent override writers. The storage assumption is
-only that a reported successful mutation is durable before the next retry.
+Atomic `publish` is the target contract. DefraDB transaction behavior and canonical
+registry decoding must be checked by the conformance/runtime layers. The old Rust
+per-document writer has not been migrated; it is not an alternative formal contract.
 
 ### Backend Controller Handoff
 
@@ -1219,7 +1260,7 @@ operations. The existing workspace identity now includes an immutable capability
 its lifecycle transitions preserve that field. Fresh provision accepts only an
 explicit canonical exact-path set (empty means no changes). Compatibility is
 authored only by explicit predecessor-version migration and can recover an
-identical existing host identity, never provision a fresh unrestricted tree.
+identical existing workspace binding, never provision a fresh unrestricted tree.
 
 Seal and integration require the actual captured immutable-base delta to obey
 the admitted capability and apply that same snapshot. Receipt replay checks the
@@ -1355,10 +1396,11 @@ only transports the seal produced by this owner; Ready creation is not sealing.
 
 `GraphPipeline/WorkspaceLineage.lean` derives one entry-root workspace tuple using
 verified run/plan/route and authenticated immutable physical request evidence.
-Destination authority comes from the pinned plan. Explicit conflicting identity,
-owner, seal or authority denies; absent/untrusted/ambiguous roots cannot grant.
-Bootstrap is separate: workspace ID/owner must already occur in controller-stored
-input, while the existing workspace owner may stamp an omitted seal. The helper
+Destination authority comes from the pinned plan. Explicit conflicting workspace ID,
+seal or authority denies; absent/untrusted/ambiguous roots cannot grant. The principal
+owner comes from verified workspace state, not a caller-supplied owner hint. Bootstrap
+requires the workspace ID in controller-stored input; the existing workspace owner
+may stamp an omitted seal. The helper
 never changes workspace state: ordinary creation is Ready, while operator quickstart freezes its unchanged base
 through that owner before ArtifactWrite admission.
 

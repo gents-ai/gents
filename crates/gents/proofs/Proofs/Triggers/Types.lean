@@ -33,8 +33,24 @@ inductive ConcurrencyMode where
   | latestOnly
   deriving DecidableEq, Repr
 
+/-- Omission uses one source-independent default, including graph delivery. -/
+def resolveConcurrency (_source : TriggerKind) (configured : Option ConcurrencyMode) :
+    ConcurrencyMode := configured.getD .parallel
+
+def resolveEventKind (configured : Option String) : String := configured.getD "created"
+
+theorem concurrency_default_parallel (source : TriggerKind) :
+    resolveConcurrency source none = .parallel := rfl
+
+theorem concurrency_source_independent (a b : TriggerKind) (c : Option ConcurrencyMode) :
+    resolveConcurrency a c = resolveConcurrency b c := rfl
+
+theorem event_kind_default_created : resolveEventKind none = "created" := rfl
+
+/-- Resolved runtime projections, not authored schedule/event configuration. -/
 structure ActiveSchedule where
   triggerId : String
+  taskId : String
   enabled : Bool
   deriving DecidableEq, Repr
 
@@ -96,7 +112,9 @@ theorem wellFormed_manual_triggerId_none
 
 end FireIntent
 
+/-- Selected task and lineage; execution resolves the task under the runtime principal. -/
 structure RequestSeed where
+  taskId : String
   causedByTriggerId : Option String
   causedByTriggerKind : TriggerKind
   deriving Repr

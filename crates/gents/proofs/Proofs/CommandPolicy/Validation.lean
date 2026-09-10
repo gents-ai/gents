@@ -25,17 +25,6 @@ def stringMatches (value expected : String) : Bool :=
 def stringIn (value : String) (values : List String) : Bool :=
   values.any (fun candidate => stringMatches value candidate)
 
-def firstArgWhere (p : String → Bool) : List String → Option String
-  | [] => none
-  | arg :: rest =>
-      if p arg then
-        some arg
-      else
-        firstArgWhere p rest
-
-def anyArgWhere (p : String → Bool) (args : List String) : Bool :=
-  (firstArgWhere p args).isSome
-
 def argStartsWith (arg candidatePrefix : String) : Bool :=
   arg.startsWith candidatePrefix
 
@@ -45,7 +34,7 @@ def sedArgumentDenied (arg : String) : Bool :=
     || argStartsWith arg "-i"
 
 def validateSedArgs (args : List String) : Decision :=
-  match firstArgWhere sedArgumentDenied args with
+  match List.find? sedArgumentDenied args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "sed" arg)
   | none => .allow
 
@@ -63,7 +52,7 @@ def findArgumentDenied (arg : String) : Bool :=
     ]
 
 def validateFindArgs (args : List String) : Decision :=
-  match firstArgWhere findArgumentDenied args with
+  match List.find? findArgumentDenied args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "find" arg)
   | none => .allow
 
@@ -75,7 +64,7 @@ def ripgrepArgumentDenied (arg : String) : Bool :=
     || argStartsWith arg "--hostname-bin="
 
 def validateRipgrepArgs (args : List String) : Decision :=
-  match firstArgWhere ripgrepArgumentDenied args with
+  match List.find? ripgrepArgumentDenied args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "rg" arg)
   | none => .allow
 
@@ -143,10 +132,10 @@ def curlHasHttpUrl (arg : String) : Bool :=
   argStartsWith arg "http://" || argStartsWith arg "https://"
 
 def validateCurlArgs (args : List String) : Decision :=
-  match firstArgWhere curlArgumentDenied args with
+  match List.find? curlArgumentDenied args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "curl" arg)
   | none =>
-      if anyArgWhere curlHasHttpUrl args then
+      if args.any curlHasHttpUrl then
         .allow
       else
         .deny (.readOnlyUrlRequired "curl")
@@ -216,7 +205,7 @@ def gitBranchArgAllowed (arg : String) : Bool :=
     || argStartsWith arg "--format="
 
 def validateGitBranchArgs (args : List String) : Decision :=
-  match firstArgWhere (fun arg => !gitBranchArgAllowed arg) args with
+  match List.find? (fun arg => !gitBranchArgAllowed arg) args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "git" arg)
   | none => .allow
 
@@ -224,13 +213,13 @@ def gitReadOnlySubcommandAllowed (subcommand : String) : Bool :=
   stringIn subcommand ["status", "diff", "show", "log", "ls-files", "grep", "rev-parse"]
 
 def validateGitArgs (args : List String) : Decision :=
-  match firstArgWhere gitGlobalOptionDenied args with
+  match List.find? gitGlobalOptionDenied args with
   | some arg => .deny (.readOnlyArgumentNotAllowed "git" arg)
   | none =>
       match findGitSubcommand args with
       | none => .deny (.readOnlySubcommandRequired "git")
       | some (subcommand, subcommandArgs) =>
-          match firstArgWhere gitReadOnlyFlagDenied subcommandArgs with
+          match List.find? gitReadOnlyFlagDenied subcommandArgs with
           | some arg => .deny (.readOnlyArgumentNotAllowed "git" arg)
           | none =>
               if gitReadOnlySubcommandAllowed subcommand then

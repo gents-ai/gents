@@ -5,6 +5,10 @@ import Proofs.RuntimeReconcile.State
 namespace Conformance.ContractCases
 
 structure RuntimeReconcileCase where
+  requestedBehavior : Option BehaviorId
+  preDefaultBehavior : BehaviorId
+  preSessionBehavior : Option BehaviorId
+  preRunnable : List BehaviorId
   name : String
   action : String
   legal : Bool
@@ -203,7 +207,7 @@ structure AgentRequestAdmissionCase where
   targetPolicyAllows : Bool
   bridgeAuthorBindingCurrent : Bool
   bridgeAuthorAuthorizationFresh : Bool
-  targetCrossDeploymentPolicyAllows : Bool
+  targetCrossPrincipalPolicyAllows : Bool
   expectedAdmitted : Bool
   expectedDisposition : String
   deriving Repr
@@ -224,8 +228,6 @@ structure SessionRecoveryCase where
   postNewAdmission : String
   preOrigin : String
   postNewOrigin : String
-  preBackend : String
-  postNewBackend : String
   failedId : RequestId
   newId : RequestId
   preLatestId : RequestId
@@ -251,7 +253,6 @@ structure SessionRecoveryCase where
   oldRequestRetained : Bool
   newRequestInserted : Bool
   originPreserved : Bool
-  backendPreserved : Bool
   deriving Repr
 
 structure InferenceSlotAccountingCase where
@@ -458,23 +459,6 @@ structure RecoverySweepCase where
   notificationReason : Option String := none
   deriving DecidableEq, Repr
 
-structure RecoveryEquivalenceCase where
-  name : String
-  sourceSweepCase : String
-  sweepId : String
-  collection : String
-  rustFunction : String
-  cadence : String
-  preState : String
-  recoveredState : String
-  uninterruptedState : String
-  equivalent : Bool
-  reexecutes : Bool
-  canHang : Bool
-  theoremName : String
-  aggregateTheoremName : String
-  deriving DecidableEq, Repr
-
 /-- Startup restart-disposition witness (#937): one running `AgentToolCall`
     row shape and what `ToolCallLifecycle::recover_all` must do with it —
     terminalize with a pinned cause/terminal state, or leave it running.
@@ -555,6 +539,13 @@ structure R6BackgroundingCase where
   retryCount : Option Nat := none
   maxRetries : Option Nat := none
   postRetryCount : Option Nat := none
+  redriveSourceRequestId : Option Nat := none
+  preDepth : Option Nat := none
+  postDepth : Option Nat := none
+  preParentRequestId : Option Nat := none
+  postParentRequestId : Option Nat := none
+  preExecutionDeadline : Option Nat := none
+  postExecutionDeadline : Option Nat := none
   retryDelaySeconds : Option Nat := none
   isLatest : Option Bool := none
   goalStatus : Option String := none
@@ -563,12 +554,12 @@ structure R6BackgroundingCase where
   redriveAllowed : Option Bool := none
   deriving Repr
 
-structure R5CrossDeploymentCase where
+structure R5CrossPrincipalCase where
   name : String
   route : String
   action : String
-  parentDeployment : String
-  childDeployment : String
+  parentPrincipal : String
+  childPrincipal : String
   parentRequestId : String
   parentToolCallId : String
   childRequestId : String
@@ -577,12 +568,12 @@ structure R5CrossDeploymentCase where
   cancelPolicy : String
   parentTriggerPersisted : Bool
   childMaterialized : Bool
-  childOwnedByTargetDeployment : Bool
+  childOwnedByTargetPrincipal : Bool
   causedByParentRequestIdMatches : Bool
   causedByParentToolCallIdMatches : Bool
   causedByTriggerKind : String
-  crossDeploymentRoutingFired : Bool
-  singleDeploymentFallback : Bool
+  crossPrincipalRoutingFired : Bool
+  samePrincipalFallback : Bool
   unclaimedDeadlineSet : Bool
   deriving Repr
 
@@ -590,8 +581,8 @@ structure CancelPropagationCase where
   name : String
   route : String
   action : String
-  parentDeployment : String
-  childDeployment : String
+  parentPrincipal : String
+  childPrincipal : String
   parentRequestId : String
   parentToolCallId : String
   childRequestId : String
@@ -600,7 +591,7 @@ structure CancelPropagationCase where
   cancelIntentWrittenOnBridge : Bool
   bridgeCancelReplicatesToHost : Bool
   hostInterruptsChild : Bool
-  childTerminalReplicatesToCoordinator : Bool
+  childInterruptIntentReplicatesToCoordinator : Bool
   cancelAckReturnsToCoordinator : Bool
   noThirdPartyRows : Bool
   deriving Repr

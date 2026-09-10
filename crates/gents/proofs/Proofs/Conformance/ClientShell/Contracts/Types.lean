@@ -49,10 +49,6 @@ structure ClientShellContractCase where
   frontendSessionLatestRequestId : Option RequestId
   frontendSessionTurnState : Option String
   frontendSessionPendingRequestId : Option RequestId
-  frontendConversationPresent : Bool
-  frontendConversationSessionId : Option SessionId
-  frontendConversationLatestRequestId : Option RequestId
-  frontendConversationTurnState : Option String
   frontendLocalWorkflowKind : String
   frontendLocalWorkflowSession : Option SessionId
   frontendLocalWorkflowRequest : Option RequestId
@@ -145,7 +141,7 @@ def frontendBlockedReasonName : SendBlockedReason → String
   | .awaitingObservation        => "waitingForRequestObservation"
   | .awaitingTurnTerminality _  => "awaitingTurnTerminality"
   | .sessionBehaviorMismatch    => "sessionBehaviorMismatch"
-  | .sessionAbsent              => "conversationMissingFromSnapshot"
+  | .sessionAbsent              => "sessionMissingFromSnapshot"
   | .inconsistentObservation    => "inconsistentTurnObservation"
   | .workflowBlocked            => "workflowBlocked"
 
@@ -166,9 +162,9 @@ def frontendSendReason : SendDecision → Option String
   | .blocked r => some (frontendBlockedReasonName r)
 
 def inputName : ShellInput → String
-  | .user (.selectDeployment _ _)     => "selectDeployment"
+  | .user (.selectPrincipalRoute _ _)     => "selectPrincipalRoute"
   | .user (.selectSession _)          => "selectSession"
-  | .user .requestNewConversation     => "requestNewConversation"
+  | .user .requestNewSession     => "requestNewSession"
   | .user .startSubmit                => "startSubmit"
   | .user .acknowledgeBlocker         => "acknowledgeBlocker"
   | .snapshot _                       => "snapshot"

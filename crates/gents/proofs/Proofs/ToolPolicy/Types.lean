@@ -34,51 +34,16 @@ inductive EndpointScope (K V : Type) where
   | only (keys : Finset K) (val : K → V)
   | all
 
-inductive ExecMode where
-  | readOnly
-  | workspaceWrite
-  | artifactWrite
-  | unrestricted
-  deriving DecidableEq, Repr
-
-def ExecMode.toCommand : ExecMode → CommandPolicy.ExecutionMode
-  | .readOnly => .readOnly
-  | .workspaceWrite => .workspaceWrite
-  | .artifactWrite => .artifactWrite
-  | .unrestricted => .unrestricted
-
-def ExecMode.fromCommand : CommandPolicy.ExecutionMode → ExecMode
-  | .readOnly => .readOnly
-  | .workspaceWrite => .workspaceWrite
-  | .artifactWrite => .artifactWrite
-  | .unrestricted => .unrestricted
-
-def ExecMode.meet (a b : ExecMode) : ExecMode :=
-  fromCommand (a.toCommand.meet b.toCommand)
-
-theorem ExecMode.meet_toCommand (a b : ExecMode) :
-    (a.meet b).toCommand = a.toCommand.meet b.toCommand := by
-  cases a <;> cases b <;> decide
-
-@[simp] theorem ExecMode.meet_idem (a : ExecMode) : a.meet a = a := by
-  cases a <;> decide
-
 /-- Stable wire discriminator; not an authority ordering. -/
-def ExecMode.toContractCode : ExecMode → Nat
+def executionModeContractCode : CommandPolicy.ExecutionMode → Nat
   | .readOnly => 0
   | .workspaceWrite => 1
   | .unrestricted => 2
   | .artifactWrite => 3
 
-inductive NetMode where
-  | disabled
-  | inherit
-  | enabled
-  deriving DecidableEq, Repr
-
 structure BashPolicy where
-  mode : ExecMode
-  network : NetMode
+  mode : CommandPolicy.ExecutionMode
+  network : CommandPolicy.NetworkMode
   forbidden : Finset (List String)
   allowed : EndpointScope (List String) Unit
   readOnly : EndpointScope String Unit
@@ -87,7 +52,6 @@ structure BashPolicy where
 structure Surface where
   file : FileCap
   bash : BashPolicy
-  meta : Bool
   goalTools : Bool
   goalCreate : Bool
   defraQuery : Bool
@@ -98,7 +62,7 @@ structure Surface where
   spawn : Bool
   steering : Bool
   background : Bool
-  crossDeployment : Bool
+  crossPrincipal : Bool
   skills : Bool
   lsp : Bool
   cliTools : EndpointScope ToolId (Finset String)

@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.Triggers.Groups
 
 inductive InvocationState where
   | pending
@@ -105,7 +106,12 @@ structure ActionJournalEntry where
 
 structure CallbackInvocation where
   invocationId : String
-  ownerDeploymentId : String
+  ownerAgentDid : String
+  /-- Opaque frozen projected input, including ordered group members. Its
+  internal JSON encoding belongs to the existing projection owner. -/
+  input : String := ""
+  /-- Structured identity projection of the referenced durable group, if any. -/
+  originGroupKey : Option Triggers.Groups.EventGroupKey := none
   state : InvocationState
   journal : List ActionJournalEntry
   resultEmitted : Bool

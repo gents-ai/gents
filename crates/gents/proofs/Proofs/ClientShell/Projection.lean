@@ -7,24 +7,6 @@ inductive SelectionHealth where
   | absent
   deriving DecidableEq, Repr
 
-inductive SendBlockedReason where
-  | clientOffline
-  | agentNotSelected
-  | composerEmpty
-  | mutationInFlight
-  | awaitingObservation
-  | awaitingTurnTerminality (turn : ClientTurnState)
-  | sessionBehaviorMismatch
-  | sessionAbsent
-  | inconsistentObservation
-  | workflowBlocked
-  deriving DecidableEq, Repr
-
-inductive SendDecision where
-  | ready
-  | blocked (reason : SendBlockedReason)
-  deriving DecidableEq, Repr
-
 structure ChatView where
   selection       : Selection
   selectionHealth : SelectionHealth
@@ -51,35 +33,6 @@ def classifySelection
     | none     =>
       if workflowReferences w sid then (.pendingObservation, none)
       else (.absent, none)
-
-def projectSendDecision
-    (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : SendDecision :=
-  if ¬ ctx.clientAvailable then .blocked .clientOffline
-  else if s.selection.agent.isNone then .blocked .agentNotSelected
-  else if ¬ ctx.composerNonEmpty then .blocked .composerEmpty
-  else match s.workflow with
-    | .submitting _ _ => .blocked .mutationInFlight
-    | .awaiting _ _                 => .blocked .awaitingObservation
-    | .blocked _                    => .blocked .workflowBlocked
-    | .idle =>
-      match s.selection.session with
-      | none     => .ready
-      | some sid =>
-        match store.find sid with
-        | none     =>
-          if workflowReferences s.workflow sid then
-            .blocked .awaitingObservation
-          else .blocked .sessionAbsent
-        | some obs =>
-          if behaviorMismatch store sid ctx.requestedBehavior then
-            .blocked .sessionBehaviorMismatch
-          else
-            match obs.latestObservedRequest, obs.latestTurn with
-            | none,   none   => .ready
-            | some _, some t =>
-              if t.isTerminal then .ready
-              else .blocked (.awaitingTurnTerminality t)
-            | _,      _      => .blocked .inconsistentObservation
 
 def projectChat
     (s : ShellState) (store : LocalStore) (ctx : SubmitContext) : ChatView :=

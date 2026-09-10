@@ -9,7 +9,7 @@ open RequestExecutionLease
 abbrev Generation := Nat
 
 private def world
-    (request : RequestPhase) (response : ResponsePhase)
+    (request : RequestState) (response : Option StreamingResponse.Status)
     (lease : Lease Generation) (usedGenerations : List Generation)
     (now progressSeq : Nat)
     (continuationRequired tokenChargeRequired : Bool := true)
@@ -27,19 +27,19 @@ private def world
   }
 
 private def vacant : World Generation :=
-  world .pending .absent .vacant [] 0 0
+  world .pending none .vacant [] 0 0
 
 private def claimed (generation deadline now : Nat := 1) : World Generation :=
-  world .claimed .absent (.active generation deadline) [generation] now 0
+  world .claimed none (.active generation deadline) [generation] now 0
 
 private def processing
     (generation deadline now : Nat := 1) (progressSeq : Nat := 0) : World Generation :=
-  world .processing .streaming (.active generation deadline)
+  world .processing (some .streaming) (.active generation deadline)
     [generation] now progressSeq
 
 private def recoverable
     (generation now : Nat := 1) (progressSeq : Nat := 0) : World Generation :=
-  world .processing .streaming (.recoverable generation)
+  world .processing (some .streaming) (.recoverable generation)
     [generation] now progressSeq
 
 structure LeaseCase where
@@ -54,7 +54,7 @@ def leaseCases : List LeaseCase :=
     , pre := vacant
     , action := .claim 101 10
     , expected := some
-        (world .claimed .absent (.active 101 10) [101] 0 0)
+        (world .claimed none (.active 101 10) [101] 0 0)
     }
   , { name := "claim_rejects_reused_generation"
     , pre := { vacant with usedGenerations := [101] }
@@ -137,38 +137,38 @@ def leaseCases : List LeaseCase :=
     , pre := recoverable 101 11 7
     , action := .recoverAndFail 101 202
     , expected := some
-        (world .failed .failed (.terminal 202 .failed) [202, 101]
+        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
           11 7 true true 1 1)
     }
   , { name := "completion_atomically_agrees_request_response"
     , pre := processing 101 10 5 7
     , action := .finalize 101 .completed
     , expected := some
-        (world .completed .completed (.terminal 101 .completed) [101]
+        (world .completed (some .completed) (.terminal 101 .completed) [101]
           5 7 true true 1 1)
     }
   , { name := "provider_eof_fails_claimed_pair_atomically"
     , pre := claimed 101 10 5
     , action := .finalize 101 .failed
     , expected := some
-        (world .failed .failed (.terminal 101 .failed) [101]
+        (world .failed (some .error) (.terminal 101 .failed) [101]
           5 0 true true 1 1)
     }
   , { name := "interrupt_atomically_agrees_request_response"
     , pre := processing 101 10 5 7
     , action := .finalize 101 .interrupted
     , expected := some
-        (world .interrupted .interrupted (.terminal 101 .interrupted) [101]
+        (world .interrupted (some .error) (.terminal 101 .interrupted) [101]
           5 7 true true 1 1)
     }
   , { name := "terminal_winner_rejects_second_finalize"
-    , pre := world .completed .completed (.terminal 101 .completed) [101]
+    , pre := world .completed (some .completed) (.terminal 101 .completed) [101]
         5 7 true true 1 1
     , action := .finalize 101 .failed
     , expected := none
     }
   , { name := "terminal_winner_rejects_recovery_racer"
-    , pre := world .failed .failed (.terminal 202 .failed) [202, 101]
+    , pre := world .failed (some .error) (.terminal 202 .failed) [202, 101]
         11 7 true true 1 1
     , action := .recoverAndFail 101 303
     , expected := none
@@ -196,17 +196,17 @@ def leaseCases : List LeaseCase :=
   , { name := "deadline_boundary_allows_completion"
     , pre := processing 101 10 10 7
     , action := .finalize 101 .completed
-    , expected := some (world .completed .completed (.terminal 101 .completed) [101] 10 7 true true 1 1)
+    , expected := some (world .completed (some .completed) (.terminal 101 .completed) [101] 10 7 true true 1 1)
     }
   , { name := "live_generation_can_be_superseded"
     , pre := processing 101 10 5 7
     , action := .revoke 101 10 7 202 .superseded
-    , expected := some (world .superseded .failed (.terminal 202 .superseded) [202, 101] 5 7 true true 1 1)
+    , expected := some (world .superseded (some .error) (.terminal 202 .superseded) [202, 101] 5 7 true true 1 1)
     }
   , { name := "claimed_generation_can_be_declared_dead"
     , pre := claimed 101 10 5
     , action := .revoke 101 10 0 202 .dead
-    , expected := some (world .dead .failed (.terminal 202 .dead) [202, 101] 5 0 true true 1 1)
+    , expected := some (world .dead (some .error) (.terminal 202 .dead) [202, 101] 5 0 true true 1 1)
     }
   , { name := "revocation_rejects_stale_generation"
     , pre := processing 101 10 5 7
@@ -261,7 +261,7 @@ def leaseTraceCases : List LeaseTraceCase :=
         , .recoverAndFail 101 202
         ]
     , expected := some
-        (world .failed .failed (.terminal 202 .failed) [202, 101]
+        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
           11 7 true true 1 1)
     }
   , { name := "semantic_progress_renews_before_success"
@@ -272,14 +272,14 @@ def leaseTraceCases : List LeaseTraceCase :=
         , .finalize 101 .completed
         ]
     , expected := some
-        (world .completed .completed (.terminal 101 .completed) [101]
+        (world .completed (some .completed) (.terminal 101 .completed) [101]
           11 8 true true 1 1)
     }
   , { name := "dropped_owner_recovers_and_fails_atomically"
     , pre := processing 101 10 5 7
     , actions := [.drop 101, .recoverAndFail 101 202]
     , expected := some
-        (world .failed .failed (.terminal 202 .failed) [202, 101]
+        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
           5 7 true true 1 1)
     }
   , { name := "recovered_owner_wins_and_stale_owner_cannot_finalize"
@@ -304,22 +304,9 @@ theorem leaseTraceCases_hold :
 private def boolJson (value : Bool) : String :=
   if value then "true" else "false"
 
-def requestPhaseName : RequestPhase → String
-  | .pending => "pending"
-  | .claimed => "claimed"
-  | .processing => "processing"
-  | .completed => "completed"
-  | .failed => "failed"
-  | .interrupted => "interrupted"
-  | .dead => "dead"
-  | .superseded => "superseded"
-
-def responsePhaseName : ResponsePhase → String
-  | .absent => "absent"
-  | .streaming => "streaming"
-  | .completed => "completed"
-  | .failed => "failed"
-  | .interrupted => "interrupted"
+def responseStatusName : Option StreamingResponse.Status → String
+  | none => "absent"
+  | some status => status.toDefraDB
 
 def outcomeName : Outcome → String
   | .completed => "completed"
@@ -348,8 +335,8 @@ def leaseJson : Lease Generation → String
 
 def worldJson (value : World Generation) : String :=
   "{"
-    ++ "\"request\":" ++ jsonString (requestPhaseName value.request) ++ ","
-    ++ "\"response\":" ++ jsonString (responsePhaseName value.response) ++ ","
+    ++ "\"request\":" ++ jsonString (value.request.toDefraDB) ++ ","
+    ++ "\"response\":" ++ jsonString (responseStatusName value.response) ++ ","
     ++ "\"lease\":" ++ leaseJson value.lease ++ ","
     ++ "\"used_generations\":" ++
       jsonArray (value.usedGenerations.map (fun generation => toString generation)) ++ ","

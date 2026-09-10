@@ -56,8 +56,10 @@ def runStep (validate guard : Doc → Bool) (t : Target) (s : Store)
   | some merged => (fun t' => if t' = t then merged else s t', true)
   | none => (s, false)
 
-def gateField : FieldKey := "enable_self_config"
-
-def gateOn (doc : Doc) : Bool := doc gateField == some "true"
+/-- The canonical Tools decoder projects self_config.enable_self_config.
+Missing enablement is false. Decode errors must fail the shared validator;
+this model does not parse or duplicate the nested configuration schema. -/
+def gateOn (decodeEnabled : Doc → Option Bool) (doc : Doc) : Bool :=
+  (decodeEnabled doc).getD false
 
 end SelfConfig

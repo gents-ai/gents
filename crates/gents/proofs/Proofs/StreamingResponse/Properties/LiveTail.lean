@@ -86,18 +86,6 @@ theorem recovery_path_preserves_liveTail
     rw [h_post] at h_reason
     exact absurd h_reason h_pre_no_recovery
 
-theorem finalize_persists_durable_reasoning_and_clears_tail
-    {pre post : ResponseContext} {seq : Transcript.Sequence}
-    (_h : Transition pre post)
-    (h_finalize : post = { pre with
-        status := .completed
-      , liveTail := .empty
-      , durableReasoning := pre.tailReasoning
-      , materializedMessageSequence := some seq }) :
-    post.liveTail = .empty ∧ post.durableReasoning = pre.tailReasoning := by
-  rw [h_finalize]
-  exact ⟨rfl, rfl⟩
-
 theorem finalizeComplete_copies_reasoning_then_clears
     {pre post : ResponseContext}
     (h_streaming : pre.status = .streaming)
@@ -198,7 +186,7 @@ theorem completed_state_has_empty_liveTail
   · exact completed_carries_materialized_handle h h_completed
       (h_pre_wellformed.imp id (fun h => ⟨h.1, h.2.2⟩))
 
-private theorem trace_from_terminal_is_noop
+theorem terminal_trace_is_noop
     {pre post : ResponseContext}
     (h_trace : Trace pre post)
     (h_pre_term : isTerminal pre.status) :
@@ -209,17 +197,5 @@ private theorem trace_from_terminal_is_noop
     have h_noop : s₂ = s₁ := idempotent_finalize_is_noop h_trans h_pre_term
     have h_s₂_term : isTerminal s₂.status := h_noop ▸ h_pre_term
     exact (ih h_s₂_term).trans h_noop
-
-theorem recovery_state_liveTail_stable
-    {pre post : ResponseContext}
-    (h_trace : Trace pre post)
-    (h_pre_status : pre.status = .error)
-    (_h_pre_reason : pre.errorReason = some .daemonRestartRecovery)
-    (_h_post_reason : post.errorReason = some .daemonRestartRecovery) :
-    post.liveTail = pre.liveTail := by
-  have h_pre_term : isTerminal pre.status := by
-    rw [h_pre_status]; exact Or.inr rfl
-  have h_eq : post = pre := trace_from_terminal_is_noop h_trace h_pre_term
-  rw [h_eq]
 
 end StreamingResponse

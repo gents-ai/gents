@@ -113,10 +113,12 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"post_message_count\":" ++ toString witness.postMessageCount ++ ","
     ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","
     ++ "\"preserves_order\":" ++ boolString witness.preservesOrder ++ ","
-    ++ "\"gate_open\":" ++ boolString witness.gateOpen ++ ","
+    ++ "\"gate_open\":" ++ jsonOptionalBool witness.gateOpen ++ ","
     ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
     ++ "\"reducer_is_identity\":"
       ++ boolString witness.reducerIsIdentity ++ ","
+    ++ "\"reducer_is_idempotent\":"
+      ++ boolString witness.reducerIsIdempotent ++ ","
     ++ "\"split_index\":" ++ toString witness.splitIndex ++ ","
     ++ "\"safe_boundary\":" ++ toString witness.safeBoundary ++ ","
     ++ "\"retained_count\":" ++ toString witness.retainedCount
@@ -176,26 +178,6 @@ def restartDispositionCaseJson (witness : RestartDispositionCase) : String :=
     ++ "\"queue_key_prefix\":"
       ++ jsonOptionalString witness.queueKeyPrefix ++ ","
     ++ "\"theorem\":" ++ jsonString witness.theoremName
-    ++ "}"
-
-def recoveryEquivalenceCaseJson (witness : RecoveryEquivalenceCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"source_sweep_case\":" ++ jsonString witness.sourceSweepCase ++ ","
-    ++ "\"sweep_id\":" ++ jsonString witness.sweepId ++ ","
-    ++ "\"collection\":" ++ jsonString witness.collection ++ ","
-    ++ "\"rust_function\":" ++ jsonString witness.rustFunction ++ ","
-    ++ "\"cadence\":" ++ jsonString witness.cadence ++ ","
-    ++ "\"pre_state\":" ++ jsonString witness.preState ++ ","
-    ++ "\"recovered_state\":" ++ jsonString witness.recoveredState ++ ","
-    ++ "\"uninterrupted_state\":"
-      ++ jsonString witness.uninterruptedState ++ ","
-    ++ "\"equivalent\":" ++ boolString witness.equivalent ++ ","
-    ++ "\"reexecutes\":" ++ boolString witness.reexecutes ++ ","
-    ++ "\"can_hang\":" ++ boolString witness.canHang ++ ","
-    ++ "\"theorem\":" ++ jsonString witness.theoremName ++ ","
-    ++ "\"aggregate_theorem\":"
-      ++ jsonString witness.aggregateTheoremName
     ++ "}"
 
 end Conformance.Contracts

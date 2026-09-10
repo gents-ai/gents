@@ -392,17 +392,14 @@ def codexShimSubagentMetadataCaseJson
 
 def codexShimSubagentMetadataCases : List CodexShimSubagentMetadataCase :=
   [ { witness := "codex_shim.subagent_metadata.runtime_model"
-    , leanTheorems := [ "CodexShim.collab_model_is_runtime_model" ]
+    , leanTheorems := []
     , runtimeModel := some "child-model"
     , runtimeReasoningEffort := none
     , projectedModel := some "child-model"
     , projectedReasoningEffort := none
     }
   , { witness := "codex_shim.subagent_metadata.absent_values"
-    , leanTheorems :=
-        [ "CodexShim.collab_model_is_runtime_model"
-        , "CodexShim.absent_runtime_reasoning_effort_stays_absent"
-        ]
+    , leanTheorems := []
     , runtimeModel := none
     , runtimeReasoningEffort := none
     , projectedModel := none
@@ -676,24 +673,21 @@ structure CodexShimThreadStatusCase where
   leanTheorems : List String
   requestState : Option String
   responseStatus : Option String
-  conversationStatus : String
   projectedStatus : String
 
 def codexShimThreadStatusCase
     (witness : String)
     (leanTheorems : List String)
     (requestState : Option RequestState)
-    (responseStatus : Option ResponseStatus)
-    (conversationStatus : String) : CodexShimThreadStatusCase :=
+    (responseStatus : Option ResponseStatus) : CodexShimThreadStatusCase :=
   let head := requestState.map fun state => clientHeadProjection state responseStatus
   { witness
   , leanTheorems
   , requestState := requestState.map RequestState.toDefraDB
   , responseStatus := responseStatus.map responseStatusName
-  , conversationStatus
   , projectedStatus :=
       threadPresentationStatusName
-        (CodexShim.projectThreadStatus head conversationStatus)
+        (CodexShim.projectThreadStatus head)
   }
 
 def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String :=
@@ -702,49 +696,44 @@ def codexShimThreadStatusCaseJson (witness : CodexShimThreadStatusCase) : String
     ++ "\"lean_theorems\":" ++ jsonStringArray witness.leanTheorems ++ ","
     ++ "\"request_state\":" ++ jsonOptionalString witness.requestState ++ ","
     ++ "\"response_status\":" ++ jsonOptionalString witness.responseStatus ++ ","
-    ++ "\"conversation_status\":" ++ jsonString witness.conversationStatus ++ ","
     ++ "\"projected_status\":" ++ jsonString witness.projectedStatus
     ++ "}"
 
 def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
   [ codexShimThreadStatusCase "codex_shim.thread_status.workspace_binding_pending" []
-      (some .workspaceBindingPending) none "active"
-  , codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) none "active"
-  , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) none "active"
+      (some .workspaceBindingPending) none
+  , codexShimThreadStatusCase "codex_shim.thread_status.pending" [] (some .pending) none
+  , codexShimThreadStatusCase "codex_shim.thread_status.claimed" [] (some .claimed) none
   , codexShimThreadStatusCase
       "codex_shim.thread_status.processing"
       ["CodexShim.active_request_projects_active_thread"]
-      (some .processing) none "completed"
+      (some .processing) none
   , codexShimThreadStatusCase "codex_shim.thread_status.input_required" []
-      (some .inputRequired) none "active"
+      (some .inputRequired) none
   , codexShimThreadStatusCase
       "codex_shim.thread_status.completed"
       ["CodexShim.completed_request_projects_idle_thread"]
-      (some .completed) none "error"
+      (some .completed) none
   , codexShimThreadStatusCase
       "codex_shim.thread_status.failed"
       ["CodexShim.failed_request_projects_system_error_thread"]
-      (some .failed) none "active"
-  , codexShimThreadStatusCase "codex_shim.thread_status.dead" [] (some .dead) none "active"
+      (some .failed) none
+  , codexShimThreadStatusCase "codex_shim.thread_status.dead" [] (some .dead) none
   , codexShimThreadStatusCase "codex_shim.thread_status.superseded" []
-      (some .superseded) none "active"
+      (some .superseded) none
   , codexShimThreadStatusCase "codex_shim.thread_status.interrupted" []
-      (some .interrupted) none "active"
+      (some .interrupted) none
   , codexShimThreadStatusCase
       "codex_shim.thread_status.processing_complete_response"
       ["CodexShim.terminal_response_projects_idle_thread_before_request_terminalizes"]
-      (some .processing) (some .complete) "active"
+      (some .processing) (some .complete)
   , codexShimThreadStatusCase
       "codex_shim.thread_status.processing_error_response"
-      [] (some .processing) (some .error) "active"
-  , codexShimThreadStatusCase
-      "codex_shim.thread_status.conversation_error"
-      ["CodexShim.missing_request_error_conversation_projects_system_error"]
-      none none "error"
+      [] (some .processing) (some .error)
   , codexShimThreadStatusCase
       "codex_shim.thread_status.quiescent"
-      ["CodexShim.missing_request_active_conversation_is_quiescent"]
-      none none "active"
+      ["CodexShim.missing_request_observation_is_quiescent"]
+      none none
   ]
 
 def codexShimThreadStatusCasesJson : String :=

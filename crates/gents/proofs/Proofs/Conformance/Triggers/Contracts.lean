@@ -29,7 +29,7 @@ def keyJson (key : TriggerKey) : String :=
     ++ "}"
 
 def schedule (triggerId : String) : ActiveSchedule :=
-  { triggerId := triggerId, enabled := true }
+  { triggerId := triggerId, taskId := "task", enabled := true }
 
 def eventTrigger (triggerId : String) : ActiveEventTrigger :=
   { triggerId := triggerId
@@ -140,6 +140,9 @@ def contractJson (scenario : TriggerScenario) : String :=
     ++ "\"name\":" ++ jsonString scenario.name ++ ","
     ++ "\"trigger_id\":" ++ jsonOptionString scenario.intent.triggerId ++ ","
     ++ "\"trigger_kind\":" ++ jsonString scenario.intent.triggerKind.toDefraDB ++ ","
+    ++ "\"intent_task_id\":" ++ jsonString scenario.intent.taskId ++ ","
+    ++ "\"selected_task_id\":"
+      ++ jsonOptionString ((dispatch scenario.snap scenario.intent).map RequestSeed.taskId) ++ ","
     ++ "\"concurrency\":" ++ jsonString (concurrencyName scenario.intent.concurrency) ++ ","
     ++ "\"active_schedule_ids\":"
       ++ jsonStringArray (scenario.snap.activeSchedules.map ActiveSchedule.triggerId) ++ ","
@@ -181,6 +184,16 @@ def triggerDispatchScenarios : List TriggerScenario :=
     , snap := snapshot [] []
     , before := SystemState.empty
     , intent := intent none .manual .parallel
+    }
+  , { name := "schedule_uses_configured_task"
+    , snap := snapshot ["sched-a"] []
+    , before := SystemState.empty
+    , intent := { intent (some "sched-a") .schedule .parallel with taskId := "stale-task" }
+    }
+  , { name := "event_uses_configured_task"
+    , snap := snapshot [] ["event-a"]
+    , before := SystemState.empty
+    , intent := { intent (some "event-a") .event .parallel with taskId := "stale-task" }
     }
   , { name := "schedule_disabled_is_unreachable"
     , snap := snapshot [] []

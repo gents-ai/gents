@@ -1,5 +1,4 @@
 import Proofs.PairingReconcile.State
 import Proofs.PairingReconcile.Transition
-import Proofs.PairingReconcile.Executable
 import Proofs.PairingReconcile.Convergence
 import Proofs.PairingReconcile.Layering

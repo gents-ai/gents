@@ -25,10 +25,10 @@ structure Case where
 
 def cases : List Case :=
   [ {name := "entry_bootstrap_owner_stamped_seal", source := .bootstrap
-        {workspaceId := some 11, owner := some 21} (some identity) true true,
+        {workspaceId := some 11} (some identity) true true,
       expected := some bound, published := true}
   , {name := "area_to_scan_inherits_entry", expected := some bound, published := true}
-  , {name := "scan_to_verifier_partial_matching_context", explicit := {owner := some 21},
+  , {name := "scan_to_verifier_partial_matching_context", explicit := {workspaceId := some 11},
       expected := some bound, published := true}
   , {name := "unbound_entry_stays_unbound", source := .downstream [{root with workspace := none}],
       expected := some ⟨none, some .readOnly⟩, published := true}
@@ -38,14 +38,15 @@ def cases : List Case :=
       source := .downstream [{root with workspace := none}],
       expected := some ⟨none, none⟩, published := true}
   , {name := "no_authority_matching_identity_is_attenuated", ctx := {context with destinationAuthority := none},
-      explicit := {workspaceId := some 11, owner := some 21, sealHash := some 31},
+      explicit := {workspaceId := some 11, sealHash := some 31},
       expected := some ⟨none, none⟩, published := true}
   , {name := "no_authority_rejects_explicit_authority", ctx := {context with destinationAuthority := none},
       explicit := {authority := some .readOnly}}
   , {name := "no_authority_rejects_conflicting_identity", ctx := {context with destinationAuthority := none},
       explicit := {workspaceId := some 99}}
   , {name := "explicit_workspace_conflict", explicit := {workspaceId := some 99}}
-  , {name := "explicit_owner_conflict", explicit := {owner := some 99}}
+  , {name := "bootstrap_unverified_workspace_owner", source := .bootstrap
+        {workspaceId := some 11} (some identity) true false}
   , {name := "explicit_seal_conflict", explicit := {sealHash := some 99}}
   , {name := "explicit_authority_conflict", explicit := {authority := some .readWrite}}
   , {name := "missing_admitted_entry", source := .downstream []}
@@ -58,9 +59,9 @@ def cases : List Case :=
   , {name := "wrong_root_correlation", source := .downstream [{root with correlation := 99}]}
   , {name := "destination_not_pinned_route", ctx := {context with destinationRouteVerified := false}}
   , {name := "bootstrap_controller_input_conflict", source := .bootstrap
-        {workspaceId := some 99, owner := some 21} (some identity) true true}
+        {workspaceId := some 99} (some identity) true true}
   , {name := "unbound_entry_rejects_injected_workspace", source := .downstream [{root with workspace := none}],
-      explicit := {workspaceId := some 11, owner := some 21}}
+      explicit := {workspaceId := some 11}}
   , {name := "stale_publication_generation", expectedGeneration := 3, expected := some bound}
   , {name := "canceled_run_blocks_publication", before :=
         {state with graph := {state.graph with run := {state.graph.run with cancellationRequested := true}}},
@@ -80,8 +81,7 @@ def optionalIdentityJson : Option Identity → String
       ",\"owner\":" ++ toString i.owner ++ ",\"seal_hash\":" ++ jsonOptionalNat i.sealHash ++ "}"
 
 def explicitJson (e : Explicit) : String :=
-  "{\"workspace_id\":" ++ jsonOptionalNat e.workspaceId ++ ",\"owner\":" ++
-  jsonOptionalNat e.owner ++ ",\"seal_hash\":" ++ jsonOptionalNat e.sealHash ++
+  "{\"workspace_id\":" ++ jsonOptionalNat e.workspaceId ++ ",\"seal_hash\":" ++ jsonOptionalNat e.sealHash ++
   ",\"authority\":" ++ jsonOptionalString (e.authority.map BindingAuthority.toDefraDB) ++ "}"
 
 def rootJson (r : Root) : String :=

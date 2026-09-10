@@ -51,7 +51,7 @@ def orphanedBackgroundRecoveryCase
         | .childDead => "child_dead"
         | .childInterrupted => "child_interrupted"
         | .childSuperseded => "child_superseded"
-        | .unclaimedCrossDeploymentSpawn => "unclaimed_spawn_timeout"
+        | .unclaimedCrossPrincipalSpawn => "unclaimed_spawn_timeout"
     else
       none
   { (recoveryCase
@@ -169,10 +169,10 @@ def recoverySweepCases : List RecoverySweepCase :=
       "r6-cross-turn-background-process-durability"
   , recoveryCase
       toolCallRecoverySweep
-      "tool_running_unclaimed_cross_deployment_spawn_to_failed"
+      "tool_running_unclaimed_cross_principal_spawn_to_failed"
       "running"
       "failed"
-      "r5-cross-deployment-subagents-design"
+      "r5-cross-principal-subagents-design"
   , recoveryCase
       toolCallRecoverySweep
       "tool_running_child_completed_to_completed"
@@ -265,52 +265,6 @@ def recoverySweepCases : List RecoverySweepCase :=
       "deadline-plumbing-audit-2026-05-12-follow-up-6-pr-e"
   ]
 
-def recoveryEquivalenceTheorem (sweepId : String) : String :=
-  if sweepId = requestRecoverySweep.sweepId then
-    "Recovery.requestRecover_matches_uninterrupted"
-  else if sweepId = responseRecoverySweep.sweepId then
-    "Recovery.responseRecover_matches_uninterrupted"
-  else if sweepId = toolCallRecoverySweep.sweepId then
-    "Recovery.toolCallRecover_matches_uninterrupted"
-  else if sweepId = orphanedBackgroundToolSweep.sweepId then
-    "Recovery.orphanedBackgroundToolRecover_matches_uninterrupted"
-  else if sweepId = backgroundCompletionSideEffectSweep.sweepId then
-    "Recovery.backgroundCompletionSideEffectRecover_matches_uninterrupted"
-  else if sweepId = terminalParentOwnedToolSweep.sweepId then
-    "Recovery.terminalParentToolRecover_matches_uninterrupted"
-  else if sweepId = detachedBridgeRecoverySweep.sweepId then
-    "Recovery.detachedBridgeRecover_matches_uninterrupted"
-  else if sweepId = inferenceCallRecoverySweep.sweepId then
-    "Recovery.inferenceCallRecover_matches_uninterrupted"
-  else if sweepId = expiredSubagentChildSweep.sweepId then
-    "Recovery.expiredChildRecover_matches_uninterrupted"
-  else if sweepId = queuedDescendantSweep.sweepId then
-    "Recovery.queuedDescendantRecover_matches_uninterrupted"
-  else
-    "unregistered_recovery_equivalence"
-
-def recoveryEquivalenceCase
-    (witness : RecoverySweepCase) : RecoveryEquivalenceCase :=
-  { name := witness.name ++ "_same_as_uninterrupted"
-  , sourceSweepCase := witness.name
-  , sweepId := witness.sweepId
-  , collection := witness.collection
-  , rustFunction := witness.rustFunction
-  , cadence := witness.cadence
-  , preState := witness.preState
-  , recoveredState := witness.terminalState
-  , uninterruptedState := witness.terminalState
-  , equivalent := true
-  , reexecutes := false
-  , canHang := false
-  , theoremName := recoveryEquivalenceTheorem witness.sweepId
-  , aggregateTheoremName :=
-      "Recovery.RecoveryEquivalence.finite_stale_rows_converge_to_uninterrupted"
-  }
-
-def recoveryEquivalenceCases : List RecoveryEquivalenceCase :=
-  recoverySweepCases.map recoveryEquivalenceCase
-
 /-! ## Restart disposition witnesses (#937)
 
 Finite rows for the startup classifier in
@@ -398,7 +352,7 @@ def restartDispositionCases : List RestartDispositionCase :=
       "restart_subagent_missing_parent_left_running"
       .background .cascade true .missing
       "Recovery.leave_running_iff_preserved_shapes"
-  , -- Unclaimed cross-deployment spawn expiry outranks every leave-running
+  , -- Unclaimed cross-principal spawn expiry outranks every leave-running
     -- exemption: an unclaimed bridge under a live parent still fails.
     restartDispositionCase
       "restart_unclaimed_spawn_expired_fails"
@@ -471,20 +425,6 @@ theorem recoverySweepCases_decrease_to_zero :
     ∀ witness,
       witness ∈ recoverySweepCases →
       witness.measureBefore > witness.measureAfter ∧ witness.measureAfter = 0 := by
-  native_decide
-
-theorem recoveryEquivalenceCases_cover_recoverySweepCases :
-    recoveryEquivalenceCases.length = recoverySweepCases.length := by
-  native_decide
-
-theorem recoveryEquivalenceCases_same_as_uninterrupted :
-    ∀ witness,
-      witness ∈ recoveryEquivalenceCases →
-      witness.recoveredState = witness.uninterruptedState ∧
-      witness.equivalent = true ∧
-      witness.reexecutes = false ∧
-      witness.canHang = false ∧
-      witness.theoremName ≠ "unregistered_recovery_equivalence" := by
   native_decide
 
 end Recovery

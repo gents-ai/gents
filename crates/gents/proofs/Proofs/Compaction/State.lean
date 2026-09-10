@@ -6,7 +6,7 @@ import Proofs.PromptAssembly.State
 namespace Compaction
 
 open Transcript (Sequence MessageId MessageRow MessageKind ToolResultKey
-                 MessageRole StrictlyIncreasingMessages UniqueMessageSequences)
+                 MessageRole StrictlyIncreasingMessages)
 
 structure SummaryHandle where
   payload : Nat
@@ -37,26 +37,39 @@ def AnnouncementsAreAssistant (msgs : List MessageRow) : Prop :=
   ∀ row, row ∈ msgs →
     ∀ callIds, row.kind = .assistantToolCalls callIds → row.role = .assistant
 
-/-- Coherence of a prompt view.
-
-`blockValid` and `announcementsAssistant` were added with the real `summarize`
-reducer (#993). The runtime establishes both by construction — every view is
-born from `providerView`, and `providerView_sound` gives `ProviderValid` — and
-they are exactly the premises under which dropping a compacted prefix preserves
-pair closure. The previous three fields sufficed only because the modelled
-reducer was `id`. -/
+/-- Premises for safe reduction of a row-level prompt view. Provider validity
+and assistant announcement roles are separate obligations. The global provider
+proof supplies validity only under its unique-call-id premise; it does not
+establish arbitrary production content or repeated-call behavior. -/
 structure ViewCoherent (v : PromptView) : Prop where
   pairs                  : PairsClosedInMessages v.messages
   ordered                : StrictlyIncreasingMessages v.messages
-  uniqueSequences        : UniqueMessageSequences v.messages
   blockValid             : PromptAssembly.ActiveBlockValid v.messages
   announcementsAssistant : AnnouncementsAreAssistant v.messages
 
+/-- Only tool-result rows require a terminal response observation. The finite
+row traversal keeps the actual reduction gate executable. -/
 def safeToReduce (v : PromptView) : Prop :=
-  ∀ row, row ∈ v.messages →
-    (∃ callId key, row.kind = .toolResult callId key) →
-      ∃ status, v.responseStatuses row.messageId = some status ∧
-        isTerminal status
+  ∀ row ∈ v.messages,
+    match row.kind with
+    | .toolResult _ _ =>
+        match v.responseStatuses row.messageId with
+        | some status => isTerminal status
+        | none => False
+    | _ => True
+
+instance (v : PromptView) : Decidable (safeToReduce v) := by
+  unfold safeToReduce
+  have rowDec : ∀ row : MessageRow, Decidable
+      (match row.kind with
+       | .toolResult _ _ => match v.responseStatuses row.messageId with
+         | some status => isTerminal status
+         | none => False
+       | _ => True) := by
+    intro row
+    cases row.kind <;> try infer_instance
+    cases v.responseStatuses row.messageId <;> infer_instance
+  exact @List.decidableBAll _ _ rowDec v.messages
 
 end PromptView
 

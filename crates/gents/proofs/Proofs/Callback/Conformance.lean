@@ -8,7 +8,7 @@ open CallbackInvocation
 structure CallbackCase where
   name : String
   invocationId : String
-  ownerDeploymentId : String
+  ownerAgentDid : String
   state : InvocationState
   journal : List ActionJournalState
   resultEmitted : Bool
@@ -24,7 +24,7 @@ where
 
 def CallbackCase.invocation (c : CallbackCase) : CallbackInvocation :=
   { invocationId := c.invocationId
-  , ownerDeploymentId := c.ownerDeploymentId
+  , ownerAgentDid := c.ownerAgentDid
   , state := c.state
   , journal := numberedJournal c.journal
   , resultEmitted := c.resultEmitted }
@@ -39,7 +39,7 @@ def mkCase
     (resultEmitted legal : Bool) : CallbackCase :=
   { name := name
   , invocationId := "inv-1"
-  , ownerDeploymentId := "dep-1"
+  , ownerAgentDid := "dep-1"
   , state := state
   , journal := journal
   , resultEmitted := resultEmitted
@@ -65,10 +65,10 @@ theorem callbackCasesLegalCorrect :
   native_decide
 
 def mkInv
-    (invocationId ownerDeploymentId : String)
+    (invocationId ownerAgentDid : String)
     (state : InvocationState) : CallbackInvocation :=
   { invocationId := invocationId
-  , ownerDeploymentId := ownerDeploymentId
+  , ownerAgentDid := ownerAgentDid
   , state := state
   , journal := []
   , resultEmitted := false }
@@ -82,6 +82,51 @@ theorem claim_unique_different_ids :
     ClaimUnique
       [mkInv "inv-1" "dep-1" .running, mkInv "inv-2" "dep-1" .running] := by
   native_decide
+
+/-- Proof-carrying lifecycle cases expose nonempty captured input and group
+origin, so downstream conformance checks the real transition and journal. -/
+structure TransitionCase where
+  name : String
+  pre : CallbackInvocation
+  post : CallbackInvocation
+  step : CallbackInvocation.Transition pre post
+
+def groupedInvocation (state : InvocationState) : CallbackInvocation :=
+  { invocationId := "inv-group", ownerAgentDid := "did:agent:a",
+    input := "[{\"doc\":\"b\",\"value\":2},{\"doc\":\"a\",\"value\":1}]",
+    originGroupKey := some ⟨"did:agent:a", .callbackBinding "summarize", "config-1", "run-1"⟩,
+    state := state, journal := [], resultEmitted := false }
+
+def transitionCases : List TransitionCase :=
+  let recovering := { groupedInvocation .running with
+    journal := [{ index := 0, state := .executing }] }
+  let completed := { groupedInvocation .running with
+    journal := [{ index := 0, state := .resultDocsWritten }] }
+  [ { name := "claim_preserves_captured_group",
+      pre := groupedInvocation .pending,
+      post := { groupedInvocation .pending with state := .claimed },
+      step := .claim rfl rfl }
+  , { name := "run_preserves_captured_group",
+      pre := groupedInvocation .claimed,
+      post := { groupedInvocation .claimed with state := .running },
+      step := .run rfl rfl }
+  , { name := "failure_preserves_captured_group_and_journal",
+      pre := recovering,
+      post := { recovering with state := .failed, resultEmitted := false },
+      step := .fail rfl rfl }
+  , { name := "success_preserves_captured_group_and_emits_result",
+      pre := completed,
+      post := { completed with state := .succeeded, resultEmitted := true },
+      step := .succeed rfl (by decide) rfl }
+  , { name := "denied_claim_preserves_captured_group_without_actions",
+      pre := groupedInvocation .claimed,
+      post := { groupedInvocation .claimed with state := .denied, resultEmitted := false },
+      step := .deny_claimed rfl rfl rfl }
+  , { name := "denied_running_preserves_captured_group_without_actions",
+      pre := groupedInvocation .running,
+      post := { groupedInvocation .running with state := .denied, resultEmitted := false },
+      step := .deny_running rfl rfl rfl }
+  ]
 
 end Conformance
 end Callback

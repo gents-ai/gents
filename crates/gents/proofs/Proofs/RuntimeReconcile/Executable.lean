@@ -12,7 +12,10 @@ inductive Action where
   | publish (resolved : ResolvedSnapshot)
   | applyFailed
   | routerObserve (process : ProcessState)
+  /-- Mandatory behavior is decoded from the authenticated request; absent/blank
+  identifiers are rejected before this Nat identifier abstraction. -/
   | acceptRequest (process : ProcessState) (sessionId : SessionId) (requestId : RequestId)
+      (requested : BehaviorId)
   | finishRequest (requestId : RequestId)
   | retireGeneration (generation : Generation)
   deriving DecidableEq, Repr
@@ -88,16 +91,16 @@ def step? (pre : RuntimeState) : Action → Option RuntimeState
         some { pre with routerObservedGeneration := pre.active.generation }
       else
         none
-  | .acceptRequest process sessionId requestId =>
-      if CanAdmitRequest process pre sessionId requestId then
+  | .acceptRequest process sessionId requestId requested =>
+      if CanAdmitRequest process pre sessionId requestId requested then
         some
           { pre with
             accepted := insert requestId pre.accepted
           , inFlight := insert requestId pre.inFlight
           , requestGeneration := Function.update pre.requestGeneration requestId pre.routerObservedGeneration
           , requestSession := Function.update pre.requestSession requestId sessionId
-          , requestBehavior := Function.update pre.requestBehavior requestId (pre.selectedBehavior sessionId)
-          , sessionBehavior := pre.bindSessionIfNeeded sessionId (pre.selectedBehavior sessionId)
+          , requestBehavior := Function.update pre.requestBehavior requestId requested
+          , sessionBehavior := pre.bindSessionIfNeeded sessionId requested
           }
       else
         none
@@ -169,9 +172,9 @@ theorem step_sound
   | routerObserve process =>
       simp [step?] at h_step
       exact Transition.router_observe process h_step.1.1 h_step.1.2 h_step.2.symm
-  | acceptRequest process sessionId requestId =>
+  | acceptRequest process sessionId requestId requested =>
       simp [step?] at h_step
-      exact Transition.accept_request process sessionId requestId h_step.1 h_step.2.symm
+      exact Transition.accept_request process sessionId requestId requested h_step.1 h_step.2.symm
   | finishRequest requestId =>
       simp [step?] at h_step
       exact Transition.finish_request requestId h_step.1 h_step.2.symm
@@ -204,8 +207,8 @@ theorem transition_complete
       exact ⟨.applyFailed, by simp [step?, h_phase, h_post]⟩
   | router_observe process h_process h_ready h_post =>
       exact ⟨.routerObserve process, by simp [step?, h_process, h_ready, h_post]⟩
-  | accept_request process sessionId requestId h_can h_post =>
-      exact ⟨.acceptRequest process sessionId requestId, by simp [step?, h_can, h_post]⟩
+  | accept_request process sessionId requestId requested h_can h_post =>
+      exact ⟨.acceptRequest process sessionId requestId requested, by simp [step?, h_can, h_post]⟩
   | finish_request requestId h_inFlight h_post =>
       exact ⟨.finishRequest requestId, by simp [step?, h_inFlight, h_post]⟩
   | retire_generation generation h_live h_not_active h_not_router h_clear h_post =>
@@ -290,13 +293,14 @@ theorem accept_step_router_observed_ready_live
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
+    {requested : BehaviorId}
     (h_coherent : pre.coherent)
-    (h_step : step? pre (.acceptRequest process sessionId requestId) = some post) :
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     pre.routerObservedGeneration = pre.active.generation ∧
       pre.routerObservedGeneration ∈ pre.readyGenerations ∧
       pre.routerObservedGeneration ∈ pre.liveGenerations := by
   simp [step?] at h_step
-  rcases h_step.1 with ⟨_, _, _, _, h_router_eq, _, _⟩
+  rcases h_step.1 with ⟨_, _, ⟨_, _, h_router_eq, _, _⟩, _⟩
   have h_router_ready := coherent_aligned_router_is_ready h_coherent h_router_eq
   rcases h_coherent with ⟨_, _, _, _, _, _, _, _, h_ready_live, _, _, _, _⟩
   exact ⟨h_router_eq, h_router_ready, h_ready_live _ h_router_ready⟩
@@ -306,19 +310,27 @@ theorem accept_step_binding_coherent
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    (h_step : step? pre (.acceptRequest process sessionId requestId) = some post) :
+    {requested : BehaviorId}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       requestId ∈ post.inFlight ∧
       post.requestGeneration requestId = pre.routerObservedGeneration ∧
       post.requestSession requestId = sessionId ∧
-      post.requestBehavior requestId = pre.selectedBehavior sessionId ∧
+      post.requestBehavior requestId = requested ∧
       post.sessionBehavior (post.requestSession requestId) =
         some (post.requestBehavior requestId) := by
   simp [step?] at h_step
   rcases h_step with ⟨h_can, h_post⟩
-  rcases h_can with ⟨_, h_fresh, _⟩
+  rcases h_can with ⟨_, h_fresh, _, h_binding⟩
   cases h_post
-  simp [Function.update, bindSessionIfNeeded_selected, h_fresh]
+  simp [Function.update, bindSessionIfNeeded_requested pre sessionId requested h_binding, h_fresh]
+
+theorem mismatched_session_behavior_denied
+    (pre : RuntimeState) (process : ProcessState) (sessionId : SessionId)
+    (requestId requested bound : Nat)
+    (hbound : pre.sessionBehavior sessionId = some bound) (hne : bound ≠ requested) :
+    step? pre (.acceptRequest process sessionId requestId requested) = none := by
+  simp [step?, CanAdmitRequest, hbound, hne]
 
 /-- Admission is the atomic boundary: an accepted request already owns its
 session/behavior projection; there is no later repair transition. -/
@@ -327,7 +339,8 @@ theorem accept_step_projects_session_atomically
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    (h_step : step? pre (.acceptRequest process sessionId requestId) = some post) :
+    {requested : BehaviorId}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
     requestId ∈ post.accepted ∧
       post.requestSession requestId = sessionId ∧
       post.sessionBehavior sessionId = some (post.requestBehavior requestId) := by
@@ -339,8 +352,9 @@ theorem accept_step_replay_rejected
     {process : ProcessState}
     {sessionId : SessionId}
     {requestId : RequestId}
-    (h_step : step? pre (.acceptRequest process sessionId requestId) = some post) :
-    step? post (.acceptRequest process sessionId requestId) = none := by
+    {requested : BehaviorId}
+    (h_step : step? pre (.acceptRequest process sessionId requestId requested) = some post) :
+    step? post (.acceptRequest process sessionId requestId requested) = none := by
   simp [step?] at h_step
   rcases h_step with ⟨h_can, h_post⟩
   rcases h_can with ⟨h_unaccepted, _, _⟩

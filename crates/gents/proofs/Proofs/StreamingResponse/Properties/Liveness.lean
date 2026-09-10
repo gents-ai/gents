@@ -2,7 +2,8 @@ import Proofs.StreamingResponse.Transition
 
 namespace StreamingResponse
 
-theorem streamIdle_eventually_terminal
+/-- Expiry enables an error transition; scheduler fairness is not claimed. -/
+theorem expired_idle_timeout_transition_constructible
     (pre : ResponseContext)
     (h_streaming : pre.status = .streaming)
     (h_expired : pre.now > pre.streamIdleDeadline) :
@@ -18,16 +19,6 @@ theorem streamIdle_eventually_terminal
       rfl
   · rfl
   · rfl
-
-theorem streaming_eventually_terminal
-    (pre : ResponseContext)
-    (h_streaming : pre.status = .streaming) :
-    ∃ post, Transition pre post ∧ isTerminal post.status := by
-  refine ⟨{ pre with
-    status := .error
-  , errorReason := some .daemonRestartRecovery }, ?_, ?_⟩
-  · exact Transition.recoverInterrupted h_streaming rfl
-  · exact Or.inr rfl
 
 theorem recoverInterrupted_constructible
     (pre : ResponseContext)

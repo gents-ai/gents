@@ -201,7 +201,6 @@ def claimPreservesExplicitDeadlineCase : QueueDeadlineConformanceCase :=
     , maxRetries := 3
     , progressSeq := 0
     , messageSeq := 0
-    , isLatest := true
     , persistence := .uncommitted
     , validUntil := some 60
     }

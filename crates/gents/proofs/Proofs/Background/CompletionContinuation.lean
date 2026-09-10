@@ -1,4 +1,5 @@
 import Proofs.Session.Properties.Executable
+import Proofs.AgentSession
 import Proofs.Request
 import Proofs.Goals
 import Proofs.ToolExecution.State
@@ -75,13 +76,15 @@ structure QueuedCompletion where
   queue : SessionQueue.SessionQueueState
   sameSession : preQueue.sessionId = notified.transcript.sessionId
   wakeWellFormed :
+    notified.completion.wake.source = .backgroundCompletion ∧
     notified.completion.wake.coalesceWellFormed preQueue.sessionId
   wakeKeyMissing :
     SessionQueue.containsCoalescedQueueKey
       preQueue.pending
       SessionQueue.QueueSource.backgroundCompletion
       preQueue.sessionId = false
-  enqueued : SessionQueue.Transition preQueue queue
+  enqueued : SessionQueue.step? preQueue
+    (.coalescePending notified.completion.wake) = some queue
 
 /-- Enqueue the first coalesced completion wake for this parent session.
 Subsequent terminal completions reuse the session queue's separately-proved
@@ -92,6 +95,7 @@ def enqueueWake?
     Option QueuedCompletion :=
   if h_session : pre.sessionId = notified.transcript.sessionId then
     if h_well_formed :
+        notified.completion.wake.source = .backgroundCompletion ∧
         notified.completion.wake.coalesceWellFormed pre.sessionId then
       if h_missing :
           SessionQueue.containsCoalescedQueueKey
@@ -111,7 +115,7 @@ def enqueueWake?
               , sameSession := h_session
               , wakeWellFormed := h_well_formed
               , wakeKeyMissing := h_missing
-              , enqueued := SessionQueue.step?_sound h_step
+              , enqueued := h_step
               }
       else
         none
@@ -119,6 +123,13 @@ def enqueueWake?
       none
   else
     none
+
+/-- Shared goal coalescing does not authorize the background producer to issue
+Goal-owned requests; those retain their authenticated continuation owner. -/
+theorem goal_queue_cannot_be_background_wake
+    (notified : NotifiedCompletion) (pre : SessionQueue.SessionQueueState)
+    (h : notified.completion.wake.source = .goal) : enqueueWake? notified pre = none := by
+  simp [enqueueWake?, h]
 
 /-! Canonical Goal presence selects the existing Goal continuation owner,
 including paused and terminal Goals. This is not another budget/status policy.
@@ -148,7 +159,7 @@ theorem non_goal_enqueue_preserves_existing_policy
 structure Continuation where
   queued : QueuedCompletion
   queue : SessionQueue.SessionQueueState
-  claimed : SessionQueue.Transition queued.queue queue
+  claimed : SessionQueue.step? queued.queue .claimNext = some queue
   activeWake :
     queue.active = some queued.notified.completion.wake.requestId
 
@@ -164,7 +175,7 @@ def claimContinuation? (queued : QueuedCompletion) : Option Continuation :=
         some
           { queued := queued
           , queue := post
-          , claimed := SessionQueue.step?_sound h_step
+          , claimed := h_step
           , activeWake := h_active
           }
       else
@@ -315,17 +326,32 @@ separate capability from the interactive client retry modeled by
 it was scheduled.
 -/
 
+/-- Publication fields observed or written by the existing RequestSpec owner.
+Physical document IDs, signatures and typed inputs remain adapter boundaries;
+execution clocks are assigned at claim, never invented by retry publication. -/
+structure WakeRequest where
+  state : RequestState
+  origin : ExecutionOrigin
+  admission : AdmissionState
+  retryCount : Nat
+  maxRetries : Nat
+  depth : Nat
+  parentRequestId : Option RequestId
+  deadline : Option Time
+
 structure FailedWake where
-  ctx : RequestContext
+  requestId : RequestId
+  ctx : WakeRequest
   source : SessionQueue.QueueSource
   policy : SessionQueue.QueuePolicy
   queueKey : Option SessionId
 
+/-- Local lifecycle/budget/queue eligibility only. Publication additionally
+requires the authoritative transaction gate in redriveWakeFromRows?. -/
 def CanRedriveWake (wake : FailedWake) : Prop :=
   wake.ctx.state = .failed ∧
     wake.ctx.admission = .released ∧
     wake.ctx.origin = .scheduled ∧
-    wake.ctx.isLatest = true ∧
     wake.ctx.retryCount < wake.ctx.maxRetries ∧
     wake.source = .backgroundCompletion ∧
     wake.policy = .coalesce ∧
@@ -335,35 +361,89 @@ instance (wake : FailedWake) : Decidable (CanRedriveWake wake) := by
   unfold CanRedriveWake
   infer_instance
 
-def redrivenWakeContext (ctx : RequestContext) : RequestContext :=
-  { state := .pending
-  , origin := .scheduled
-  , backend := ctx.backend
-  , admission := .released
-  , deadline := ctx.currentTime + 1
-  , claimTime := ctx.currentTime
-  , currentTime := ctx.currentTime
-  , retryCount := ctx.retryCount + 1
-  , maxRetries := ctx.maxRetries
-  , progressSeq := 0
-  , messageSeq := 0
-  , isLatest := true
-  , persistence := .uncommitted
-  }
+def redrivenWakeContext (wake : FailedWake) : WakeRequest :=
+  { wake.ctx with
+    state := .pending
+    origin := .scheduled
+    admission := .released
+    retryCount := wake.ctx.retryCount + 1
+    parentRequestId := some wake.requestId
+    deadline := none }
 
-def redriveWake? (wake : FailedWake) : Option RequestContext :=
+def redriveWake? (wake : FailedWake) : Option WakeRequest :=
   if _h : CanRedriveWake wake then
-    some (redrivenWakeContext wake.ctx)
+    some (redrivenWakeContext wake)
   else
     none
 
 /-- Legacy failed wakes also defer to the canonical Goal owner. This guard
 is applied at publication, not merely during candidate discovery. -/
 def redriveWakeForOwner?
-    (goal : Option Goals.Status) (wake : FailedWake) : Option RequestContext :=
+    (goal : Option Goals.Status) (wake : FailedWake) : Option WakeRequest :=
   match goal with
   | some _ => none
   | none => redriveWake? wake
+
+/-- One publication transaction's result, not another durable request/session.
+The parent WakeRequest projection is decoded from the exact physical row below.
+The DB adapter must read rows and publish all three outputs atomically; this
+executable composition does not prove native isolation or signature verification. -/
+def redriveWakeFromRows?
+    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
+    (successor : AgentSession.RequestFact) (preview : String) (now : Time) :
+    Option (WakeRequest × AgentSession.Document × List AgentSession.RequestFact) := do
+  let parent ← AgentSession.latest rows session.scope.agent session.scope.session none
+  let next ← redriveWakeForOwner? goal wake
+  let nextRows := rows ++ [successor]
+  if parent.observed.docId = parentDoc ∧ parent.observed.requestId = wake.requestId ∧
+      parent.observed.state = wake.ctx.state ∧ parent.scope = session.scope ∧
+      parent.behavior = session.behavior ∧ wake.queueKey = some session.scope.session ∧
+      successor.scope = session.scope ∧ successor.behavior = session.behavior ∧
+      successor.observed.state = .pending ∧
+      rows.all (fun row => row.observed.docId != successor.observed.docId &&
+        row.observed.requestId != successor.observed.requestId) ∧
+      AgentSession.newer successor parent ∧
+      AgentSession.latest nextRows session.scope.agent session.scope.session none = some successor then
+    some (next, AgentSession.advance session nextRows successor preview now, nextRows)
+  else none
+
+/-- Every successful transaction publishes the same successor as both the
+canonical request head and the session's exact observed identity/state. This is
+an invariant of the executable publication result, not a proof of DB isolation. -/
+theorem redrive_publication_has_one_successor
+    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
+    (successor : AgentSession.RequestFact) (preview : String) (now : Time)
+    (post : WakeRequest × AgentSession.Document × List AgentSession.RequestFact)
+    (h : redriveWakeFromRows? goal session rows parentDoc wake successor preview now = some post) :
+    post.2.2 = rows ++ [successor] ∧
+    AgentSession.latest post.2.2 session.scope.agent session.scope.session none = some successor ∧
+    post.2.1.observation.bind (·.latest) = some successor.observed ∧
+    successor.observed.state = .pending := by
+  cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
+    cases hn : redriveWakeForOwner? goal wake <;>
+    simp [redriveWakeFromRows?, hp, hn] at h
+  obtain ⟨guard, rfl⟩ := h
+  obtain ⟨_, _, _, _, _, _, hs, hb, hstate, _, _, hhead⟩ := guard
+  have hscoped := AgentSession.latest_exact_of_session_winner
+    (rows ++ [successor]) session.scope.agent session.scope.session successor hhead
+  simp only [hs] at hscoped
+  simp [AgentSession.advance, hs, hb, hhead, hscoped, hstate]
+
+/-- Cached presentation is deliberately absent from every redrive gate. It is
+updated from the same successor rows as part of successful publication. -/
+theorem redrive_selection_ignores_cached_head
+    (goal : Option Goals.Status) (session : AgentSession.Document)
+    (rows : List AgentSession.RequestFact) (parentDoc : Nat) (wake : FailedWake)
+    (successor : AgentSession.RequestFact) (preview : String) (now : Time)
+    (observation : Option AgentSession.Observation) :
+    (redriveWakeFromRows? goal { session with observation } rows parentDoc wake successor preview now).isSome =
+    (redriveWakeFromRows? goal session rows parentDoc wake successor preview now).isSome := by
+  cases hp : AgentSession.latest rows session.scope.agent session.scope.session none <;>
+    cases hn : redriveWakeForOwner? goal wake <;>
+    simp [redriveWakeFromRows?, hp, hn]
+  split <;> simp_all
 
 theorem goal_owned_failed_wake_cannot_redrive
     (status : Goals.Status) (wake : FailedWake) :
@@ -376,16 +456,17 @@ theorem non_goal_redrive_preserves_existing_policy (wake : FailedWake) :
 
 theorem redriveWake?_bounded
     {wake : FailedWake}
-    {post : RequestContext}
+    {post : WakeRequest}
     (h_redrive : redriveWake? wake = some post) :
     post.state = .pending ∧
       post.origin = .scheduled ∧
-      post.backend = wake.ctx.backend ∧
       post.retryCount = wake.ctx.retryCount + 1 ∧
-      post.retryCount ≤ post.maxRetries := by
+      post.retryCount ≤ post.maxRetries ∧
+      post.depth = wake.ctx.depth ∧
+      post.parentRequestId = some wake.requestId ∧ post.deadline = none := by
   simp [redriveWake?] at h_redrive
   rcases h_redrive with ⟨h_can, rfl⟩
-  rcases h_can with ⟨_, _, _, _, h_budget, _, _, _⟩
+  rcases h_can with ⟨_, _, _, h_budget, _, _, _⟩
   simp [redrivenWakeContext, Nat.succ_le_of_lt h_budget]
 
 def failedWakeFixture
@@ -393,24 +474,19 @@ def failedWakeFixture
     (origin : ExecutionOrigin := .scheduled)
     (retryCount : Nat := 0)
     (maxRetries : Nat := 3)
-    (isLatest : Bool := true)
     (source : SessionQueue.QueueSource := .backgroundCompletion)
     (policy : SessionQueue.QueuePolicy := .coalesce)
     (queueKey : Option SessionId := some 900) : FailedWake :=
-  { ctx :=
+  { requestId := 901
+  , ctx :=
       { state := state
       , origin := origin
-      , backend := { val := "background-wake-backend" }
       , admission := .released
-      , deadline := 1
-      , claimTime := 0
-      , currentTime := 10
+      , deadline := some 1
+      , depth := 2
+      , parentRequestId := some 899
       , retryCount := retryCount
       , maxRetries := maxRetries
-      , progressSeq := 0
-      , messageSeq := 0
-      , isLatest := isLatest
-      , persistence := .committed
       }
   , source := source
   , policy := policy
@@ -425,7 +501,8 @@ def canonicalFailedWakeRedriveAccepted : Bool :=
         (post.state = .pending ∧
          post.origin = .scheduled ∧
          post.retryCount = 2 ∧
-         post.maxRetries = 3)
+         post.maxRetries = 3 ∧ post.depth = 2 ∧
+         post.parentRequestId = some 901 ∧ post.deadline = none)
 
 theorem canonical_failed_wake_redrive_is_bounded :
     canonicalFailedWakeRedriveAccepted = true := by
@@ -504,18 +581,6 @@ theorem fresh_completion_wake_preserves_fifo_priority
     admissionPriority wake = 1 := by
   simp [admissionPriority, AdmissionCandidate.isAgedCompletionWake,
     h_wake_source, Nat.not_le.mpr h_wake_age]
-
-/-- The behavior executor admits only a finite predecessor set.  Once an aged
-wake is selected ahead of new descendants, its remaining wait is bounded by
-the already-running workers plus the fixed dispatcher queue. -/
-def predecessorBound (executorCapacity queueCapacity : Nat) : Nat :=
-  executorCapacity + queueCapacity
-
-theorem aged_wake_predecessors_bounded
-    (executorCapacity queueCapacity predecessors : Nat)
-    (h_bounded : predecessors ≤ executorCapacity + queueCapacity) :
-    predecessors ≤ predecessorBound executorCapacity queueCapacity := by
-  simpa [predecessorBound] using h_bounded
 
 def agedWakeFixture : AdmissionCandidate :=
   { requestId := 901
@@ -665,39 +730,40 @@ def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBind
   | none => []
   | some snapshot => snapshot.attemptedBindings
 
-/-- Recovery is computed only from durable facts.  A committed response wins
-over a stale processing request; otherwise a durable claim snapshot proves an
-attempt occurred and remains retryable.  With neither fact, the pending wake
-is still unconsumed. -/
+/-- Existing terminal request outcomes win. Responses repair only unfinished
+requests; an observed unfinished attempt without a response becomes failed.
+Without a claim, preserve the current admission state. This projection does
+not authorize retries: `redriveWakeFromRows?` still applies authoritative head,
+physical parent, ownership and budget gates. -/
 def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
   let attempted := attemptedFromSnapshot input.claimSnapshot
-  match input.responseState with
-  | .completed =>
-      { requestState := .completed
-      , attemptedBindings := attempted
-      , acknowledgedBindings := attempted
-      , retryEligible := false
-      }
-  | .failed =>
-      { requestState := .failed
-      , attemptedBindings := attempted
-      , acknowledgedBindings := []
-      , retryEligible := input.claimSnapshot.isSome
-      }
-  | .absent =>
-      match input.claimSnapshot with
-      | none =>
-          { requestState := .pending
-          , attemptedBindings := []
-          , acknowledgedBindings := []
-          , retryEligible := false
-          }
-      | some snapshot =>
-          { requestState := .failed
-          , attemptedBindings := snapshot.attemptedBindings
-          , acknowledgedBindings := []
-          , retryEligible := true
-          }
+  let state :=
+    if isTerminal input.requestState then input.requestState
+    else match input.responseState with
+      | .completed => .completed
+      | .failed => .failed
+      | .absent => if input.claimSnapshot.isSome then .failed else input.requestState
+  { requestState := state
+  , attemptedBindings := attempted
+  , acknowledgedBindings := if state = .completed then attempted else []
+  , retryEligible := state == .failed && input.claimSnapshot.isSome
+  }
+
+theorem recovery_preserves_terminal_request (input : WakeRecoveryInput)
+    (h : isTerminal input.requestState) :
+    (recoverWakeDelivery input).requestState = input.requestState := by
+  simp [recoverWakeDelivery, h]
+
+theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
+    (h : input.requestState = .interrupted ∨ input.requestState = .superseded ∨
+      input.requestState = .dead) :
+    (recoverWakeDelivery input).retryEligible = false := by
+  rcases h with h | h | h <;> simp [recoverWakeDelivery, h, isTerminal]
+
+theorem recovery_without_attempt_preserves_request (input : WakeRecoveryInput)
+    (hclaim : input.claimSnapshot = none) (hresponse : input.responseState = .absent) :
+    (recoverWakeDelivery input).requestState = input.requestState := by
+  simp [recoverWakeDelivery, hclaim, hresponse]
 
 def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
   | .beforeClaim =>

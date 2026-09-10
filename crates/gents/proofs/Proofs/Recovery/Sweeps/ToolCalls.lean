@@ -22,7 +22,7 @@ inductive ToolRecoveryCause where
   | childDead
   | childInterrupted
   | childSuperseded
-  | unclaimedCrossDeploymentSpawn
+  | unclaimedCrossPrincipalSpawn
   deriving DecidableEq, Repr
 
 namespace ToolRecoveryCause
@@ -37,7 +37,7 @@ def toContract : ToolRecoveryCause → String
   | .childDead => "childDead"
   | .childInterrupted => "childInterrupted"
   | .childSuperseded => "childSuperseded"
-  | .unclaimedCrossDeploymentSpawn => "unclaimedCrossDeploymentSpawn"
+  | .unclaimedCrossPrincipalSpawn => "unclaimedCrossPrincipalSpawn"
 
 def terminalState : ToolRecoveryCause → ToolCallState
   | .deadlineExceeded => .timedOut
@@ -49,7 +49,7 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .childDead => .failed
   | .childInterrupted => .cancelled
   | .childSuperseded => .failed
-  | .unclaimedCrossDeploymentSpawn => .failed
+  | .unclaimedCrossPrincipalSpawn => .failed
 
 theorem terminalState_terminal (cause : ToolRecoveryCause) :
     isTerminal cause.terminalState := by
@@ -84,17 +84,8 @@ instance (row : ToolCallRecoveryRow) : Decidable (toolCallRecoveryStale row) := 
 def toolCallRecover (row : ToolCallRecoveryRow) : ToolCallRecoveryRow :=
   { row with call := { row.call with state := row.cause.terminalState } }
 
-def toolCallUninterruptedTerminalize (row : ToolCallRecoveryRow) : ToolCallRecoveryRow :=
-  { row with call := { row.call with state := row.cause.terminalState } }
-
 def toolCallRecoveryMeasure (row : ToolCallRecoveryRow) : Nat :=
   if toolCallRecoveryStale row then 1 else 0
-
-theorem toolCallRecover_matches_uninterrupted :
-    ∀ row, toolCallRecoveryStale row →
-      toolCallRecover row = toolCallUninterruptedTerminalize row := by
-  intro row _h_stale
-  simp [toolCallRecover, toolCallUninterruptedTerminalize]
 
 theorem toolCallRecovery_stale_positive :
     ∀ row, toolCallRecoveryStale row → toolCallRecoveryMeasure row > 0 := by
@@ -137,11 +128,6 @@ def toolCallRecoverySweep : RecoverySweep :=
   , h_recover_zero := toolCallRecover_zero
   }
 
-def toolCallRecoveryEquivalence : RecoveryEquivalence toolCallRecoverySweep :=
-  { uninterrupted := toolCallUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := toolCallRecover_matches_uninterrupted
-  }
-
 /-! ## Periodic native-background ownership repair
 
 A native background row is backed by volatile process state while its worker
@@ -167,7 +153,7 @@ def orphanedBackgroundToolCause
   if row.deadlineExpired then
     some .deadlineExceeded
   else if row.unclaimedExpired then
-    some .unclaimedCrossDeploymentSpawn
+    some .unclaimedCrossPrincipalSpawn
   else if row.parentLive then
     some .terminalizeBackgroundedAsInterrupted
   else if row.parentInterrupted then
@@ -245,24 +231,6 @@ def orphanedBackgroundToolSweep : RecoverySweep :=
   , h_stale_positive := orphanedBackgroundTool_stale_positive
   , h_recover_terminal := orphanedBackgroundToolRecover_terminal
   , h_recover_zero := orphanedBackgroundToolRecover_zero
-  }
-
-def orphanedBackgroundToolUninterruptedTerminalize
-    (row : OrphanedBackgroundToolRow) : OrphanedBackgroundToolRow :=
-  orphanedBackgroundToolRecover row
-
-theorem orphanedBackgroundToolRecover_matches_uninterrupted :
-    ∀ row, orphanedBackgroundToolStale row →
-      orphanedBackgroundToolRecover row =
-        orphanedBackgroundToolUninterruptedTerminalize row := by
-  intro _row _h_stale
-  rfl
-
-def orphanedBackgroundToolEquivalence :
-    RecoveryEquivalence orphanedBackgroundToolSweep :=
-  { uninterrupted := orphanedBackgroundToolUninterruptedTerminalize
-  , h_recover_eq_uninterrupted :=
-      orphanedBackgroundToolRecover_matches_uninterrupted
   }
 
 /-! ## Retryable native-background completion side effects
@@ -345,24 +313,6 @@ def backgroundCompletionSideEffectSweep : RecoverySweep :=
   , h_recover_zero := backgroundCompletionSideEffectRecover_zero
   }
 
-def backgroundCompletionSideEffectUninterrupted
-    (row : BackgroundCompletionSideEffectRow) : BackgroundCompletionSideEffectRow :=
-  backgroundCompletionSideEffectRecover row
-
-theorem backgroundCompletionSideEffectRecover_matches_uninterrupted :
-    ∀ row, backgroundCompletionSideEffectStale row →
-      backgroundCompletionSideEffectRecover row =
-        backgroundCompletionSideEffectUninterrupted row := by
-  intro _row _h_stale
-  rfl
-
-def backgroundCompletionSideEffectEquivalence :
-    RecoveryEquivalence backgroundCompletionSideEffectSweep :=
-  { uninterrupted := backgroundCompletionSideEffectUninterrupted
-  , h_recover_eq_uninterrupted :=
-      backgroundCompletionSideEffectRecover_matches_uninterrupted
-  }
-
 /- Native background calls are disjoint from this sweep: the orphan sweep owns
    their volatile-registration gate and deadline/unclaimed precedence. -/
 structure TerminalParentToolRow where
@@ -409,18 +359,8 @@ def terminalParentToolRecover (row : TerminalParentToolRow) : TerminalParentTool
     if row.parentInterrupted then .parentInterrupted else .parentTerminal
   { row with call := { row.call with state := cause.terminalState } }
 
-def terminalParentToolUninterruptedTerminalize
-    (row : TerminalParentToolRow) : TerminalParentToolRow :=
-  terminalParentToolRecover row
-
 def terminalParentToolMeasure (row : TerminalParentToolRow) : Nat :=
   if terminalParentToolStale row then 1 else 0
-
-theorem terminalParentToolRecover_matches_uninterrupted :
-    ∀ row, terminalParentToolStale row →
-      terminalParentToolRecover row = terminalParentToolUninterruptedTerminalize row := by
-  intro row _h_stale
-  rfl
 
 theorem terminalParentTool_stale_positive :
     ∀ row, terminalParentToolStale row → terminalParentToolMeasure row > 0 := by
@@ -471,12 +411,6 @@ def terminalParentOwnedToolSweep : RecoverySweep :=
   , h_stale_positive := terminalParentTool_stale_positive
   , h_recover_terminal := terminalParentToolRecover_terminal
   , h_recover_zero := terminalParentToolRecover_zero
-  }
-
-def terminalParentOwnedToolEquivalence :
-    RecoveryEquivalence terminalParentOwnedToolSweep :=
-  { uninterrupted := terminalParentToolUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := terminalParentToolRecover_matches_uninterrupted
   }
 
 end Recovery

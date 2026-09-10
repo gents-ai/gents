@@ -1,7 +1,7 @@
 import Proofs.Triggers.Groups
 import Proofs.Conformance.ContractTypes
 
-namespace Conformance.TriggerGroupContracts
+namespace Conformance.EventGroupContracts
 
 open Conformance.Contracts
 open Triggers
@@ -12,10 +12,10 @@ structure GroupScenario where
   before : MarkerState
   candidate : Candidate
 
-def key (did correlation : String) : CorrelatedTriggerKey :=
-  { targetAgentDid := did
-  , triggerId := "event-a"
-  , triggerKind := .event
+def key (did correlation : String) : EventGroupKey :=
+  { agentDid := did
+  , consumer := .trigger "event-a"
+  , consumerConfigKey := "config-1"
   , correlation := correlation
   }
 
@@ -70,7 +70,7 @@ def scenarios : List GroupScenario :=
     , before := marker "did:agent:a" "run-1"
     , candidate := candidate "did:agent:a" "run-1" 3 (some 3)
     }
-  , { name := "different_target_did_does_not_suppress"
+  , { name := "different_owner_does_not_suppress"
     , before := marker "did:agent:b" "run-1"
     , candidate := candidate "did:agent:a" "run-1" 3 (some 3)
     }
@@ -78,17 +78,37 @@ def scenarios : List GroupScenario :=
     , before := marker "did:agent:a" "run-2"
     , candidate := candidate "did:agent:a" "run-1" 3 (some 3)
     }
+  , { name := "callback_and_trigger_same_id_do_not_alias"
+    , before := { materialized := [{ (key "did:agent:a" "run-1") with
+        consumer := .callbackBinding "event-a" }] }
+    , candidate := candidate "did:agent:a" "run-1" 3 (some 3)
+    }
+  , { name := "changed_consumer_config_does_not_suppress"
+    , before := { materialized := [{ (key "did:agent:a" "run-1") with
+        consumerConfigKey := "config-2" }] }
+    , candidate := candidate "did:agent:a" "run-1" 3 (some 3)
+    }
+  , { name := "callback_group_materializes_with_common_eligibility"
+    , before := { materialized := [] }
+    , candidate := { (candidate "did:agent:a" "run-1" 3 (some 3)) with
+        key := { (key "did:agent:a" "run-1") with consumer := .callbackBinding "event-a" } }
+    }
   ]
 
 def jsonOptionNat : Option Nat → String
   | none => "null"
   | some value => toString value
 
-def keyJson (value : CorrelatedTriggerKey) : String :=
+def consumerJson : EventConsumer → String
+  | .trigger id => "{\"kind\":\"trigger\",\"trigger_id\":" ++ jsonString id ++ "}"
+  | .callbackBinding id =>
+      "{\"kind\":\"callback_binding\",\"binding_id\":" ++ jsonString id ++ "}"
+
+def keyJson (value : EventGroupKey) : String :=
   "{"
-    ++ "\"target_agent_did\":" ++ jsonString value.targetAgentDid ++ ","
-    ++ "\"trigger_id\":" ++ jsonString value.triggerId ++ ","
-    ++ "\"trigger_kind\":" ++ jsonString value.triggerKind.toDefraDB ++ ","
+    ++ "\"agent_did\":" ++ jsonString value.agentDid ++ ","
+    ++ "\"consumer\":" ++ consumerJson value.consumer ++ ","
+    ++ "\"consumer_config_key\":" ++ jsonString value.consumerConfigKey ++ ","
     ++ "\"correlation\":" ++ jsonString value.correlation
     ++ "}"
 
@@ -108,8 +128,8 @@ def scenarioJson (scenario : GroupScenario) : String :=
     ++ "\"marker_count_after\":" ++ toString after.materialized.length
     ++ "}"
 
-def triggerGroupCaseCount : Nat := scenarios.length
+def eventGroupCaseCount : Nat := scenarios.length
 
-def triggerGroupCasesJson : String := jsonArray (scenarios.map scenarioJson)
+def eventGroupCasesJson : String := jsonArray (scenarios.map scenarioJson)
 
-end Conformance.TriggerGroupContracts
+end Conformance.EventGroupContracts

@@ -1,4 +1,5 @@
 import Proofs.Triggers.Types
+import Proofs.Configuration
 
 def dispatchEnabledForSchedule
     (snap : TriggerSnapshot) (triggerId : String) : Option ActiveSchedule :=
@@ -17,18 +18,18 @@ def dispatch
     | some tid =>
       match dispatchEnabledForSchedule snap tid with
       | none   => none
-      | some _ =>
-        some { causedByTriggerId := some tid, causedByTriggerKind := .schedule }
+      | some active =>
+        some { taskId := active.taskId, causedByTriggerId := some tid, causedByTriggerKind := .schedule }
   | .event =>
     match intent.triggerId with
     | none     => none
     | some tid =>
       match dispatchEnabledForEvent snap tid with
       | none   => none
-      | some _ =>
-        some { causedByTriggerId := some tid, causedByTriggerKind := .event }
+      | some active =>
+        some { taskId := active.taskId, causedByTriggerId := some tid, causedByTriggerKind := .event }
   | .manual =>
-    some { causedByTriggerId := none, causedByTriggerKind := .manual }
+    some { taskId := intent.taskId, causedByTriggerId := none, causedByTriggerKind := .manual }
 
 theorem dispatch_manual_lineage_id_is_none
     (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed) :
@@ -160,7 +161,49 @@ theorem T1_manual_unconditional
     (snap : TriggerSnapshot) (intent : FireIntent) :
     intent.triggerKind = .manual →
     dispatch snap intent =
-      some { causedByTriggerId := none, causedByTriggerKind := .manual } := by
+      some { taskId := intent.taskId, causedByTriggerId := none, causedByTriggerKind := .manual } := by
   intro h_kind
   unfold dispatch
   rw [h_kind]
+
+/-- A missing/disabled trigger produces no work. A selected task goes through the
+same owned resolver as direct task and graph execution; resolution errors remain
+visible to the caller. `scope` is the principal owning this runtime snapshot. -/
+def resolveDispatch (registry : Configuration.Registry) (scope : String)
+    (snap : TriggerSnapshot) (intent : FireIntent) :
+    Option (Except Configuration.ResolveError Configuration.ResolvedSessionConfig) :=
+  (dispatch snap intent).map fun seed =>
+    Configuration.resolveTask registry scope seed.taskId
+
+theorem dispatch_uses_common_task_resolver (registry : Configuration.Registry)
+    (scope : String) (snap : TriggerSnapshot) (intent : FireIntent) (seed : RequestSeed)
+    (h : dispatch snap intent = some seed) :
+    resolveDispatch registry scope snap intent =
+      some (Configuration.resolveTask registry scope seed.taskId) := by
+  simp [resolveDispatch, h]
+
+theorem scheduled_dispatch_selects_configured_task (snap : TriggerSnapshot)
+    (intent : FireIntent) (tid : String) (active : ActiveSchedule)
+    (hk : intent.triggerKind = .schedule) (hi : intent.triggerId = some tid)
+    (ha : dispatchEnabledForSchedule snap tid = some active) :
+    (dispatch snap intent).map RequestSeed.taskId = some active.taskId := by
+  simp [dispatch, hk, hi, ha]
+
+theorem event_dispatch_selects_configured_task (snap : TriggerSnapshot)
+    (intent : FireIntent) (tid : String) (active : ActiveEventTrigger)
+    (hk : intent.triggerKind = .event) (hi : intent.triggerId = some tid)
+    (ha : dispatchEnabledForEvent snap tid = some active) :
+    (dispatch snap intent).map RequestSeed.taskId = some active.taskId := by
+  simp [dispatch, hk, hi, ha]
+
+/-- Successful trigger execution has an owned, enabled Task and delegates its
+behavior to the canonical resolver. Trigger lineage cannot bypass task admission. -/
+theorem resolveDispatch_ok_iff (registry : Configuration.Registry)
+    (scope : String) (snap : TriggerSnapshot) (intent : FireIntent)
+    (session : Configuration.ResolvedSessionConfig) :
+    resolveDispatch registry scope snap intent = some (.ok session) ↔
+      ∃ seed, dispatch snap intent = some seed ∧
+        Configuration.resolveTask registry scope seed.taskId = .ok session := by
+  cases h : dispatch snap intent with
+  | none => simp [resolveDispatch, h]
+  | some seed => simp [resolveDispatch, h]

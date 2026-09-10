@@ -37,21 +37,8 @@ def requestRecover (row : RequestRecoveryRow) : RequestRecoveryRow :=
             state := recoveredRequestState row.durableOutcome
             admission := .released } }
 
-def requestUninterruptedTerminalize (row : RequestRecoveryRow) : RequestRecoveryRow :=
-  { row with
-      request :=
-        { row.request with
-            state := recoveredRequestState row.durableOutcome
-            admission := .released } }
-
 def requestRecoveryMeasure (row : RequestRecoveryRow) : Nat :=
   if requestRecoveryStale row then 1 else 0
-
-theorem requestRecover_matches_uninterrupted :
-    ∀ row, requestRecoveryStale row →
-      requestRecover row = requestUninterruptedTerminalize row := by
-  intro row _h_stale
-  simp [requestRecover, requestUninterruptedTerminalize]
 
 theorem requestRecovery_stale_positive :
     ∀ row, requestRecoveryStale row → requestRecoveryMeasure row > 0 := by
@@ -106,11 +93,6 @@ def requestRecoverySweep : RecoverySweep :=
   , h_recover_zero := requestRecover_zero
   }
 
-def requestRecoveryEquivalence : RecoveryEquivalence requestRecoverySweep :=
-  { uninterrupted := requestUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := requestRecover_matches_uninterrupted
-  }
-
 abbrev ResponseRecoveryStatus := StreamingResponse.Status
 
 namespace ResponseRecoveryStatus
@@ -134,17 +116,8 @@ instance (row : ResponseRecoveryRow) : Decidable (responseRecoveryStale row) := 
 def responseRecover (row : ResponseRecoveryRow) : ResponseRecoveryRow :=
   { row with status := .error }
 
-def responseUninterruptedTerminalize (row : ResponseRecoveryRow) : ResponseRecoveryRow :=
-  { row with status := .error }
-
 def responseRecoveryMeasure (row : ResponseRecoveryRow) : Nat :=
   if responseRecoveryStale row then 1 else 0
-
-theorem responseRecover_matches_uninterrupted :
-    ∀ row, responseRecoveryStale row →
-      responseRecover row = responseUninterruptedTerminalize row := by
-  intro row _h_stale
-  simp [responseRecover, responseUninterruptedTerminalize]
 
 theorem responseRecovery_stale_positive :
     ∀ row, responseRecoveryStale row → responseRecoveryMeasure row > 0 := by
@@ -175,11 +148,6 @@ def responseRecoverySweep : RecoverySweep :=
   , h_stale_positive := responseRecovery_stale_positive
   , h_recover_terminal := responseRecover_terminal
   , h_recover_zero := responseRecover_zero
-  }
-
-def responseRecoveryEquivalence : RecoveryEquivalence responseRecoverySweep :=
-  { uninterrupted := responseUninterruptedTerminalize
-  , h_recover_eq_uninterrupted := responseRecover_matches_uninterrupted
   }
 
 end Recovery

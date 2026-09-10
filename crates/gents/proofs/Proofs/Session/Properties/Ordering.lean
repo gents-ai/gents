@@ -22,15 +22,6 @@ theorem canAppendAfter_true
         · exact ih h_after existing h_tail
       · simp [canAppendAfter, h_head] at h_after
 
-theorem active_at_most_one
-    (s : SessionQueueState) :
-    ∀ {rid₁ rid₂ : RequestId},
-      s.active = some rid₁ → s.active = some rid₂ → rid₁ = rid₂ := by
-  intro rid₁ rid₂ h₁ h₂
-  rw [h₁] at h₂
-  cases h₂
-  rfl
-
 theorem head_earliest_of_createdOrdered
     {entry : QueueEntry}
     {rest : List QueueEntry}

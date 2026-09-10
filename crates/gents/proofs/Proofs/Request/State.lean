@@ -118,7 +118,6 @@ structure RequestContext where
   maxRetries   : Nat
   progressSeq  : Nat
   messageSeq   : Nat
-  isLatest     : Bool
   persistence  : PersistenceState
   interruptRequestedAt : Option Time := none
   validUntil           : Option Time := none

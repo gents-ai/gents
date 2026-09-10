@@ -26,7 +26,7 @@ def bindingWitnessJson (workspaceId : String)
     ++ "\"workspace_id\":" ++ jsonString workspaceId ++ ","
     ++ "\"request_id\":" ++ jsonString witness.requestId ++ ","
     ++ "\"authority\":" ++ jsonString witness.authority.toDefraDB ++ ","
-    ++ "\"deployment_id\":" ++ jsonString witness.deploymentId ++ ","
+    ++ "\"agent_did\":" ++ jsonString witness.agentDid ++ ","
     ++ "\"seal_hash\":" ++ jsonOptionalString witness.sealHash ++ ","
     ++ "\"state\":" ++ jsonString witness.state.toDefraDB
     ++ "}"
@@ -38,7 +38,7 @@ def workspaceBindingCaseJson
     ++ "\"workspace_id\":" ++ jsonString witness.workspaceId ++ ","
     ++ "\"workspace_state\":" ++ jsonString witness.workspaceState.toDefraDB ++ ","
     ++ "\"workspace_seal_hash\":" ++ jsonOptionalString witness.workspaceSealHash ++ ","
-    ++ "\"owner_deployment_id\":" ++ jsonString witness.ownerDeploymentId ++ ","
+    ++ "\"owner_agent_did\":" ++ jsonString witness.ownerAgentDid ++ ","
     ++ "\"creation_policy\":" ++ jsonString witness.creationPolicy.toDefraDB ++ ","
     ++ "\"existing\":"
       ++ jsonArray

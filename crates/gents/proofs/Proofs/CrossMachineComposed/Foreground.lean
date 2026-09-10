@@ -173,42 +173,6 @@ theorem invFG_preserved
       intro h_post_p
       simp [hp, h_post] at h_post_p
       exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inr rfl))))
-    | holdForApproval h_state h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp [hp, h_post] at h_post_p ⊢
-      refine ⟨h_post_p.1, ?_⟩
-      intro h_term
-      rw [h_state] at h_term
-      rcases h_term with h' | h' | h' | h' <;> cases h'
-    | recordApproval _ h_state h_none h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp only [hp, h_post] at h_post_p ⊢
-      exact h_post_p
-    | approve h_state h_evidence h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp [hp, h_post] at h_post_p ⊢
-      refine ⟨h_post_p.1, ?_⟩
-      intro h_term
-      rw [h_state] at h_term
-      rcases h_term with h' | h' | h' | h' <;> cases h'
-    | deny h_state h_evidence h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp [hp, h_post] at h_post_p
-      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inl rfl)))
-    | cancelWhileHeld _ h_state h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp [hp, h_post] at h_post_p
-      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inr rfl))))
-    | timeoutWhileHeld h_state _ h_post =>
-      refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
-      intro h_post_p
-      simp [hp, h_post] at h_post_p
-      exact absurd h_post_p.2 (fun h => h (Or.inr (Or.inr (Or.inl rfl))))
     | background h_state h_mode h_post =>
       refine le_trans (length_filter_set_le p pre.tools idx toolPre toolPost h_idx ?_) h_inv
       intro h_post_p

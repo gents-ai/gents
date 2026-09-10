@@ -12,8 +12,8 @@ def managedExecStateNames : List String :=
 def managedExecActions : List (String × ManagedExecContext.Action) :=
   [ ("spawn", .spawn)
   , ("spawnFailed", .spawnFailed)
-  , ("observeExitSuccess", .observeExitSuccess 0)
-  , ("observeExitFailure", .observeExitFailure 1)
+  , ("observeExitSuccess", .observeExit 0)
+  , ("observeExitFailure", .observeExit 1)
   , ("deadlineElapsed", .deadlineElapsed)
   , ("cancelRequested", .cancelRequested)
   , ("killObserved", .killObserved)

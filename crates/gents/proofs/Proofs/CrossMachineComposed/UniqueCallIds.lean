@@ -36,7 +36,7 @@ private theorem length_set_eq {α : Type _} (l : List α) (i : Nat) (a : α) :
     (l.set i a).length = l.length := by
   exact List.length_set l i a
 
-private theorem uniqueCallIds_of_tools_eq
+theorem uniqueCallIds_of_tools_eq
     {pre post : ComposedState}
     (h_inv : pre.UniqueCallIds)
     (h_tools : post.tools = pre.tools) :
@@ -49,7 +49,7 @@ private theorem uniqueCallIds_of_tools_eq
   apply h_inv i j h_i' h_j'
   simpa [h_tools] using h_eq
 
-private theorem uniqueCallIds_append_fresh_preserved
+theorem uniqueCallIds_append_fresh_preserved
     {s sPost : ComposedState} {newTool : ToolExecution.ToolCallContext}
     (h_uniq         : s.UniqueCallIds)
     (h_fresh        : ∀ t ∈ s.tools, t.callId ≠ newTool.callId)
@@ -118,6 +118,51 @@ private theorem uniqueCallIds_map_currentTime_preserved
   apply h_inv i j h_i' h_j'
   simpa [h_tools] using h_eq
 
+theorem uniqueCallIds_set_callId_preserved
+    {s sPost : ComposedState} {idx : Nat}
+    {tPre tPost : ToolExecution.ToolCallContext}
+    (h_uniq         : s.UniqueCallIds)
+    (h_idx          : s.tools[idx]? = some tPre)
+    (h_callId_eq    : tPost.callId = tPre.callId)
+    (h_tools_set    : sPost.tools = s.tools.set idx tPost) :
+    sPost.UniqueCallIds := by
+  intro i j h_i h_j h_eq
+  have h_len : sPost.tools.length = s.tools.length := by
+    rw [h_tools_set]; exact List.length_set _ _ _
+  have h_i' : i < s.tools.length := by rw [h_len] at h_i; exact h_i
+  have h_j' : j < s.tools.length := by rw [h_len] at h_j; exact h_j
+  have h_idx_lt : idx < s.tools.length :=
+    (List.getElem?_eq_some_iff.mp h_idx).1
+  have h_pre_idx_eq : s.tools[idx] = tPre := by
+    have := (List.getElem?_eq_some_iff.mp h_idx).2
+    simpa using this
+  have h_callId_at : ∀ (k : Nat) (h_k : k < s.tools.length),
+      (sPost.tools[k]'(by rw [h_len]; exact h_k)).callId = s.tools[k].callId := by
+    intro k h_k
+    by_cases h_eq_idx : k = idx
+    · subst h_eq_idx
+      have h_get : (sPost.tools[k]'(by rw [h_len]; exact h_k)) = tPost := by
+        have h_k_set : (s.tools.set k tPost)[k]'(by rw [List.length_set]; exact h_k)
+                        = tPost :=
+          List.getElem_set_self (l := s.tools) (i := k) (a := tPost)
+            (h := by rw [List.length_set]; exact h_k)
+        have hk1 : sPost.tools[k]'(by rw [h_len]; exact h_k)
+                    = (s.tools.set k tPost)[k]'(by rw [List.length_set]; exact h_k) := by
+          simp [h_tools_set]
+        rw [hk1]; exact h_k_set
+      rw [h_get, h_callId_eq, ← h_pre_idx_eq]
+    · have h_k_set : (s.tools.set idx tPost)[k]'(by rw [List.length_set]; exact h_k)
+                      = s.tools[k] :=
+        List.getElem_set_ne (l := s.tools) (i := idx) (j := k) (a := tPost)
+          (h := fun h => h_eq_idx h.symm) (hj := by rw [List.length_set]; exact h_k)
+      have hk1 : sPost.tools[k]'(by rw [h_len]; exact h_k)
+                  = (s.tools.set idx tPost)[k]'(by rw [List.length_set]; exact h_k) := by
+        simp [h_tools_set]
+      rw [hk1, h_k_set]
+  have h_eq' : s.tools[i].callId = s.tools[j].callId := by
+    rw [← h_callId_at i h_i', ← h_callId_at j h_j']; exact h_eq
+  exact h_uniq i j h_i' h_j' h_eq'
+
 theorem uniqueCallIds_preserved
     {pre post : ComposedState}
     (h_inv  : pre.UniqueCallIds)
@@ -141,44 +186,7 @@ theorem uniqueCallIds_preserved
   | @tool_spawn newTool _ _ h_tools _ _ _ _ _ _ h_fresh _ =>
     exact uniqueCallIds_append_fresh_preserved h_inv h_fresh h_tools
   | @tool_step idx toolPre toolPost h_idx h_t_step h_tools _ _ _ _ _ _ _ =>
-    have h_callId_eq : toolPost.callId = toolPre.callId :=
-      ToolExecution.ToolCallContext.transition_preserves_callId h_t_step
-    have h_len : post.tools.length = pre.tools.length := by
-      rw [h_tools]; exact List.length_set _ _ _
-    have h_idx_lt : idx < pre.tools.length :=
-      (List.getElem?_eq_some_iff.mp h_idx).1
-    have h_pre_idx_eq : pre.tools[idx] = toolPre := by
-      have := (List.getElem?_eq_some_iff.mp h_idx).2
-      simpa using this
-    intro i j h_i h_j h_eq
-    have h_i' : i < pre.tools.length := by rw [h_len] at h_i; exact h_i
-    have h_j' : j < pre.tools.length := by rw [h_len] at h_j; exact h_j
-    have h_callId_at : ∀ (k : Nat) (h_k : k < pre.tools.length),
-        (post.tools[k]'(by rw [h_len]; exact h_k)).callId = pre.tools[k].callId := by
-      intro k h_k
-      by_cases h_eq_idx : k = idx
-      · subst h_eq_idx
-        have : (post.tools[k]'(by rw [h_len]; exact h_k)) = toolPost := by
-          have h_k_set : (pre.tools.set k toolPost)[k]'(by rw [List.length_set]; exact h_k)
-                          = toolPost :=
-            List.getElem_set_self (l := pre.tools) (i := k) (a := toolPost)
-              (h := by rw [List.length_set]; exact h_k)
-          have hk1 : post.tools[k]'(by rw [h_len]; exact h_k)
-                      = (pre.tools.set k toolPost)[k]'(by rw [List.length_set]; exact h_k) := by
-            simp [h_tools]
-          rw [hk1]; exact h_k_set
-        rw [this, h_callId_eq, ← h_pre_idx_eq]
-      ·
-        have h_k_set : (pre.tools.set idx toolPost)[k]'(by rw [List.length_set]; exact h_k)
-                        = pre.tools[k] :=
-          List.getElem_set_ne (l := pre.tools) (i := idx) (j := k) (a := toolPost)
-            (h := fun h => h_eq_idx h.symm) (hj := by rw [List.length_set]; exact h_k)
-        have hk1 : post.tools[k]'(by rw [h_len]; exact h_k)
-                    = (pre.tools.set idx toolPost)[k]'(by rw [List.length_set]; exact h_k) := by
-          simp [h_tools]
-        rw [hk1, h_k_set]
-    have h_eq' : pre.tools[i].callId = pre.tools[j].callId := by
-      rw [← h_callId_at i h_i', ← h_callId_at j h_j']; exact h_eq
-    exact h_inv i j h_i' h_j' h_eq'
+    exact uniqueCallIds_set_callId_preserved h_inv h_idx
+      (ToolExecution.ToolCallContext.transition_preserves_callId h_t_step) h_tools
 
 end ComposedState

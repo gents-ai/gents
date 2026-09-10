@@ -107,7 +107,7 @@ inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge →
       , liveTail := .empty
       , errorReason := some reason } →
       pre.requestState = .processing →
-      post.requestState = .failed →
+      post.requestState = (if reason = .interrupted then .interrupted else .failed) →
       post.requestPersistence = .committed →
       BridgeTransition pre post
   | recoverPaired
@@ -120,5 +120,25 @@ inductive BridgeTransition : ResponseRequestBridge → ResponseRequestBridge →
       post.requestState = .failed →
       post.requestPersistence = .committed →
       BridgeTransition pre post
+
+end StreamingResponse
+
+namespace StreamingResponse
+
+/-- Cancellation retains the request owner's interrupted outcome while the response
+uses its existing error projection. Ordinary provider failures remain failed. -/
+theorem interrupted_bridge_preserves_request_cancellation
+    {pre post : ResponseRequestBridge}
+    (h : BridgeTransition pre post)
+    (hInterrupted : post.response.errorReason = some .interrupted)
+    (hNoPreviousError : pre.response.errorReason = none) :
+    post.requestState = .interrupted := by
+  cases h with
+  | finalizeComplete _ hp _ _ _ => simp [hp, hNoPreviousError] at hInterrupted
+  | finalizeError _ _ _ hp _ hr _ =>
+      simp only [hp, Option.some.injEq] at hInterrupted
+      simp [hInterrupted] at hr
+      exact hr
+  | recoverPaired _ hp _ _ _ => simp [hp] at hInterrupted
 
 end StreamingResponse

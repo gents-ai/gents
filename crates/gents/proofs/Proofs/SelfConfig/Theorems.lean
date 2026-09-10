@@ -123,15 +123,15 @@ theorem runStep_accept_target (validate guard : Doc → Bool) (t : Target)
       have hm := step_accepts_wholesale validate guard t (s t) p merged hstep
       simp [runStep, hstep, hm]
 
-theorem no_lockout_recoverable (validate : Doc → Bool) (s : Store) (p : Patch)
-    (h : (runStep validate gateOn .toolSelection s p).2 = true) :
-    gateOn ((runStep validate gateOn .toolSelection s p).1 .toolSelection)
+theorem no_lockout_recoverable (decodeEnabled : Doc → Option Bool) (validate : Doc → Bool) (s : Store) (p : Patch)
+    (h : (runStep validate (gateOn decodeEnabled) .tools s p).2 = true) :
+    (gateOn decodeEnabled) ((runStep validate (gateOn decodeEnabled) .tools s p).1 .tools)
       = true := by
-  cases hstep : step validate gateOn .toolSelection (s .toolSelection) p with
+  cases hstep : step validate (gateOn decodeEnabled) .tools (s .tools) p with
   | none => simp [runStep, hstep] at h
   | some merged =>
-      have hval := step_accept_validates validate gateOn .toolSelection
-        (s .toolSelection) p merged hstep
+      have hval := step_accept_validates validate (gateOn decodeEnabled) .tools
+        (s .tools) p merged hstep
       simp [runStep, hstep, hval.2]
 
 theorem runStep_identity_immutable (validate guard : Doc → Bool) (t : Target)

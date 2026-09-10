@@ -1,4 +1,4 @@
-import Proofs.Background.State
+import Proofs.Background.Properties.Budget
 import Proofs.Background.ToolOutput
 import Proofs.Background.CompletionContinuation
 import Proofs.Background.ProcessControl
@@ -48,7 +48,6 @@ def r6NativeToolFixture
   , currentTime := 10
   , failureClass := none
   , persistence := .committed
-  , approval := none
   , awaitMode := awaitMode
   , cancelPolicy := .cascade
   , childRequestId := none
@@ -80,7 +79,7 @@ def r6NativeStepCase
 creating another live background row. -/
 def r6BudgetCase (name : String) (preLiveCount : Nat) :
     R6BackgroundingCase :=
-  let legal := decide (preLiveCount < Subagent.maxBackgroundedPerParent)
+  let legal := (Subagent.admitBackground preLiveCount).isSome
   r6Case name "budget" "spawn_process" legal preLiveCount
     (if legal then "running" else "rejected")
     none none
@@ -167,10 +166,25 @@ def r6GoalOwnerCase (name : String) (goal : Option Goals.Status) : R6Backgroundi
     wakeCreated := some queued.isSome
     redriveAllowed := some redrive.isSome }
 
+def wakeSession : AgentSession.Document :=
+  { scope := ⟨1, 900, some 2⟩, behavior := 3, createdAt := 0 }
+def wakeParent (wake : BackgroundCompletion.FailedWake) : AgentSession.RequestFact :=
+  { scope := wakeSession.scope, behavior := 3, createdAt := 1,
+    observed := ⟨101, wake.requestId, wake.ctx.state⟩ }
+def wakeSuccessor : AgentSession.RequestFact :=
+  { scope := wakeSession.scope, behavior := 3, createdAt := 3, observed := ⟨102, 902, .pending⟩ }
+/-- Different requester still blocks stale session-wide recovery. -/
+def newerInteractive : AgentSession.RequestFact :=
+  { scope := { wakeSession.scope with requester := some 99 }, behavior := 3,
+    createdAt := 2, observed := ⟨103, 903, .processing⟩ }
+
 def r6FailedWakeRedriveCase
     (name : String)
-    (wake : BackgroundCompletion.FailedWake) : R6BackgroundingCase :=
-  let post := BackgroundCompletion.redriveWake? wake
+    (wake : BackgroundCompletion.FailedWake) (latest : Bool := true) : R6BackgroundingCase :=
+  let parent := wakeParent wake
+  let rows := if latest then [parent] else [parent, newerInteractive]
+  let post := (BackgroundCompletion.redriveWakeFromRows? none wakeSession rows 101 wake
+    wakeSuccessor "wake" 3).map (·.1)
   let legal := post.isSome
   { r6Case
       name
@@ -187,8 +201,15 @@ def r6FailedWakeRedriveCase
       retryCount := some wake.ctx.retryCount
       maxRetries := some wake.ctx.maxRetries
       postRetryCount := post.map (·.retryCount)
+      redriveSourceRequestId := some wake.requestId
+      preDepth := some wake.ctx.depth
+      postDepth := post.map (·.depth)
+      preParentRequestId := wake.ctx.parentRequestId
+      postParentRequestId := post.bind (·.parentRequestId)
+      preExecutionDeadline := wake.ctx.deadline
+      postExecutionDeadline := post.bind (·.deadline)
       retryDelaySeconds := if legal then some (BackgroundCompletion.wakeRetryDelaySeconds wake.ctx.retryCount) else none
-      isLatest := some wake.ctx.isLatest
+      isLatest := some (decide (AgentSession.latest rows 1 900 none = some parent))
   }
 
 def r6WakeAdmissionCase
@@ -289,14 +310,6 @@ def r6ProcessControlCase
     (Subagent.ProcessControl.authorized caller owner)
     1 "running" none (some scenario)
 
-def childTerminalContract : Subagent.ChildTerminal -> String
-  | .running => "running"
-  | .completed => "completed"
-  | .failed => "failed"
-  | .dead => "dead"
-  | .interrupted => "interrupted"
-  | .superseded => "superseded"
-
 def r6WaitBoundaryCase
     (name : String) (boundary : Subagent.ProcessControl.WaitBoundary) :
     R6BackgroundingCase :=
@@ -304,7 +317,7 @@ def r6WaitBoundaryCase
     Subagent.ProcessControl.observeBoundary Subagent.ChildTerminal.running boundary
   r6Case name "wait_boundary" "wait_process"
     (!observation.cancellationRequested)
-    1 (childTerminalContract observation.processState)
+    1 (Subagent.ChildTerminal.toDefraDB observation.processState)
     none (some observation.reason)
 
 def r6BackgroundingCases : List R6BackgroundingCase :=
@@ -353,7 +366,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       (BackgroundCompletion.failedWakeFixture (source := .user))
   , r6FailedWakeRedriveCase
       "non_latest_background_wake_does_not_redrive"
-      (BackgroundCompletion.failedWakeFixture (isLatest := false))
+      (BackgroundCompletion.failedWakeFixture) false
   , r6WakeAdmissionCase
       "aged_background_wake_precedes_new_descendant"
       BackgroundCompletion.agedWakeFixture
@@ -630,8 +643,8 @@ theorem toolOutputPagingCases_head_and_continuation_tile :
   native_decide
 
 def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
-  [ { theoremName := "Subagent.BridgedState.backgrounded_budget_bounded"
-    , witnessKind := "state_invariant"
+  [ { theoremName := "Subagent.admitted_background_count_bounded"
+    , witnessKind := "admission_bound"
     , scenario := "background_tool_admission_respects_max_backgrounded_per_parent"
     , numericBound := Subagent.maxBackgroundedPerParent
     , kindFields :=
@@ -652,5 +665,51 @@ def r6BackgroundTheoremWitnesses : List BackgroundTheoremWitness :=
         ]
     }
   ]
+
+/-- Full row inputs for the composed transaction gate, not a supplied isLatest
+flag. Publication output carries both successor rows and the session observation. -/
+structure WakeRowsCase where
+  name : String
+  goal : Option Goals.Status := none
+  session : AgentSession.Document := wakeSession
+  rows : List AgentSession.RequestFact := [wakeParent BackgroundCompletion.failedWakeFixture]
+  parentDoc : Nat := 101
+  wake : BackgroundCompletion.FailedWake := BackgroundCompletion.failedWakeFixture
+  successor : AgentSession.RequestFact := wakeSuccessor
+
+def WakeRowsCase.result (c : WakeRowsCase) :=
+  BackgroundCompletion.redriveWakeFromRows? c.goal c.session c.rows c.parentDoc c.wake
+    c.successor "wake" 3
+
+def backgroundWakeRowsCases : List WakeRowsCase :=
+  [ { name := "head-wake-publishes-successor-and-observation" }
+  , { name := "newer-interactive-requester-blocks-stale-wake",
+      rows := [wakeParent BackgroundCompletion.failedWakeFixture, newerInteractive] }
+  , { name := "wrong-physical-parent-denied", parentDoc := 999 }
+  , { name := "successor-physical-id-collision-denied",
+      successor := { wakeSuccessor with observed := ⟨101, 902, .pending⟩ } }
+  , { name := "successor-logical-id-collision-denied",
+      successor := { wakeSuccessor with observed := ⟨102, 901, .pending⟩ } }
+  , { name := "older-successor-cannot-advance-head",
+      successor := { wakeSuccessor with createdAt := 0 } }
+  , { name := "goal-owner-blocks-background-redrive", goal := some .active }
+  , { name := "published-successor-prevents-second-redrive",
+      rows := [wakeParent BackgroundCompletion.failedWakeFixture, wakeSuccessor],
+      successor := { wakeSuccessor with createdAt := 4, observed := ⟨104, 904, .pending⟩ } }
+  , { name := "stale-session-observation-does-not-block-current-parent",
+      session := { wakeSession with observation := some ⟨2, none, some ⟨999, 999, .processing⟩⟩ } }
+  , { name := "wrong-session-queue-key-denied",
+      wake := BackgroundCompletion.failedWakeFixture (queueKey := some 999) }
+  ]
+
+theorem background_recovery_rows_pinned :
+    backgroundWakeRowsCases.map (fun c => c.result.isSome) =
+      [true, false, false, false, false, false, false, false, true, false] := by native_decide
+
+theorem background_successor_publication_pinned :
+    ((WakeRowsCase.result { name := "publication" }).map fun post =>
+      (post.1.retryCount, post.2.1.observation.bind (·.latest),
+       post.2.2.map (·.observed.docId))) =
+      some (1, some wakeSuccessor.observed, [101, 102]) := by native_decide
 
 end Conformance.ContractCases

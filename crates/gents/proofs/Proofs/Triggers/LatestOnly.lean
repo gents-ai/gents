@@ -1,33 +1,5 @@
 import Proofs.Triggers.Reachability
 
-def AgentRequest.isSuperseded (r : AgentRequest) : Prop :=
-  r.isTerminal = true
-
-def latestOnlyFireTransition
-    (before after : SystemState) (t : TriggerKey) (r_new : AgentRequest) : Prop :=
-  r_new.causedBy = some t ∧
-  r_new.concurrency = .latestOnly ∧
-  r_new.isTerminal = false ∧
-  r_new ∈ after.requests ∧
-  (∀ r_prior ∈ before.requests,
-    r_prior.causedBy = some t ∧ r_prior.isTerminal = false ∧ r_prior.id ≠ r_new.id →
-    ∃ r_prior_after ∈ after.requests,
-      r_prior_after.id = r_prior.id ∧ r_prior_after.isTerminal = true) ∧
-  (∀ r ∈ before.requests, r.causedBy ≠ some t →
-    r ∈ after.requests)
-
-theorem latestOnlyFireTransition_convergence
-    (before after : SystemState) (t : TriggerKey) (r_new : AgentRequest) :
-    latestOnlyFireTransition before after t r_new →
-    ∀ r_prior ∈ before.requests,
-      r_prior.causedBy = some t ∧ r_prior.isTerminal = false ∧
-        r_prior.id ≠ r_new.id →
-      ∃ r_prior_after ∈ after.requests,
-        r_prior_after.id = r_prior.id ∧ r_prior_after.isTerminal = true := by
-  intro h_trans r_prior h_mem h_cond
-  rcases h_trans with ⟨_, _, _, _, h_super, _⟩
-  exact h_super r_prior h_mem h_cond
-
 theorem T3_latest_only_convergence
     (before : SystemState) (snap : TriggerSnapshot) (intent : FireIntent)
     (seed : RequestSeed) (t : TriggerKey)

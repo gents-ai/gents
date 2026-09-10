@@ -11,8 +11,11 @@ dispatch from the ledger and charge every non-zero provider usage report.
 The provider tokenizer and the truthfulness of its usage report remain external
 assumptions. Production charges the input/output components it persists on the
 durable `InferenceCall`, so restart rehydration observes exactly the same spend.
-It fails closed when those components are absent, zero, or would put the ledger
-over its declared limit.
+Live charging rejects missing or all-zero usage and fails on an observed overrun.
+Restart accounting sums decoded durable components; zero rows add no spend, and
+production omits wholly unreported rows (which can include calls that never
+started). This sum does not establish whether every completed call reported
+usage. That admission obligation remains with the durable call owner.
 -/
 
 namespace PromptAssembly.AggregateBudget
@@ -33,7 +36,8 @@ def Usage.chargedTotal (usage : Usage) : Nat :=
 separate makes the crash boundary explicit: rehydration sees these columns,
 not the transient provider response. Production admits a row into this model
 only when both durable components are present and non-negative; partial or
-negative rows fail decoding rather than becoming a `PersistedUsage`. -/
+negative rows fail decoding. Wholly absent rows are omitted, and zero components
+are allowed. Thus PersistedUsage models accounted rows, not call completion. -/
 structure PersistedUsage where
   promptTokens : Nat
   completionTokens : Nat
@@ -53,6 +57,48 @@ structure Ledger where
   limit : Nat
   used : Nat
   deriving DecidableEq, Repr
+
+/-- InferenceCall accounting uses the exact physical request. Compaction and
+ordinary inference share its allowance; logical retry labels, goals and sessions
+must not widen the query. -/
+inductive CallKind where
+  | inference | compaction
+  deriving DecidableEq, Repr
+
+structure DurableCallUsage where
+  requestDocId : String
+  kind : CallKind
+  usage : PersistedUsage
+  deriving DecidableEq, Repr
+
+def requestUsage (requestDocId : String) (rows : List DurableCallUsage) : List PersistedUsage :=
+  (rows.filter (fun row => row.requestDocId == requestDocId)).map DurableCallUsage.usage
+
+/-- The limit is pinned by the execution owner from InferenceExecution once,
+never supplied by request input. Restart does not reread edited configuration.
+None is unlimited, distinct from zero and from the per-call output ceiling. -/
+def rehydrateRequest (requestDocId : String) (pinnedLimit : Option Nat)
+    (rows : List DurableCallUsage) : Option Ledger :=
+  pinnedLimit.map (fun limit => ⟨limit, rehydrateUsed (requestUsage requestDocId rows)⟩)
+
+theorem other_request_usage_excluded (requestDocId : String) (row : DurableCallUsage)
+    (rows : List DurableCallUsage) (h : row.requestDocId ≠ requestDocId) :
+    requestUsage requestDocId (row :: rows) = requestUsage requestDocId rows := by
+  simp [requestUsage, h]
+
+theorem rehydrate_keeps_pinned_limit (requestDocId : String) (limit : Nat)
+    (rows : List DurableCallUsage) :
+    (rehydrateRequest requestDocId (some limit) rows).map Ledger.limit = some limit := by rfl
+
+theorem no_limit_stays_unlimited (requestDocId : String) (rows : List DurableCallUsage) :
+    rehydrateRequest requestDocId none rows = none := by rfl
+
+/-- Neither call kind nor later retraction exempts a persisted charge. -/
+theorem owned_call_counts (requestDocId : String) (kind : CallKind)
+    (usage : PersistedUsage) (rows : List DurableCallUsage) :
+    rehydrateUsed (requestUsage requestDocId (⟨requestDocId, kind, usage⟩ :: rows)) =
+      usage.chargedTotal + rehydrateUsed (requestUsage requestDocId rows) := by
+  simp [requestUsage, rehydrateUsed]
 
 def Ledger.remaining (ledger : Ledger) : Nat :=
   ledger.limit - ledger.used

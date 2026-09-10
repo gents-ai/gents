@@ -207,9 +207,13 @@ def boundaries : List Boundary :=
     , domain := "event_delivery"
     , subject := "Fair substrate delivery"
     , statement :=
-        "EventDelivery's Fair predicate assumes rescanTick actions occur with " ++
-        "bounded gap. Substrate-level fairness (DefraDB gossip + libp2p delivery) " ++
-        "is taken as an axiom; the substrate model lives in tla/ReversePairing.tla."
+        "EventDelivery constructs finite rescan/handle paths satisfying its " ++
+        "bounded-gap Fair predicate; this does not prove substrate scheduling " ++
+        "fairness. Delivery traces cover one dedupe epoch. Watcher cooldown " ++
+        "expiry and capacity eviction end that epoch and permit redelivery; " ++
+        "its ttl_cooldown metadata does not imply permanent processed-set " ++
+        "membership or lifetime at-most-once delivery. The substrate model " ++
+        "lives in tla/ReversePairing.tla."
     , acceptedFollowUp :=
         some "Substrate fairness is proved separately in tla/ReversePairing.tla; see also #162."
     }
@@ -255,11 +259,11 @@ def boundaries : List Boundary :=
     , domain := "Compaction"
     , subject := "UniqueCallIds is checked, not structural"
     , statement :=
-        "providerView_append and the compacted-prefix correspondence assume PromptAssembly.UniqueCallIds. That is a hypothesis, not a structural guarantee: tool-call ids come from the provider and no ingestion path enforces uniqueness across a session. The coarser providerView credits an announcement from the globally resolved set, so a later turn reusing an id would resurrect an earlier unpaired announcement and shift the prefix under an already-stored count — Compaction.reused_call_id_breaks_prefix_stability exhibits it. Production does not: drop_unpaired_tool_calls scopes resolution to the active turn (resolved_keys_per_turn), and Compaction.reused_call_id_is_prefix_stable_per_turn shows the same witness is stable under providerViewTurn, which providerViewTurn_eq_providerView proves equal to providerView whenever UniqueCallIds holds. agent/daemon/request.rs still verifies compaction::has_unique_call_ids over the provider view before compacting and skips reduction when it fails, now as defence in depth rather than as the only guard."
+        "providerViewGlobal_append and the compacted-prefix correspondence assume PromptAssembly.UniqueCallIds. That is a hypothesis, not a structural guarantee: tool-call ids come from the provider and no ingestion path enforces uniqueness across a session. The coarser providerViewGlobal credits an announcement from the globally resolved set, so a later turn reusing an id would resurrect an earlier unpaired announcement and shift the prefix under an already-stored count — Compaction.reused_call_id_breaks_prefix_stability exhibits it. Production does not: drop_unpaired_tool_calls scopes resolution to the active turn (resolved_keys_per_turn), and Compaction.reused_call_id_is_prefix_stable_per_turn shows the same witness is stable under providerViewTurn, which providerViewTurn_eq_providerViewGlobal proves equal to providerViewGlobal whenever UniqueCallIds holds. agent/daemon/request.rs still verifies compaction::has_unique_call_ids over the provider view before compacting and skips reduction when it fails, now as defence in depth rather than as the only guard."
     , acceptedFailureMode :=
-        some "A session whose provider reuses call ids stops compacting: the prompt grows until the request fails on context overflow rather than silently dropping rows that were never summarized. Counts already stored before a reuse appeared are still applied to a prefix that reuse may have shifted; the post-drop sanitize keeps the provider view valid, so the residual harm is bounded to context skew."
+        some "A session whose provider reuses call ids stops compacting: the prompt grows until the request fails on context overflow rather than silently dropping rows that were never summarized. Counts already stored before a reuse appeared are still applied to a prefix that reuse may have shifted; the post-drop production sanitizer keeps the provider view valid, so the residual harm is bounded to context skew."
     , acceptedFollowUp :=
-        some "Turn-scoped pair matching in dropUnpairedCalls — crediting an announcement only from the result block that immediately follows it — would make sanitize local and discharge UniqueCallIds entirely. That changes PromptAssembly.sanitize and its soundness/idempotence/fixpoint proofs (#448 territory), so it is tracked separately rather than folded into #993."
+        some "Transfer soundness and prefix/cursor laws to the content-bearing per-turn sanitizer, including repeated call occurrences, then retire the global proof models. The row-level sanitizeTurn operation already scopes resolution per turn; its current soundness/idempotence bridge still requires UniqueCallIds."
     }
   , { id := boundaryModelNatTypedIdsTimeId
     , domain := "CoreTypes"
@@ -285,7 +289,7 @@ def boundaries : List Boundary :=
     , domain := "GraphPipeline"
     , subject := "compiler and existing-runtime publication adapter"
     , statement :=
-        "Proofs.GraphPipeline establishes that only wholly valid proposals may cross the publication boundary. Rust conformance generates the four-part validation matrix, and publication reuses ConfigApplyTxn plus existing EventTrigger writers. DefraDB transaction serializability and runtime reconciliation readiness remain assumed platform boundaries rather than theorems of this repository."
+        "Proofs.GraphPipeline establishes that only wholly valid proposals may cross the publication boundary. The next conformance layer must exercise the shared configuration resolver and atomic publication owner for tasks and triggers. DefraDB transaction serializability and runtime reconciliation readiness remain assumed platform boundaries rather than theorems of this repository."
     , acceptedFollowUp :=
         some "Before graduation, add a live model evaluation that waits for normal reconciliation, writes an entry document through an existing bounded write tool, and observes the existing task/trigger runtime end to end."
     }

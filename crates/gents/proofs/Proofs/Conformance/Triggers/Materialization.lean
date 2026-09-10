@@ -68,7 +68,6 @@ structure ClaimedEmbeddingInputs where
   maxRetries : Nat
   progressSeq : Nat
   messageSeq : Nat
-  isLatest : Bool
   persistence : PersistenceState
   interruptRequestedAt : Option Time
   validUntil : Option Time
@@ -89,7 +88,6 @@ def claimedEmbeddingContext
   , maxRetries := inputs.maxRetries
   , progressSeq := inputs.progressSeq
   , messageSeq := inputs.messageSeq
-  , isLatest := inputs.isLatest
   , persistence := inputs.persistence
   , interruptRequestedAt := inputs.interruptRequestedAt
   , validUntil := inputs.validUntil }

@@ -1,4 +1,5 @@
 import Proofs.Enrollment.Transition
+import Proofs.Enrollment.RequestInput
 
 /-!
 # Agent request admission owned by authenticated enrollment
@@ -19,7 +20,7 @@ inductive AgentRequestAdmissionKind where
 
 inductive RuntimeInternalSourceKind where
   | localChild
-  | crossDeploymentChild
+  | crossPrincipalChild
   | localControl
   | automatedTrigger
   deriving DecidableEq, Repr
@@ -32,24 +33,23 @@ structure AgentRequestSemantics where
   behaviorId : String
   sessionId : String
   content : String
-  samplingFields : CanonicalFields
-  metadata : String
+  input : RequestInput
   createdAt : String
-  /-- Physical `_docID` of the Schedule/EventTrigger configuration row. -/
+  /-- Physical `_docID` of the canonical Trigger configuration row. -/
   triggerConfigDocumentId : String
   retryFields : CanonicalFields
   triggerFields : CanonicalFields
   parentFields : CanonicalFields
-  workspaceFields : CanonicalFields
+  workspace : RequestWorkspace
   deriving DecidableEq, Repr
 
 def agentRequestSemanticFields (request : AgentRequestSemantics) : CanonicalFields :=
   textFieldsToBytes
     [ request.requestId, request.targetAgent, request.requesterDid
     , request.behaviorId, request.sessionId, request.content ] ++
-  request.samplingFields ++ textFieldsToBytes
-    [request.metadata, request.createdAt, request.triggerConfigDocumentId] ++
-  request.retryFields ++ request.triggerFields ++ request.parentFields ++ request.workspaceFields
+  requestInputFields request.input ++ textFieldsToBytes
+    [request.createdAt, request.triggerConfigDocumentId] ++
+  request.retryFields ++ request.triggerFields ++ request.parentFields ++ requestWorkspaceFields request.workspace
 
 structure AgentRequestAdmission where
   kind : AgentRequestAdmissionKind
@@ -85,7 +85,7 @@ def agentRequestAdmissionFields
     , match admission.kind with
       | .runtimeInternal => match admission.runtimeSourceKind with
           | .localChild => "local-child"
-          | .crossDeploymentChild => "cross-deployment-child"
+          | .crossPrincipalChild => "cross-principal-child"
           | .localControl => "local-control"
           | .automatedTrigger => "automated-trigger"
       | _ => ""
@@ -103,6 +103,9 @@ structure RuntimeInternalEvidence where
   bridgeAuthorDid : Did
   targetAgent : Did
   targetRuntimeAttestationValid : Bool
+  /-- Includes complete signed workspace reference agreement with the existing
+  authenticated source via requestWorkspaceWithinSource; cross-principal sources
+  are exact ACP-authenticated bridges, not a parent-replication requirement. -/
   sourceBindingCurrent : Bool
   triggerConfigDocumentBindingCurrent : Bool
   sourceDocumentBindingCurrent : Bool
@@ -110,7 +113,11 @@ structure RuntimeInternalEvidence where
   targetPolicyAllows : Bool
   bridgeAuthorBindingCurrent : Bool
   bridgeAuthorAuthorizationFresh : Bool
-  targetCrossDeploymentPolicyAllows : Bool
+  targetCrossPrincipalPolicyAllows : Bool
+  /-- Existing Goal physical-edge validator authenticates this exact receipt's
+  original sequence/wrapup, source/goal/physical-parent binding and deterministic
+  identity. This is reconstructed evidence, never copied from input unchecked. -/
+  verifiedGoalContinuation : Option GoalContinuationInput := none
   deriving DecidableEq, Repr
 
 def exactRuntimeInternalEvidence
@@ -131,13 +138,13 @@ def exactRuntimeInternalEvidence
       evidence.sourceDocumentBindingCurrent = true ∧
       evidence.sourceToolCallBindingCurrent = true ∧
       evidence.targetPolicyAllows = true
-  | .crossDeploymentChild =>
+  | .crossPrincipalChild =>
       admission.bridgeAuthorDid ≠ "" ∧
       evidence.bridgeAuthorDid = admission.bridgeAuthorDid ∧
       evidence.sourceToolCallBindingCurrent = true ∧
       evidence.bridgeAuthorBindingCurrent = true ∧
       evidence.bridgeAuthorAuthorizationFresh = true ∧
-      evidence.targetCrossDeploymentPolicyAllows = true
+      evidence.targetCrossPrincipalPolicyAllows = true
   | .localControl =>
       admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.sourceDocumentBindingCurrent = true
@@ -198,6 +205,65 @@ def agentRequestAdmissible
       | some evidence => exactRuntimeInternalEvidence request admission evidence
       | none => False
 
+/-- Runtime-only continuation facts require the authenticated local-control
+branch and exact original receipt facts. Queue provenance never grants that
+branch; a goal wake missing its original facts cannot infer them from Goal. -/
+def goalContinuationAllowed (input : RequestInput) (kind : AgentRequestAdmissionKind)
+    (source : RuntimeInternalSourceKind) (verified : Option GoalContinuationInput) : Bool :=
+  match input.goalContinuation with
+  | none => !(input.queue.any (fun q => q.source == .goal))
+  | some facts =>
+      facts.sequence > 0 && kind == .runtimeInternal && source == .localControl &&
+        verified == some facts
+
+def requestGoalInputAllowed (request : AgentRequestSemantics)
+    (admission : AgentRequestAdmission) (evidence : Option RuntimeInternalEvidence) : Bool :=
+  goalContinuationAllowed request.input admission.kind admission.runtimeSourceKind
+    (evidence.bind RuntimeInternalEvidence.verifiedGoalContinuation)
+
+/-- Composed claim boundary: signatures authenticate input but do not grant
+skills, cwd escape, or runtime queue origins. The observed session behavior is
+resolved by the session owner; blank/mismatched selection cannot be repaired by
+falling back to the principal name. New-session creation passes its selected
+behavior through the same boundary. -/
+def agentRequestClaimable
+    (s : State) (request : AgentRequestSemantics) (admission : AgentRequestAdmission)
+    (enrollmentRequest : Option Request) (decision : Option Decision)
+    (authorizationFresh : Bool) (runtimeEvidence : Option RuntimeInternalEvidence)
+    (branchFieldsExact pendingDeadlineAbsent : Bool)
+    (sessionBehavior : String) (skillIds : List String)
+    (cwdAllowed : String → Bool) (queueSourceAllowed : SessionQueue.QueueSource → Bool) : Prop :=
+  behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+  inputWithinContext request.input skillIds cwdAllowed queueSourceAllowed = true ∧
+  agentRequestAdmissible s request admission enrollmentRequest decision authorizationFresh
+    runtimeEvidence branchFieldsExact pendingDeadlineAbsent ∧
+  requestGoalInputAllowed request admission runtimeEvidence = true
+
+theorem claim_requires_authenticated_input
+    {s : State} {request : AgentRequestSemantics} {admission : AgentRequestAdmission}
+    {enrollmentRequest : Option Request} {decision : Option Decision}
+    {fresh : Bool} {runtimeEvidence : Option RuntimeInternalEvidence}
+    {branchFieldsExact pendingDeadlineAbsent : Bool}
+    {sessionBehavior : String} {skills : List String}
+    {cwdAllowed : String → Bool} {queueAllowed : SessionQueue.QueueSource → Bool}
+    (h : agentRequestClaimable s request admission enrollmentRequest decision fresh
+      runtimeEvidence branchFieldsExact pendingDeadlineAbsent sessionBehavior skills
+      cwdAllowed queueAllowed) :
+    admission.signatureValid = true ∧
+    admission.signedFields = agentRequestAdmissionFields request admission ∧
+    behaviorMatchesSession request.behaviorId sessionBehavior = true ∧
+    inputWithinContext request.input skills cwdAllowed queueAllowed = true := by
+  exact ⟨h.2.2.1.1, h.2.2.1.2.1, h.1, h.2.1⟩
+
+theorem goal_input_requires_runtime_control (input : RequestInput)
+    (facts : GoalContinuationInput) (kind : AgentRequestAdmissionKind)
+    (source : RuntimeInternalSourceKind) (verified : Option GoalContinuationInput)
+    (hpresent : input.goalContinuation = some facts)
+    (h : goalContinuationAllowed input kind source verified = true) :
+    facts.sequence > 0 ∧ kind = .runtimeInternal ∧ source = .localControl ∧
+      verified = some facts := by
+  simpa [goalContinuationAllowed, hpresent, Bool.and_eq_true, and_assoc] using h
+
 /-- Explicit observations used by generated implementation conformance cases. -/
 structure AgentRequestAdmissionObservation where
   kind : AgentRequestAdmissionKind
@@ -223,7 +289,7 @@ structure AgentRequestAdmissionObservation where
   targetPolicyAllows : Bool
   bridgeAuthorBindingCurrent : Bool
   bridgeAuthorAuthorizationFresh : Bool
-  targetCrossDeploymentPolicyAllows : Bool
+  targetCrossPrincipalPolicyAllows : Bool
   deriving DecidableEq, Repr
 
 def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation) : Bool :=
@@ -245,11 +311,11 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
       | .localChild =>
           observation.sourceDocumentBindingCurrent &&
           observation.sourceToolCallBindingCurrent && observation.targetPolicyAllows
-      | .crossDeploymentChild =>
+      | .crossPrincipalChild =>
           observation.sourceToolCallBindingCurrent &&
           observation.bridgeAuthorBindingCurrent &&
           observation.bridgeAuthorAuthorizationFresh &&
-          observation.targetCrossDeploymentPolicyAllows
+          observation.targetCrossPrincipalPolicyAllows
       | .localControl => observation.sourceDocumentBindingCurrent
       | .automatedTrigger =>
           observation.triggerConfigDocumentBindingCurrent && observation.targetPolicyAllows
