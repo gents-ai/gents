@@ -246,6 +246,65 @@ pub(crate) enum PackCommand {
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
+    /// Compile a pack's tools and pack the whole pack into one `.afb`.
+    Build(PackBuildArgs),
+    /// Search the pack registry.
+    Search(PackSearchArgs),
+    /// Publish a built `.afb` to the pack registry.
+    Publish(PackPublishArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackBuildArgs {
+    #[arg(
+        required_unless_present = "all",
+        help = "Pack directory to compile and pack (its manifest.json and declared assets)"
+    )]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        conflicts_with_all = ["dir", "out"],
+        help = "Build every pack under packs/ into a .afb beside it, instead of one directory"
+    )]
+    pub(crate) all: bool,
+    #[arg(
+        long,
+        help = "Where to write the .afb; defaults to <dir>/../<name>-<version>.afb"
+    )]
+    pub(crate) out: Option<PathBuf>,
+    #[arg(
+        long,
+        default_value = "gents",
+        help = "Namespace this pack is published under"
+    )]
+    pub(crate) namespace: String,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackSearchArgs {
+    #[arg(help = "Search terms; omit to list every published pack")]
+    pub(crate) query: Option<String>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackPublishArgs {
+    #[arg(help = "Path to the .afb file to publish")]
+    pub(crate) file: PathBuf,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+    )]
+    pub(crate) token: Option<String>,
 }
 
 #[derive(clap::Args)]
@@ -274,6 +333,11 @@ pub(crate) struct PackInstallArgs {
         help = "Explicitly rebind concrete identities in document packs to the target node"
     )]
     pub(crate) force_rebind_concrete_did: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
 }
 
 #[derive(clap::Args)]

@@ -1067,6 +1067,7 @@ async fn install_bundled_graph_dependencies(
                 },
                 output: OutputFormat::Json,
                 force_rebind_concrete_did: false,
+                registry: None,
             },
             false,
         )
