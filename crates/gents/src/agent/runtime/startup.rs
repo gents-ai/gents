@@ -413,7 +413,7 @@ async fn run_agent_owned(
     let control_subscription = agent
         .document_runtime_context()
         .is_some()
-        .then(|| agent.node.subscribe(&[defra_node::EventName::Update]));
+        .then(|| agent.node.subscribe_document_changes());
     log_recovery(
         agent.node.as_ref(),
         agent.agent_did(),

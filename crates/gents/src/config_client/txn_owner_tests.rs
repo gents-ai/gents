@@ -10,7 +10,7 @@ use axum::routing::post;
 use axum::{Json, Router};
 use defra_node::EmbeddedNode;
 use serde_json::{json, Value};
-use tokio::sync::Notify;
+use tokio::sync::{Barrier, Notify};
 use tracing::field::{Field, Visit};
 use tracing::instrument::WithSubscriber;
 use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
@@ -200,6 +200,96 @@ async fn cancellation_before_begin_reports_no_scheduled_rollback() {
     node.shutdown().await;
 }
 
+#[tokio::test(start_paused = true)]
+async fn stalled_callback_releases_the_embedded_write_gate() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type WriteAfterStall { value: String }")
+        .await
+        .unwrap();
+    let entered = Arc::new(Notify::new());
+    let entered_for_callback = Arc::clone(&entered);
+    let mut stalled = Box::pin(ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.stalled_callback",
+        move |_| {
+            let entered = Arc::clone(&entered_for_callback);
+            Box::pin(async move {
+                entered.notify_one();
+                std::future::pending::<Result<()>>().await
+            })
+        },
+    ));
+
+    tokio::select! {
+        () = entered.notified() => {}
+        result = &mut stalled => panic!("transaction finished before callback stalled: {result:?}"),
+    }
+    tokio::time::advance(super::EMBEDDED_TRANSACTION_CALLBACK_TIMEOUT).await;
+    let error = stalled.await.expect_err("stalled transaction times out");
+    assert!(
+        error.to_string().contains("callback timed out"),
+        "{error:#}"
+    );
+    assert!(
+        super::retry::is_transaction_storage_failure(&error),
+        "callback timeout must use the standard storage-failure retry classification"
+    );
+
+    ConfigAccess::write_local(
+        &node,
+        "test.write_after_stall",
+        r#"mutation { create_WriteAfterStall(input: {value: "committed"}) { _docID } }"#,
+    )
+    .await
+    .expect("a later canonical write is not blocked by the stalled transaction");
+    let response = node.execute("{ WriteAfterStall { value } }").await;
+    assert_eq!(
+        response.data.unwrap()["WriteAfterStall"][0]["value"],
+        "committed"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_cancellation_cleanup_releases_the_embedded_write_gate() {
+    let gate = Arc::new(tokio::sync::Mutex::new(()));
+    let guard = Arc::clone(&gate).lock_owned().await;
+    let cleanup = tokio::spawn(super::cleanup_while_holding_write_gate(
+        Some(guard),
+        std::future::pending::<()>(),
+    ));
+
+    tokio::time::advance(super::EMBEDDED_TRANSACTION_ROLLBACK_TIMEOUT).await;
+    cleanup
+        .await
+        .expect("cleanup task joins")
+        .expect_err("stalled cleanup times out");
+    let _guard = tokio::time::timeout(Duration::from_millis(1), gate.lock())
+        .await
+        .expect("the embedded write gate is released after cleanup times out");
+}
+
+#[test]
+fn embedded_timeout_diagnostics_preserve_phase_and_retry_classification() {
+    for phase in [
+        "write-gate acquisition",
+        "begin",
+        "execute",
+        "callback",
+        "commit",
+        "rollback",
+        "auto-commit",
+    ] {
+        let error = super::embedded_phase_timeout(phase, Duration::from_secs(1));
+        assert!(error.to_string().contains(phase), "{error:#}");
+        assert!(
+            super::retry::is_transaction_storage_failure(&error),
+            "{phase} timeout must use the standard storage-failure retry classification"
+        );
+    }
+}
+
 #[tokio::test]
 async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
     let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
@@ -268,6 +358,100 @@ async fn embedded_conflict_replays_complete_callback_with_fresh_snapshot() {
         durable.data.unwrap()["OwnedWriteFact"][0]["value"],
         "canonical"
     );
+    node.shutdown().await;
+}
+
+/// Regression for the write/event feedback loop that wedged response
+/// publication under concurrent request progress. All application writes enter
+/// through the canonical owner, while a deliberately idle current-state
+/// observer coalesces every revision of the hot document into one invalidation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn thirty_two_hot_document_writers_converge_without_event_loss() {
+    const WORKERS: usize = 32;
+
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    node.add_schema(
+        "type HotMutationState { key: String @index(unique: true) @immutable value: Int }",
+    )
+    .await
+    .unwrap();
+    ConfigAccess::write_local(
+        node.as_ref(),
+        "test.seed_hot_mutation_state",
+        r#"mutation { create_HotMutationState(input: {key: "shared", value: 0}) { _docID } }"#,
+    )
+    .await
+    .unwrap();
+    let seed = node
+        .execute(r#"{ HotMutationState(filter: {key: {_eq: "shared"}}) { _docID } }"#)
+        .await;
+    assert!(!seed.has_errors(), "{:?}", seed.errors);
+    let doc_id = seed.data.unwrap()["HotMutationState"][0]["_docID"]
+        .as_str()
+        .expect("seeded document id")
+        .to_owned();
+    let collection_id = node
+        .get_collection("HotMutationState")
+        .unwrap()
+        .expect("hot mutation collection")
+        .collection_id;
+
+    // Subscribe after the seed and intentionally do not drain until every
+    // writer completes. A raw bounded event stream can overflow here; the
+    // native document-change subscription must retain the invalidation.
+    let mut changes = node.subscribe_document_changes();
+    let start = Arc::new(Barrier::new(WORKERS + 1));
+    let mut writers = Vec::with_capacity(WORKERS);
+    for value in 1..=WORKERS {
+        let node = Arc::clone(&node);
+        let start = Arc::clone(&start);
+        writers.push(tokio::spawn(async move {
+            start.wait().await;
+            let mutation = format!(
+                r#"mutation {{ update_HotMutationState(filter: {{key: {{_eq: "shared"}}}}, input: {{value: {value}}}) {{ _docID }} }}"#
+            );
+            ConfigAccess::write_local(
+                node.as_ref(),
+                "test.concurrent_hot_document_update",
+                &mutation,
+            )
+            .await
+        }));
+    }
+    start.wait().await;
+
+    let results = tokio::time::timeout(Duration::from_secs(30), futures::future::join_all(writers))
+        .await
+        .expect("32 canonical writers complete within the liveness bound");
+    for result in results {
+        result.expect("writer task joins").expect("writer commits");
+    }
+
+    let batch = tokio::time::timeout(Duration::from_secs(2), changes.recv())
+        .await
+        .expect("document observer is woken")
+        .expect("document observer remains open");
+    assert!(!batch.resync_required);
+    assert_eq!(batch.updates, WORKERS as u64);
+    assert_eq!(batch.changes.len(), 1);
+    assert_eq!(batch.changes[0].collection_id, collection_id);
+    assert_eq!(batch.changes[0].doc_id, doc_id);
+    assert!(batch.changes[0].has_local_write);
+
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        ConfigAccess::write_local(
+            node.as_ref(),
+            "test.write_after_hot_document_burst",
+            r#"mutation { update_HotMutationState(filter: {key: {_eq: "shared"}}, input: {value: 33}) { _docID } }"#,
+        ),
+    )
+    .await
+    .expect("a following canonical write is not blocked")
+    .expect("the following canonical write commits");
+    let durable = node.execute("{ HotMutationState { key value } }").await;
+    assert!(!durable.has_errors(), "{:?}", durable.errors);
+    assert_eq!(durable.data.unwrap()["HotMutationState"][0]["value"], 33);
     node.shutdown().await;
 }
 

@@ -392,7 +392,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
     assert_eq!(active_snapshot.default_behavior_id, "code");
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn router_publishes_observed_generation_without_waiting_for_request() {
     let router = lean_runtime_reconcile_case("router_observe_published_generation");
     assert!(router.legal);
@@ -529,7 +529,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             router.post_router_generation
         );
         tokio::task::yield_now().await;
-        tokio::time::advance(Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let _ = shutdown_tx.send(true);

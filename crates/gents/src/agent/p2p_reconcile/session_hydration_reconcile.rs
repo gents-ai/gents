@@ -11,7 +11,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
-use defra_node::{EmbeddedNode, EventName};
+use defra_node::EmbeddedNode;
 use gents_protocol::session_hydration::{
     canonical_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
     SESSION_HYDRATION_RECEIPT_VERSION,
@@ -22,12 +22,17 @@ use tokio_util::sync::CancellationToken;
 use super::enrollment_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorizationFence};
 use super::graphql_helpers::{ensure_no_errors, rows};
 use super::session_hydration::{
-    decide_hydration, AppliedPairingRoute, HydrationCatalog, HydrationDocument, HydrationRequest,
-    HydrationVerdict, SessionOwner, VerifiedActiveMembership, HYDRATION_COLLECTIONS,
+    apply_hydration_delivery, decide_hydration, AppliedPairingRoute, HydrationApplyOutcome,
+    HydrationCatalog, HydrationDeliveryResult, HydrationDocument, HydrationRequest,
+    HydrationTerminalWriteResult, HydrationVerdict, SessionOwner, VerifiedActiveMembership,
+    HYDRATION_COLLECTIONS,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
 use crate::graphql::escape_graphql_string;
 use crate::identity::AgentIdentity;
+
+const HYDRATION_DELIVERY_MAX_ATTEMPTS: usize = 3;
+const HYDRATION_DELIVERY_RETRY_BASE: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct HydrationTickOutcome {
@@ -131,7 +136,7 @@ async fn process_one_request(
         .await
         .context("load hydration catalog")?;
 
-    match decide_hydration(&request, &loaded.catalog) {
+    let (verdict, delivery_result) = match decide_hydration(&request, &loaded.catalog) {
         HydrationVerdict::Admit(documents) => {
             if !store
                 .authorization_is_current(&request, &loaded.authorization)
@@ -144,36 +149,112 @@ async fn process_one_request(
                 outcome.rejected.insert(request.request_key);
                 return Ok(());
             }
-            delivery
-                .push_documents_to_peer(&request.peer_id, &documents)
-                .await
-                .context("push admitted hydration documents")?;
-            if !store
-                .authorization_is_current(&request, &loaded.authorization)
-                .await
-                .context("revalidate hydration authorization at terminal commit")?
-            {
-                let detail =
-                    "authenticated enrollment authorization changed before hydration commit";
-                store.mark_rejected(row, detail).await?;
-                outcome.rejected.insert(request.request_key);
-                return Ok(());
+            let delivery_result = deliver_with_bounded_retry(delivery, &request, &documents).await;
+            if delivery_result == HydrationDeliveryResult::Confirmed {
+                if !store
+                    .authorization_is_current(&request, &loaded.authorization)
+                    .await
+                    .context("revalidate hydration authorization at terminal commit")?
+                {
+                    let detail =
+                        "authenticated enrollment authorization changed before hydration commit";
+                    store.mark_rejected(row, detail).await?;
+                    outcome.rejected.insert(request.request_key);
+                    return Ok(());
+                }
             }
-            store
-                .mark_served(row, &documents)
-                .await
-                .context("mark session hydration served")?;
-            outcome.served.insert(request.request_key);
+            (HydrationVerdict::Admit(documents), delivery_result)
         }
-        HydrationVerdict::Reject(detail) => {
-            store
-                .mark_rejected(row, detail)
-                .await
-                .context("mark session hydration rejected")?;
-            outcome.rejected.insert(request.request_key);
+        HydrationVerdict::Reject(detail) => (
+            HydrationVerdict::Reject(detail),
+            HydrationDeliveryResult::Confirmed,
+        ),
+    };
+
+    match (verdict, delivery_result) {
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Indeterminate) => {
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Admit(documents),
+                HydrationDeliveryResult::Indeterminate,
+                HydrationTerminalWriteResult::NotAttempted,
+            );
+            debug_assert!(matches!(
+                modeled,
+                HydrationApplyOutcome::PendingAfterIndeterminateDelivery { .. }
+            ));
+        }
+        (HydrationVerdict::Admit(documents), HydrationDeliveryResult::Confirmed) => {
+            let terminal_write = store.mark_served(row, &documents).await;
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Admit(documents),
+                HydrationDeliveryResult::Confirmed,
+                if terminal_write.is_ok() {
+                    HydrationTerminalWriteResult::Committed
+                } else {
+                    HydrationTerminalWriteResult::Failed
+                },
+            );
+            match (terminal_write, modeled) {
+                (Ok(()), HydrationApplyOutcome::Served(_)) => {
+                    outcome.served.insert(request.request_key);
+                }
+                (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
+                    return Err(error).context("mark session hydration served")
+                }
+                _ => unreachable!("hydration model diverged from served receipt commit"),
+            }
+        }
+        (HydrationVerdict::Reject(detail), delivery_result) => {
+            let terminal_write = store.mark_rejected(row, detail).await;
+            let modeled = apply_hydration_delivery(
+                HydrationVerdict::Reject(detail),
+                delivery_result,
+                if terminal_write.is_ok() {
+                    HydrationTerminalWriteResult::Committed
+                } else {
+                    HydrationTerminalWriteResult::Failed
+                },
+            );
+            match (terminal_write, modeled) {
+                (Ok(()), HydrationApplyOutcome::Rejected { .. }) => {
+                    outcome.rejected.insert(request.request_key);
+                }
+                (Err(error), HydrationApplyOutcome::PendingAfterTerminalWriteFailure { .. }) => {
+                    return Err(error).context("mark session hydration rejected")
+                }
+                _ => unreachable!("hydration model diverged from rejected receipt commit"),
+            }
         }
     }
     Ok(())
+}
+
+async fn deliver_with_bounded_retry(
+    delivery: &dyn HydrationDelivery,
+    request: &HydrationRequest,
+    documents: &BTreeSet<HydrationDocument>,
+) -> HydrationDeliveryResult {
+    for attempt in 1..=HYDRATION_DELIVERY_MAX_ATTEMPTS {
+        match delivery
+            .push_documents_to_peer(&request.peer_id, documents)
+            .await
+        {
+            Ok(()) => return HydrationDeliveryResult::Confirmed,
+            Err(error) => {
+                tracing::warn!(
+                    request_key = %request.request_key,
+                    attempt,
+                    max_attempts = HYDRATION_DELIVERY_MAX_ATTEMPTS,
+                    %error,
+                    "session hydration document delivery attempt failed"
+                );
+                if attempt < HYDRATION_DELIVERY_MAX_ATTEMPTS {
+                    tokio::time::sleep(HYDRATION_DELIVERY_RETRY_BASE * attempt as u32).await;
+                }
+            }
+        }
+    }
+    HydrationDeliveryResult::Indeterminate
 }
 
 pub async fn run_session_hydration_reconciler(
@@ -182,6 +263,10 @@ pub async fn run_session_hydration_reconciler(
     identity: Arc<dyn AgentIdentity>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let hydration_collection_id = node
+        .get_collection("SessionHydrationRequest")?
+        .context("SessionHydrationRequest schema is not installed")?
+        .collection_id;
     let store = GraphqlHydrationStore {
         node: node.clone(),
         enrollment,
@@ -189,9 +274,12 @@ pub async fn run_session_hydration_reconciler(
     };
     let delivery: Arc<dyn HydrationDelivery> =
         Arc::new(EmbeddedHydrationDelivery { node: node.clone() });
-    let mut subscription = node.subscribe(&[EventName::Update]);
-    let mut interval = tokio::time::interval(super::intervals::sweep_interval());
+    let mut subscription = node.subscribe_document_changes();
+    let sweep_interval = super::intervals::sweep_interval();
+    let mut interval =
+        tokio::time::interval_at(tokio::time::Instant::now() + sweep_interval, sweep_interval);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut subscription_open = true;
 
     if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
         return Ok(());
@@ -204,14 +292,23 @@ pub async fn run_session_hydration_reconciler(
                     return Ok(());
                 }
             },
-            message = subscription.recv() => {
-                if message.is_none() {
+            batch = subscription.recv(), if subscription_open => {
+                let Some(batch) = batch else {
                     tracing::warn!("session-hydration reconciler update subscription closed; continuing with periodic sweeps");
+                    subscription_open = false;
                     continue;
-                }
-                let dropped = subscription.check_and_reset_dropped();
-                if dropped > 0 {
-                    tracing::warn!(dropped, "session-hydration reconciler update subscription dropped messages");
+                };
+                if batch.resync_required {
+                    tracing::warn!(
+                        updates = batch.updates,
+                        "session-hydration document-change capacity exceeded; performing authoritative sweep"
+                    );
+                } else if !batch
+                    .changes
+                    .iter()
+                    .any(|change| change.collection_id == hydration_collection_id)
+                {
+                    continue;
                 }
                 if !sweep_hydration_requests_until_cancelled(&store, delivery.as_ref(), &cancel).await {
                     return Ok(());
@@ -616,6 +713,7 @@ mod tests {
         catalog: HydrationCatalog,
         authorization_current: std::sync::atomic::AtomicBool,
         authorization_check: Option<Arc<AuthorizationCheckBarrier>>,
+        terminal_write_failures_remaining: std::sync::atomic::AtomicUsize,
         served: std::sync::Mutex<Vec<(String, usize)>>,
         rejected: std::sync::Mutex<Vec<(String, String)>>,
     }
@@ -627,6 +725,16 @@ mod tests {
     }
 
     struct RecordingDelivery {
+        pushed: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
+    }
+
+    struct FailOnceDelivery {
+        attempts: std::sync::atomic::AtomicUsize,
+        pushed: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
+    }
+
+    struct FailingDelivery {
+        attempts: std::sync::atomic::AtomicUsize,
         pushed: std::sync::Mutex<Vec<(String, BTreeSet<HydrationDocument>)>>,
     }
 
@@ -672,6 +780,17 @@ mod tests {
             request: &HydrationRequestRow,
             documents: &BTreeSet<HydrationDocument>,
         ) -> Result<()> {
+            if self
+                .terminal_write_failures_remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |remaining| remaining.checked_sub(1),
+                )
+                .is_ok()
+            {
+                anyhow::bail!("injected terminal write failure");
+            }
             self.served
                 .lock()
                 .expect("served lock")
@@ -679,6 +798,17 @@ mod tests {
             Ok(())
         }
         async fn mark_rejected(&self, request: &HydrationRequestRow, detail: &str) -> Result<()> {
+            if self
+                .terminal_write_failures_remaining
+                .fetch_update(
+                    std::sync::atomic::Ordering::SeqCst,
+                    std::sync::atomic::Ordering::SeqCst,
+                    |remaining| remaining.checked_sub(1),
+                )
+                .is_ok()
+            {
+                anyhow::bail!("injected terminal write failure");
+            }
             self.rejected
                 .lock()
                 .expect("rejected lock")
@@ -699,6 +829,45 @@ mod tests {
                 .expect("pushed lock")
                 .push((peer_id.to_string(), documents.clone()));
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl HydrationDelivery for FailOnceDelivery {
+        async fn push_documents_to_peer(
+            &self,
+            peer_id: &str,
+            documents: &BTreeSet<HydrationDocument>,
+        ) -> Result<()> {
+            if self
+                .attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                anyhow::bail!("temporary transport failure");
+            }
+            self.pushed
+                .lock()
+                .expect("pushed lock")
+                .push((peer_id.to_string(), documents.clone()));
+            Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl HydrationDelivery for FailingDelivery {
+        async fn push_documents_to_peer(
+            &self,
+            peer_id: &str,
+            documents: &BTreeSet<HydrationDocument>,
+        ) -> Result<()> {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.pushed
+                .lock()
+                .expect("pushed lock")
+                .push((peer_id.to_string(), documents.clone()));
+            anyhow::bail!("transport outcome unknown after dispatch")
         }
     }
 
@@ -749,6 +918,7 @@ mod tests {
             },
             authorization_current: std::sync::atomic::AtomicBool::new(true),
             authorization_check: None,
+            terminal_write_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
         }
@@ -784,6 +954,91 @@ mod tests {
         let pushed = delivery.pushed.lock().expect("pushed lock").clone();
         assert_eq!(pushed[0].0, "peer-1");
         assert_eq!(pushed[0].1, BTreeSet::from([document]));
+        assert_eq!(
+            *store.served.lock().expect("served lock"),
+            vec![("peer-1:session-1".into(), 1)]
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn transient_delivery_failure_retries_within_the_same_sweep() {
+        let store = admitted_store();
+        let delivery = FailOnceDelivery {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+
+        let outcome = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect("same sweep retries the transient delivery failure");
+        assert_eq!(outcome.served, BTreeSet::from(["peer-1:session-1".into()]));
+        assert!(outcome.rejected.is_empty());
+        assert_eq!(
+            delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        assert_eq!(delivery.pushed.lock().expect("pushed lock").len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn indeterminate_delivery_stays_pending_and_retries_idempotently() {
+        let store = admitted_store();
+        let delivery = FailingDelivery {
+            attempts: std::sync::atomic::AtomicUsize::new(0),
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+
+        for sweep in 1..=2 {
+            let outcome = reconcile_hydration_tick(&store, &delivery)
+                .await
+                .expect("ambiguous delivery remains pending for a later sweep");
+            assert!(outcome.served.is_empty());
+            assert!(outcome.rejected.is_empty());
+            assert!(store.served.lock().expect("served lock").is_empty());
+            assert!(store.rejected.lock().expect("rejected lock").is_empty());
+            assert_eq!(
+                delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
+                sweep * HYDRATION_DELIVERY_MAX_ATTEMPTS
+            );
+        }
+        assert_eq!(
+            delivery.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            2 * HYDRATION_DELIVERY_MAX_ATTEMPTS
+        );
+        let attempts = delivery.pushed.lock().expect("pushed lock");
+        assert_eq!(attempts.len(), 2 * HYDRATION_DELIVERY_MAX_ATTEMPTS);
+        assert!(attempts
+            .windows(2)
+            .all(|attempts| attempts[0] == attempts[1]));
+        assert_eq!(
+            attempts[0].1, store.catalog.documents,
+            "every ambiguous retry remains scoped to the selected content-addressed set"
+        );
+    }
+
+    #[tokio::test]
+    async fn delivered_push_replays_idempotently_after_terminal_write_failure() {
+        let mut store = admitted_store();
+        store.terminal_write_failures_remaining = std::sync::atomic::AtomicUsize::new(1);
+        let delivery = RecordingDelivery {
+            pushed: std::sync::Mutex::new(Vec::new()),
+        };
+
+        reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect_err("first terminal write fails and leaves the request pending");
+        assert!(store.served.lock().expect("served lock").is_empty());
+
+        let outcome = reconcile_hydration_tick(&store, &delivery)
+            .await
+            .expect("a later sweep converges");
+        assert_eq!(outcome.served, BTreeSet::from(["peer-1:session-1".into()]));
+        let pushes = delivery.pushed.lock().expect("pushed lock");
+        assert_eq!(pushes.len(), 2);
+        assert_eq!(
+            pushes[0], pushes[1],
+            "retry sends the same content-addressed document set to the same peer"
+        );
         assert_eq!(
             *store.served.lock().expect("served lock"),
             vec![("peer-1:session-1".into(), 1)]
@@ -900,6 +1155,7 @@ mod tests {
             catalog: HydrationCatalog::default(),
             authorization_current: std::sync::atomic::AtomicBool::new(true),
             authorization_check: None,
+            terminal_write_failures_remaining: std::sync::atomic::AtomicUsize::new(0),
             served: std::sync::Mutex::new(Vec::new()),
             rejected: std::sync::Mutex::new(Vec::new()),
         };

@@ -593,6 +593,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::session_hydration::generated_session_hydration_cases_match_decision_core")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "session_hydration_apply_cases"
+      "SessionHydrationApplyCases"
+      "conformance::session_hydration::generated_session_hydration_apply_cases_match_terminal_delivery_core")
+      "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "session_hydration_progress_cases"
       "SessionHydrationProgressCases"
       "conformance::session_hydration::generated_session_hydration_progress_cases_match_observe")

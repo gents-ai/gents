@@ -95,6 +95,62 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
 def sessionHydrationDecisionCasesJson : String :=
   jsonArray (sessionHydrationDecisionCases.map sessionHydrationDecisionCaseJson)
 
+structure SessionHydrationApplyCase where
+  name : String
+  admitted : Bool
+  deliveryConfirmed : Bool
+  terminalWrite : String
+
+def sessionHydrationApplyCases : List SessionHydrationApplyCase :=
+  [ { name := "admitted_delivery_commits", admitted := true, deliveryConfirmed := true,
+      terminalWrite := "committed" }
+  , { name := "delivered_terminal_write_fails", admitted := true, deliveryConfirmed := true,
+      terminalWrite := "failed" }
+  , { name := "delivered_terminal_write_not_attempted", admitted := true,
+      deliveryConfirmed := true, terminalWrite := "not_attempted" }
+  , { name := "indeterminate_delivery_stays_pending", admitted := true,
+      deliveryConfirmed := false, terminalWrite := "not_attempted" }
+  , { name := "denied_request_rejects", admitted := false, deliveryConfirmed := true,
+      terminalWrite := "committed" }
+  , { name := "denied_terminal_write_fails", admitted := false, deliveryConfirmed := true,
+      terminalWrite := "failed" } ]
+
+def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
+  let decision : SessionHydrationDecisionCase :=
+    { name := w.name
+    , paired := w.admitted
+    , pairingRequesterMatches := true
+    , pairingAgentMatches := true
+    , activeMember := true
+    , membershipNetworkMatches := true
+    , ownsSession := true }
+  let cat := hydrationCatalog decision
+  let delivery := if w.deliveryConfirmed then SessionHydration.DeliveryResult.confirmed
+    else SessionHydration.DeliveryResult.indeterminate
+  let terminalWrite := match w.terminalWrite with
+    | "committed" => SessionHydration.TerminalWriteResult.committed
+    | "failed" => SessionHydration.TerminalWriteResult.failed
+    | _ => SessionHydration.TerminalWriteResult.notAttempted
+  let initial : SessionHydration.State :=
+    { attempted := ∅, confirmedDelivered := ∅, terminals := ∅ }
+  let next := SessionHydration.applyStep cat initial hydrationRequest delivery terminalWrite
+  let selected := SessionHydration.selectedDocuments cat hydrationRequest
+  let served := SessionHydration.terminal hydrationRequest .served selected ∈ next.terminals
+  let rejected := SessionHydration.terminal hydrationRequest .rejected ∅ ∈ next.terminals
+  "{"
+    ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"admitted\":" ++ boolString w.admitted ++ ","
+    ++ "\"delivery_confirmed\":" ++ boolString w.deliveryConfirmed ++ ","
+    ++ "\"terminal_write\":" ++ jsonString w.terminalWrite ++ ","
+    ++ "\"expected_served\":" ++ boolString served ++ ","
+    ++ "\"expected_rejected\":" ++ boolString rejected ++ ","
+    ++ "\"expected_attempted_count\":" ++ toString next.attempted.card ++ ","
+    ++ "\"expected_confirmed_count\":" ++ toString next.confirmedDelivered.card
+    ++ "}"
+
+def sessionHydrationApplyCasesJson : String :=
+  jsonArray (sessionHydrationApplyCases.map sessionHydrationApplyCaseJson)
+
 structure SessionHydrationProgressCase where
   name : String
   prevSession : String

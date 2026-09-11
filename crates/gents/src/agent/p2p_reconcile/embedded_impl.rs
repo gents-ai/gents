@@ -378,6 +378,7 @@ mod tests {
                 bind_addr: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
                 relay_mode: IrohRelayModeConfig::Disabled,
                 discovery: IrohDiscoveryConfig::Disabled,
+                allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
                 max_concurrent_multipath_paths: None,
                 secret_key_path: None,
                 load_persisted_collections: false,

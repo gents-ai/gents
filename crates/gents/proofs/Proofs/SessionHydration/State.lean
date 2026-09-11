@@ -64,6 +64,22 @@ inductive Outcome where
   | rejected
   deriving DecidableEq, Repr
 
+/-- Result after the bounded delivery attempt budget is consumed. An
+`indeterminate` result may follow partial transport side effects; it only says
+that delivery of the complete selected set was not confirmed. -/
+inductive DeliveryResult where
+  | confirmed
+  | indeterminate
+  deriving DecidableEq, Repr
+
+/-- Result of committing the signed terminal hydration receipt. Delivery and
+terminal persistence are separate effects in the Rust reconciler. -/
+inductive TerminalWriteResult where
+  | committed
+  | failed
+  | notAttempted
+  deriving DecidableEq, Repr
+
 structure Terminal where
   key : String
   outcome : Outcome
@@ -71,7 +87,8 @@ structure Terminal where
   deriving DecidableEq
 
 structure State where
-  delivered : Finset Document
+  attempted : Finset Document
+  confirmedDelivered : Finset Document
   terminals : Finset Terminal
   deriving DecidableEq
 
@@ -118,14 +135,35 @@ instance (st : State) (key : String) : Decidable (terminalFor st key) := by
 def terminal (r : Request) (outcome : Outcome) (servedDocuments : Finset Document) : Terminal :=
   { key := r.key, outcome, servedDocuments }
 
-def applyStep (cat : Catalog) (st : State) (r : Request) : State :=
+def applyStep (cat : Catalog) (st : State) (r : Request)
+    (delivery : DeliveryResult) (terminalWrite : TerminalWriteResult) : State :=
   if terminalFor st r.key then st
   else if admits cat r then
-    let docs := selectedDocuments cat r
-    { st with
-      delivered := st.delivered ∪ docs
-      terminals := insert (terminal r .served docs) st.terminals }
+    match delivery with
+    | .confirmed =>
+      let docs := selectedDocuments cat r
+      match terminalWrite with
+      | .committed =>
+        { st with
+          attempted := st.attempted ∪ docs
+          confirmedDelivered := st.confirmedDelivered ∪ docs
+          terminals := insert (terminal r .served docs) st.terminals }
+      | .failed =>
+        { st with
+          attempted := st.attempted ∪ docs
+          confirmedDelivered := st.confirmedDelivered ∪ docs }
+      | .notAttempted =>
+        { st with
+          attempted := st.attempted ∪ docs
+          confirmedDelivered := st.confirmedDelivered ∪ docs }
+    | .indeterminate =>
+      let docs := selectedDocuments cat r
+      { st with attempted := st.attempted ∪ docs }
   else
-    { st with terminals := insert (terminal r .rejected ∅) st.terminals }
+    match terminalWrite with
+    | .committed =>
+      { st with terminals := insert (terminal r .rejected ∅) st.terminals }
+    | .failed => st
+    | .notAttempted => st
 
 end SessionHydration
