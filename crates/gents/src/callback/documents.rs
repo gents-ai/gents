@@ -80,6 +80,7 @@ pub struct CallbackInvocationDoc {
     /// object and groups an ordered array of projected objects.
     /// Reuse the existing planner input and action journal; retries never reread
     /// changed source rows or recompute a persisted action plan.
+    #[serde(deserialize_with = "deserialize_callback_input")]
     pub input: serde_json::Value,
     pub invocation_id: String,
     /// Principal whose runtime owns execution and recovery.
@@ -100,6 +101,46 @@ pub struct CallbackInvocationDoc {
     pub claimed_at: Option<String>,
     #[serde(default)]
     pub created_at: Option<String>,
+}
+
+const CALLBACK_INPUT_ENVELOPE_VERSION: &str = "_gents_callback_input_version";
+const CALLBACK_INPUT_ENVELOPE_VALUE: &str = "value";
+
+fn callback_input_for_storage(input: &Value) -> Value {
+    if input.is_array() {
+        serde_json::json!({
+            CALLBACK_INPUT_ENVELOPE_VERSION: 1,
+            CALLBACK_INPUT_ENVELOPE_VALUE: input,
+        })
+    } else {
+        input.clone()
+    }
+}
+
+pub(super) fn callback_input_from_storage(mut input: Value) -> Value {
+    let Some(object) = input.as_object_mut() else {
+        return input;
+    };
+    let is_envelope = object.len() == 2
+        && object
+            .get(CALLBACK_INPUT_ENVELOPE_VERSION)
+            .and_then(Value::as_u64)
+            == Some(1)
+        && object.contains_key(CALLBACK_INPUT_ENVELOPE_VALUE);
+    if is_envelope {
+        object
+            .remove(CALLBACK_INPUT_ENVELOPE_VALUE)
+            .unwrap_or(Value::Null)
+    } else {
+        input
+    }
+}
+
+fn deserialize_callback_input<'de, D>(deserializer: D) -> Result<Value, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(callback_input_from_storage)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -591,7 +632,8 @@ pub async fn create_pending_invocation(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     let input = serde_json::json!({
         "invocation_id": invocation.invocation_id, "owner_agent_did": invocation.owner_agent_did,
-        "callback_id": invocation.callback_id, "origin": invocation.origin, "input": invocation.input,
+        "callback_id": invocation.callback_id, "origin": invocation.origin,
+        "input": callback_input_for_storage(&invocation.input),
         "idempotency_key": invocation.idempotency_key, "lifecycle_state": "pending", "attempts": 0,
         "action_plan": "", "action_journal": "[]", "error": "", "claimed_at": "", "created_at": now
     });

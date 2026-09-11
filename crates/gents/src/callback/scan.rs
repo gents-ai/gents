@@ -653,7 +653,8 @@ mod grouped_tests {
         let response = node.execute(query).await;
         let rows = crate::graphql::rows::<Value>(&response, "CallbackInvocation").unwrap();
         assert_eq!(rows.len(), 1);
-        let frozen = rows[0]["input"].clone();
+        let frozen =
+            crate::callback::documents::callback_input_from_storage(rows[0]["input"].clone());
         let members = node
             .execute("{CallbackMember(order:{_docID:ASC}){value}}")
             .await;
@@ -686,7 +687,8 @@ mod grouped_tests {
             "same group must not materialize a second invocation"
         );
         assert_eq!(
-            rows[0]["input"], frozen,
+            crate::callback::documents::callback_input_from_storage(rows[0]["input"].clone()),
+            frozen,
             "replay must preserve original projected input"
         );
         node.shutdown().await;
