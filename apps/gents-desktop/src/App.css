@@ -1,3 +1,6 @@
+@import "tailwindcss";
+@import "@gents/ui/styles.css";
+
 @layer tokens, base, primitives, shell, sidebar, chat, fleet, config, transcript, components, backend-health, holds, mcp-health, utilities, trace, workspace;
 
 @import "@fontsource-variable/inter";
