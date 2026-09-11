@@ -48,10 +48,10 @@ export function renderTauriAppDriverWithBridge(
     bridge,
     user,
     composer() {
-      return screen.getByTestId("composer-input") as HTMLTextAreaElement;
+      return screen.getByRole("textbox", { name: "Message" }) as HTMLTextAreaElement;
     },
     sendButton() {
-      return screen.getByTestId("composer-send");
+      return screen.getByRole("button", { name: "Send" });
     },
     session(sessionId: string) {
       return screen.getByTestId(`session-${sessionId}`);
@@ -125,7 +125,7 @@ export function renderTauriAppDriverWithBridge(
     async openChat() {
       await user.click(this.chatButton());
       await waitFor(() => {
-        expect(screen.getByTestId("composer-input")).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: "Message" })).toBeInTheDocument();
       });
     },
     async typeComposer(value: string) {

@@ -6,13 +6,12 @@ const shellState = extract((state) => {
   const document = state.document;
   const errorBanner = document.querySelector('[data-testid="error-banner"]');
   const surfaceSelectors = [
-    '[data-testid="fleet-dashboard"]',
-    '[data-testid="fleet-empty"]',
-    '[data-testid="transcript-panel"]',
-    ".config-workspace",
+    '[data-testid="app-shell"]',
+    '[data-testid="setup-screen"]',
+    '[data-testid="startup-screen"]',
   ];
   return {
-    shellMounted: Boolean(document.querySelector(".app-shell")),
+    shellMounted: Boolean(document.querySelector('[data-testid="app-shell"]')),
     errorBanner: {
       visible: Boolean(errorBanner),
       message: normalizeText(
@@ -145,10 +144,11 @@ const dialogProblems = extract((state) => {
 
 const emptyPrimarySurfaceProblems = extract((state) => {
   const surfaces = [
-    '[data-testid="fleet-dashboard"]',
-    '[data-testid="fleet-empty"]',
-    '[data-testid="transcript-panel"]',
-    ".config-workspace",
+    '[data-testid="app-shell"]',
+    '[data-testid="setup-screen"]',
+    '[data-testid="startup-screen"]',
+    '[data-testid="sessions-screen"]',
+    '[data-testid="session-screen"]',
   ];
   return surfaces
     .map((selector) => {

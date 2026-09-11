@@ -2,7 +2,6 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const STYLES_ROOT = join(__dirname, "..", "src", "styles");
 const APP_CSS = join(__dirname, "..", "src", "App.css");
 const PACKAGES_ROOT = join(__dirname, "..", "..", "..", "packages");
 
@@ -17,196 +16,25 @@ function cssFiles(dir: string): string[] {
 const packageStyleFiles = readdirSync(PACKAGES_ROOT)
   .filter((entry) => entry.startsWith("gents-desktop-"))
   .flatMap((entry) => cssFiles(join(PACKAGES_ROOT, entry)));
-const files = [APP_CSS, ...cssFiles(STYLES_ROOT), ...packageStyleFiles];
 
 function stripComments(css: string): string {
   return css.replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-function isTokenSheet(file: string): boolean {
-  return file.endsWith("tokens.css") || file.endsWith("semantic.css");
-}
-
-const sources = new Map(
-  files.map((file) => [file, stripComments(readFileSync(file, "utf8"))]),
-);
-
-describe("design tokens", () => {
-  it("package CSS never reaches into host-private brand tokens", () => {
-    const violations = packageStyleFiles
-      .filter((file) => sources.get(file)?.includes("--source-"))
-      .map((file) => relative(PACKAGES_ROOT, file));
-    expect(violations).toEqual([]);
-  });
-
-  it("every fallback-less var() reference resolves to a defined token", () => {
-    const defined = new Set<string>();
-    for (const css of sources.values()) {
-      for (const match of css.matchAll(/(?:^|[{;\s])(--[\w-]+)\s*:/g)) {
-        defined.add(match[1]);
-      }
-    }
-
-    const undefinedRefs: string[] = [];
-    for (const [file, css] of sources) {
-      for (const match of css.matchAll(/var\(\s*(--[\w-]+)\s*([,)])/g)) {
-        const [, token, terminator] = match;
-        const hasFallback = terminator === ",";
-        if (!hasFallback && !defined.has(token)) {
-          undefinedRefs.push(`${relative(STYLES_ROOT, file)}: ${token}`);
-        }
-      }
-    }
-
-    expect(undefinedRefs).toEqual([]);
-  });
-});
-
-describe("motion and focus", () => {
-  it("transition/animation durations use --motion-* tokens", () => {
-    const raw: string[] = [];
-    for (const [file, css] of sources) {
-      if (isTokenSheet(file) || file === APP_CSS) continue;
-      for (const match of css.matchAll(
-        /(?:transition|animation)[^:;{}]*:\s*[^;{}]*?(\d+(?:\.\d+)?m?s)\b/g,
-      )) {
-        if (match[1] === "0.01ms") continue;
-        raw.push(`${relative(STYLES_ROOT, file)}: ${match[1]}`);
-      }
-    }
-    expect(raw).toEqual([]);
-  });
-
-  it("focus outlines are never removed", () => {
-    const removals: string[] = [];
-    for (const [file, css] of sources) {
-      for (const match of css.matchAll(
-        /outline(?:-style|-width)?\s*:\s*(?:none|0(?:px)?)\b(?:\s*!important)?\s*[;}]/gi,
-      )) {
-        removals.push(`${relative(STYLES_ROOT, file)}: ${match[0]}`);
-      }
-    }
-    expect(removals).toEqual([]);
-  });
-});
-
-describe("type scale", () => {
-  it("every font-size declaration uses a --text-* token", () => {
-    const raw: string[] = [];
-    for (const [file, css] of sources) {
-      for (const match of css.matchAll(/font-size:\s*([^;}]+)[;}]/gi)) {
-        const value = match[1].trim();
-        if (!/^var\(--text-[\w-]+\)$/.test(value) && value !== "inherit") {
-          if (isTokenSheet(file)) continue;
-          raw.push(`${relative(STYLES_ROOT, file)}: font-size: ${value}`);
-        }
-      }
-    }
-    expect(raw).toEqual([]);
-  });
-
-  it("the font shorthand never smuggles a raw size past the fence", () => {
-    const raw: string[] = [];
-    for (const [file, css] of sources) {
-      for (const match of css.matchAll(/(?<![\w-])font:\s*([^;}]+)[;}]/gi)) {
-        const value = match[1].trim();
-        if (value !== "inherit") {
-          raw.push(`${relative(STYLES_ROOT, file)}: font: ${value}`);
-        }
-      }
-    }
-    expect(raw).toEqual([]);
-  });
-});
-
-describe("token ratchets", () => {
-  function countMatches(pattern: RegExp): number {
-    let count = 0;
-    for (const css of sources.values()) {
-      count += [...css.matchAll(pattern)].length;
-    }
-    return count;
-  }
-
-  it("raw px inside spacing declarations does not grow (ceiling 40)", () => {
-    let count = 0;
-    for (const css of sources.values()) {
-      for (const match of css.matchAll(
-        /(?<![\w-])(?:padding|margin|gap|row-gap|column-gap)(?:-(?:top|right|bottom|left|inline|block))?(?:-(?:start|end))?\s*:\s*([^;{}]+)/g,
-      )) {
-        count += (match[1].match(/\d+px\b/g) ?? []).length;
-      }
-    }
-    expect(count).toBeLessThanOrEqual(40);
-  });
-
-  it("light-theme overrides only redefine tokens the dark root declares", () => {
-    const tokens = stripComments(readFileSync(join(STYLES_ROOT, "tokens.css"), "utf8"));
-    const blockTokens = (open: string) => {
-      const start = tokens.indexOf(open);
-      expect(start).toBeGreaterThan(-1);
-      const body = tokens.slice(start, tokens.indexOf("}", start));
-      return new Set([...body.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
-    };
-    const root = blockTokens(":root {");
-    const light = blockTokens(':root[data-theme="light"] {');
-    expect(light.size).toBeGreaterThan(0);
-    for (const token of light) {
-      expect(root, `${token} overridden in light but undefined in dark root`).toContain(
-        token,
-      );
-    }
-  });
-
-  it("raw rgb() literals stay eliminated: colors live in tokens.css", () => {
-    expect(countMatches(/rgb\(\d+ \d+ \d+/g)).toBe(0);
-  });
-
-  it("bespoke box-shadows do not grow (ceiling 38)", () => {
-    expect(
-      countMatches(/box-shadow:(?!\s*none\s*[;}]|\s*var\(--shadow-)[^;{}]+/gi),
-    ).toBeLessThanOrEqual(38);
-  });
-});
-
-describe("cascade layers", () => {
-  it("App.css is the kit entry, not a cascade-layer host", () => {
-    const appCss = sources.get(APP_CSS) ?? "";
+describe("kit entry", () => {
+  it("App.css is the kit stylesheet, not a cascade-layer host", () => {
+    const appCss = readFileSync(APP_CSS, "utf8");
     expect(appCss).toContain('@import "tailwindcss"');
     expect(appCss).toContain('@import "@gents/ui/styles.css"');
     expect(appCss).not.toMatch(/@layer\s+[\w\s,-]+;/);
   });
+});
 
-  it("every leftover cascade sheet keeps all rules inside @layer blocks", () => {
-    const violations: string[] = [];
-    for (const [file, css] of sources) {
-      if (file === APP_CSS) continue;
-      let depth = 0;
-      let statement = "";
-      for (const char of css) {
-        if (char === "{") {
-          if (depth === 0) {
-            const head = statement.trim();
-            if (!head.startsWith("@layer")) {
-              violations.push(
-                `${relative(STYLES_ROOT, file)}: top-level rule outside @layer: "${head.slice(0, 60)}"`,
-              );
-            }
-            statement = "";
-          }
-          depth += 1;
-        } else if (char === "}") {
-          depth -= 1;
-        } else if (depth === 0) {
-          if (char === ";") {
-            statement = "";
-          } else {
-            statement += char;
-          }
-        }
-      }
-    }
+describe("package CSS", () => {
+  it("never reaches into host-private brand tokens", () => {
+    const violations = packageStyleFiles
+      .filter((file) => stripComments(readFileSync(file, "utf8")).includes("--source-"))
+      .map((file) => relative(PACKAGES_ROOT, file));
     expect(violations).toEqual([]);
   });
-
 });

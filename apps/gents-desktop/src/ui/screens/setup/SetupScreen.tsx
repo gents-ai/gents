@@ -36,6 +36,7 @@ import {
   type LoadingStepState,
 } from '../../../lib/loadingStatus'
 import type { Shell } from '@/hooks/useShell'
+import { isMobileTauriShell } from '../../../lib/shellPlatform'
 import { AgentAvatar } from '@/screens/AgentAvatar'
 import { applyTheme, themePreference } from '@/theme'
 
@@ -185,7 +186,12 @@ function Nav({
         <span />
       )}
       {next && (
-        <Button variant="brand" onClick={next} disabled={disabled || busy}>
+        <Button
+          variant="brand"
+          onClick={next}
+          disabled={disabled || busy}
+          data-testid="setup-next"
+        >
           {busy ? <Spinner /> : null} {nextLabel} <ArrowRight />
         </Button>
       )}
@@ -210,7 +216,8 @@ export function SetupScreen({
   onDone: (snapshot: DesktopClientSnapshot) => void
 }) {
   const [step, setStep] = useState<Step>('welcome')
-  const [where, setWhere] = useState<'local' | 'remote'>('local')
+  const allowLocal = !isMobileTauriShell()
+  const [where, setWhere] = useState<'local' | 'remote'>(allowLocal ? 'local' : 'remote')
   const [address, setAddress] = useState('')
   const [name, setName] = useState('Forge')
   const [busy, setBusy] = useState(false)
@@ -429,13 +436,15 @@ export function SetupScreen({
           Let’s get set up
         </Title>
         <div className="grid gap-3">
-          <Option
-            selected={where === 'local'}
-            onSelect={() => setWhere('local')}
-            title="Local agent"
-            hint="Create an agent on this Mac."
-            icon={Server}
-          />
+          {allowLocal && (
+            <Option
+              selected={where === 'local'}
+              onSelect={() => setWhere('local')}
+              title="Local agent"
+              hint="Create an agent on this Mac."
+              icon={Server}
+            />
+          )}
           <Option
             selected={where === 'remote'}
             onSelect={() => setWhere('remote')}

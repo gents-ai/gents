@@ -45,10 +45,10 @@ test.describe("desktop live browser smoke", () => {
       }
 
       await gotoLiveHarness(page, liveRunner.baseUrl);
-      await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
 
-      await page.locator('[data-testid^="fleet-row-"]').first().click();
-      await expect(page.getByTestId("composer-input")).toBeVisible();
+      await page.getByRole("link", { name: "New", exact: true }).click();
+      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(
         deployment.sessions
@@ -57,9 +57,9 @@ test.describe("desktop live browser smoke", () => {
       );
 
       await page
-        .getByTestId("composer-input")
+        .getByRole("textbox", { name: "Message" })
         .fill("Reply with a short desktop live browser smoke confirmation.");
-      await page.getByTestId("composer-send").click();
+      await page.getByRole("button", { name: "Send" }).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
         agentDid: deployment.agentDid,
@@ -84,22 +84,12 @@ test.describe("desktop live browser smoke", () => {
           (completedSession.timelinePage?.toolCallQueryLimit ?? 0),
       );
 
-      const transcriptRows = page.locator(
-        '[data-testid="transcript-panel"] .message-card',
-      );
-      await expect
-        .poll(async () => transcriptRows.count(), { timeout: 30_000 })
-        .toBeGreaterThanOrEqual(2);
-      const transcriptRowCount = await transcriptRows.count();
+      await expect(page.getByText(/Bombadil harness response|desktop live browser smoke/i).first()).toBeVisible({
+        timeout: 30_000,
+      });
 
-      await expect(
-        page.getByRole("button", { name: /open operations drawer/i }),
-      ).toHaveCount(0);
-      await page.getByTestId("agent-actions").click();
-      await page.getByRole("button", { name: "Configure" }).click();
-      await expect(page.locator(".config-workspace")).toBeVisible();
-      await page.getByTestId("config-tab-backends").click();
-      await expect(page.getByTestId("backend-save")).toBeVisible();
+      await page.getByRole("link", { name: /configuration/i }).first().click();
+      await expect(page.getByTestId("agent-screen")).toBeVisible();
 
       diagnostics = await liveRunner.fetchRequestDiagnostics(
         submitted.sessionId,
@@ -113,7 +103,7 @@ test.describe("desktop live browser smoke", () => {
         sessionId: submitted.sessionId,
         requestId: submitted.requestId,
         turnState: completedSession.turnState,
-        transcriptRows: transcriptRowCount,
+        transcriptRows: completedSession.timelinePage?.queriedRows ?? 0,
         transcriptQueryCount: completedSession.timelinePage?.queryCount ?? 0,
         transcriptQueriedRows: completedSession.timelinePage?.queriedRows ?? 0,
         transcriptMessageQueryLimit:

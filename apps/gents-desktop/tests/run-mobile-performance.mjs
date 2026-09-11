@@ -158,7 +158,7 @@ async function runSample(browserInstance, sampleIndex) {
     `${baseUrl}/tests/ui-harness/harness.html?scenario=mobile-performance`,
     { waitUntil: "domcontentloaded" },
   );
-  await page.locator('[data-testid="fleet-dashboard"]').waitFor({ state: "visible" });
+  await page.locator('[data-testid="app-shell"]').waitFor({ state: "visible" });
   const navigationElapsedMs = monotonicElapsedMs(navigationStartedAt);
   await settleRender(page);
   const fixture = await page.evaluate(
@@ -174,7 +174,7 @@ async function runSample(browserInstance, sampleIndex) {
       navigationElapsedMs,
       {
         cold: sampleIndex === 1,
-        boundary: "navigation start -> visible application fleet shell",
+        boundary: "navigation start -> visible application shell",
       },
     ),
   );
