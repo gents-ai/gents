@@ -196,6 +196,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return (
       <div
         key={shell.selectedAgentDid ?? 'new'}
+        data-testid="session-screen"
         className="mx-auto grid min-h-full max-w-2xl content-center gap-6 px-6 py-16 animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ease-out fill-mode-both motion-reduce:animate-none"
       >
         <div className="flex items-start gap-3">
@@ -211,6 +212,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             </p>
           </div>
         </div>
+        <div data-testid="composer">
         <Composer
           value={draft}
           onChange={setDraft}
@@ -236,6 +238,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           sending={shell.sending}
           placeholder={startStatus.kind === 'disabled' ? startStatus.hint : 'Ask anything'}
         />
+        </div>
         <p className="text-xs text-muted-foreground">
           {chosenName} <strong className="font-medium text-foreground">can</strong>{' '}
           {env
@@ -375,6 +378,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   return (
     <div
       className="grid h-full min-h-0"
+      data-testid="session-screen"
       style={{
         gridTemplateColumns: wide
           ? `minmax(0,1fr) ${traceOpen ? 'auto' : '0px'} ${traceOpen ? trace.width : 0}px`
@@ -637,6 +641,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     ))}
                   </div>
                 )}
+                <div data-testid="composer">
                 <Composer
                   value={draft}
                   onChange={setDraft}
@@ -657,6 +662,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     status.kind === 'disabled' && !inFlight ? status.hint : 'Ask anything'
                   }
                 />
+                </div>
                 {status.kind === 'disabled' && (
                   <p className="mt-2 px-1 text-xs text-muted-foreground">{status.hint}</p>
                 )}

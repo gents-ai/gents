@@ -11,6 +11,31 @@ body,
   overflow: hidden;
 }
 
+/* Overlay titlebar (macOS Tauri): drag strip + clearance so traffic lights
+   do not sit on the mark. applyShellPlatform sets data-shell="mac". */
+.titlebar-drag-region {
+  display: none;
+}
+
+:root[data-shell="mac"] {
+  --titlebar-height: 34px;
+  --titlebar-clearance: 44px;
+}
+
+:root[data-shell="mac"] .titlebar-drag-region {
+  display: block;
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 40;
+  height: var(--titlebar-height);
+}
+
+:root[data-shell="mac"] .viewport-frame {
+  padding-top: calc(var(--safe-area-top, 0px) + var(--titlebar-clearance));
+}
+
 .startup-ellipsis::after {
   content: "";
   animation: startup-ellipsis 1.2s steps(4, end) infinite;

@@ -60,7 +60,11 @@ export function AgentScreen({
   }
   const groups = [...new Set(SECTIONS.map((s) => s.group))]
   return (
-    <div className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[20rem_minmax(0,1fr)]">
+    <div
+      className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[20rem_minmax(0,1fr)]"
+      data-testid="agent-screen"
+      data-section={section}
+    >
       <ScrollArea className="hidden h-full md:block">
         <SidebarNav className="w-auto">
           {groups.map((group) => (
