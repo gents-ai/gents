@@ -193,6 +193,13 @@ export function createDesktopUiHarness(
   let sessionSeq = 1;
   let rowCount = 42;
   let deployment = createDeployment();
+  if (scenario === "empty-fleet") {
+    deployment = {
+      ...deployment,
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "backend-unavailable") {
     deployment = {
       ...deployment,
@@ -245,6 +252,7 @@ export function createDesktopUiHarness(
     };
   }
   let removed = false;
+  let provisioned = scenario !== "empty-fleet";
   let p2pStatus: "healthy" | "degraded" | "wedged" =
     scenario === "sync-offline" ? "wedged" : "healthy";
   let syncHealth: SyncHealthView = initialSyncHealth(scenario);
@@ -425,6 +433,15 @@ export function createDesktopUiHarness(
         : []),
     ],
   });
+  if (scenario === "empty-fleet") {
+    sessions.clear();
+    deployment = {
+      ...deployment,
+      sessions: [],
+      inferenceBackends: [],
+      inferenceProfiles: [],
+    };
+  }
   if (scenario === "session-hydration") {
     sessions.set("session-remote", {
       sessionId: "session-remote",
@@ -564,7 +581,7 @@ export function createDesktopUiHarness(
   }
 
   function snapshot() {
-    const deployments = scenario === "empty-fleet" || removed ? [] : [deployment];
+    const deployments = !provisioned || removed ? [] : [deployment];
     const health = {
       status: p2pStatus,
       connectedPeerCount: p2pStatus === "healthy" ? 1 : 0,
@@ -590,7 +607,7 @@ export function createDesktopUiHarness(
         peerDirectoryExists: true,
         clientStateExists: true,
         savedPeers:
-          scenario === "empty-fleet"
+          !provisioned
             ? []
             : [
                 {
@@ -748,6 +765,12 @@ export function createDesktopUiHarness(
     },
     async initLocalStandardRuntime(request) {
       const label = request.label.trim() || "Bombadil UI Agent";
+      provisioned = true;
+      deployment = {
+        ...deployment,
+        label,
+        agentPrincipal: { ...deployment.agentPrincipal, displayName: label },
+      };
       const summary: InitSummary = {
         status: "ready",
         source: "bombadil-harness",

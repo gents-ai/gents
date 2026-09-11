@@ -54,23 +54,15 @@ export const test = base.extend<DesktopFixtures>({
 export { expect };
 export type { Page, TestInfo };
 
+const KIT_SURFACE = [
+  '[data-testid="app-shell"]',
+  '[data-testid="setup-screen"]',
+  '[data-testid="startup-screen"]',
+].join(", ");
+
 export async function gotoHarness(page: Page, scenario: HarnessScenario = "default") {
   await page.goto(`/tests/ui-harness/harness.html?scenario=${scenario}`);
-  await expect(page.locator(".app-shell")).toBeVisible();
-  await expect(
-    page
-      .locator(
-        [
-          '[data-testid="fleet-dashboard"]',
-          '[data-testid="fleet-empty"]',
-          '[data-testid="transcript-panel"]',
-          ".config-workspace",
-          '[data-testid="error-banner"]',
-          '[data-testid="startup-screen"]',
-        ].join(", "),
-      )
-      .first(),
-  ).toBeVisible();
+  await expect(page.locator(KIT_SURFACE).first()).toBeVisible();
 }
 
 export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
@@ -79,60 +71,53 @@ export async function gotoLiveHarness(page: Page, bridgeUrl?: string) {
     params.set("bridgeUrl", bridgeUrl);
   }
   await page.goto(`/tests/ui-harness/harness.html?${params.toString()}`);
-  await expect(page.locator(".app-shell")).toBeVisible();
+  await expect(page.locator(KIT_SURFACE).first()).toBeVisible();
   await expect(page.locator("html")).toHaveAttribute(
     "data-desktop-ui-harness-backend",
     "live",
   );
 }
 
-export async function openChat(page: Page) {
-  await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-row-${PEER_ID}`).click();
-  if ((page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760) {
-    await page.getByTestId("session-session-intro").click();
-  }
-  await expect(page.getByTestId("composer-input")).toBeVisible();
+export function composer(page: Page) {
+  return page.getByRole("textbox", { name: "Message" });
 }
 
-export async function openChatNavigation(page: Page) {
-  const sidebar = page.locator(".sidebar");
-  if (
-    !(await sidebar.isVisible()) &&
-    (page.viewportSize()?.width ?? Number.POSITIVE_INFINITY) <= 760
-  ) {
-    await page.getByTestId("mobile-chat-navigation").click();
+export function sendButton(page: Page) {
+  return page.getByRole("button", { name: "Send" });
+}
+
+export async function openChat(page: Page) {
+  await expect(page.getByTestId("app-shell")).toBeVisible();
+  if (await page.getByTestId("sessions-screen").count()) {
+    const newChat = page.getByRole("button", { name: "New" });
+    if (await newChat.count()) {
+      await newChat.click();
+    } else {
+      await page.getByRole("button", { name: "Menu" }).click();
+      await page.getByRole("link", { name: "New session" }).click();
+    }
   }
-  await expect(sidebar).toBeVisible();
+  await expect(page.getByTestId("session-screen")).toBeVisible();
+  await expect(composer(page)).toBeVisible();
 }
 
 export async function openConfig(page: Page) {
-  await expect(page.getByTestId("fleet-dashboard")).toBeVisible();
-  await page.getByTestId(`fleet-row-${PEER_ID}`).click();
-  await openChatNavigation(page);
-  await page.getByTestId("agent-actions").click();
-  await page.getByRole("button", { name: "Configure" }).click();
-  await expect(page.locator(".config-workspace")).toBeVisible();
-}
-
-export async function openConfigTab(page: Page, tabId: string) {
-  const tab = page.getByTestId(`config-tab-${tabId}`);
-  await tab.click();
-  await expect(tab).toHaveClass(/selected/);
-}
-
-export async function saveConfig(page: Page, testId: string) {
-  await page.getByTestId(testId).click();
-  await expect(page.locator(".config-editor").getByText("Saved")).toBeVisible();
+  await expect(page.getByTestId("app-shell")).toBeVisible();
+  const configLink = page.getByRole("link", { name: /configuration/i });
+  if (await configLink.first().isVisible()) {
+    await configLink.first().click();
+  } else {
+    await page.getByRole("button", { name: "Menu" }).click();
+    await page.getByRole("link", { name: /configuration|Configure/i }).first().click();
+  }
+  await expect(page.getByTestId("agent-screen")).toBeVisible();
 }
 
 export async function primarySurfaceCount(page: Page) {
   return page.evaluate(() => {
     const selectors = [
-      '[data-testid="fleet-dashboard"]',
-      '[data-testid="fleet-empty"]',
-      '[data-testid="transcript-panel"]',
-      ".config-workspace",
+      '[data-testid="app-shell"]',
+      '[data-testid="setup-screen"]',
       '[data-testid="startup-screen"]',
     ];
     return selectors.filter((selector) => document.querySelector(selector)).length;
@@ -199,28 +184,15 @@ export async function expectNoPageHorizontalOverflow(page: Page) {
       offenders: Array.from(
         document.querySelectorAll(
           [
-            ".app-shell",
-            ".workspace",
-            ".chat-workspace",
-            ".chat-main",
-            ".config-workspace",
-            ".fleet-dashboard",
-            ".fleet-empty",
-            ".operations-rail",
-            ".chat-header",
-            ".chat-title-block",
-            ".chat-status",
-            ".session-loading-status",
-            ".composer-panel",
-            ".fleet-header",
-            ".config-header",
-            ".config-editor",
-            ".config-actions",
-            ".confirm-dialog",
-            ".dialog",
-            ".context-meter-popover",
-            ".sync-health-details",
-            ".mailbox-item",
+            '[data-testid="app-shell"]',
+            '[data-testid="setup-screen"]',
+            '[data-testid="startup-screen"]',
+            '[data-testid="sessions-screen"]',
+            '[data-testid="session-screen"]',
+            '[data-testid="agents-screen"]',
+            '[data-testid="agent-screen"]',
+            '[data-testid="mailbox-screen"]',
+            '[data-testid="composer"]',
           ].join(", "),
         ),
       )
