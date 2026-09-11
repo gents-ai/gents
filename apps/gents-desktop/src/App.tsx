@@ -1,40 +1,61 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { createDesktopClient } from "@source-inc/gents-desktop-client";
-import { ConfirmDialog } from "@source-inc/gents-desktop-ui";
+import { MemoryNavProvider, useNav, type Nav } from "@gents/shell";
+import { Toaster } from "@gents/ui/components/sonner";
+import { TooltipProvider } from "@gents/ui/components/tooltip";
 import { listen } from "@tauri-apps/api/event";
-import { ChatWorkspace } from "./components/ChatWorkspace";
-import { ConfigWorkspace } from "./components/ConfigWorkspace";
-import type { ConfigTab } from "./components/config-workspace/model";
-import { useConfigNavigationController } from "./components/config/ConfigNavigationGuard";
+
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { FleetHostDashboard } from "./components/fleet/FleetHostDashboard";
-import { ErrorBanner } from "./components/ErrorBanner";
-import { applyTheme, loadTheme } from "./lib/theme";
-import { applyShellPlatform } from "./lib/shellPlatform";
-import { ShortcutsHelp } from "./components/ShortcutsHelp";
-import { useAppShortcuts } from "./hooks/useAppShortcuts";
+import { StartupScreen } from "./components/StartupScreen";
 import { useMobileBackSwipe } from "./hooks/useMobileBackSwipe";
 import { useMobileVisualViewport } from "./hooks/useMobileVisualViewport";
-import { Sidebar } from "./components/Sidebar";
-import { StartupScreen } from "./components/StartupScreen";
-import { useDesktopShell, type DesktopShellBridge } from "./hooks/useDesktopShell";
+import type { DesktopShellBridge } from "./hooks/useDesktopShell";
 import { installExternalLinkGuard } from "./lib/externalLinks";
 import { startNativeSimulatorE2e } from "./lib/nativeSimulatorE2e";
 import { isMobileTauriShell } from "./lib/shellPlatform";
+import { applyShellPlatform } from "./lib/shellPlatform";
+import { AppShell } from "./ui/app/AppShell";
+import { BehaviorColorsContext } from "./ui/screens/behavior-colors";
+import { AgentScreen } from "./ui/screens/agent/AgentScreen";
+import { AgentsScreen } from "./ui/screens/AgentsScreen";
+import { MailboxScreen } from "./ui/screens/MailboxScreen";
+import { SessionScreen } from "./ui/screens/SessionScreen";
+import { SessionsScreen } from "./ui/screens/SessionsScreen";
+import { Shortcuts } from "./ui/screens/Shortcuts";
+import { SetupScreen } from "./ui/screens/setup/SetupScreen";
+import { useShell, type ShellBridge } from "./ui/hooks/useShell";
+import { bindNav, navigate, useRoute } from "./ui/lib/router";
+import { initTheme } from "./ui/theme";
+
 import "./App.css";
+
+function NavBinder({ children }: { children: ReactNode }) {
+  const nav = useNav();
+  bindNav(nav);
+  return <BackSwipe nav={nav}>{children}</BackSwipe>;
+}
+
+function BackSwipe({ nav, children }: { nav: Nav; children: ReactNode }) {
+  useMobileBackSwipe(isMobileTauriShell(), () => nav.back());
+  return children;
+}
 
 function App({ bridge }: { bridge?: DesktopShellBridge } = {}) {
   return (
     <ErrorBoundary>
-      <AppShell bridge={bridge} />
+      <MemoryNavProvider>
+        <NavBinder>
+          <AppHost bridge={bridge} />
+        </NavBinder>
+      </MemoryNavProvider>
     </ErrorBoundary>
   );
 }
 
-function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
+function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
   useMobileVisualViewport();
-  const defaultBridge = useMemo<DesktopShellBridge>(() => {
+  const defaultBridge = useMemo<ShellBridge>(() => {
     const client = createDesktopClient();
     return {
       api: client.api,
@@ -43,15 +64,13 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     };
   }, []);
   const bridge = explicitBridge ?? defaultBridge;
-  const shell = useDesktopShell(bridge);
+  const route = useRoute();
+  const shell = useShell(bridge, route.name === "session" ? route.sessionId : null);
 
   useEffect(() => {
-    applyTheme(loadTheme());
+    initTheme();
     applyShellPlatform();
   }, []);
-
-  // External links (e.g. markdown links in the transcript) must open in the
-  // OS browser — an unguarded anchor click navigates the whole webview away.
   useEffect(() => installExternalLinkGuard(document), []);
   useEffect(() => {
     void startNativeSimulatorE2e();
@@ -66,370 +85,85 @@ function AppShell({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
     });
     return () => unlisten?.();
   }, [bridge.api]);
-  const [workspaceView, setWorkspaceView] = useState<"fleet" | "chat" | "config">(
-    "fleet",
-  );
-  const [mobileChatPane, setMobileChatPane] = useState<"navigation" | "session">(
-    "navigation",
-  );
-  const [configReturnView, setConfigReturnView] = useState<"fleet" | "chat">("fleet");
-  const [configInitialTab, setConfigInitialTab] = useState<ConfigTab>("behavior");
-  const [shortcutsOpen, setShortcutsOpen] = useState(false);
-  const configNavigation = useConfigNavigationController();
-  const requestConfigNavigation = configNavigation.requestNavigation;
 
-  const requestWorkspaceNavigation = useCallback(
-    (navigate: () => void) => {
-      if (workspaceView === "config") {
-        requestConfigNavigation(navigate);
-      } else {
-        navigate();
-      }
-    },
-    [requestConfigNavigation, workspaceView],
-  );
+  const agent = shell.selectedDeployment?.agentPrincipal.displayName ?? null;
+  const [setup, setSetup] = useState<"unknown" | "active" | "done">("unknown");
 
-  const navigateBack = useCallback(() => {
-    if (workspaceView === "config") {
-      requestConfigNavigation(() => {
-        setWorkspaceView(configReturnView);
-        if (configReturnView === "chat") {
-          setMobileChatPane("navigation");
-        }
-      });
-      return;
-    }
-    if (workspaceView === "chat" && mobileChatPane === "session") {
-      setMobileChatPane("navigation");
-      return;
-    }
-    if (workspaceView === "chat") {
-      setWorkspaceView("fleet");
-    }
-  }, [configReturnView, mobileChatPane, requestConfigNavigation, workspaceView]);
-
-  useMobileBackSwipe(workspaceView !== "fleet", navigateBack);
-
-  useAppShortcuts({
-    setView: (view) => {
-      if (view === "config") {
-        if (workspaceView !== "config") {
-          openConfig();
-        }
-        return;
-      }
-      requestWorkspaceNavigation(() => {
-        if (view === "chat") {
-          setMobileChatPane("session");
-        }
-        setWorkspaceView(view);
-      });
-    },
-    newSession: () => {
-      const behaviorId =
-        shell.selectedBehaviorId ??
-        shell.selectedDeployment?.agentPrincipal.defaultBehaviorId ??
-        null;
-      if (behaviorId) {
-        requestWorkspaceNavigation(() => {
-          setWorkspaceView("chat");
-          setMobileChatPane("session");
-          shell.onStartNewSession(behaviorId);
-        });
-      }
-    },
-    focusComposer: () => {
-      requestWorkspaceNavigation(() => {
-        setWorkspaceView("chat");
-        setMobileChatPane("session");
-        requestAnimationFrame(() => {
-          document
-            .querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]')
-            ?.focus();
-        });
-      });
-    },
-    toggleHelp: () => setShortcutsOpen((open) => !open),
-  });
-
-  function openChat(agentDid?: string) {
-    requestWorkspaceNavigation(() => {
-      if (agentDid) {
-        shell.setSelectedAgentDid(agentDid);
-      }
-      shell.clearPendingMailboxCause();
-      // Fleet selects an agent instance first. On narrow screens the sidebar is
-      // that instance view (behaviors + sessions); opening the session
-      // pane here made it impossible to reach that navigation from Fleet.
-      setMobileChatPane("navigation");
-      setWorkspaceView("chat");
-    });
+  if (shell.startupPhase && shell.startupPhase !== "ready") {
+    return (
+      <StartupScreen
+        error={shell.error}
+        managedServerSupported={bridge.supportsManagedServer === true}
+        onRetry={shell.reconnect}
+        phase={shell.startupPhase}
+      />
+    );
   }
 
-  function openConfig(agentDid?: string, initialTab: ConfigTab = "behavior") {
-    shell.clearPendingMailboxCause();
-    if (agentDid) {
-      shell.setSelectedAgentDid(agentDid);
-    }
-    setConfigReturnView(workspaceView === "fleet" ? "fleet" : "chat");
-    setConfigInitialTab(initialTab);
-    setWorkspaceView("config");
+  if (
+    setup === "unknown" &&
+    shell.snapshot !== null &&
+    shell.deployments.length === 0
+  ) {
+    setSetup("active");
   }
-
-  const routeOwnsPageScroll =
-    shell.startupPhase !== "ready" ||
-    workspaceView === "fleet" ||
-    workspaceView === "config";
+  if (setup === "active" || (setup === "unknown" && shell.snapshot === null)) {
+    return setup === "active" ? (
+      <TooltipProvider>
+        <BehaviorColorsContext.Provider value={shell.behaviorColors}>
+          <SetupScreen
+            shell={shell}
+            onDone={() => {
+              setSetup("done");
+              void shell.refreshSnapshot();
+              navigate({ name: "session", sessionId: null });
+            }}
+          />
+        </BehaviorColorsContext.Provider>
+      </TooltipProvider>
+    ) : null;
+  }
 
   return (
-    <main className={`app-shell app-view-${workspaceView}`}>
-      <div aria-hidden="true" className="titlebar-drag-region" data-tauri-drag-region />
-      <ShortcutsHelp open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
-      <ConfirmDialog
-        cancelLabel="Keep editing"
-        confirmLabel="Discard changes"
-        danger
-        message="This configuration has unsaved changes. Discard them and continue?"
-        onCancel={configNavigation.cancelDiscard}
-        onConfirm={configNavigation.confirmDiscard}
-        open={configNavigation.confirmingDiscard}
-        title="Discard unsaved changes?"
-      />
-
-      <section className="app-notice-slot" data-testid="app-notice-slot">
-        {shell.error && shell.startupPhase === "ready" ? (
-          <ErrorBanner message={shell.error} onDismiss={shell.onDismissError} />
-        ) : null}
-      </section>
-
-      <section
-        className={
-          routeOwnsPageScroll
-            ? "app-route-slot app-route-slot-scroll"
-            : "app-route-slot"
-        }
-        data-scroll-owner={routeOwnsPageScroll ? "route" : undefined}
-        data-testid="app-route-slot"
-      >
-        {shell.startupPhase !== "ready" ? (
-          <StartupScreen
-            error={shell.error}
-            managedServerSupported={bridge.supportsManagedServer === true}
-            onRetry={shell.onRetryStartup}
-            phase={shell.startupPhase}
-          />
-        ) : workspaceView === "fleet" ? (
-          <FleetHostDashboard
-            api={bridge.api}
-            addingPeer={shell.addingPeer}
-            bootstrap={shell.snapshot?.bootstrap ?? null}
-            deployments={shell.deployments}
-            enrollmentRequests={shell.snapshot?.client?.enrollmentRequests ?? null}
-            loading={shell.loading}
-            p2pHealth={shell.runtimeHealth}
-            syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-            repairingP2P={shell.repairingP2P}
-            starting={shell.starting}
-            onRequestStatusEnrollment={shell.onRequestStatusEnrollment}
-            onInitLocalRuntime={shell.onInitLocalRuntime}
-            onStartManagedServer={
-              bridge.api.startManagedServer
-                ? (agentName) => bridge.api.startManagedServer!(agentName)
-                : undefined
-            }
-            onCommitManagedServerAutoStart={
-              bridge.api.commitManagedServerAutoStart
-                ? (agentName) => bridge.api.commitManagedServerAutoStart!(agentName)
-                : undefined
-            }
-            onOpenChat={openChat}
-            onOpenConfig={openConfig}
-            onRemovePeer={shell.onRemovePeer}
-            onRenamePeer={shell.onRenamePeer}
-            onRepairP2P={shell.onRepairP2P}
-            onPatchConfigComponents={shell.onPatchConfigComponents}
-            onProbeInferenceEndpoint={shell.onProbeInferenceEndpoint}
-            onCodexLogin={shell.onCodexLogin}
-            onCancelCodexLogin={shell.onCancelCodexLogin}
-            onGrokLogin={shell.onGrokLogin}
-            onCancelGrokLogin={shell.onCancelGrokLogin}
-          />
-        ) : workspaceView === "chat" ? (
-          <section
-            className={`workspace mobile-chat-pane-${mobileChatPane}`}
-            data-mobile-chat-pane={mobileChatPane}
-          >
-            <Sidebar
-              sessions={shell.selectedDeployment?.sessions ?? []}
-              mailboxItems={shell.selectedDeployment?.mailboxItems ?? []}
-              deployments={shell.deployments}
-              onConfigureDeployment={(agentDid) => openConfig(agentDid)}
-              onOpenFleet={() => {
-                shell.clearPendingMailboxCause();
-                setWorkspaceView("fleet");
-              }}
-              onSelectBehavior={shell.setSelectedBehaviorId}
-              onSelectAgent={(agentDid) => {
-                shell.clearPendingMailboxCause();
-                shell.setSelectedAgentDid(agentDid);
-                shell.setSelectedSessionId(null);
-              }}
-              onSelectSession={shell.onSelectSession}
-              onOpenSession={(sessionId) => {
-                shell.onSelectSession(sessionId);
-                setMobileChatPane("session");
-              }}
-              onRepairP2P={shell.onRepairP2P}
-              repairingP2P={shell.repairingP2P}
-              syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-              onStartNewSession={(behaviorId) => {
-                shell.onStartNewSession(behaviorId);
-                setMobileChatPane("session");
-              }}
-              onOpenMailboxItem={(itemId) => {
-                void shell
-                  .onOpenMailboxItem(itemId)
-                  .then(() => {
-                    setWorkspaceView("chat");
-                    setMobileChatPane("session");
-                    requestAnimationFrame(() => {
-                      document
-                        .querySelector<HTMLTextAreaElement>(
-                          '[data-testid="composer-input"]',
-                        )
-                        ?.focus();
-                    });
-                  })
-                  .catch(() => {});
-              }}
-              onDismissMailboxItem={(itemId) => {
-                void shell.onDismissMailboxItem(itemId).catch(() => {});
-              }}
-              selectedAgentDid={shell.selectedAgentDid}
-              selectedBehaviorId={shell.selectedBehaviorId}
-              selectedSessionId={shell.selectedSessionId}
+    <TooltipProvider>
+      <BehaviorColorsContext.Provider value={shell.behaviorColors}>
+        <AppShell
+          route={route}
+          agentName={agent}
+          agentDid={shell.selectedAgentDid}
+          deployment={shell.selectedDeployment}
+          root={shell.snapshot?.bootstrap.initToolRoot}
+          ceiling={shell.snapshot?.bootstrap.initToolCeiling}
+          online={Boolean(shell.snapshot?.client)}
+          mailboxCount={
+            shell.selectedDeployment?.mailboxItems.filter((m) => m.status === "open")
+              .length ?? 0
+          }
+          holds={
+            new Set(shell.holds.flatMap((h) => (h.sessionId ? [h.sessionId] : [])))
+          }
+          syncHealth={shell.snapshot?.client?.syncHealth}
+          error={shell.error}
+          onDismissError={shell.clearError}
+          onReconnect={shell.reconnect}
+        >
+          {route.name === "sessions" && <SessionsScreen shell={shell} />}
+          {route.name === "session" && <SessionScreen shell={shell} />}
+          {route.name === "mailbox" && <MailboxScreen shell={shell} />}
+          {route.name === "agents" && <AgentsScreen shell={shell} />}
+          {route.name === "agent" && (
+            <AgentScreen
+              shell={shell}
+              agentDid={route.agentDid}
+              section={route.section}
+              item={route.item}
             />
-
-            <section className="chat-column">
-              {shell.pendingMailboxCauseId ? (
-                <div
-                  className="mailbox-compose-banner"
-                  data-testid="mailbox-compose-banner"
-                >
-                  This reply is linked to a mailbox item.
-                  <button onClick={shell.clearPendingMailboxCause} type="button">
-                    Cancel link
-                  </button>
-                </div>
-              ) : null}
-              <ChatWorkspace
-                api={bridge.api}
-                activeRequestId={
-                  shell.activeRequestId ?? shell.session?.latestRequestId ?? null
-                }
-                activityStatus={shell.activityStatus}
-                approxSerializedBytes={
-                  shell.snapshot?.client?.approxSerializedBytes ?? 0
-                }
-                canSend={shell.canSendMessage}
-                sessionLoadingStatus={shell.sessionLoadingStatus}
-                draft={shell.draft}
-                interruptVisible={shell.interruptVisible}
-                onDraftChange={shell.setDraft}
-                onConfigureInference={
-                  shell.operationalState?.admissionBlocker?.action ===
-                  "configureInference"
-                    ? () => openConfig(shell.selectedDeployment?.agentDid, "backends")
-                    : undefined
-                }
-                onReconnect={
-                  shell.operationalState?.admissionBlocker?.action === "reconnect"
-                    ? shell.onRepairP2P
-                    : undefined
-                }
-                onSessionReconnect={
-                  shell.snapshot?.client ? shell.onRepairP2P : undefined
-                }
-                reconnecting={shell.repairingP2P}
-                onRenameSessionTitle={shell.onRenameSessionTitle}
-                onSend={shell.onSendMessage}
-                onRetryMessage={shell.onRetryMessage}
-                onRetryHydration={() =>
-                  shell.retrySessionHydration(shell.selectedSessionId)
-                }
-                onRetrySession={() => shell.refreshSession(shell.selectedSessionId)}
-                onLoadOlderTimeline={shell.loadOlderSessionTimeline}
-                rowCount={shell.snapshot?.client?.rowCount ?? 0}
-                syncHealth={shell.snapshot?.client?.syncHealth ?? null}
-                retryUnavailableHint={
-                  shell.retryStatus.kind === "disabled" &&
-                  shell.retryStatus.reason === "behaviorUnavailable"
-                    ? shell.retryStatus.hint
-                    : null
-                }
-                selectedBehaviorId={shell.selectedBehaviorId}
-                selectedSessionTitle={
-                  shell.session
-                    ? (shell.session.title ?? null)
-                    : (shell.selectedSessionSummary?.title ?? null)
-                }
-                selectedDeployment={shell.selectedDeployment}
-                selectedSessionId={shell.selectedSessionId}
-                sending={shell.sending}
-                session={shell.session}
-                optimisticPendingTurn={shell.optimisticPendingTurn}
-                turnState={shell.turnState}
-                onOpenMobileNavigation={() => setMobileChatPane("navigation")}
-                onInterruptAccepted={async () => {
-                  await shell.refreshSession(shell.selectedSessionId);
-                }}
-              />
-            </section>
-          </section>
-        ) : (
-          <section className="config-page">
-            <ConfigWorkspace
-              api={bridge.api}
-              initialTab={configInitialTab}
-              backLabel={
-                configReturnView === "fleet" ? "Back to Fleet" : "Back to Chat"
-              }
-              bootstrap={shell.snapshot?.bootstrap ?? null}
-              onBack={navigateBack}
-              onDirtyChange={configNavigation.reportDirty}
-              onDeleteSkillConfig={shell.onDeleteSkillConfig}
-              onDeleteTaskConfig={shell.onDeleteTaskConfig}
-              onDeleteScheduleConfig={shell.onDeleteScheduleConfig}
-              onDeleteEventSourceConfig={shell.onDeleteEventSourceConfig}
-              onDeleteTriggerConfig={shell.onDeleteTriggerConfig}
-              onDeleteBackendConfig={shell.onDeleteBackendConfig}
-              onDeleteInferenceProfileConfig={shell.onDeleteInferenceProfileConfig}
-              onDeleteToolsConfig={shell.onDeleteToolsConfig}
-              onDeleteToolServiceConfig={shell.onDeleteToolServiceConfig}
-              onDeleteBehaviorConfig={shell.onDeleteBehaviorConfig}
-              onSaveAgentConfig={shell.onSaveAgentConfig}
-              onRunTask={shell.onRunTask}
-              onSaveBackendConfig={shell.onSaveBackendConfig}
-              onPatchConfigComponents={shell.onPatchConfigComponents}
-              onSaveEventSourceConfig={shell.onSaveEventSourceConfig}
-              onApplyConfigComponents={shell.onApplyConfigComponents}
-              onSaveScheduleConfig={shell.onSaveScheduleConfig}
-              onSaveSkillConfig={shell.onSaveSkillConfig}
-              onSaveTaskConfig={shell.onSaveTaskConfig}
-              onSaveToolServiceConfig={shell.onSaveToolServiceConfig}
-              onTestToolService={shell.onTestToolService}
-              requestNavigation={requestConfigNavigation}
-              onRunSchedule={shell.onRunSchedule}
-              runningTask={shell.runningTask}
-              saving={shell.savingConfig}
-              selectedBehaviorId={shell.selectedBehaviorId}
-              selectedDeployment={shell.selectedDeployment}
-              onSaveTriggerConfig={shell.onSaveTriggerConfig}
-            />
-          </section>
-        )}
-      </section>
-    </main>
+          )}
+        </AppShell>
+        <Toaster />
+        <Shortcuts shell={shell} />
+      </BehaviorColorsContext.Provider>
+    </TooltipProvider>
   );
 }
 
